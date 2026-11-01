@@ -1,0 +1,12 @@
+[package]
+name = "aiw-hw"
+description = "Hardware probe: CPU features, memory, GPUs (CUDA/ROCm/Metal/Vulkan/DirectML), NPUs → DeviceProfile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aiw-core.workspace = true
+sysinfo.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

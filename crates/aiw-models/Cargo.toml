@@ -1,0 +1,19 @@
+[package]
+name = "aiw-models"
+description = "Model store: GGUF metadata, curated catalog with per-device fit, local scan and resumable Hugging Face downloads"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aiw-core.workspace = true
+aiw-hw.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

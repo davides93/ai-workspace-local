@@ -1,0 +1,332 @@
+# Architettura · AI Workspace Local (AIW)
+
+> Versione 0.1 · 2026-11-01 · Input: [ricerca REA](../research/01-reverse-engineering.md) (pattern P01–P24) e [panorama di frontiera](../research/02-frontier-landscape.md)
+
+## 1. Obiettivi e vincoli
+
+1. **Locale prima di tutto**: tutto funziona offline. Il cloud non serve e non si contatta mai
+   senza un consenso esplicito.
+2. **Ovunque**: Windows, macOS, Linux, Android, iOS (e browser come client remoto) con lo stesso
+   core e la stessa UI.
+3. **Tutti i metodi di inferenza**: embedded, sidecar, modelli di sistema, endpoint LAN, sotto
+   un'unica API.
+4. **Ogni layer personalizzabile dall'app**: ogni componente (runtime, modello, tool, agente,
+   workflow, policy) è descritto da un *manifest* con uno *schema di impostazioni*; la UI genera i
+   form dagli schemi e la configurazione è a strati, con override ispezionabili.
+5. **Agentico oltre il coding**: file, shell, browser, computer-use, MCP, workflow schedulati, subagenti.
+6. **Sicuro di default**: policy esplicita, sandbox del sistema operativo, audit trail e kill switch.
+
+## 2. Vista a layer
+
+```mermaid
+flowchart TB
+  subgraph Clients["L7 · Client"]
+    UIdesk["App desktop (Tauri)"]:::c
+    UImob["App mobile (Tauri iOS/Android)"]:::c
+    Web["Browser in LAN"]:::c
+    CLI["CLI aiw"]:::c
+    Ext["App esterne: Claude Code, Codex, OpenCode, CopilotKit…"]:::c
+  end
+  subgraph API["L6 · Interfacce"]
+    IPC["IPC Tauri"]
+    HTTP["REST + SSE (eventi AG-UI)"]
+    GW["Gateway compatibile OpenAI /v1"]
+    MCPS["Server MCP (roadmap)"]
+  end
+  subgraph Agentic["L5 · Layer agentico"]
+    WF["Motore workflow: trigger, step, approvazioni"]
+    AG["Agent loop: subagenti, hook, compattazione, skill, memoria"]
+    POL["Policy engine + audit + kill switch"]
+  end
+  subgraph Tools["L4 · Tool"]
+    FS["fs / edit / search"]
+    SH["shell (sandbox)"]
+    BR["browser (CDP)"]
+    CU["computer-use"]
+    WEB["web_fetch"]
+    MCPC["client MCP"]
+  end
+  subgraph Infer["L3 · Inferenza unificata"]
+    ROUTER["Router: profilo → runtime → modello"]
+    REG["Runtime Registry (manifest)"]
+    SUP["Supervisor dei sidecar"]
+  end
+  subgraph Runtimes["L2 · Runtime"]
+    EMB["Embedded: llama.cpp, ORT GenAI, MLX, LiteRT-LM, ExecuTorch"]
+    SIDE["Sidecar: llama-server, Ollama, vLLM, SGLang, mlx-lm, Foundry Local, Lemonade…"]
+    SYS["Di sistema: Apple Foundation Models, Gemini Nano, Phi Silica"]
+    LAN["Remoti LAN: altri device AIW, RPC llama.cpp, exo"]
+  end
+  subgraph HW["L1 · Hardware e sistema operativo"]
+    PROBE["Probe: CPU/RAM/GPU/NPU/OS → DeviceProfile"]
+    MODELS["Model store: GGUF, MLX, ONNX, .litertlm, .pte"]
+  end
+  Clients --> API --> Agentic --> Tools
+  Agentic --> Infer --> Runtimes --> HW
+  POL -. vaglia .-> Tools
+  classDef c fill:#eef,stroke:#88a
+```
+
+| Layer | Crate / package | Responsabilità | Pattern |
+|---|---|---|---|
+| L1 | `aiw-hw`, `aiw-models` | Rilevamento hardware, catalogo e store dei modelli, parser GGUF, download con ripresa | — |
+| L2–L3 | `aiw-runtimes` | Manifest dei runtime, rilevamento disponibilità, adapter, supervisor, router | P20 |
+| L4 | `aiw-tools` | Tool builtin, client MCP, browser CDP, computer-use | P12, P14, P18, P19 |
+| L5 | `aiw-agent`, `aiw-workflow` | Loop agentico, policy, hook, contesto, skill, subagenti, workflow | P04–P11, P13, P15, P17, P22 |
+| L6 | `aiw-server`, `apps/desktop/src-tauri` | API HTTP/SSE, gateway OpenAI, IPC | P01–P03 |
+| L7 | `apps/ui`, `aiw-cli` | UI React unica (desktop, mobile, web) e CLI | — |
+| Collante | `aiw-core`, `aiw-engine` | Tipi, configurazione a strati, eventi AG-UI, storage; facciata `Workspace` | — |
+
+## 3. Topologie di deployment
+
+```mermaid
+flowchart LR
+  subgraph PC["PC / Mac (GPU)"]
+    D["App desktop Tauri\n(core in-process)"]
+    S1["llama-server / vLLM / Ollama"]
+    D --> S1
+  end
+  subgraph Phone["Telefono"]
+    M["App mobile Tauri\n(core in-process)"]
+    N["Plugin nativo: Foundation Models / Gemini Nano / LiteRT-LM / llama.cpp"]
+    M --> N
+  end
+  Browser["Browser di un altro device"] -- "HTTP+SSE, token di pairing" --> D
+  M -- "runtime remoto LAN (OpenAI API)" --> D
+```
+
+- **Standalone**: il core gira dentro l'app (desktop o mobile).
+- **Daemon**: `aiw serve` su un PC o server headless; i client si collegano via HTTP.
+- **Mesh**: i device si accoppiano. Il telefono usa i modelli grandi del PC come runtime `remote`
+  e il PC delega al telefono i task che servono lì (roadmap: A2A).
+
+## 4. Inferenza unificata (L2–L3)
+
+### 4.1 Runtime manifest
+
+Ogni runtime è un file JSON dichiarativo (vedi `crates/aiw-runtimes/manifests/`):
+
+```jsonc
+{
+  "id": "llama-server",
+  "name": "llama.cpp server",
+  "kind": "sidecar",                 // embedded | sidecar | system | remote
+  "platforms": ["windows","macos","linux"],
+  "accelerators": ["cpu","cuda","metal","vulkan","rocm","sycl"],
+  "formats": ["gguf"],
+  "api": "openai",                   // openai | ollama | native
+  "capabilities": ["chat","tools","vision","embeddings","grammar"],
+  "detect": { "binaries": ["llama-server"] },
+  "launch": {
+    "command": "llama-server",
+    "args": ["-m","{model_path}","--host","127.0.0.1","--port","{port}","-c","{ctx_size}","-ngl","{gpu_layers}","--jinja"],
+    "health": "/health",
+    "ready_timeout_s": 120
+  },
+  "settings": {                      // JSON Schema (sottoinsieme) → form generato nella UI
+    "type": "object",
+    "properties": {
+      "ctx_size":   { "type": "integer", "default": 8192, "minimum": 512, "title": "Context" },
+      "gpu_layers": { "type": "integer", "default": 999, "title": "GPU layers" },
+      "extra_args": { "type": "array", "items": {"type": "string"}, "title": "Argomenti extra" }
+    }
+  },
+  "install": { "hint": "winget install llama.cpp | brew install llama.cpp | nix/apt" }
+}
+```
+
+- **Rilevamento**: binari nel `PATH` o in percorsi noti, endpoint raggiungibile, piattaforma
+  compatibile, bridge nativo registrato. Lo stato è uno di `available`, `installable`, `running`,
+  `unsupported`.
+- **Adapter**: `openai` copre la maggior parte dei sidecar (llama-server, vLLM, SGLang, mlx-lm,
+  TRT-LLM, Foundry Local, Lemonade, LM Studio, LocalAI…); `ollama` aggiunge la gestione dei
+  modelli; `native` instrada verso un *bridge* fornito dalla shell (plugin Swift o Kotlin, embedded FFI).
+- **Supervisor**: avvia il processo, assegna la porta, sostituisce i placeholder (`{model_path}`,
+  `{port}`, impostazioni), attende l'health check, raccoglie i log, riavvia secondo la policy e
+  ferma tutto all'uscita.
+- **Manifest utente**: ogni JSON in `~/.aiw/runtimes/*.json` si aggiunge al catalogo. Così si
+  integra qualsiasi motore futuro senza ricompilare.
+
+### 4.2 Interfaccia comune
+
+```rust
+#[async_trait]
+pub trait ChatBackend: Send + Sync {
+    async fn list_models(&self) -> Result<Vec<RemoteModel>>;
+    async fn chat(&self, req: ChatRequest) -> Result<BoxStream<'static, Result<ChatDelta>>>;
+}
+```
+
+`ChatRequest` usa messaggi e tool in formato OpenAI. `ChatDelta` normalizza testo, *reasoning* e
+tool call parziali. Per i modelli senza tool calling nativo c'è un **fallback di parsing**
+(`<tool_call>{…}</tool_call>` in stile Hermes/Qwen e blocchi JSON) con system prompt dedicato.
+
+### 4.3 Router e profili
+
+Un **profilo di inferenza** sceglie runtime + modello + parametri (temperature, contesto…) ed è
+assegnabile per agente, per workflow step o per sessione. Il router, a partire dal `DeviceProfile`
+(RAM, VRAM, acceleratori), propone il runtime migliore per un modello e stima se ci sta in memoria
+(pesi + KV cache). L'utente può sempre forzare un'altra scelta.
+
+## 5. Layer agentico (L5)
+
+### 5.1 Ciclo di un run
+
+```mermaid
+sequenceDiagram
+  participant UI
+  participant Engine
+  participant Agent
+  participant Policy
+  participant Tool
+  participant LLM as Runtime
+  UI->>Engine: POST /sessions/{id}/runs {input}
+  Engine-->>UI: SSE RUN_STARTED
+  loop fino a risposta finale o max_turns
+    Agent->>LLM: chat(messages, tools) stream
+    LLM-->>Agent: delta testo / tool_calls
+    Agent-->>UI: TEXT_MESSAGE_CONTENT / TOOL_CALL_START/ARGS/END
+    Agent->>Policy: evaluate(tool, args)
+    alt ask
+      Policy-->>UI: CUSTOM approval_request
+      UI->>Engine: POST /approvals/{id} {allow|deny}
+    end
+    Agent->>Tool: run (sandbox)
+    Tool-->>Agent: risultato
+    Agent-->>UI: TOOL_CALL_RESULT
+    Agent->>Agent: hook PostToolUse, compattazione se oltre il budget
+  end
+  Agent-->>UI: RUN_FINISHED
+```
+
+- **Eventi**: AG-UI 1.0 (`RUN_STARTED`, `TEXT_MESSAGE_*`, `REASONING_*`, `TOOL_CALL_*`,
+  `STATE_SNAPSHOT`, `SUBAGENT_*`, `RUN_FINISHED`/`RUN_ERROR`) più `CUSTOM` con nome
+  `aiw.approval_request`, `aiw.todo`, `aiw.usage`. Ogni evento viene salvato (P17), così i run
+  sono riproducibili.
+- **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo.
+- **Subagenti** (P09): il tool `agent` avvia un run figlio con un profilo diverso e contesto
+  isolato; al padre torna solo il risultato.
+- **Contesto** (P10): un budget di token per profilo; oltre la soglia i turni più vecchi vengono
+  riassunti con il modello attivo o con uno dedicato.
+- **Memoria e skill** (P11): `AGENTS.md` del workspace entra nel system prompt; le skill
+  (`SKILL.md` con frontmatter `name`/`description`) sono elencate solo con la descrizione e il
+  modello le carica su richiesta con il tool `skill`.
+- **Hook** (P08): `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Un
+  hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
+- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato; dalla UI si può
+  fare rewind del run.
+
+### 5.2 Policy, sandbox, audit
+
+| Elemento | Default | Personalizzabile |
+|---|---|---|
+| Modalità | `ask` (chiede conferma per gli effetti collaterali) | `plan` (solo lettura), `auto-edit` (modifica file senza chiedere, comandi su conferma), `auto` (tutto entro la sandbox), `yolo` (tutto, sconsigliato) |
+| Regole | allow: read, list, search, web_fetch su host pubblici · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow |
+| Sandbox OS (P07) | `workspace-write`: Linux bwrap, macOS sandbox-exec, Windows job object con token ristretto (roadmap) | `read-only`, `workspace-write`, `off` |
+| Rete dei tool | Consentita solo per i tool web e browser | Allowlist di domini |
+| Audit (P22) | Ogni decisione di policy ed esecuzione viene registrata con l'ID del run | Esportabile in JSONL |
+| Kill switch | `POST /kill` e scorciatoia globale: ferma run, sidecar avviati per i run e browser | — |
+
+### 5.3 Workflow (task operativi)
+
+Definizione YAML o JSON (editabile dalla UI):
+
+```yaml
+id: daily-inbox-digest
+trigger: { cron: "0 8 * * 1-5" }          # manual | cron | interval | file | webhook
+inputs: { folder: "~/Downloads" }
+steps:
+  - id: scan
+    tool: list_dir
+    args: { path: "{{inputs.folder}}" }
+  - id: triage
+    agent: { profile: "fast-local", prompt: "Classifica questi file: {{steps.scan.output}}" }
+  - id: confirm
+    approval: { message: "Sposto i file come proposto?" }
+  - id: act
+    agent: { profile: "operator", prompt: "Esegui il piano: {{steps.triage.output}}", tools: ["move_file"] }
+```
+
+Tipi di step: `tool`, `agent`, `llm`, `approval`, `condition` (`if`), `foreach`, `workflow`
+(sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
+ripresa dopo un'approvazione.
+
+## 6. Tool (L4)
+
+| Tool | Piattaforme | Note |
+|---|---|---|
+| `read_file`, `write_file`, `edit_file` (sostituzione esatta), `list_dir`, `glob`, `grep` | tutte | Confinati alle radici del workspace |
+| `shell` | desktop | Timeout, cwd nel workspace, sandbox OS, output troncato |
+| `web_fetch` | tutte | HTML → testo, limiti di dimensione |
+| `browser_*` (navigate, snapshot, click, type, screenshot) | desktop (Chrome/Edge/Chromium via CDP) | Snapshot testuale con riferimenti numerati per i modelli solo testo; screenshot per i VLM |
+| `computer_*` (screenshot, click, type, key, scroll) | desktop (feature `computer-use`) · Android via AccessibilityService (plugin) | Modalità *vision* oppure *accessibility* |
+| `todo`, `agent` (subagente), `skill` | tutte | — |
+| `mcp__<server>__<tool>` | tutte (stdio solo desktop) | Client MCP: stdio e streamable HTTP |
+
+## 7. Configurazione a strati
+
+`defaults (manifest)` → `globale (~/.aiw/config.json)` → `device` → `workspace (.aiw/config.json)`
+→ `agente/profilo` → `sessione`. La UI mostra per ogni valore **da quale strato arriva**
+(`GET /config/explain?key=…`). Ogni componente espone uno `settings` schema; i form sono generati
+(oggetti, enum, numeri con min/max, booleani, liste, segreti).
+
+## 8. API (estratto)
+
+| Metodo | Percorso | Descrizione |
+|---|---|---|
+| GET | `/api/system` | DeviceProfile + versione + stato |
+| GET | `/api/runtimes` · POST `/api/runtimes/{id}/start` · `/stop` · PUT `/settings` | Catalogo e ciclo di vita dei runtime |
+| GET | `/api/models` · POST `/api/models/pull` · GET `/api/models/catalog` | Modelli locali, download, catalogo consigliato |
+| GET/PUT | `/api/profiles` | Profili di inferenza |
+| GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run |
+| GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
+| POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
+| GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
+| GET/POST | `/api/mcp/servers` | Server MCP |
+| GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
+| POST | `/api/kill` | Kill switch |
+| — | `/v1/models`, `/v1/chat/completions` | Gateway OpenAI-compatibile verso i runtime locali |
+
+Autenticazione: in loopback non serve; per l'accesso dalla LAN serve un **token di pairing**
+(QR mostrato nell'app) inviato come `Authorization: Bearer`.
+
+## 9. Storage
+
+- `~/.aiw/` (desktop) o la sandbox dell'app (mobile): `config.json`, `aiw.db` (SQLite:
+  sessioni, messaggi, eventi, run, workflow, audit), `models/`, `runtimes/` (manifest utente),
+  `skills/`, `checkpoints/`.
+- Workspace utente: `AGENTS.md`, `.aiw/config.json`, `.aiw/skills/`, `.aiw/workflows/`.
+
+## 10. Piattaforme: cosa gira dove
+
+| Capacità | Win | macOS | Linux | Android | iOS |
+|---|---|---|---|---|---|
+| Core + UI (Tauri 2) | ● | ● | ● | ● | ● |
+| Sidecar (llama-server, vLLM, Ollama…) | ● | ● | ● | — | — |
+| llama.cpp embedded (FFI) | ● | ● | ● | ● | ● |
+| Modello di sistema | Phi Silica (Copilot+) | Foundation Models | — | Gemini Nano (ML Kit) | Foundation Models |
+| Altri embedded | ORT GenAI / Windows ML | MLX, Core ML / Core AI | ORT, ExecuTorch | LiteRT-LM, ExecuTorch, ORT (QNN) | MLX Swift, LiteRT-LM (preview), Core AI |
+| shell / browser / computer-use | ● | ● | ● | ◐ (AccessibilityService) | — (App Intents / Shortcuts) |
+| Runtime remoto LAN | ● | ● | ● | ● | ● |
+
+## 11. Decisioni (ADR)
+
+| ADR | Decisione | Motivazione | Alternative scartate |
+|---|---|---|---|
+| [0001](adr/0001-tauri-rust-core.md) | **Tauri 2 + core Rust** per tutte le piattaforme | Un solo core nativo per desktop e mobile, binari piccoli, llama.cpp e ORT facili da integrare in Rust, plugin mobili in Swift e Kotlin | Electron (niente mobile, pesante), Flutter (FFI da duplicare, ecosistema agentico più povero), React Native (desktop immaturo), KMP |
+| [0002](adr/0002-headless-core-protocol.md) | **Core headless** con la stessa API su IPC e su HTTP/SSE | P01: UI, CLI, browser e app terze sono tutti client | API diverse per ogni shell |
+| [0003](adr/0003-manifest-driven-runtimes.md) | **Runtime come manifest dichiarativi** con schema delle impostazioni | Integrare "tutto" senza codice per ogni motore e generare la UI dagli schemi | Un adapter scritto a mano per ciascun motore |
+| [0004](adr/0004-ag-ui-events.md) | **AG-UI 1.0** come formato degli eventi | Interoperabilità con CopilotKit e A2UI, già pensato per streaming, tool e stato | Formato proprietario |
+| [0005](adr/0005-policy-sandbox.md) | **Policy separata dalla sandbox** e `ask` di default | P05–P07 osservati in tutti gli agenti maturi | Sola conferma dell'utente |
+
+## 12. Roadmap tecnica
+
+1. v0.1 (questo repository): core, registry con circa 30 manifest, adapter OpenAI e Ollama,
+   supervisor, catalogo modelli e download, agent loop con policy, hook, subagenti e skill, tool
+   (fs, shell, web, browser, computer-use, MCP), workflow con trigger manual/interval/cron, server
+   e gateway, UI completa, shell Tauri, plugin nativi mobili (Foundation Models, ML Kit GenAI,
+   LiteRT-LM).
+2. v0.2: llama.cpp embedded su mobile come default, MLX Swift, ORT GenAI/Windows ML, gateway
+   Anthropic Messages, server MCP, renderer A2UI, git worktree per i task paralleli.
+3. v0.3: device mesh (pairing via QR, A2A), RPC llama.cpp ed exo per l'inferenza distribuita,
+   voice mode (whisper.cpp e Kokoro), code mode (interprete ermetico, P13), trigger webhook e file.

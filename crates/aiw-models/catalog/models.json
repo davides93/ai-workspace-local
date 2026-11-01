@@ -1,0 +1,494 @@
+[
+ {
+  "id": "qwen3-0.6b",
+  "name": "Qwen3 0.6B",
+  "family": "Qwen3",
+  "publisher": "Alibaba",
+  "description": "Minuscolo ma con tool calling e modalità thinking: ideale per telefoni e test.",
+  "params_b": 0.6,
+  "format": "gguf",
+  "quant": "Q8_0",
+  "size_bytes": 639446688,
+  "context_length": 40960,
+  "capabilities": [
+   "chat",
+   "tools",
+   "reasoning"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "Qwen/Qwen3-0.6B-GGUF",
+   "file": "Qwen3-0.6B-Q8_0.gguf"
+  },
+  "min_memory_mb": 1370,
+  "tags": [
+   "mobile",
+   "fast"
+  ]
+ },
+ {
+  "id": "qwen3-1.7b",
+  "name": "Qwen3 1.7B",
+  "family": "Qwen3",
+  "publisher": "Alibaba",
+  "description": "Piccolo agente locale: tool calling affidabile su CPU.",
+  "params_b": 1.7,
+  "format": "gguf",
+  "quant": "Q8_0",
+  "size_bytes": 1834426016,
+  "context_length": 40960,
+  "capabilities": [
+   "chat",
+   "tools",
+   "reasoning"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "Qwen/Qwen3-1.7B-GGUF",
+   "file": "Qwen3-1.7B-Q8_0.gguf"
+  },
+  "min_memory_mb": 2624,
+  "tags": [
+   "mobile",
+   "agent"
+  ]
+ },
+ {
+  "id": "qwen3-4b",
+  "name": "Qwen3 4B",
+  "family": "Qwen3",
+  "publisher": "Alibaba",
+  "description": "Buon compromesso per laptop senza GPU dedicata.",
+  "params_b": 4,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 2500000000,
+  "context_length": 40960,
+  "capabilities": [
+   "chat",
+   "tools",
+   "reasoning"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "Qwen/Qwen3-4B-GGUF",
+   "file": "Qwen3-4B-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 3322,
+  "tags": [
+   "agent",
+   "laptop"
+  ]
+ },
+ {
+  "id": "qwen3-8b",
+  "name": "Qwen3 8B",
+  "family": "Qwen3",
+  "publisher": "Alibaba",
+  "description": "Generalista solido per GPU da 8 GB.",
+  "params_b": 8.2,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 5030000000,
+  "context_length": 40960,
+  "capabilities": [
+   "chat",
+   "tools",
+   "reasoning"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "Qwen/Qwen3-8B-GGUF",
+   "file": "Qwen3-8B-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 5976,
+  "tags": [
+   "agent"
+  ]
+ },
+ {
+  "id": "qwen3-30b-a3b",
+  "name": "Qwen3 30B-A3B",
+  "family": "Qwen3",
+  "publisher": "Alibaba",
+  "description": "MoE con 3B parametri attivi: veloce come un piccolo, qualità da 30B.",
+  "params_b": 30.5,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 18600000000,
+  "context_length": 40960,
+  "capabilities": [
+   "chat",
+   "tools",
+   "reasoning"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "Qwen/Qwen3-30B-A3B-GGUF",
+   "file": "Qwen3-30B-A3B-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 20212,
+  "tags": [
+   "agent",
+   "moe"
+  ],
+  "active_params_b": 3.3
+ },
+ {
+  "id": "qwen3-coder-30b-a3b",
+  "name": "Qwen3 Coder 30B-A3B",
+  "family": "Qwen3",
+  "publisher": "Alibaba",
+  "description": "Agente di coding MoE con tool calling nativo.",
+  "params_b": 30.5,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 18600000000,
+  "context_length": 262144,
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+   "file": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 20212,
+  "tags": [
+   "coding",
+   "moe"
+  ],
+  "active_params_b": 3.3
+ },
+ {
+  "id": "gpt-oss-20b",
+  "name": "gpt-oss 20B",
+  "family": "gpt-oss",
+  "publisher": "OpenAI",
+  "description": "Modello open-weight di OpenAI (MoE, MXFP4) con ragionamento configurabile.",
+  "params_b": 21,
+  "format": "gguf",
+  "quant": "MXFP4",
+  "size_bytes": 12100000000,
+  "context_length": 131072,
+  "capabilities": [
+   "chat",
+   "tools",
+   "reasoning"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "ggml-org/gpt-oss-20b-GGUF",
+   "file": "gpt-oss-20b-mxfp4.gguf"
+  },
+  "min_memory_mb": 13393,
+  "tags": [
+   "agent",
+   "moe"
+  ],
+  "active_params_b": 3.6
+ },
+ {
+  "id": "gemma-3-4b",
+  "name": "Gemma 3 4B",
+  "family": "Gemma 3",
+  "publisher": "Google",
+  "description": "Multimodale compatto (testo e immagini).",
+  "params_b": 4.3,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 2490000000,
+  "context_length": 131072,
+  "capabilities": [
+   "chat",
+   "vision"
+  ],
+  "license": "Gemma",
+  "source": {
+   "kind": "hf",
+   "repo": "unsloth/gemma-3-4b-it-GGUF",
+   "file": "gemma-3-4b-it-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 3312,
+  "tags": [
+   "vision",
+   "laptop"
+  ]
+ },
+ {
+  "id": "gemma-3n-e4b",
+  "name": "Gemma 3n E4B",
+  "family": "Gemma 3n",
+  "publisher": "Google",
+  "description": "Architettura per dispositivi (MatFormer), testo/immagini/audio.",
+  "params_b": 6.9,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 4540000000,
+  "context_length": 32768,
+  "capabilities": [
+   "chat",
+   "vision",
+   "audio"
+  ],
+  "license": "Gemma",
+  "source": {
+   "kind": "hf",
+   "repo": "unsloth/gemma-3n-E4B-it-GGUF",
+   "file": "gemma-3n-E4B-it-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 5462,
+  "tags": [
+   "mobile",
+   "vision"
+  ],
+  "active_params_b": 4
+ },
+ {
+  "id": "llama-3.2-3b",
+  "name": "Llama 3.2 3B Instruct",
+  "family": "Llama 3.2",
+  "publisher": "Meta",
+  "description": "Piccolo e veloce, buon tool calling.",
+  "params_b": 3.2,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 2020000000,
+  "context_length": 131072,
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "license": "Llama 3.2",
+  "source": {
+   "kind": "hf",
+   "repo": "bartowski/Llama-3.2-3B-Instruct-GGUF",
+   "file": "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 2819,
+  "tags": [
+   "mobile",
+   "fast"
+  ]
+ },
+ {
+  "id": "llama-3.3-70b",
+  "name": "Llama 3.3 70B Instruct",
+  "family": "Llama 3.3",
+  "publisher": "Meta",
+  "description": "Denso 70B per workstation e server.",
+  "params_b": 70.6,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 42500000000,
+  "context_length": 131072,
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "license": "Llama 3.3",
+  "source": {
+   "kind": "hf",
+   "repo": "bartowski/Llama-3.3-70B-Instruct-GGUF",
+   "file": "Llama-3.3-70B-Instruct-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 45284,
+  "tags": [
+   "general",
+   "large"
+  ]
+ },
+ {
+  "id": "qwen2.5-vl-7b",
+  "name": "Qwen2.5-VL 7B",
+  "family": "Qwen2.5-VL",
+  "publisher": "Alibaba",
+  "description": "Vision-language con grounding: base per computer-use (serve anche il file mmproj).",
+  "params_b": 8.3,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 4680000000,
+  "context_length": 128000,
+  "capabilities": [
+   "chat",
+   "vision",
+   "gui-grounding"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF",
+   "file": "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 5609,
+  "tags": [
+   "vision",
+   "computer-use"
+  ]
+ },
+ {
+  "id": "qwen3-embedding-0.6b",
+  "name": "Qwen3 Embedding 0.6B",
+  "family": "Qwen3",
+  "publisher": "Alibaba",
+  "description": "Embedding multilingue per ricerca e memoria degli agenti.",
+  "params_b": 0.6,
+  "format": "gguf",
+  "quant": "Q8_0",
+  "size_bytes": 640000000,
+  "context_length": 32768,
+  "capabilities": [
+   "embeddings"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "Qwen/Qwen3-Embedding-0.6B-GGUF",
+   "file": "Qwen3-Embedding-0.6B-Q8_0.gguf"
+  },
+  "min_memory_mb": 1371,
+  "tags": [
+   "embeddings",
+   "mobile"
+  ]
+ },
+ {
+  "id": "gemma-3n-e2b-litert",
+  "name": "Gemma 3n E2B (LiteRT-LM)",
+  "family": "Gemma 3n",
+  "publisher": "Google",
+  "description": "Formato .litertlm per LiteRT-LM su Android e iOS (CPU, GPU, NPU).",
+  "params_b": 5.4,
+  "format": "litertlm",
+  "quant": "int4",
+  "size_bytes": 3100000000,
+  "context_length": 32768,
+  "capabilities": [
+   "chat",
+   "vision",
+   "audio"
+  ],
+  "license": "Gemma",
+  "source": {
+   "kind": "hf",
+   "repo": "google/gemma-3n-E2B-it-litert-lm",
+   "file": "gemma-3n-E2B-it-int4.litertlm"
+  },
+  "min_memory_mb": 3952,
+  "tags": [
+   "mobile"
+  ],
+  "active_params_b": 2
+ },
+ {
+  "id": "qwen3-4b-mlx",
+  "name": "Qwen3 4B (MLX 4-bit)",
+  "family": "Qwen3",
+  "publisher": "Alibaba / mlx-community",
+  "description": "Per MLX LM e MLX Swift su Apple Silicon: il runtime scarica il repository.",
+  "params_b": 4,
+  "format": "mlx",
+  "quant": "4bit",
+  "size_bytes": 2300000000,
+  "context_length": 40960,
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "mlx-community/Qwen3-4B-4bit",
+   "file": ""
+  },
+  "min_memory_mb": 3112,
+  "tags": [
+   "apple"
+  ]
+ },
+ {
+  "id": "apple-fm-system",
+  "name": "Apple Foundation Model",
+  "family": "Apple",
+  "publisher": "Apple",
+  "description": "Modello di sistema di Apple Intelligence: già sul dispositivo, nulla da scaricare.",
+  "params_b": 3,
+  "format": "system",
+  "quant": "2-bit QAT",
+  "size_bytes": 0,
+  "context_length": 4096,
+  "capabilities": [
+   "chat",
+   "tools",
+   "guided-generation"
+  ],
+  "license": "Apple",
+  "source": {
+   "kind": "system",
+   "runtime": "apple-fm"
+  },
+  "min_memory_mb": 0,
+  "tags": [
+   "system",
+   "mobile"
+  ]
+ },
+ {
+  "id": "gemini-nano-system",
+  "name": "Gemini Nano",
+  "family": "Gemini",
+  "publisher": "Google",
+  "description": "Modello di sistema Android (AICore), condiviso tra le app.",
+  "params_b": 3.25,
+  "format": "system",
+  "quant": "int4",
+  "size_bytes": 0,
+  "context_length": 4096,
+  "capabilities": [
+   "chat",
+   "vision"
+  ],
+  "license": "Google",
+  "source": {
+   "kind": "system",
+   "runtime": "gemini-nano"
+  },
+  "min_memory_mb": 0,
+  "tags": [
+   "system",
+   "mobile"
+  ]
+ },
+ {
+  "id": "phi-silica-system",
+  "name": "Phi Silica",
+  "family": "Phi",
+  "publisher": "Microsoft",
+  "description": "Modello di sistema dei Copilot+ PC, gira sulla NPU.",
+  "params_b": 3.3,
+  "format": "system",
+  "quant": "int4",
+  "size_bytes": 0,
+  "context_length": 4096,
+  "capabilities": [
+   "chat"
+  ],
+  "license": "Microsoft",
+  "source": {
+   "kind": "system",
+   "runtime": "phi-silica"
+  },
+  "min_memory_mb": 0,
+  "tags": [
+   "system"
+  ]
+ }
+]

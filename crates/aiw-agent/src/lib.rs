@@ -1,0 +1,241 @@
+//! Agentic layer (architecture §5): the agent loop and its policy, hooks, skills and helpers.
+
+pub mod fallback;
+pub mod hooks;
+pub mod policy;
+pub mod runner;
+pub mod skills;
+pub mod think;
+
+pub use hooks::HookConfig;
+pub use policy::{Decision, Policy, PolicyRule};
+pub use runner::{to_msgs, AgentRunner, RunHost, RunInput, RunOutcome};
+pub use skills::Skill;
+
+#[cfg(test)]
+pub(crate) mod tests_support {
+    pub use super::tests::{input, setup};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aiw_core::api::{AgentProfile, ApprovalRequest, AuditEntry, InferenceParams, InferenceProfile};
+    use aiw_core::events::AgEvent;
+    use aiw_core::Result;
+    use aiw_runtimes::{ChatBackend, ChatDelta, ScriptedBackend};
+    use aiw_tools::{ToolContext, ToolRegistry};
+    use async_trait::async_trait;
+    use serde_json::json;
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+
+    pub struct TestHost {
+        backend: ScriptedBackend,
+        tools: Arc<ToolRegistry>,
+        events: Mutex<Vec<AgEvent>>,
+        approve: bool,
+        audits: Mutex<Vec<AuditEntry>>,
+    }
+
+    #[async_trait]
+    impl RunHost for TestHost {
+        fn emit(&self, _run_id: &str, ev: AgEvent) {
+            self.events.lock().unwrap().push(ev);
+        }
+        async fn approve(&self, _req: ApprovalRequest) -> bool {
+            self.approve
+        }
+        fn audit(&self, e: AuditEntry) {
+            self.audits.lock().unwrap().push(e);
+        }
+        async fn backend(&self, _p: &InferenceProfile) -> Result<Arc<dyn ChatBackend>> {
+            Ok(Arc::new(self.backend.clone()))
+        }
+        fn tools(&self) -> Arc<ToolRegistry> {
+            self.tools.clone()
+        }
+        fn skills(&self) -> Vec<Skill> {
+            vec![]
+        }
+        async fn subagent(&self, _p: &RunInput, agent: &str, task: &str) -> Result<String> {
+            Ok(format!("{agent} ha svolto: {task}"))
+        }
+    }
+
+    pub fn setup(turns: Vec<Vec<ChatDelta>>, approve: bool) -> (Arc<TestHost>, tempfile::TempDir) {
+        let reg = ToolRegistry::default();
+        for t in aiw_tools::fs::tools() {
+            reg.register(t);
+        }
+        reg.register(Arc::new(aiw_tools::shell::ShellTool));
+        let host = Arc::new(TestHost {
+            backend: ScriptedBackend::new(turns),
+            tools: Arc::new(reg),
+            events: Mutex::new(vec![]),
+            approve,
+            audits: Mutex::new(vec![]),
+        });
+        (host, tempfile::tempdir().unwrap())
+    }
+
+    pub fn input(dir: &std::path::Path, mode: &str) -> RunInput {
+        RunInput {
+            run_id: "run_1".into(),
+            thread_id: "ses_1".into(),
+            agent: AgentProfile {
+                id: "op".into(),
+                name: "Operatore".into(),
+                description: String::new(),
+                inference_profile: "p".into(),
+                system_prompt: String::new(),
+                tools: vec!["*".into()],
+                mode: mode.into(),
+                sandbox: "workspace-write".into(),
+                max_turns: 8,
+            },
+            profile: InferenceProfile {
+                id: "p".into(),
+                name: "p".into(),
+                description: None,
+                runtime_id: "scripted".into(),
+                model: "scripted".into(),
+                params: InferenceParams { context: Some(8192), ..Default::default() },
+            },
+            history: vec![],
+            user_input: "Fai il lavoro".into(),
+            system_extra: vec![],
+            tool_ctx: ToolContext::new("run_1", dir.to_path_buf()),
+            policy: Policy { mode: mode.into(), rules: vec![], sandbox_available: true },
+            hooks: vec![],
+            compact_at: 0.8,
+            depth: 0,
+            session_allow: Arc::new(Mutex::new(HashSet::new())),
+            subagents: vec![("planner".into(), "pianifica".into())],
+        }
+    }
+
+    fn types(h: &TestHost) -> Vec<String> {
+        h.events.lock().unwrap().iter().map(|e| serde_json::to_value(e).unwrap()["type"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn read_tool_then_answer() {
+        let (host, dir) = setup(
+            vec![ScriptedBackend::tool_turn("c1", "list_dir", json!({"path": "."})), ScriptedBackend::text_turn("La cartella è vuota.")],
+            true,
+        );
+        std::fs::write(dir.path().join("a.txt"), "x").unwrap();
+        let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        assert_eq!(out.final_text, "La cartella è vuota.");
+        assert_eq!(out.new_messages.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), vec!["user", "assistant", "tool", "assistant"]);
+        assert!(out.new_messages[2].content.contains("a.txt"));
+        let t = types(&host);
+        assert_eq!(t.first().unwrap(), "RUN_STARTED");
+        assert_eq!(t.last().unwrap(), "RUN_FINISHED");
+        for needed in [
+            "TOOL_CALL_START",
+            "TOOL_CALL_ARGS",
+            "TOOL_CALL_END",
+            "TOOL_CALL_RESULT",
+            "TEXT_MESSAGE_START",
+            "TEXT_MESSAGE_CONTENT",
+            "TEXT_MESSAGE_END",
+            "STATE_SNAPSHOT",
+        ] {
+            assert!(t.contains(&needed.to_string()), "missing {needed}: {t:?}");
+        }
+        // the tool definitions were sent to the model
+        let reqs = host.backend.requests.lock().unwrap();
+        assert!(reqs[0].tools.iter().any(|t| t.function.name == "list_dir"));
+        assert!(reqs[1].messages.iter().any(|m| m.role == "tool"));
+    }
+
+    #[tokio::test]
+    async fn writes_need_approval_in_ask_mode() {
+        let turns = || {
+            vec![
+                ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "out.txt", "content": "ciao"})),
+                ScriptedBackend::text_turn("ok"),
+            ]
+        };
+        let (host, dir) = setup(turns(), false);
+        AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        assert!(!dir.path().join("out.txt").exists(), "denied write must not happen");
+        assert!(types(&host).contains(&"CUSTOM".to_string()), "approval request emitted");
+        assert!(host.audits.lock().unwrap().iter().any(|a| a.decision.as_deref() == Some("rejected")));
+
+        let (host, dir) = setup(turns(), true);
+        AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("out.txt")).unwrap(), "ciao");
+    }
+
+    #[tokio::test]
+    async fn plan_mode_denies_side_effects_without_asking() {
+        let (host, dir) = setup(
+            vec![ScriptedBackend::tool_turn("c1", "shell", json!({"command": "touch x"})), ScriptedBackend::text_turn("Ecco il piano")],
+            true,
+        );
+        let out = AgentRunner::run(input(dir.path(), "plan"), host.clone()).await.unwrap();
+        assert!(out.new_messages[2].content.contains("Negato dalla policy"));
+        assert!(!dir.path().join("x").exists());
+        assert!(!types(&host).contains(&"CUSTOM".to_string()));
+    }
+
+    #[tokio::test]
+    async fn todo_and_subagent_and_text_fallback() {
+        let turns = vec![
+            ScriptedBackend::tool_turn("c1", "todo", json!({"todos": [{"content": "Leggere", "status": "in_progress"}]})),
+            ScriptedBackend::tool_turn("c2", "agent", json!({"agent": "planner", "task": "fai un piano"})),
+            vec![
+                ChatDelta::Text(
+                    "<think>uso un tool</think>Controllo.<tool_call>{\"name\": \"list_dir\", \"arguments\": {\"path\": \".\"}}</tool_call>"
+                        .into(),
+                ),
+                ChatDelta::Done { finish_reason: Some("stop".into()) },
+            ],
+            ScriptedBackend::text_turn("Finito"),
+        ];
+        let (host, dir) = setup(turns, true);
+        let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        assert_eq!(out.final_text, "Finito");
+        let evs = host.events.lock().unwrap();
+        assert!(evs
+            .iter()
+            .any(|e| matches!(e, AgEvent::StateSnapshot { snapshot } if snapshot.todos.as_ref().map(|t| t.len()) == Some(1))));
+        assert!(evs.iter().any(|e| matches!(e, AgEvent::SubagentFinished { result: Some(r), .. } if r.contains("planner ha svolto"))));
+        assert!(evs.iter().any(|e| matches!(e, AgEvent::ReasoningMessageContent { delta, .. } if delta.contains("uso un tool"))));
+        assert!(out.new_messages.iter().any(|m| m.role == "tool" && m.name.as_deref() == Some("list_dir")), "text tool call executed");
+    }
+}
+
+#[cfg(test)]
+mod ordering_tests {
+    use super::*;
+    use aiw_runtimes::{ChatDelta, ScriptedBackend};
+    use serde_json::json;
+
+    /// A write followed by a read in the same turn must be executed in that order.
+    #[tokio::test]
+    async fn write_then_read_in_one_turn_keeps_order() {
+        let turn = vec![
+            ChatDelta::ToolCall {
+                index: 0,
+                id: Some("w".into()),
+                name: Some("write_file".into()),
+                arguments: json!({"path": "x.txt", "content": "1"}).to_string(),
+            },
+            ChatDelta::ToolCall {
+                index: 1,
+                id: Some("l".into()),
+                name: Some("list_dir".into()),
+                arguments: json!({"path": "."}).to_string(),
+            },
+            ChatDelta::Done { finish_reason: Some("tool_calls".into()) },
+        ];
+        let (host, dir) = tests_support::setup(vec![turn, ScriptedBackend::text_turn("ok")], true);
+        let out = AgentRunner::run(tests_support::input(dir.path(), "auto-edit"), host).await.unwrap();
+        let listing = out.new_messages.iter().find(|m| m.name.as_deref() == Some("list_dir")).unwrap();
+        assert!(listing.content.contains("x.txt"), "{}", listing.content);
+    }
+}

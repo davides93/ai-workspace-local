@@ -1,0 +1,2178 @@
+[
+ {
+  "id": "llama-server",
+  "name": "llama.cpp server",
+  "vendor": "ggml-org",
+  "kind": "sidecar",
+  "description": "Server OpenAI-compatibile di llama.cpp: CPU, CUDA, ROCm, Metal, Vulkan, SYCL. AIW lo avvia e lo supervisiona.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu",
+   "cuda",
+   "rocm",
+   "metal",
+   "vulkan",
+   "sycl",
+   "opencl"
+  ],
+  "formats": [
+   "gguf"
+  ],
+  "capabilities": [
+   "chat",
+   "tools",
+   "vision",
+   "embeddings",
+   "grammar"
+  ],
+  "detect": {
+   "binaries": [
+    "llama-server"
+   ]
+  },
+  "launch": {
+   "command": "llama-server",
+   "args": [
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}",
+    "-m",
+    "{model_path}",
+    "--jinja"
+   ],
+   "settings_args": {
+    "ctx_size": [
+     "-c",
+     "{value}"
+    ],
+    "gpu_layers": [
+     "-ngl",
+     "{value}"
+    ],
+    "threads": [
+     "-t",
+     "{value}"
+    ],
+    "flash_attn": [
+     "--flash-attn",
+     "on"
+    ],
+    "cache_type": [
+     "-ctk",
+     "{value}",
+     "-ctv",
+     "{value}"
+    ],
+    "parallel": [
+     "-np",
+     "{value}"
+    ],
+    "mmproj": [
+     "--mmproj",
+     "{value}"
+    ],
+    "rpc_servers": [
+     "--rpc",
+     "{value}"
+    ],
+    "extra_args": []
+   },
+   "health": "/health",
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "ctx_size": {
+     "type": "integer",
+     "title": "Finestra di contesto",
+     "default": 8192,
+     "minimum": 512,
+     "maximum": 1048576,
+     "step": 512
+    },
+    "gpu_layers": {
+     "type": "integer",
+     "title": "Layer su GPU",
+     "description": "999 = tutto su GPU, 0 = solo CPU",
+     "default": 999,
+     "minimum": 0,
+     "maximum": 999
+    },
+    "threads": {
+     "type": "integer",
+     "title": "Thread CPU",
+     "description": "vuoto = automatico",
+     "minimum": 1,
+     "maximum": 256
+    },
+    "flash_attn": {
+     "type": "boolean",
+     "title": "Flash attention",
+     "default": true
+    },
+    "cache_type": {
+     "type": "string",
+     "title": "Quantizzazione KV cache",
+     "enum": [
+      "f16",
+      "q8_0",
+      "q4_0"
+     ],
+     "default": "f16"
+    },
+    "parallel": {
+     "type": "integer",
+     "title": "Slot paralleli",
+     "default": 1,
+     "minimum": 1,
+     "maximum": 64,
+     "advanced": true
+    },
+    "mmproj": {
+     "type": "string",
+     "title": "Proiettore multimodale (mmproj)",
+     "default": "",
+     "advanced": true
+    },
+    "rpc_servers": {
+     "type": "string",
+     "title": "Worker RPC (host:porta,…) per inferenza distribuita",
+     "default": "",
+     "advanced": true
+    },
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    },
+    "extra_args": {
+     "type": "array",
+     "title": "Argomenti extra",
+     "items": {
+      "type": "string"
+     },
+     "default": [],
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "windows": "winget install llama.cpp",
+   "macos": "brew install llama.cpp",
+   "linux": "brew install llama.cpp · oppure release ggml-org/llama.cpp"
+  },
+  "homepage": "https://github.com/ggml-org/llama.cpp",
+  "api": "openai"
+ },
+ {
+  "id": "ollama",
+  "name": "Ollama",
+  "vendor": "Ollama",
+  "kind": "sidecar",
+  "api": "ollama",
+  "description": "Usa un server Ollama già attivo oppure lo avvia (`ollama serve`). Modelli gestiti con `ollama pull`.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu",
+   "cuda",
+   "rocm",
+   "metal",
+   "vulkan"
+  ],
+  "formats": [
+   "gguf"
+  ],
+  "capabilities": [
+   "chat",
+   "tools",
+   "vision",
+   "embeddings"
+  ],
+  "detect": {
+   "binaries": [
+    "ollama"
+   ]
+  },
+  "external_endpoint": "http://127.0.0.1:11434/v1",
+  "launch": {
+   "command": "ollama",
+   "args": [
+    "serve"
+   ],
+   "env": {
+    "OLLAMA_HOST": "127.0.0.1:{port}"
+   },
+   "health": "/api/version"
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    },
+    "keep_alive": {
+     "type": "string",
+     "title": "Keep alive",
+     "default": "5m",
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://ollama.com/download"
+  },
+  "homepage": "https://ollama.com"
+ },
+ {
+  "id": "lmstudio",
+  "name": "LM Studio",
+  "vendor": "Element Labs",
+  "kind": "sidecar",
+  "description": "Server locale di LM Studio con motori llama.cpp e MLX (`lms server start`).",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu",
+   "cuda",
+   "vulkan",
+   "metal"
+  ],
+  "formats": [
+   "gguf",
+   "mlx"
+  ],
+  "capabilities": [
+   "chat",
+   "tools",
+   "vision",
+   "embeddings"
+  ],
+  "detect": {
+   "binaries": [
+    "lms"
+   ]
+  },
+  "external_endpoint": "http://127.0.0.1:1234/v1",
+  "launch": {
+   "command": "lms",
+   "args": [
+    "server",
+    "start",
+    "--port",
+    "{port}"
+   ],
+   "health": "/v1/models",
+   "detached": true,
+   "fixed_port": 1234
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://lmstudio.ai"
+  },
+  "homepage": "https://lmstudio.ai",
+  "api": "openai"
+ },
+ {
+  "id": "vllm",
+  "name": "vLLM",
+  "vendor": "vLLM project",
+  "kind": "sidecar",
+  "description": "Serving ad alto throughput con PagedAttention e batching continuo. Su Windows tramite WSL2.",
+  "platforms": [
+   "linux"
+  ],
+  "accelerators": [
+   "cuda",
+   "rocm",
+   "sycl",
+   "cpu"
+  ],
+  "formats": [
+   "safetensors",
+   "awq",
+   "gptq",
+   "fp8",
+   "gguf"
+  ],
+  "capabilities": [
+   "chat",
+   "tools",
+   "vision",
+   "embeddings",
+   "grammar"
+  ],
+  "detect": {
+   "binaries": [
+    "vllm"
+   ],
+   "python_modules": [
+    "vllm"
+   ]
+  },
+  "launch": {
+   "command": "vllm",
+   "args": [
+    "serve",
+    "{model}",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}"
+   ],
+   "settings_args": {
+    "gpu_memory_utilization": [
+     "--gpu-memory-utilization",
+     "{value}"
+    ],
+    "max_model_len": [
+     "--max-model-len",
+     "{value}"
+    ],
+    "tensor_parallel_size": [
+     "--tensor-parallel-size",
+     "{value}"
+    ],
+    "quantization": [
+     "--quantization",
+     "{value}"
+    ],
+    "tool_parser": [
+     "--enable-auto-tool-choice",
+     "--tool-call-parser",
+     "{value}"
+    ],
+    "extra_args": []
+   },
+   "health": "/health",
+   "ready_timeout_s": 900,
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "gpu_memory_utilization": {
+     "type": "number",
+     "title": "Uso memoria GPU",
+     "default": 0.9,
+     "minimum": 0.1,
+     "maximum": 0.98,
+     "step": 0.01
+    },
+    "max_model_len": {
+     "type": "integer",
+     "title": "Lunghezza massima",
+     "default": 32768,
+     "minimum": 1024,
+     "maximum": 1048576
+    },
+    "tensor_parallel_size": {
+     "type": "integer",
+     "title": "Tensor parallel (GPU)",
+     "default": 1,
+     "minimum": 1,
+     "maximum": 16
+    },
+    "quantization": {
+     "type": "string",
+     "title": "Quantizzazione",
+     "enum": [
+      "auto",
+      "awq",
+      "gptq",
+      "fp8",
+      "bitsandbytes"
+     ],
+     "default": "auto"
+    },
+    "tool_parser": {
+     "type": "string",
+     "title": "Parser tool calling",
+     "enum": [
+      "hermes",
+      "llama3_json",
+      "mistral",
+      "qwen3_coder",
+      "pythonic"
+     ],
+     "default": "hermes"
+    },
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    },
+    "extra_args": {
+     "type": "array",
+     "title": "Argomenti extra",
+     "items": {
+      "type": "string"
+     },
+     "default": [],
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "linux": "pip install vllm",
+   "windows": "wsl -- pip install vllm"
+  },
+  "homepage": "https://github.com/vllm-project/vllm",
+  "api": "openai"
+ },
+ {
+  "id": "sglang",
+  "name": "SGLang",
+  "vendor": "LMSYS",
+  "kind": "sidecar",
+  "description": "Runtime con RadixAttention: riuso del prefisso ideale per agenti multi-turno.",
+  "platforms": [
+   "linux"
+  ],
+  "accelerators": [
+   "cuda",
+   "rocm"
+  ],
+  "formats": [
+   "safetensors",
+   "fp8",
+   "awq"
+  ],
+  "capabilities": [
+   "chat",
+   "tools",
+   "vision",
+   "grammar"
+  ],
+  "detect": {
+   "python_modules": [
+    "sglang"
+   ]
+  },
+  "launch": {
+   "command": "python3",
+   "args": [
+    "-m",
+    "sglang.launch_server",
+    "--model-path",
+    "{model}",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}"
+   ],
+   "settings_args": {
+    "tool_parser": [
+     "--tool-call-parser",
+     "{value}"
+    ],
+    "extra_args": []
+   },
+   "health": "/health",
+   "ready_timeout_s": 900,
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "tool_parser": {
+     "type": "string",
+     "title": "Parser tool calling",
+     "enum": [
+      "qwen25",
+      "llama3",
+      "mistral",
+      "deepseekv3"
+     ],
+     "default": "qwen25"
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    },
+    "extra_args": {
+     "type": "array",
+     "title": "Argomenti extra",
+     "items": {
+      "type": "string"
+     },
+     "default": [],
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "linux": "pip install \"sglang[all]\""
+  },
+  "homepage": "https://github.com/sgl-project/sglang",
+  "api": "openai"
+ },
+ {
+  "id": "trtllm",
+  "name": "TensorRT-LLM",
+  "vendor": "NVIDIA",
+  "kind": "sidecar",
+  "description": "`trtllm-serve` con kernel ottimizzati per GPU NVIDIA (FP8/FP4).",
+  "platforms": [
+   "linux",
+   "windows"
+  ],
+  "accelerators": [
+   "cuda"
+  ],
+  "formats": [
+   "safetensors",
+   "trt"
+  ],
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "detect": {
+   "binaries": [
+    "trtllm-serve"
+   ]
+  },
+  "launch": {
+   "command": "trtllm-serve",
+   "args": [
+    "{model}",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}"
+   ],
+   "settings_args": {
+    "extra_args": []
+   },
+   "health": "/health",
+   "ready_timeout_s": 1200,
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    },
+    "extra_args": {
+     "type": "array",
+     "title": "Argomenti extra",
+     "items": {
+      "type": "string"
+     },
+     "default": [],
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "pip install tensorrt_llm"
+  },
+  "homepage": "https://github.com/NVIDIA/TensorRT-LLM",
+  "api": "openai"
+ },
+ {
+  "id": "mlx-lm",
+  "name": "MLX LM",
+  "vendor": "Apple ML Research",
+  "kind": "sidecar",
+  "description": "Server OpenAI-compatibile di mlx-lm per Apple Silicon (memoria unificata).",
+  "platforms": [
+   "macos"
+  ],
+  "accelerators": [
+   "metal"
+  ],
+  "formats": [
+   "mlx"
+  ],
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "detect": {
+   "binaries": [
+    "mlx_lm.server"
+   ],
+   "python_modules": [
+    "mlx_lm"
+   ]
+  },
+  "launch": {
+   "command": "mlx_lm.server",
+   "args": [
+    "--model",
+    "{model}",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}"
+   ],
+   "settings_args": {
+    "extra_args": []
+   },
+   "health": "/v1/models",
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    },
+    "extra_args": {
+     "type": "array",
+     "title": "Argomenti extra",
+     "items": {
+      "type": "string"
+     },
+     "default": [],
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "macos": "pip install mlx-lm"
+  },
+  "homepage": "https://github.com/ml-explore/mlx-lm",
+  "api": "openai"
+ },
+ {
+  "id": "mlx-vlm",
+  "name": "MLX VLM",
+  "vendor": "Prince Canuma",
+  "kind": "sidecar",
+  "description": "Modelli vision-language su MLX (utile per il computer-use su Mac).",
+  "platforms": [
+   "macos"
+  ],
+  "accelerators": [
+   "metal"
+  ],
+  "formats": [
+   "mlx"
+  ],
+  "capabilities": [
+   "chat",
+   "vision"
+  ],
+  "detect": {
+   "python_modules": [
+    "mlx_vlm"
+   ]
+  },
+  "launch": {
+   "command": "python3",
+   "args": [
+    "-m",
+    "mlx_vlm.server",
+    "--model",
+    "{model}",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}"
+   ],
+   "health": "/health",
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "macos": "pip install mlx-vlm"
+  },
+  "homepage": "https://github.com/Blaizzy/mlx-vlm",
+  "api": "openai"
+ },
+ {
+  "id": "foundry-local",
+  "name": "Foundry Local",
+  "vendor": "Microsoft",
+  "kind": "sidecar",
+  "description": "Runtime LLM on-device di Microsoft: sceglie CPU, GPU o NPU e scarica la variante ONNX adatta.",
+  "platforms": [
+   "windows",
+   "macos"
+  ],
+  "accelerators": [
+   "npu",
+   "directml",
+   "cuda",
+   "cpu",
+   "metal"
+  ],
+  "formats": [
+   "onnx"
+  ],
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "detect": {
+   "binaries": [
+    "foundry"
+   ]
+  },
+  "external_endpoint": "http://127.0.0.1:5273/v1",
+  "launch": {
+   "command": "foundry",
+   "args": [
+    "service",
+    "start"
+   ],
+   "health": "/v1/models",
+   "detached": true,
+   "fixed_port": 5273
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "base_url": {
+     "type": "string",
+     "title": "Endpoint (OpenAI /v1)",
+     "default": "http://127.0.0.1:5273/v1"
+    },
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "windows": "winget install Microsoft.FoundryLocal",
+   "macos": "brew install microsoft/foundrylocal/foundrylocal"
+  },
+  "homepage": "https://github.com/microsoft/Foundry-Local",
+  "api": "openai"
+ },
+ {
+  "id": "lemonade",
+  "name": "Lemonade Server",
+  "vendor": "AMD",
+  "kind": "sidecar",
+  "description": "NPU + iGPU Ryzen AI (OGA) e llama.cpp Vulkan/ROCm dietro un'API OpenAI.",
+  "platforms": [
+   "windows",
+   "linux"
+  ],
+  "accelerators": [
+   "npu",
+   "vulkan",
+   "rocm",
+   "cpu"
+  ],
+  "formats": [
+   "onnx",
+   "gguf"
+  ],
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "detect": {
+   "binaries": [
+    "lemonade-server",
+    "lemonade-server-dev"
+   ]
+  },
+  "external_endpoint": "http://127.0.0.1:8000/api/v1",
+  "launch": {
+   "command": "lemonade-server",
+   "args": [
+    "serve",
+    "--port",
+    "{port}"
+   ],
+   "health": "/api/v1/health",
+   "api_base": "/api/v1"
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://lemonade-server.ai"
+  },
+  "homepage": "https://github.com/lemonade-sdk/lemonade",
+  "api": "openai"
+ },
+ {
+  "id": "openvino",
+  "name": "OpenVINO Model Server",
+  "vendor": "Intel",
+  "kind": "sidecar",
+  "description": "CPU, GPU e NPU Intel con modelli OpenVINO IR e API OpenAI.",
+  "platforms": [
+   "windows",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu",
+   "sycl",
+   "npu"
+  ],
+  "formats": [
+   "openvino"
+  ],
+  "capabilities": [
+   "chat",
+   "embeddings"
+  ],
+  "detect": {
+   "binaries": [
+    "ovms"
+   ]
+  },
+  "launch": {
+   "command": "ovms",
+   "args": [
+    "--rest_port",
+    "{port}",
+    "--source_model",
+    "{model}",
+    "--model_repository_path",
+    "{models_dir}",
+    "--target_device",
+    "{device}"
+   ],
+   "settings_args": {},
+   "health": "/v2/health/ready",
+   "api_base": "/v3",
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "device": {
+     "type": "string",
+     "title": "Dispositivo",
+     "enum": [
+      "CPU",
+      "GPU",
+      "NPU",
+      "AUTO"
+     ],
+     "default": "AUTO"
+    },
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://docs.openvino.ai/nightly/model-server/ovms_what_is_openvino_model_server.html"
+  },
+  "homepage": "https://github.com/openvinotoolkit/model_server",
+  "api": "openai"
+ },
+ {
+  "id": "localai",
+  "name": "LocalAI",
+  "vendor": "mudler",
+  "kind": "sidecar",
+  "description": "Server all-in-one (LLM, immagini, audio) compatibile OpenAI.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu",
+   "cuda",
+   "rocm",
+   "metal",
+   "vulkan",
+   "sycl"
+  ],
+  "formats": [
+   "gguf",
+   "safetensors"
+  ],
+  "capabilities": [
+   "chat",
+   "tools",
+   "embeddings",
+   "vision",
+   "stt",
+   "tts"
+  ],
+  "detect": {
+   "binaries": [
+    "local-ai"
+   ]
+  },
+  "external_endpoint": "http://127.0.0.1:8080/v1",
+  "launch": {
+   "command": "local-ai",
+   "args": [
+    "run",
+    "--address",
+    "127.0.0.1:{port}"
+   ],
+   "health": "/readyz"
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "curl https://localai.io/install.sh | sh"
+  },
+  "homepage": "https://localai.io",
+  "api": "openai"
+ },
+ {
+  "id": "koboldcpp",
+  "name": "KoboldCpp",
+  "vendor": "LostRuins",
+  "kind": "sidecar",
+  "description": "Fork di llama.cpp in un solo eseguibile, con API OpenAI.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu",
+   "cuda",
+   "vulkan",
+   "metal"
+  ],
+  "formats": [
+   "gguf"
+  ],
+  "capabilities": [
+   "chat",
+   "vision"
+  ],
+  "detect": {
+   "binaries": [
+    "koboldcpp"
+   ]
+  },
+  "launch": {
+   "command": "koboldcpp",
+   "args": [
+    "--model",
+    "{model_path}",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}",
+    "--quiet"
+   ],
+   "settings_args": {
+    "ctx_size": [
+     "--contextsize",
+     "{value}"
+    ],
+    "gpu_layers": [
+     "--gpulayers",
+     "{value}"
+    ],
+    "extra_args": []
+   },
+   "health": "/api/v1/model",
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "ctx_size": {
+     "type": "integer",
+     "title": "Contesto",
+     "default": 8192,
+     "minimum": 512,
+     "maximum": 262144
+    },
+    "gpu_layers": {
+     "type": "integer",
+     "title": "Layer su GPU",
+     "default": 999,
+     "minimum": 0,
+     "maximum": 999
+    },
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    },
+    "extra_args": {
+     "type": "array",
+     "title": "Argomenti extra",
+     "items": {
+      "type": "string"
+     },
+     "default": [],
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://github.com/LostRuins/koboldcpp/releases"
+  },
+  "homepage": "https://github.com/LostRuins/koboldcpp",
+  "api": "openai"
+ },
+ {
+  "id": "llamafile",
+  "name": "llamafile",
+  "vendor": "Mozilla.ai",
+  "kind": "sidecar",
+  "description": "Modello + runtime in un singolo file eseguibile multipiattaforma.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu",
+   "cuda",
+   "metal"
+  ],
+  "formats": [
+   "gguf",
+   "llamafile"
+  ],
+  "capabilities": [
+   "chat"
+  ],
+  "detect": {
+   "binaries": [
+    "llamafile"
+   ]
+  },
+  "launch": {
+   "command": "llamafile",
+   "args": [
+    "--server",
+    "--nobrowser",
+    "-m",
+    "{model_path}",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}"
+   ],
+   "health": "/health",
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://github.com/mozilla-ai/llamafile/releases"
+  },
+  "homepage": "https://github.com/mozilla-ai/llamafile",
+  "api": "openai"
+ },
+ {
+  "id": "nexa",
+  "name": "Nexa SDK",
+  "vendor": "Nexa AI",
+  "kind": "sidecar",
+  "description": "Runtime con supporto NPU (Qualcomm, Apple, Intel, AMD) e modelli multimodali.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "npu",
+   "cuda",
+   "metal",
+   "vulkan",
+   "cpu"
+  ],
+  "formats": [
+   "gguf",
+   "mlx",
+   "nexa"
+  ],
+  "capabilities": [
+   "chat",
+   "vision",
+   "stt"
+  ],
+  "detect": {
+   "binaries": [
+    "nexa"
+   ]
+  },
+  "launch": {
+   "command": "nexa",
+   "args": [
+    "serve",
+    "--host",
+    "127.0.0.1:{port}"
+   ],
+   "health": "/v1/models"
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://github.com/NexaAI/nexa-sdk"
+  },
+  "homepage": "https://github.com/NexaAI/nexa-sdk",
+  "api": "openai"
+ },
+ {
+  "id": "mistralrs",
+  "name": "mistral.rs",
+  "vendor": "Eric Buehler",
+  "kind": "sidecar",
+  "description": "Motore Rust con quantizzazione in-situ (ISQ), CUDA e Metal.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cuda",
+   "metal",
+   "cpu"
+  ],
+  "formats": [
+   "gguf",
+   "safetensors"
+  ],
+  "capabilities": [
+   "chat",
+   "tools",
+   "vision"
+  ],
+  "detect": {
+   "binaries": [
+    "mistralrs-server"
+   ]
+  },
+  "external_endpoint": "http://127.0.0.1:1234/v1",
+  "launch": {
+   "command": "mistralrs-server",
+   "args": [
+    "--port",
+    "{port}",
+    "plain",
+    "-m",
+    "{model}"
+   ],
+   "health": "/v1/models",
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "cargo install mistralrs-server"
+  },
+  "homepage": "https://github.com/EricLBuehler/mistral.rs",
+  "api": "openai"
+ },
+ {
+  "id": "tabbyapi",
+  "name": "TabbyAPI (ExLlamaV3)",
+  "vendor": "theroyallab",
+  "kind": "sidecar",
+  "description": "ExLlamaV3 per GPU NVIDIA, quantizzazioni EXL3.",
+  "platforms": [
+   "windows",
+   "linux"
+  ],
+  "accelerators": [
+   "cuda"
+  ],
+  "formats": [
+   "exl3",
+   "exl2"
+  ],
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "detect": {},
+  "external_endpoint": "http://127.0.0.1:5000/v1",
+  "settings": {
+   "type": "object",
+   "properties": {
+    "base_url": {
+     "type": "string",
+     "title": "Endpoint (OpenAI /v1)",
+     "default": "http://127.0.0.1:5000/v1"
+    },
+    "api_key": {
+     "type": "string",
+     "title": "API key (opzionale)",
+     "default": "",
+     "secret": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://github.com/theroyallab/tabbyAPI"
+  },
+  "homepage": "https://github.com/theroyallab/tabbyAPI",
+  "api": "openai"
+ },
+ {
+  "id": "exo",
+  "name": "exo (cluster)",
+  "vendor": "exo labs",
+  "kind": "sidecar",
+  "description": "Inferenza distribuita su più dispositivi della tua rete (Mac, PC, telefoni).",
+  "platforms": [
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "metal",
+   "cuda",
+   "cpu"
+  ],
+  "formats": [
+   "mlx",
+   "safetensors"
+  ],
+  "capabilities": [
+   "chat"
+  ],
+  "detect": {
+   "binaries": [
+    "exo"
+   ]
+  },
+  "external_endpoint": "http://127.0.0.1:52415/v1",
+  "launch": {
+   "command": "exo",
+   "args": [],
+   "health": "/v1/models",
+   "fixed_port": 52415
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://github.com/exo-explore/exo"
+  },
+  "homepage": "https://github.com/exo-explore/exo",
+  "api": "openai"
+ },
+ {
+  "id": "whisper-server",
+  "name": "whisper.cpp server",
+  "vendor": "ggml-org",
+  "kind": "sidecar",
+  "api": "native",
+  "description": "Trascrizione vocale locale (STT) per voice mode e trigger audio.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu",
+   "cuda",
+   "metal",
+   "vulkan"
+  ],
+  "formats": [
+   "ggml"
+  ],
+  "capabilities": [
+   "stt"
+  ],
+  "detect": {
+   "binaries": [
+    "whisper-server"
+   ]
+  },
+  "launch": {
+   "command": "whisper-server",
+   "args": [
+    "-m",
+    "{model_path}",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}"
+   ],
+   "health": "/",
+   "requires_model": true
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta (0 = automatica)",
+     "default": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "https://github.com/ggml-org/whisper.cpp"
+  },
+  "homepage": "https://github.com/ggml-org/whisper.cpp"
+ },
+ {
+  "id": "llama-embedded",
+  "name": "llama.cpp (embedded)",
+  "vendor": "ggml-org",
+  "kind": "embedded",
+  "api": "native",
+  "description": "llama.cpp collegato in-process via FFI, senza processi esterni. Default su Android e iOS.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux",
+   "android",
+   "ios"
+  ],
+  "accelerators": [
+   "cpu",
+   "cuda",
+   "metal",
+   "vulkan",
+   "opencl"
+  ],
+  "formats": [
+   "gguf"
+  ],
+  "capabilities": [
+   "chat",
+   "tools",
+   "embeddings",
+   "grammar"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "ctx_size": {
+     "type": "integer",
+     "title": "Finestra di contesto",
+     "default": 8192,
+     "minimum": 512,
+     "maximum": 1048576,
+     "step": 512
+    },
+    "gpu_layers": {
+     "type": "integer",
+     "title": "Layer su GPU",
+     "description": "999 = tutto su GPU, 0 = solo CPU",
+     "default": 999,
+     "minimum": 0,
+     "maximum": 999
+    },
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    }
+   }
+  },
+  "homepage": "https://github.com/ggml-org/llama.cpp",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "ort-genai",
+  "name": "ONNX Runtime GenAI",
+  "vendor": "Microsoft",
+  "kind": "embedded",
+  "api": "native",
+  "description": "Generazione con ONNX Runtime: DirectML, CUDA, QNN, OpenVINO, CoreML, XNNPACK.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux",
+   "android",
+   "ios"
+  ],
+  "accelerators": [
+   "directml",
+   "cuda",
+   "npu",
+   "qnn",
+   "coreml",
+   "cpu"
+  ],
+  "formats": [
+   "onnx"
+  ],
+  "capabilities": [
+   "chat"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://github.com/microsoft/onnxruntime-genai",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "windows-ml",
+  "name": "Windows ML",
+  "vendor": "Microsoft",
+  "kind": "embedded",
+  "api": "native",
+  "description": "ONNX Runtime di sistema con execution provider scaricati per NPU (Qualcomm, Intel, AMD) e GPU. Windows 11 24H2+.",
+  "platforms": [
+   "windows"
+  ],
+  "accelerators": [
+   "npu",
+   "directml",
+   "cuda"
+  ],
+  "formats": [
+   "onnx"
+  ],
+  "capabilities": [
+   "chat"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://learn.microsoft.com/windows/ai/new-windows-ml/overview",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "mlx-swift",
+  "name": "MLX Swift",
+  "vendor": "Apple ML Research",
+  "kind": "embedded",
+  "api": "native",
+  "description": "MLX in-process su iPhone, iPad e Mac tramite il plugin nativo.",
+  "platforms": [
+   "macos",
+   "ios"
+  ],
+  "accelerators": [
+   "metal"
+  ],
+  "formats": [
+   "mlx"
+  ],
+  "capabilities": [
+   "chat",
+   "vision"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://github.com/ml-explore/mlx-swift",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "core-ai",
+  "name": "Core AI / Core ML",
+  "vendor": "Apple",
+  "kind": "embedded",
+  "api": "native",
+  "description": "Modelli personalizzati su Neural Engine e GPU (Core AI da iOS/macOS 27, Core ML prima).",
+  "platforms": [
+   "macos",
+   "ios"
+  ],
+  "accelerators": [
+   "npu",
+   "metal",
+   "cpu"
+  ],
+  "formats": [
+   "coreml",
+   "mlpackage"
+  ],
+  "capabilities": [
+   "chat"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://developer.apple.com/machine-learning/",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "litert-lm",
+  "name": "LiteRT-LM",
+  "vendor": "Google AI Edge",
+  "kind": "embedded",
+  "api": "native",
+  "description": "Gemma 3n/4 on-device con CPU, GPU e NPU; drafter MTP e function calling.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux",
+   "android",
+   "ios"
+  ],
+  "accelerators": [
+   "cpu",
+   "opencl",
+   "metal",
+   "npu"
+  ],
+  "formats": [
+   "litertlm"
+  ],
+  "capabilities": [
+   "chat",
+   "vision",
+   "audio",
+   "tools"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://github.com/google-ai-edge/LiteRT-LM",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "executorch",
+  "name": "ExecuTorch",
+  "vendor": "Meta / PyTorch",
+  "kind": "embedded",
+  "api": "native",
+  "description": "Runtime PyTorch per l'edge: delegati XNNPACK, CoreML, MPS, QNN, Vulkan, MediaTek.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux",
+   "android",
+   "ios"
+  ],
+  "accelerators": [
+   "cpu",
+   "coreml",
+   "metal",
+   "qnn",
+   "vulkan",
+   "npu"
+  ],
+  "formats": [
+   "pte"
+  ],
+  "capabilities": [
+   "chat"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://github.com/pytorch/executorch",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "mlc-llm",
+  "name": "MLC LLM",
+  "vendor": "MLC AI",
+  "kind": "embedded",
+  "api": "native",
+  "description": "Compilazione TVM per Vulkan, Metal, CUDA, OpenCL e WebGPU.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux",
+   "android",
+   "ios"
+  ],
+  "accelerators": [
+   "vulkan",
+   "metal",
+   "cuda",
+   "opencl"
+  ],
+  "formats": [
+   "mlc"
+  ],
+  "capabilities": [
+   "chat"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://github.com/mlc-ai/mlc-llm",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "apple-fm",
+  "name": "Apple Foundation Models",
+  "vendor": "Apple",
+  "kind": "system",
+  "api": "native",
+  "description": "Modello di sistema on-device (~3B) di Apple Intelligence, con guided generation e tool. iOS/macOS 26+.",
+  "platforms": [
+   "macos",
+   "ios"
+  ],
+  "accelerators": [
+   "npu",
+   "metal"
+  ],
+  "formats": [
+   "system"
+  ],
+  "capabilities": [
+   "chat",
+   "tools",
+   "guided-generation"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://developer.apple.com/documentation/foundationmodels",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "gemini-nano",
+  "name": "Gemini Nano (ML Kit GenAI)",
+  "vendor": "Google",
+  "kind": "system",
+  "api": "native",
+  "description": "Prompt API su AICore, modello condiviso tra le app. Solo con l'app in primo piano.",
+  "platforms": [
+   "android"
+  ],
+  "accelerators": [
+   "npu"
+  ],
+  "formats": [
+   "system"
+  ],
+  "capabilities": [
+   "chat",
+   "vision"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://developers.google.com/ml-kit/genai",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "phi-silica",
+  "name": "Phi Silica (Windows AI APIs)",
+  "vendor": "Microsoft",
+  "kind": "system",
+  "api": "native",
+  "description": "Modello di sistema dei Copilot+ PC eseguito sulla NPU.",
+  "platforms": [
+   "windows"
+  ],
+  "accelerators": [
+   "npu"
+  ],
+  "formats": [
+   "system"
+  ],
+  "capabilities": [
+   "chat"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "temperature": {
+     "type": "number",
+     "title": "Temperatura",
+     "default": 0.7,
+     "minimum": 0,
+     "maximum": 2,
+     "step": 0.05
+    },
+    "max_tokens": {
+     "type": "integer",
+     "title": "Token massimi",
+     "default": 1024,
+     "minimum": 16,
+     "maximum": 32768
+    }
+   }
+  },
+  "homepage": "https://learn.microsoft.com/windows/ai/apis/phi-silica",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "remote-openai",
+  "name": "Endpoint compatibile OpenAI",
+  "vendor": "Personalizzato",
+  "kind": "remote",
+  "description": "Qualsiasi server OpenAI-compatibile nella tua rete (vLLM su un server, LocalAI, un altro PC…).",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux",
+   "android",
+   "ios"
+  ],
+  "accelerators": [],
+  "formats": [],
+  "capabilities": [
+   "chat",
+   "tools",
+   "vision"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "base_url": {
+     "type": "string",
+     "title": "Endpoint (OpenAI /v1)",
+     "default": "",
+     "placeholder": "http://192.168.1.10:8000/v1"
+    },
+    "api_key": {
+     "type": "string",
+     "title": "API key (opzionale)",
+     "default": "",
+     "secret": true
+    },
+    "timeout_s": {
+     "type": "integer",
+     "title": "Timeout (s)",
+     "default": 600,
+     "minimum": 5,
+     "maximum": 7200,
+     "advanced": true
+    }
+   }
+  },
+  "api": "openai",
+  "detect": {},
+  "install": {}
+ },
+ {
+  "id": "aiw-peer",
+  "name": "Dispositivo AIW accoppiato",
+  "vendor": "AI Workspace Local",
+  "kind": "remote",
+  "description": "Usa i runtime di un altro dispositivo AIW in LAN tramite il suo gateway /v1 (serve il token di pairing).",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux",
+   "android",
+   "ios"
+  ],
+  "accelerators": [],
+  "formats": [],
+  "capabilities": [
+   "chat",
+   "tools",
+   "vision"
+  ],
+  "settings": {
+   "type": "object",
+   "properties": {
+    "base_url": {
+     "type": "string",
+     "title": "Endpoint (OpenAI /v1)",
+     "default": "",
+     "placeholder": "http://192.168.1.20:7777/v1"
+    },
+    "api_key": {
+     "type": "string",
+     "title": "API key (opzionale)",
+     "default": "",
+     "secret": true
+    },
+    "timeout_s": {
+     "type": "integer",
+     "title": "Timeout (s)",
+     "default": 600,
+     "minimum": 5,
+     "maximum": 7200,
+     "advanced": true
+    }
+   }
+  },
+  "api": "openai",
+  "detect": {},
+  "install": {}
+ }
+]

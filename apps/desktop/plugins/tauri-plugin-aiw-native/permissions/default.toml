@@ -1,0 +1,5 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Lets the app query and run the platform's on-device models."
+permissions = ["allow-availability", "allow-generate"]

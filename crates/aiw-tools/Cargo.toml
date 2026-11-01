@@ -1,0 +1,35 @@
+[package]
+name = "aiw-tools"
+description = "Agent tools: files, search, sandboxed shell, web fetch, CDP browser, computer-use and MCP client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# Desktop screen capture + synthetic input (xcap + enigo). Needs X11/Wayland libs on Linux.
+computer-use = ["dep:xcap", "dep:enigo", "dep:image"]
+
+[dependencies]
+aiw-core.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+futures.workspace = true
+globset.workspace = true
+ignore.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+which.workspace = true
+chrono.workspace = true
+xcap = { version = "0.9", optional = true }
+enigo = { version = "0.6", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,10 @@
+/target
+**/node_modules
+apps/ui/dist
+apps/ui/dist-mockup
+apps/desktop/src-tauri/gen/schemas
+apps/desktop/src-tauri/target
+*.gguf
+*.log
+.DS_Store
+.aiw-dev/
