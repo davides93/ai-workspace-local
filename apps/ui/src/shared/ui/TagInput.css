@@ -1,0 +1,20 @@
+/* TagInput: removable tags and a free text field inside one bordered box. Tokens only. */
+.taginput {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-height: 36px; width: 100%; padding: 4px 6px;
+  border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface); font-size: var(--fs-sm); cursor: text;
+}
+.taginput:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
+.taginput.is-disabled { opacity: 0.6; cursor: not-allowed; }
+.ti-tag {
+  display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 1px 2px 1px 8px; border-radius: 5px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--fg); font-size: 0.78rem;
+}
+.ti-text { overflow: hidden; text-overflow: ellipsis; white-space: pre; min-width: 0; }
+.ti-x {
+  display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px;
+  background: transparent; color: var(--fg-muted); cursor: pointer; flex: none;
+}
+.ti-x:hover:not(:disabled) { background: var(--surface-3); color: var(--fg); }
+.ti-x:focus-visible { outline-offset: 0; }
+.taginput-field { flex: 1 1 9ch; min-width: 9ch; border: 0; outline: none; background: transparent; padding: 3px 4px; font: inherit; color: inherit; }
+@media (pointer: coarse) { .ti-x { width: 28px; height: 28px; } }

@@ -56,6 +56,9 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run build:mockup
+      # Every route of the mockup at 1440 and 390 px, light and dark: no console errors, no horizontal scroll.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:smoke
 
   desktop-linux:
     name: Tauri shell (Linux compile)

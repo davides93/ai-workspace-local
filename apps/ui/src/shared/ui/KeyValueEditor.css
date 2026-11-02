@@ -1,0 +1,9 @@
+/* KeyValueEditor: name / value rows. Two columns on wide screens, stacked on phones. */
+.kve { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.kve-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto; gap: var(--space-2); align-items: center; }
+.kve-actions { display: flex; gap: 2px; align-items: center; }
+@media (max-width: 520px) {
+  .kve-row { grid-template-columns: minmax(0, 1fr) auto; padding-bottom: var(--space-2); border-bottom: 1px dashed var(--line); }
+  .kve-key, .kve-value { grid-column: 1; }
+  .kve-actions { grid-column: 2; grid-row: 1 / span 2; flex-direction: column; justify-content: center; }
+}

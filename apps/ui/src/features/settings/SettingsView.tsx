@@ -1,94 +1,73 @@
 import { useState } from "react";
 import { useTheme } from "../../shared/lib/theme";
-import { Chip, Page, PageHeader, QueryState, Segmented, Toggle } from "../../shared/ui";
-import type { ConfigView, FieldSchema } from "../../shared/api/types";
+import { Button, EmptyState, Field, Icon, Input, Page, PageHeader, QueryState, Section, Segmented } from "../../shared/ui";
 import { useConfig, useSetConfig } from "./api";
+import { LayerBar } from "./components/LayerBar";
+import { SettingRow } from "./components/SettingRow";
+import { configTheme, groupSettings, isTheme, LAYER_LABEL, THEME_LABEL, THEMES, winningLayer, type WritableLayer } from "./model/config";
+import "./settings.css";
 
-type Layer = "global" | "device" | "workspace";
-const LAYERS: Layer[] = ["global", "device", "workspace"];
-const LAYER_LABEL: Record<string, string> = { defaults: "default", global: "globale", device: "device", workspace: "workspace" };
-
-function winner(view: ConfigView, key: string): string {
-  let w = "defaults";
-  for (const l of view.layers) if (key in l.values) w = l.name;
-  return w;
-}
-
+/** `#/settings` — the layered configuration (default → global → device → workspace) with the winning layer of every value. */
 export function SettingsView() {
   const cfg = useConfig();
   const setConfig = useSetConfig();
   const [theme, setTheme] = useTheme();
-  const [layer, setLayer] = useState<Layer>("global");
+  const [layer, setLayer] = useState<WritableLayer>("global");
+  const [query, setQuery] = useState("");
 
-  const setValue = (key: string, value: unknown) => setConfig.mutate({ layer, key, value, layerLabel: LAYER_LABEL[layer] });
+  const commit = (key: string, title: string, value: unknown) => {
+    setConfig.mutate({ layer, key, value, title });
+    // The theme is applied here as well: the choice shows at once, whatever the layer says.
+    if (key === "ui.theme" && isTheme(value)) setTheme(value);
+  };
+  const chooseTheme = (t: typeof theme) => {
+    setTheme(t);
+    commit("ui.theme", "Tema", t);
+  };
+  const wanted = configTheme(cfg.data);
 
   return (
     <Page>
       <PageHeader
         eyebrow="Controllo" title="Impostazioni"
         subtitle="Configurazione a strati: default → globale → device → workspace. Per ogni valore vedi quale strato vince."
-        actions={<Segmented label="Tema" value={theme} onChange={setTheme} options={[{ id: "system", label: "Sistema" }, { id: "light", label: "Chiaro" }, { id: "dark", label: "Scuro" }]} />}
+        actions={<Segmented label="Tema" value={theme} onChange={chooseTheme} options={THEMES.map((t) => ({ id: t, label: THEME_LABEL[t] }))} />}
       />
-
-      <div className="row mb-3">
-        <span className="muted text-sm">Scrivi nello strato:</span>
-        <Segmented label="Strato di destinazione" value={layer} onChange={setLayer} options={LAYERS.map((l) => ({ id: l, label: LAYER_LABEL[l] }))} />
-        <span className="faint mono text-xs">{cfg.data?.layers.find((l) => l.name === layer)?.path}</span>
-      </div>
+      {cfg.data && wanted && wanted !== theme && (
+        <p className="set-note text-sm">
+          <Icon name="info" size={15} />
+          <span>
+            La configurazione ({LAYER_LABEL[winningLayer(cfg.data, "ui.theme")]}) indica il tema «{THEME_LABEL[wanted]}», ma questo dispositivo usa «{THEME_LABEL[theme]}».
+          </span>
+          <Button size="sm" onClick={() => setTheme(wanted)}>Usa la configurazione</Button>
+        </p>
+      )}
 
       <QueryState query={cfg}>
-        {(view) => (
-          <div className="table-wrap">
-            <table className="data" aria-label="Impostazioni">
-              <thead><tr><th>Impostazione</th><th>Valore effettivo</th><th>Strati</th><th>Modifica ({LAYER_LABEL[layer]})</th></tr></thead>
-              <tbody>
-                {Object.entries(view.schema.properties).map(([key, f]) => {
-                  const w = winner(view, key);
-                  return (
-                    <tr key={key}>
-                      <td><b>{f.title ?? key}</b><div className="mono faint text-xs">{key}</div></td>
-                      <td className="mono">{JSON.stringify(view.effective[key] ?? f.default)}</td>
-                      <td>
-                        <div className="chips">
-                          {view.layers.filter((l) => key in l.values).map((l) => (
-                            <Chip key={l.name} hot={l.name === w} title={`${LAYER_LABEL[l.name]}: ${JSON.stringify(l.values[key])}`}>{LAYER_LABEL[l.name]}</Chip>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="cell-edit">
-                        {/* The key resets the input when the target layer changes, so it never shows a stale value. */}
-                        <ConfigInput key={`${layer}-${key}`} id={`cfg-${key}`} field={f} value={view.layers.find((l) => l.name === layer)?.values[key] ?? view.effective[key]} onCommit={(v) => setValue(key, v)} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {(view) => {
+          const groups = groupSettings(view.schema, query);
+          return (
+            <>
+              <LayerBar view={view} layer={layer} onLayer={setLayer} />
+              <Field label="Cerca un'impostazione" htmlFor="set-search" className="set-search">
+                <Input id="set-search" type="search" placeholder="Nome, chiave o descrizione" value={query} onChange={(e) => setQuery(e.target.value)} />
+              </Field>
+              {groups.length === 0 && (
+                <EmptyState icon="search" title="Nessuna impostazione corrisponde" description="Prova con un altro termine." action={<Button onClick={() => setQuery("")}>Cancella la ricerca</Button>} />
+              )}
+              {groups.map(({ section, entries }) => (
+                <Section key={section.id} title={section.title} hint={section.description}>
+                  <div className="panel">
+                    <ul className="set-list">
+                      {entries.map((e) => <SettingRow key={e.key} view={view} entry={e} layer={layer} onCommit={commit} />)}
+                    </ul>
+                  </div>
+                </Section>
+              ))}
+            </>
+          );
+        }}
       </QueryState>
     </Page>
-  );
-}
-
-function ConfigInput({ id, field, value, onCommit }: { id: string; field: FieldSchema; value: unknown; onCommit: (v: unknown) => void }) {
-  const initial = value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value);
-  const [v, setV] = useState<string>(initial);
-  if (field.type === "boolean") return <Toggle id={id} label={field.title} checked={!!value} onChange={onCommit} />;
-  if (field.enum) {
-    return (
-      <select id={id} className="input" aria-label={field.title} value={String(value ?? "")} onChange={(e) => onCommit(e.target.value)}>
-        {field.enum.map((o) => <option key={String(o)} value={String(o)}>{String(o)}</option>)}
-      </select>
-    );
-  }
-  // Write on blur only when the value actually changed (tabbing through a field must not save).
-  const commit = () => {
-    if (v === initial) return;
-    onCommit(field.type === "integer" ? parseInt(v, 10) : field.type === "number" ? parseFloat(v) : v);
-  };
-  return (
-    <input id={id} className="input mono" aria-label={field.title} value={v} onChange={(e) => setV(e.target.value)}
-      onBlur={commit} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
   );
 }

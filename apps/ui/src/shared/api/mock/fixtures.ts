@@ -294,9 +294,10 @@ tools.push(
 );
 
 export const mcp: McpServer[] = [
-  { id: "mcp_fs", name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Workspace"], enabled: true, status: "connected", tools: ["search_files", "read_text_file", "directory_tree"] },
-  { id: "mcp_gh", name: "github", transport: "http", url: "http://127.0.0.1:8931/mcp", enabled: true, status: "connected", tools: ["list_issues", "create_issue"] },
+  { id: "mcp_fs", name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Workspace"], env: { LOG_LEVEL: "info" }, enabled: true, status: "connected", tools: ["search_files", "read_text_file", "directory_tree"] },
+  { id: "mcp_gh", name: "github", transport: "http", url: "http://127.0.0.1:8931/mcp", headers: { Authorization: "Bearer ghp_demo_0000" }, enabled: true, status: "connected", tools: ["list_issues", "create_issue"] },
   { id: "mcp_pw", name: "playwright", transport: "stdio", command: "npx", args: ["@playwright/mcp@latest"], enabled: false, status: "disconnected", tools: [] },
+  { id: "mcp_db", name: "postgres", transport: "stdio", command: "uvx", args: ["mcp-server-postgres", "--dsn", "postgresql://localhost/app"], env: { PGPASSWORD: "demo" }, enabled: true, status: "error", tools: [], error: "spawn uvx ENOENT: comando non trovato nel PATH" },
 ];
 
 export const workflows: WorkflowDef[] = [
@@ -348,15 +349,17 @@ export const configSchema: SettingsSchema = {
     "policy.mode": { type: "string", title: "Modalità di approvazione", enum: ["plan", "ask", "auto-edit", "auto", "yolo"], default: "ask" },
     "sandbox.mode": { type: "string", title: "Sandbox", enum: ["read-only", "workspace-write", "off"], default: "workspace-write" },
     "context.compact_at": { type: "number", title: "Compatta il contesto al", default: 0.8, minimum: 0.3, maximum: 0.95, step: 0.05 },
+    "network.allow_domains": { type: "array", title: "Domini consentiti a web/browser (vuoto = tutti i pubblici)", items: { type: "string" }, default: [] },
     "server.lan": { type: "boolean", title: "Accesso dalla LAN (richiede pairing)", default: false },
     "server.port": { type: "integer", title: "Porta API", default: 7777, minimum: 1024, maximum: 65535 },
     "models.dir": { type: "string", title: "Cartella modelli", default: "~/.aiw/models" },
+    "workspace.root": { type: "string", title: "Cartella di lavoro degli agenti", default: "" },
     "telemetry.otlp": { type: "string", title: "Endpoint OTLP (vuoto = disattivato)", default: "" },
   },
 };
 export const configLayers: ConfigView["layers"] = [
   { name: "defaults", values: Object.fromEntries(Object.entries(configSchema.properties).map(([k, v]) => [k, v.default])) },
-  { name: "global", path: "~/.aiw/config.json", values: { "ui.theme": "system", "models.dir": "D:\\Modelli", "server.lan": true } },
+  { name: "global", path: "~/.aiw/config.json", values: { "ui.theme": "system", "models.dir": "D:\\Modelli", "server.lan": true, "network.allow_domains": ["docs.rs", "crates.io"] } },
   { name: "device", path: "~/.aiw/devices/Studio-PC.json", values: { "context.compact_at": 0.85 } },
   { name: "workspace", path: "Workspace/.aiw/config.json", values: { "policy.mode": "auto-edit" } },
 ];
