@@ -1,5 +1,5 @@
 import { MutationCache, QueryClient } from "@tanstack/react-query";
-import { errorMessage, isUnauthorized } from "../lib/errors";
+import { errorMessage, errorStatus } from "../lib/errors";
 import { toast } from "../lib/toast";
 
 /** Defaults of docs/design/UI-ARCHITECTURE.md §2. */
@@ -9,9 +9,13 @@ export const QUERY_DEFAULTS = {
   refetchIntervalInBackground: false,
 } as const;
 
-/** Retry once on network or server errors, never on 401 (the pairing screen handles it). */
+/**
+ * Retry once on network or server errors, never on a 4xx: asking again gets the same answer (a 401 is for the
+ * pairing screen, a 404 means the thing is gone, a 400 means the request itself is wrong).
+ */
 export function shouldRetry(failureCount: number, error: unknown): boolean {
-  if (isUnauthorized(error)) return false;
+  const status = errorStatus(error);
+  if (status !== undefined && status >= 400 && status < 500) return false;
   return failureCount < 1;
 }
 

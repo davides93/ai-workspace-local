@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { emptyRow } from "../../../shared/lib/kvRows";
 import type { McpServer } from "../../../shared/api/types";
-import { draftFromServer, draftToPayload, emptyDraft, isSecretKey, normalizeName, serverTarget, splitCommandLine, validateDraft } from "./mcpForm";
+import { draftFromServer, draftToPayload, emptyDraft, isHttpUrl, isSecretKey, normalizeName, serverTarget, splitCommandLine, validateDraft } from "./mcpForm";
 
 const stdio: McpServer = {
   id: "m1", name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "server-fs", "~/My Documents"],
@@ -29,6 +29,13 @@ describe("draft <-> payload", () => {
     expect(p).not.toHaveProperty("command");
     expect(p).not.toHaveProperty("args");
     expect(p).not.toHaveProperty("env");
+  });
+  it("sends the mask of an untouched secret back as it came, and what the user typed otherwise", () => {
+    const masked: McpServer = { ...http, headers: { Authorization: "••••••", Accept: "application/json" }, env: undefined };
+    const d = draftFromServer(masked);
+    expect(draftToPayload(d)).toMatchObject({ headers: { Authorization: "••••••", Accept: "application/json" } });
+    const changed = { ...d, headers: d.headers.map((r) => (r.key === "Authorization" ? { ...r, value: "Bearer nuovo" } : r)) };
+    expect(draftToPayload(changed)).toMatchObject({ headers: { Authorization: "Bearer nuovo", Accept: "application/json" } });
   });
   it("omits empty env and headers, and the id of a new server", () => {
     const p = draftToPayload({ ...emptyDraft(), name: "a b", command: "node", env: [emptyRow("", "x")] });
@@ -61,9 +68,33 @@ describe("validateDraft", () => {
   });
 });
 
+describe("masked secrets", () => {
+  const masked: McpServer = { ...http, headers: { Authorization: "••••••" } };
+  const ok = { ...draftFromServer(masked), name: "gh" };
+  it("keeps an untouched mask valid", () => {
+    expect(validateDraft(ok, [])).toEqual({});
+  });
+  it("refuses a mask that has no stored secret behind it (renamed row, or typed by hand)", () => {
+    const renamed = { ...ok, headers: ok.headers.map((r) => ({ ...r, key: "X-Token" })) };
+    expect(validateDraft(renamed, []).headers).toMatch(/X-Token/);
+    const typed = { ...ok, headers: [...ok.headers, emptyRow("X-Api-Key", "••••••")] };
+    expect(validateDraft(typed, []).headers).toMatch(/X-Api-Key/);
+    const stdio2 = { ...emptyDraft(), name: "fs", command: "npx", env: [emptyRow("GITHUB_TOKEN", "••••••")] };
+    expect(validateDraft(stdio2, []).env).toMatch(/GITHUB_TOKEN/);
+  });
+});
+
+describe("isHttpUrl", () => {
+  it("accepts only http and https addresses with a host", () => {
+    expect(isHttpUrl("http://127.0.0.1:8931/mcp")).toBe(true);
+    expect(isHttpUrl("https://x.test")).toBe(true);
+    for (const u of ["ftp://x.test", "x.test", "http://", "file:///etc/passwd", ""]) expect(isHttpUrl(u), u).toBe(false);
+  });
+});
+
 describe("isSecretKey", () => {
-  it("masks credentials by name", () => {
-    for (const k of ["Authorization", "authorization", "X-Api-Key", "GITHUB_TOKEN", "OPENAI_API_KEY", "client_secret", "DB_PASSWORD", "Cookie"]) expect(isSecretKey(k)).toBe(true);
+  it("masks credentials by name (the backend's list: auth, cookie, token, key, secret, password, passwd, credential, signature)", () => {
+    for (const k of ["Authorization", "authorization", "X-Api-Key", "GITHUB_TOKEN", "OPENAI_API_KEY", "client_secret", "DB_PASSWORD", "Cookie", "x-signature", " Set-Cookie "]) expect(isSecretKey(k)).toBe(true);
     for (const k of ["LOG_LEVEL", "Content-Type", "PATH", "Accept"]) expect(isSecretKey(k)).toBe(false);
   });
 });

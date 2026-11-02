@@ -4,7 +4,7 @@ import { ApprovalCard } from "../../approvals/components/ApprovalCard";
 import { A2uiSurface, type A2uiAction } from "../a2ui";
 import type { ApprovalRequest } from "../../../shared/api/types";
 import type { Item } from "../model/items";
-import { describeRunError, isStandardErrorMessage } from "../model/runNotice";
+import { describeRunError, errorDetail } from "../model/runNotice";
 import { CopyMessage } from "./CopyMessage";
 import { RunNote } from "./RunNote";
 import { ToolCard } from "./ToolCard";
@@ -87,7 +87,7 @@ export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, 
     case "error":
       return (
         <div className="ws-msg ws-assistant">
-          <RunNote live info={describeRunError(it.code)} message={isStandardErrorMessage(it.code, it.message) ? undefined : it.message} />
+          <RunNote live={!it.stored} info={describeRunError(it.code)} message={errorDetail(it.code, it.message)} />
         </div>
       );
   }

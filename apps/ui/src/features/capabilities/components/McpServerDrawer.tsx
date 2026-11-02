@@ -1,9 +1,8 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { McpServer } from "../../../shared/api/types";
 import { splitShellWords } from "../../../shared/lib/tokens";
-import { Button, Drawer, Field, Icon, Input, Toggle } from "../../../shared/ui";
-import { KeyValueEditor } from "../../../shared/ui/KeyValueEditor";
-import { TagInput } from "../../../shared/ui/TagInput";
+import { SECRET_MASK } from "../../../shared/lib/secrets";
+import { Button, Drawer, Field, Icon, Input, KeyValueEditor, TagInput, Toggle } from "../../../shared/ui";
 import {
   draftFromServer, draftToPayload, emptyDraft, isSecretKey, normalizeName, splitCommandLine, validateDraft,
   type McpDraft, type McpPayload, type McpTransportKind,
@@ -49,6 +48,8 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
     setSubmitted(true);
     const first = (["name", "command", "url"] as const).find((k) => errors[k]);
     if (first) return void document.getElementById(`mcp-${first}`)?.focus();
+    if (errors.env) return void document.getElementById("mcp-env-v0")?.focus();
+    if (errors.headers) return void document.getElementById("mcp-hdr-v0")?.focus();
     if (Object.keys(errors).length === 0) onSave(draftToPayload(draft));
   };
 
@@ -98,10 +99,10 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
             <Field label="Argomenti" htmlFor="mcp-args" hint="Invio aggiunge un argomento (anche incollando una riga). Le virgolette tengono insieme gli spazi: &quot;~/Mie Cartelle&quot;.">
               <TagInput id="mcp-args" label="Argomenti" value={draft.args} onChange={(args) => patch({ args })} parse={splitShellWords} placeholder={'-y @modelcontextprotocol/server-filesystem "~/Mie Cartelle"'} />
             </Field>
-            <GroupField label="Variabili d'ambiente" error={shown.env} hint="I valori di chiavi, token e password sono nascosti.">
+            <GroupField label="Variabili d'ambiente" error={shown.env} hint="I valori di chiavi, token e password sono nascosti: quelli già salvati restano invariati finché non li cambi.">
               <KeyValueEditor
                 idPrefix="mcp-env" label="Variabili d'ambiente" rows={draft.env} onChange={(env) => patch({ env })} keyLabel="Variabile" valueLabel="Valore"
-                keyPlaceholder="GITHUB_TOKEN" isSecret={isSecretKey} addLabel="Aggiungi variabile" emptyText="Nessuna variabile oltre a quelle dell'app."
+                keyPlaceholder="GITHUB_TOKEN" isSecret={isSecretKey} mask={SECRET_MASK} addLabel="Aggiungi variabile" emptyText="Nessuna variabile oltre a quelle dell'app."
               />
             </GroupField>
           </>
@@ -110,10 +111,10 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
             <Field label="Indirizzo" htmlFor="mcp-url" error={shown.url} hint="Endpoint MCP in streamable HTTP.">
               <Input id="mcp-url" mono value={draft.url} placeholder="http://127.0.0.1:8931/mcp" aria-invalid={!!shown.url} autoComplete="off" spellCheck={false} onChange={(e) => patch({ url: e.target.value })} />
             </Field>
-            <GroupField label="Header HTTP" error={shown.headers} hint="Authorization e gli header che contengono token o chiavi sono nascosti.">
+            <GroupField label="Header HTTP" error={shown.headers} hint="Authorization e gli header che contengono token o chiavi sono nascosti: quelli già salvati restano invariati finché non li cambi.">
               <KeyValueEditor
                 idPrefix="mcp-hdr" label="Header HTTP" rows={draft.headers} onChange={(headers) => patch({ headers })} keyLabel="Header" valueLabel="Valore"
-                keyPlaceholder="Authorization" valuePlaceholder="Bearer …" isSecret={isSecretKey} addLabel="Aggiungi header" emptyText="Nessun header aggiuntivo."
+                keyPlaceholder="Authorization" valuePlaceholder="Bearer …" isSecret={isSecretKey} mask={SECRET_MASK} addLabel="Aggiungi header" emptyText="Nessun header aggiuntivo."
               />
             </GroupField>
           </>

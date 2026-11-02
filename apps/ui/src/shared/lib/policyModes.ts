@@ -1,5 +1,5 @@
 import type { PolicyMode, SandboxMode, ToolRisk } from "../api/types";
-import type { PillTone } from "../ui/Pill";
+import type { PillTone } from "../ui";
 
 /** Approval modes of an agent (crates/aiw-agent/src/policy.rs), with what each one really does. */
 export const APPROVAL_MODES: { id: PolicyMode; label: string; summary: string; detail: string; tone: PillTone }[] = [

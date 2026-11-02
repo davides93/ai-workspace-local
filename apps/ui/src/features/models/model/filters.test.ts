@@ -29,6 +29,18 @@ describe("fit and origin", () => {
     // an unknown or missing origin (older backend) is a plain file in the models folder
     expect(isExternalOrigin(undefined)).toBe(false);
     expect(originInfo("???").label).toBe("Manuale");
+    // the backend sends "" for a model whose origin it does not know (older stores, files copied by hand)
+    expect(originInfo("").label).toBe("Manuale");
+    expect(isExternalOrigin("")).toBe(false);
+  });
+});
+
+describe("a model with an empty origin", () => {
+  const legacy = local({ id: "old", name: "Vecchio", origin: "", size_bytes: 100 });
+  it("is read as a manual file: it matches the manual filter and is counted as manual", () => {
+    expect(filterInstalled([legacy], { q: "", origin: "manual", format: "" })).toHaveLength(1);
+    expect(filterInstalled([legacy], { q: "", origin: "aiw", format: "" })).toHaveLength(0);
+    expect(originCounts([legacy])).toEqual({ manual: 1 });
   });
 });
 

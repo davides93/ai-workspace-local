@@ -13,7 +13,7 @@
 3. **Ogni layer è configurabile, senza schermate scritte a mano**: i form di runtime e
    impostazioni sono generati dai `settings_schema` dei manifest.
 4. **Una UI per tutti i dispositivi**: rail laterale su desktop, tab bar in basso su telefono,
-   pannelli che diventano sheet sotto i 1180 px e i 760 px.
+   pannelli che diventano drawer sotto i 1320 px e sheet sotto i 760 px.
 
 ## 2. Identità visiva: "rack di strumenti"
 
@@ -33,17 +33,26 @@ tok/s, classi di device XS–XL, codice di pairing.
 
 ## 3. Architettura dell'informazione
 
+Una sola tabella di rotte (`apps/ui/src/app/routes.tsx`) genera rail, tab bar, foglio "Altro" e
+palette comandi. Cinque gruppi, dodici sezioni:
+
 | Gruppo | Sezione | Contenuto |
 |---|---|---|
-| Lavoro | **Workspace** | Sessioni · conversazione con reasoning, tool card, conferme, subagenti · pannello del run (runtime/modello, tok/s, contesto, piano) |
-| | **Agenti** | Profili agente (prompt, tool, modalità, sandbox, turni) · profili di inferenza |
-| | **Workflow** | Elenco con trigger · passi a timeline · sorgente JSON/YAML · esecuzioni |
-| Inferenza | **Runtime** | Catalogo per tipo (sidecar, embedded, di sistema, remoti) · avvio/stop · impostazioni generate |
-| | **Modelli** | Installati · catalogo con compatibilità per il device · download con progresso |
-| | **Dispositivi** | Profilo hardware, classe del device, acceleratori · dispositivi accoppiati, pairing |
-| Controllo | **Tool e MCP** | Server MCP (stdio/HTTP) · tool con rischio e on/off |
-| | **Attività** | Audit trail filtrabile |
+| — | **Panoramica** | Azioni rapide (nuova sessione, scarica un modello, avvia il runtime, palette) · checklist di primo avvio finché manca qualcosa · device e acceleratori, runtime attivi, modello del profilo predefinito, conferme in attesa, sessioni recenti, download in corso |
+| Lavoro | **Workspace** | Sessioni (ricerca, per giorno, rinomina, worktree git) · conversazione con reasoning, tool card con miniature degli screenshot, conferme, subagenti, interfacce A2UI, errori del run · pannello del run (runtime/modello, tok/s, contesto, piano, worktree) |
+| | **Agenti** | Elenco e dettaglio di un agente: identità, modello, tool (selettore a gruppi, con i tool interni), sicurezza (modalità, sandbox, turni) · profili di inferenza |
+| | **Workflow** | Elenco con trigger e prossima esecuzione · editor visuale dei passi a timeline · sorgente JSON · esecuzioni con l'esito di ogni passo |
+| Capacità | **Tool, MCP e browser** | Tool per categoria con rischio e on/off (i tool interni dell'agente sempre attivi) · server MCP stdio/HTTP, con env e header (segreti mascherati) · browser controllato e computer-use |
+| | **Integrazioni** | Endpoint OpenAI, Anthropic, MCP, A2A e webhook con esempi per linguaggio · uso da un altro dispositivo con token |
+| Inferenza | **Modelli** | Installati con origine e compatibilità per il device · Scopri su Hugging Face, ModelScope, Ollama o da un indirizzo · Download con progresso · catalogo curato |
+| | **Runtime** | Catalogo per tipo (sidecar, embedded, di sistema, remoti) · avvio/stop con la scelta del modello · impostazioni generate dallo schema · log |
+| | **Dispositivi** | Profilo hardware, classe del device, budget di memoria, acceleratori · rete di dispositivi accoppiati, pairing con codice o QR |
+| Controllo | **Sicurezza** | Regole di policy riordinabili con prova di una chiamata · hook di ciclo di vita · sandbox per sistema operativo |
+| | **Attività** | Audit trail filtrabile, con esportazione e collegamento run → sessione |
 | | **Impostazioni** | Configurazione a strati con lo strato vincente evidenziato · tema |
+
+Sul telefono la tab bar tiene Panoramica, Workspace, Modelli e Runtime; il resto, il device e il
+kill switch stanno nel foglio "Altro".
 
 ## 4. Componenti
 

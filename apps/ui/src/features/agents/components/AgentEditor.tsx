@@ -1,10 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "../../../app/router";
-import { Button, EmptyState, Icon, Panel, Pill, QueryState, Skeleton } from "../../../shared/ui";
-import { DecisionDialog } from "../../../shared/ui/DecisionDialog";
-import { FormSection, FormSections } from "../../../shared/ui/FormSection";
-import { SaveBar } from "../../../shared/ui/SaveBar";
-import { UnsavedChangesDialog } from "../../../shared/ui/UnsavedChangesDialog";
+import { Button, EmptyState, Icon, Panel, Pill, QueryState, Skeleton, DecisionDialog, FormSection, FormSections, SaveBar, UnsavedChangesDialog } from "../../../shared/ui";
 import { useDraft } from "../../../shared/lib/useDraft";
 import { useUnsavedGuard } from "../../../shared/lib/useUnsavedGuard";
 import type { AgentProfile } from "../../../shared/api/types";
@@ -43,8 +39,15 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
   const guard = useUnsavedGuard(dirty, { onDiscard: reset });
   const catalog = useMemo(() => buildCatalog(tools.data ?? []), [tools.data]);
   const issues = useMemo(
-    () => (draft ? validateAgent(draft, { profileIds: (profiles.data ?? []).map((p) => p.id), otherNames: list.filter((a) => a.id !== draft.id).map((a) => a.name) }) : []),
-    [draft, profiles.data, list],
+    () => (draft
+      ? validateAgent(draft, {
+          profileIds: (profiles.data ?? []).map((p) => p.id),
+          profilesLoaded: !!profiles.data,
+          otherNames: list.filter((a) => a.id !== draft.id).map((a) => a.name),
+          knownTools: tools.data ? catalog.map((t) => t.name) : undefined,
+        })
+      : []),
+    [draft, profiles.data, list, tools.data, catalog],
   );
 
   // A blank new form does not complain about what the user has not had the time to fill in.

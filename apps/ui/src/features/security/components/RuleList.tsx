@@ -1,6 +1,5 @@
 import { useEffect } from "react";
-import { Field, Input, Pill, Select } from "../../../shared/ui";
-import { RowControls } from "../../../shared/ui/RowControls";
+import { Field, Input, Pill, Select, RowControls } from "../../../shared/ui";
 import type { Keyed } from "../../../shared/lib/keyedList";
 import type { PolicyAction, PolicyRule } from "../../../shared/api/types";
 import { ACTION_LABEL, type RuleIssue } from "../model/policy";

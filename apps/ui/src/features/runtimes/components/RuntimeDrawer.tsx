@@ -3,7 +3,7 @@ import { Link } from "../../../app/router";
 import type { LocalModel, RuntimeInfo } from "../../../shared/api/types";
 import { Button, Chip, Chips, CopyField, Drawer, Field, KeyValue, Pill, SchemaForm, Select, StatusPill, Toggle } from "../../../shared/ui";
 import { useRuntimeAction, useUpdateRuntimeSettings } from "../api";
-import { compatibleModels, FIT_META, settingsDirty } from "../model/runtimes";
+import { apiLabel, compatibleModels, FIT_META, settingsDirty } from "../model/runtimes";
 import { RuntimeLogs } from "./RuntimeLogs";
 
 /** `#/runtimes/:runtimeId` — state, start with a model, settings and logs of one runtime. */
@@ -41,7 +41,7 @@ export function RuntimeDrawer({ runtime: r, models, deviceAccels, onClose }: {
 
   return (
     <Drawer
-      title={r.name} subtitle={`${r.kind} · API ${r.api} · ${r.platforms.join(" / ")}`} onClose={onClose}
+      title={r.name} subtitle={`${r.kind} · ${apiLabel(r.api)} · ${r.platforms.join(" / ")}`} onClose={onClose}
       footer={<>
         {dirty && <span className="faint text-sm grow">Modifiche non salvate</span>}
         <Button onClick={onClose}>{dirty ? "Annulla" : "Chiudi"}</Button>

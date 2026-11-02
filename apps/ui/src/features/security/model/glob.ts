@@ -2,8 +2,9 @@
 // `Glob::new(pattern)` — `*` and `?` also match `/`, `\` escapes, `{a,b}` alternates, `[a-z]` classes,
 // `**` as a whole path component. See crates/aiw-agent/src/policy.rs and hooks.rs.
 //
-// A pattern the crate rejects is not an error for the backend: the policy engine falls back to
-// comparing the pattern with the value as plain text. `globMatches` does the same.
+// The backend refuses to save a rule or a hook whose glob the crate rejects (`validated`, 400), so the
+// editors treat `globProblem` as an error. For what was stored before that check the policy engine still
+// falls back to comparing the pattern with the value as plain text; `globMatches` does the same.
 
 type Token =
   | { t: "lit"; c: string }

@@ -3,7 +3,7 @@ import { agents, profiles } from "../../../shared/api/mock/fixtures";
 import type { AgentProfile } from "../../../shared/api/types";
 import {
   BUILTIN_AGENT_IDS, NEW_AGENT, agentsUsingProfile, blankAgent, copyName, duplicateAgent, estimateTokens, hasErrors, idForNew, isBuiltinAgent,
-  normalizeAgent, slugify, uniqueId, validateAgent,
+  normalizeAgent, slugify, uniqueId, unknownTools, validateAgent,
 } from "./agents";
 
 const ctx = { profileIds: profiles.map((p) => p.id), otherNames: [] as string[] };
@@ -83,6 +83,25 @@ describe("validateAgent", () => {
   it("checks the turns", () => {
     for (const max_turns of [0, 501, Number.NaN]) expect(hasErrors(validateAgent(valid({ max_turns }), ctx))).toBe(true);
     expect(hasErrors(validateAgent(valid({ max_turns: 500 }), ctx))).toBe(false);
+  });
+
+  it("rejects a profile that does not exist even when no profile is left, once the list is loaded", () => {
+    const issues = validateAgent(valid({ inference_profile: "balanced" }), { profileIds: [], otherNames: [], profilesLoaded: true });
+    expect(issues.map((i) => i.field)).toContain("inference_profile");
+    expect(hasErrors(issues)).toBe(true);
+    // Not loaded yet: nothing to say.
+    expect(validateAgent(valid({ inference_profile: "balanced" }), { profileIds: [], otherNames: [], profilesLoaded: false })).toEqual([]);
+  });
+
+  it("lists the tools the catalogue does not know, as the backend does (MCP tools and * are always fine)", () => {
+    const known = ["read_file", "todo"];
+    expect(unknownTools(["*", "read_file", "mcp__gone__x", "writ_file", "ghost"], known)).toEqual(["writ_file", "ghost"]);
+    const issues = validateAgent(valid({ tools: ["read_file", "writ_file", "ghost"] }), { ...ctx, knownTools: known });
+    const bad = issues.find((i) => i.field === "tools" && i.level === "error");
+    expect(bad?.message).toMatch(/writ_file, ghost/);
+    expect(hasErrors(validateAgent(valid({ tools: ["*", "mcp__gone__x"] }), { ...ctx, knownTools: known }))).toBe(false);
+    // Catalogue not loaded: nothing is flagged.
+    expect(hasErrors(validateAgent(valid({ tools: ["ghost"] }), ctx))).toBe(false);
   });
 
   it("only warns about the risky choices", () => {

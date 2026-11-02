@@ -7,6 +7,7 @@ import { useHotkey } from "../shared/lib/useHotkey";
 import { useConnection } from "../shared/query/system";
 import { EmptyState, PageSkeleton, ToastHost } from "../shared/ui";
 import { CommandPalette } from "./palette/CommandPalette";
+import { onOpenPalette } from "./palette/openPalette";
 import { useCommands } from "./palette/useCommands";
 import { RouteProvider, Link, useRoute } from "./router";
 import { ROUTES } from "./routes";
@@ -33,6 +34,15 @@ export function App() {
     setMoreOpen(false);
     setPaletteOpen((o) => !o);
   });
+
+  // Anything in the app can ask for the palette (`openPalette()`), e.g. the tile of the Panoramica.
+  useEffect(
+    () => onOpenPalette(() => {
+      setMoreOpen(false);
+      setPaletteOpen(true);
+    }),
+    [],
+  );
 
   // The sheet is about the section you were in: close it whenever the section changes.
   useEffect(() => setMoreOpen(false), [resolved?.path]);

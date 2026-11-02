@@ -108,7 +108,8 @@ export interface RuntimeInfo {
   platforms: Platform[];
   accelerators: AcceleratorKind[];
   formats: string[];
-  api: "openai" | "ollama" | "native";
+  /** `none`: the runtime has no HTTP API of its own (embedded or bridged in-process). */
+  api: "openai" | "ollama" | "native" | "none";
   capabilities: string[];
   status: RuntimeStatus;
   status_detail?: string;
@@ -147,7 +148,8 @@ export interface LocalModel {
   /** Ids of `runtime_compat`, available runtimes first. */
   runtimes: string[];
   source?: string;
-  origin: ModelOrigin;
+  /** Empty (`""`, older stores and hand-copied files) is read as `manual`. */
+  origin: ModelOrigin | "";
   /** Only models inside `models.dir` can be deleted from the UI. */
   removable: boolean;
   runtime_compat: RuntimeCompat[];
@@ -349,8 +351,15 @@ export interface ToolCall {
   arguments: string;
 }
 
+/**
+ * `name` of the stored `system` message that records how a run ended in error (`content` is the text the
+ * chat showed as RUN_ERROR). Part of the history, never of the model's context (api.rs `RUN_ERROR_MESSAGE`).
+ */
+export const RUN_ERROR_MESSAGE = "aiw.run_error";
+
 export interface ChatMessage {
   id: string;
+  /** A `system` message named `RUN_ERROR_MESSAGE` is the error that ended a run. */
   role: "user" | "assistant" | "tool" | "system";
   content: string;
   reasoning?: string;
@@ -439,7 +448,12 @@ export type ToolRisk = "read" | "write" | "exec" | "network" | "computer";
 export interface ToolInfo {
   name: string;
   description: string;
-  source: "builtin" | "mcp";
+  /**
+   * `internal` tools (todo, agent, skill, render_ui, code) are implemented by the agent loop itself: always on
+   * (`enabled` and `available` are true, risk `read`), an agent profile can list them, but they have no switch
+   * (`PUT /api/tools/{name}` answers 400).
+   */
+  source: "builtin" | "mcp" | "internal";
   server?: string;
   risk: ToolRisk;
   enabled: boolean;
@@ -448,6 +462,12 @@ export interface ToolInfo {
   parameters: unknown;
 }
 
+/**
+ * What the API shows instead of a secret (MCP headers and environment, secret runtime settings). Sending it back
+ * means "keep the stored value" (api.rs `SECRET_MASK`).
+ */
+export const SECRET_MASK = "••••••";
+
 export interface McpServer {
   id: string;
   name: string;
@@ -455,10 +475,13 @@ export interface McpServer {
   command?: string;
   args?: string[];
   url?: string;
-  /** Environment of a stdio server. */
-  env?: Record<string, string>;
-  /** Extra HTTP headers of an http server (e.g. `Authorization` for a paired device). */
-  headers?: Record<string, string>;
+  /**
+   * Environment of a stdio server. Values are strings in practice (the Rust side holds JSON values); the ones whose
+   * name looks like a secret come back as `SECRET_MASK`.
+   */
+  env?: Record<string, unknown>;
+  /** Extra HTTP headers of an http server (e.g. `Authorization`); secret values come back as `SECRET_MASK`. */
+  headers?: Record<string, unknown>;
   enabled: boolean;
   status: "connected" | "disconnected" | "error";
   tools: string[];

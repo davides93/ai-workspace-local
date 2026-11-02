@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LocalModel, RuntimeInfo, SettingsSchema } from "../../../shared/api/types";
-import { compatibleModels, defaultSettings, filterRuntimes, groupByKind, logTail, matchesRuntime, runtimeCounts, settingsDirty } from "./runtimes";
+import { apiLabel, compatibleModels, defaultSettings, filterRuntimes, groupByKind, logTail, matchesRuntime, runtimeCounts, settingsDirty } from "./runtimes";
 
 const rt = (id: string, over: Partial<RuntimeInfo> = {}): RuntimeInfo => ({
   id, name: id, kind: "sidecar", description: `runtime ${id}`, platforms: ["linux"], accelerators: ["cpu"], formats: ["gguf"], api: "openai",
@@ -84,5 +84,13 @@ describe("logTail", () => {
   it("keeps the last lines", () => {
     expect(logTail(["a", "b", "c"], 2)).toEqual(["b", "c"]);
     expect(logTail(["a"], 2)).toEqual(["a"]);
+  });
+});
+
+describe("apiLabel", () => {
+  it("names the API of a runtime, and says so when there is none", () => {
+    expect(apiLabel("openai")).toBe("API openai");
+    expect(apiLabel("native")).toBe("API native");
+    expect(apiLabel("none")).toBe("senza API");
   });
 });

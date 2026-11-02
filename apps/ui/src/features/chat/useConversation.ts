@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
-import { errorMessage } from "../../shared/lib/errors";
+import { errorMessage, isNotFound } from "../../shared/lib/errors";
 import { rememberRun } from "../../shared/lib/runIndex";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
@@ -21,8 +21,11 @@ export type HistoryState = { status: "loading" | "ready" | "error"; error?: unkn
  * run), the run that is going on, its state snapshot, and the actions on it. Opening a session
  * loads its history and re-attaches to a run that is still going; switching session drops the
  * old subscription (the run keeps going on the backend).
+ *
+ * `onGone` runs when the backend answers 404 for the open session (it was deleted from another client):
+ * loading its history, or sending to it. The view then leaves the conversation.
  */
-export function useConversation(sessionId: string | null) {
+export function useConversation(sessionId: string | null, opts: { onGone?: (sessionId: string) => void } = {}) {
   const api = useApi();
   const qc = useQueryClient();
   const startRun = useStartRun();
@@ -37,6 +40,8 @@ export function useConversation(sessionId: string | null) {
   const unsub = useRef<(() => void) | null>(null);
   const current = useRef(sessionId);
   current.current = sessionId;
+  const onGone = useRef(opts.onGone);
+  onGone.current = opts.onGone;
 
   const handle = useCallback(
     (forSession: string, e: AgEvent) => {
@@ -94,7 +99,10 @@ export function useConversation(sessionId: string | null) {
         setHistory({ status: "ready" });
         if (running) attach(running, sessionId);
       } catch (e) {
-        if (alive) setHistory({ status: "error", error: e });
+        if (!alive) return;
+        // Deleted from another client: nothing to retry, the view moves away (and says why).
+        if (isNotFound(e) && onGone.current) return void onGone.current(sessionId);
+        setHistory({ status: "error", error: e });
       }
     })();
     return () => {
@@ -120,8 +128,9 @@ export function useConversation(sessionId: string | null) {
         onSuccess: ({ run_id }) => join(run_id, sid),
         onError: (e) => {
           setItems((prev) => prev.filter((i) => !(i.kind === "user" && i.id === tempId)));
-          toast(`Impossibile avviare il run: ${errorMessage(e)}`, "crit");
           onRejected?.();
+          if (isNotFound(e) && onGone.current) return void onGone.current(sid);
+          toast(`Impossibile avviare il run: ${errorMessage(e)}`, "crit");
         },
       },
     );
@@ -133,7 +142,13 @@ export function useConversation(sessionId: string | null) {
     setItems((prev) => [...prev, { kind: "action", id: `a-${Date.now()}`, name: a.name, context: a.context }]);
     start.mutate(
       { sessionId: sid, input: actionText(a), kind: "a2ui.action" },
-      { onSuccess: ({ run_id }) => join(run_id, sid), onError: (e) => toast(`Impossibile inviare l'azione: ${errorMessage(e)}`, "crit") },
+      {
+        onSuccess: ({ run_id }) => join(run_id, sid),
+        onError: (e) => {
+          if (isNotFound(e) && onGone.current) return void onGone.current(sid);
+          toast(`Impossibile inviare l'azione: ${errorMessage(e)}`, "crit");
+        },
+      },
     );
   }, []);
 

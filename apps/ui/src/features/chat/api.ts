@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
+import { ignoreNotFound } from "../../shared/lib/errors";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { Session } from "../../shared/api/types";
@@ -38,7 +39,8 @@ export function useDeleteSession() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.deleteSession(id),
+    // Already deleted from another client (404): the session is gone, which is what was asked.
+    mutationFn: (id: string) => ignoreNotFound(api.deleteSession(id)),
     onSuccess: (_r, id) => {
       toast("Sessione eliminata");
       // Out of the list at once, so the view never navigates back to a session that is gone.

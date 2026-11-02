@@ -1,7 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button, EmptyState, Icon, QueryState } from "../../../shared/ui";
-import { SaveBar } from "../../../shared/ui/SaveBar";
-import { UnsavedChangesDialog } from "../../../shared/ui/UnsavedChangesDialog";
+import { Button, EmptyState, Icon, QueryState, SaveBar, UnsavedChangesDialog } from "../../../shared/ui";
 import { keyed, keyedOne, moveRow, unkeyed, type Keyed } from "../../../shared/lib/keyedList";
 import { useDraft } from "../../../shared/lib/useDraft";
 import { useUnsavedGuard } from "../../../shared/lib/useUnsavedGuard";

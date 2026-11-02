@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { Icon, IconButton, Input, Select, StatusPill } from "../../../shared/ui";
-import { RowControls } from "../../../shared/ui/RowControls";
+import { Icon, IconButton, Input, Select, StatusPill, RowControls } from "../../../shared/ui";
 import type { Issue } from "../model/draft";
 import { STEP_ID, STEP_KINDS, stepMeta, stepSummary, type StepDraft, type StepKind } from "../model/steps";
 import { AgentFields, ApprovalFields, ConditionFields, LlmFields, ToolFields, type StepCatalog } from "./StepForms";

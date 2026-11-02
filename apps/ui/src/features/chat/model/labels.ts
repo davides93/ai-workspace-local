@@ -1,5 +1,5 @@
-import type { PillTone } from "../../../shared/ui/Pill";
 import type { PolicyMode, RunStatus, SandboxMode } from "../../../shared/api/types";
+import type { PillTone } from "../../../shared/ui";
 
 export interface LabelInfo {
   label: string;

@@ -22,9 +22,16 @@ describe("checkHooks", () => {
     expect(issues.filter((i) => i.level === "error").map((i) => i.index)).toEqual([0, 1, 2, 3]);
   });
 
-  it("warns about SessionStart and about globs the backend cannot read", () => {
+  it("warns about SessionStart, and blocks saving on a filter the backend cannot parse as a glob", () => {
     const issues = checkHooks([hook({ event: "SessionStart" }), hook({ matcher: "[x" })], (g) => (g === "[x" ? "classe [ non chiusa" : null));
-    expect(issues.map((i) => [i.index, i.level])).toEqual([[0, "warn"], [1, "warn"]]);
+    expect(issues.map((i) => [i.index, i.level])).toEqual([[0, "warn"], [1, "error"]]);
+    expect(issues[1].message).toBe("Il filtro «[x» non è un glob valido (classe [ non chiusa).");
+  });
+
+  it("refuses an event the backend does not know", () => {
+    const issues = checkHooks([hook({ event: "Nope" as never })], noProblem);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ level: "error", message: expect.stringContaining("Evento «Nope» non valido: usa UserPromptSubmit, PreToolUse") });
   });
 
   it("does not look at the matcher of events without a tool", () => {

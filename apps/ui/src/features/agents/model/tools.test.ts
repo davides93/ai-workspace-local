@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { agents, tools as mockTools } from "../../../shared/api/mock/fixtures";
 import type { ToolInfo } from "../../../shared/api/types";
 import {
-  ALL, INTERNAL_NAMES, INTERNAL_TOOLS, blockedTools, buildCatalog, categoryOf, expandAll, groupState, groupTools, isAllTools, isSelected,
+  ALL, INTERNAL_NAMES, INTERNAL_TOOLS, blockedTools, buildCatalog, categoryLabel, categoryOf, expandAll, groupState, groupTools, isAllTools, isSelected,
   normalizeTools, orphanTools, setAllTools, setGroup, summarizeTools, toggleTool,
 } from "./tools";
 
@@ -10,7 +10,7 @@ const tool = (name: string, over: Partial<ToolInfo> = {}): ToolInfo => ({
   name, description: `${name} desc`, source: "builtin", risk: "read", enabled: true, available: true, parameters: {}, ...over,
 });
 
-/** What the real backend lists: no internal tools. */
+/** What an older backend lists: no internal tools (the current one adds them with `source: "internal"`). */
 const real: ToolInfo[] = [
   tool("read_file"), tool("write_file", { risk: "write" }), tool("list_dir"), tool("shell", { risk: "exec" }), tool("web_fetch", { risk: "network" }),
   tool("browser_click", { risk: "computer" }), tool("computer_click", { risk: "computer" }),
@@ -48,6 +48,20 @@ describe("catalogue", () => {
     const names = buildCatalog(mockTools).map((t) => t.name);
     expect(names.filter((n) => n === "todo")).toHaveLength(1);
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("takes the internal tools from the catalogue when it lists them (source internal), with its own text", () => {
+    const listed = [...real, tool("todo", { source: "internal", description: "Piano di lavoro (dal backend)" }), tool("code", { source: "internal", risk: "read" })];
+    const cat = buildCatalog(listed);
+    expect(cat.find((t) => t.name === "todo")).toMatchObject({ category: "internal", description: "Piano di lavoro (dal backend)", disabled: false });
+    expect(cat.filter((t) => t.category === "internal").map((t) => t.name).sort()).toEqual([...INTERNAL_NAMES].sort());
+    expect(new Set(cat.map((t) => t.name)).size).toBe(cat.length);
+  });
+
+  it("names the group Interni and never calls an internal tool disattivato", () => {
+    expect(categoryLabel("internal")).toBe("Interni");
+    const cat = buildCatalog([tool("skill", { source: "internal", enabled: false })]);
+    expect(cat.find((t) => t.name === "skill")?.disabled).toBe(false);
   });
 
   it("flags disabled and unavailable tools", () => {

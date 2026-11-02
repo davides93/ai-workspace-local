@@ -1,7 +1,6 @@
 import { useState } from "react";
 import type { FieldSchema } from "../../../shared/api/types";
-import { Input, Select, Toggle } from "../../../shared/ui";
-import { TagInput } from "../../../shared/ui/TagInput";
+import { Input, Select, Toggle, TagInput } from "../../../shared/ui";
 import { parseNumber } from "../model/config";
 
 /** Draft text of an input: follows the saved value whenever that changes (another layer, a reset, a save). */

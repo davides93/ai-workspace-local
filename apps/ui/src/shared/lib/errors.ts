@@ -16,3 +16,17 @@ export function errorStatus(e: unknown): number | undefined {
 export function isUnauthorized(e: unknown): boolean {
   return errorStatus(e) === 401;
 }
+
+/** 404: the thing is gone (a session or an MCP server deleted from another client, an unknown path). */
+export function isNotFound(e: unknown): boolean {
+  return errorStatus(e) === 404;
+}
+
+/** Waits for `p` and treats a 404 as success: deleting what is already gone has done what was asked. */
+export async function ignoreNotFound(p: Promise<unknown>): Promise<void> {
+  try {
+    await p;
+  } catch (e) {
+    if (!isNotFound(e)) throw e;
+  }
+}

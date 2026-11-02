@@ -167,10 +167,19 @@ describe("rule list helpers", () => {
     expect(moveItem([1, 2, 3], 2, 5)).toEqual([1, 2, 3]);
   });
 
-  it("flags empty tools as errors and bad globs or duplicates as warnings", () => {
-    const issues = checkRules([rule("", null, "ask"), rule("shell", "[abc", "deny"), rule("read_file", null, "allow"), rule("read_file", null, "allow")], (g) => (g === "[abc" ? "classe [ non chiusa" : null));
-    expect(issues.filter((i) => i.level === "error").map((i) => i.index)).toEqual([0]);
-    expect(issues.filter((i) => i.level === "warn").map((i) => i.index)).toEqual([1, 3]);
+  it("blocks saving on what the backend refuses (no tool, unknown action, invalid glob) and only warns about duplicates", () => {
+    const bad = (g: string) => (g === "[abc" ? "classe [ non chiusa" : null);
+    const issues = checkRules([rule("", null, "ask"), rule("shell", "[abc", "deny"), rule("read_file", null, "allow"), rule("read_file", null, "allow"), rule("[abc", null, "ask")], bad);
+    expect(issues.filter((i) => i.level === "error").map((i) => i.index)).toEqual([0, 1, 4]);
+    expect(issues.filter((i) => i.level === "warn").map((i) => i.index)).toEqual([3]);
+    expect(issues.find((i) => i.index === 1)?.message).toBe("Il pattern «[abc» non è un glob valido (classe [ non chiusa).");
+    expect(issues.find((i) => i.index === 4)?.message).toBe("Il tool «[abc» non è un glob valido (classe [ non chiusa).");
+    const action = checkRules([{ tool: "shell", pattern: null, action: "maybe" as never }], () => null);
+    expect(action).toEqual([{ index: 0, level: "error", message: "Azione «maybe» non valida: usa allow, ask o deny." }]);
+  });
+
+  it("accepts the globs the backend accepts", () => {
+    expect(checkRules([rule("mcp__github__*", null, "ask"), rule("shell", "git status*", "allow"), rule("write_file", "src/**/*.rs", "deny")], globProblem)).toEqual([]);
   });
 
   it("normalizes what is sent to the backend", () => {

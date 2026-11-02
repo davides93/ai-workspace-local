@@ -101,7 +101,7 @@ export function searchCorpus(items: RemoteModel[], p: ModelSearchParams): Search
 
 const BYTES_PER_PARAM: Record<string, number> = { Q4_K_M: 0.58, Q5_K_M: 0.69, Q8_0: 1.06, F16: 2.0 };
 const GGUF_RUNTIMES = ["llama-server", "llama-embedded", "ollama", "lmstudio"];
-const fakeSha = (seed: string) => {
+export const fakeSha = (seed: string) => {
   let h = 0x811c9dc5;
   const out: string[] = [];
   for (let r = 0; r < 8; r++) {

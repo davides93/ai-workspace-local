@@ -1,6 +1,7 @@
-import type { ChatMessage } from "../../../shared/api/types";
+import { RUN_ERROR_MESSAGE, type ChatMessage } from "../../../shared/api/types";
 import { A2UI_ACTION_NAME, applyA2ui, describeAction, renderUiToMessages } from "../a2ui";
 import { SELF_CHECK, selfCheckText, type Item, type ToolImage, type ToolItem } from "./items";
+import { runErrorCode } from "./runNotice";
 import { resultStatus } from "./tools";
 
 export interface HistoryOptions {
@@ -12,7 +13,10 @@ export interface HistoryOptions {
  * Rebuilds the conversation rows from the stored messages of a session.
  *
  * The backend stores what a run produced even when it was stopped or failed, so a conversation can
- * end with a tool call that never got its answer: it is shown as interrupted, not as running.
+ * end with a tool call that never got its answer: it is shown as interrupted, not as running. A run
+ * that ended in error also leaves a `system` message named `aiw.run_error`: it becomes the same error
+ * row the live `RUN_ERROR` event produces, so a reload shows what the user saw. Any other `system`
+ * message is not part of the conversation and is skipped.
  */
 export function historyToItems(msgs: ChatMessage[], opts: HistoryOptions = {}): Item[] {
   const items: Item[] = [];
@@ -31,6 +35,8 @@ export function historyToItems(msgs: ChatMessage[], opts: HistoryOptions = {}): 
         const images = opts.images?.(tc.id);
         items.push({ kind: "tool", id: tc.id, name: tc.name, args: tc.arguments, status: "interrupted", ...(images?.length ? { images } : {}) });
       }
+    } else if (m.role === "system") {
+      if (m.name === RUN_ERROR_MESSAGE) items.push({ kind: "error", id: m.id, message: m.content, code: runErrorCode(m.content), stored: true });
     } else if (m.role === "tool") {
       const idx = items.findIndex((i) => i.kind === "tool" && i.id === m.tool_call_id);
       const card = items[idx] as ToolItem | undefined;

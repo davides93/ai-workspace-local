@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { Button, EmptyState, Field, Icon, Input, Panel, Pill, QueryState, Select, Toggle } from "../../../shared/ui";
 import { useSetToolsEnabled, useTools } from "../api";
-import { countEnabled, groupState, groupTools, RISK_ORDER, TOOL_RISK, type RiskFilter } from "../model/tools";
+import { countEnabled, groupState, groupTools, isInternalTool, RISK_ORDER, switchableTools, TOOL_RISK, type RiskFilter } from "../model/tools";
 import { ToolRow } from "./ToolRow";
 
 const GROUP_ICON: Record<string, string> = {
-  files: "file", shell: "terminal", web: "globe", browser: "globe", computer: "mouse", agent: "agent", other: "tool",
+  files: "file", shell: "terminal", web: "globe", browser: "globe", computer: "mouse", internal: "agent", other: "tool",
 };
 
 /** Every tool, grouped by what it does, with search, a risk filter and the on/off switches. */
@@ -24,6 +24,8 @@ export function ToolsTab() {
     >
       {(all) => {
         const groups = groupTools(all, { query, risk });
+        const switchable = switchableTools(all);
+        const internalCount = all.length - switchable.length;
         return (
           <>
             <div className="row filters">
@@ -36,7 +38,9 @@ export function ToolsTab() {
                   {RISK_ORDER.map((r) => <option key={r} value={r}>{TOOL_RISK[r].label}</option>)}
                 </Select>
               </Field>
-              <p className="muted text-sm cap-summary" aria-live="polite">{countEnabled(all)} di {all.length} tool attivi</p>
+              <p className="muted text-sm cap-summary" aria-live="polite">
+                {countEnabled(switchable)} di {switchable.length} tool attivi{internalCount > 0 ? ` · ${internalCount} interni sempre attivi` : ""}
+              </p>
             </div>
             {groups.length === 0 && (
               <EmptyState
@@ -46,12 +50,13 @@ export function ToolsTab() {
             )}
             {groups.map((g) => {
               const state = groupState(g.tools);
+              const internal = g.tools.every(isInternalTool);
               const icon = GROUP_ICON[g.id] ?? (g.id.startsWith("mcp:") ? "plug" : "tool");
               return (
                 <Panel
                   key={g.id} padded={false} icon={icon}
-                  title={<>{g.title} <Pill>{countEnabled(g.tools)}/{g.tools.length}</Pill></>}
-                  actions={(
+                  title={<>{g.title} <Pill>{internal ? g.tools.length : `${countEnabled(g.tools)}/${g.tools.length}`}</Pill></>}
+                  actions={internal ? <span className="faint text-xs">Sempre attivi</span> : (
                     <span className="row nowrap cap-group-switch">
                       <span className="faint text-xs">{state === "all" ? "Tutti attivi" : state === "none" ? "Tutti spenti" : "Alcuni attivi"}</span>
                       <Toggle

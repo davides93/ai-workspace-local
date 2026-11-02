@@ -129,18 +129,26 @@ export interface RuleIssue {
   message: string;
 }
 
-/** Problems of the rule list: an empty tool blocks saving, a glob the backend cannot parse is only a warning. */
+const ACTIONS: readonly PolicyAction[] = ["allow", "ask", "deny"];
+
+/**
+ * Problems of the rule list: the backend refuses (400) a rule with no tool, an unknown action or a glob it cannot
+ * parse (`PolicyRule::validated`), so those block saving here too; a duplicate is only a warning.
+ */
 export function checkRules(rules: readonly PolicyRule[], problem: (glob: string) => string | null): RuleIssue[] {
   const issues: RuleIssue[] = [];
   rules.forEach((r, index) => {
-    if (!r.tool.trim()) issues.push({ index, level: "error", message: "Indica il tool a cui si applica la regola." });
+    const tool = r.tool.trim();
+    if (!tool) issues.push({ index, level: "error", message: "Indica il tool a cui si applica la regola." });
     else {
-      const p = problem(r.tool);
-      if (p) issues.push({ index, level: "warn", message: `Il tool non è un glob valido (${p}): verrà confrontato come testo.` });
+      const p = problem(tool);
+      if (p) issues.push({ index, level: "error", message: `Il tool «${tool}» non è un glob valido (${p}).` });
     }
-    if (r.pattern) {
-      const p = problem(r.pattern);
-      if (p) issues.push({ index, level: "warn", message: `Il pattern non è un glob valido (${p}): verrà confrontato come testo.` });
+    if (!ACTIONS.includes(r.action)) issues.push({ index, level: "error", message: `Azione «${String(r.action)}» non valida: usa allow, ask o deny.` });
+    const pattern = r.pattern?.trim();
+    if (pattern) {
+      const p = problem(pattern);
+      if (p) issues.push({ index, level: "error", message: `Il pattern «${pattern}» non è un glob valido (${p}).` });
     }
   });
   const seen = new Map<string, number>();

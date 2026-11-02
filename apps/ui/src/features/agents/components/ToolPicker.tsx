@@ -114,7 +114,7 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
 
       {orphans.length > 0 && (
         <div className="tool-orphans" role="group" aria-label="Tool non più disponibili">
-          <p className="text-sm"><b>Non più nel catalogo</b> <span className="muted">— un server MCP assente o un tool rinominato. Restano nell'elenco finché non li togli.</span></p>
+          <p className="text-sm"><b>Non più nel catalogo</b> <span className="muted">— un server MCP assente (non blocca il salvataggio) o un tool rinominato o inesistente (il backend lo rifiuta: toglilo dall'elenco).</span></p>
           <ul className="tool-list">
             {orphans.map((n) => (
               <li key={n} className="tool-row orphan">

@@ -21,7 +21,7 @@ export type Item =
   | { kind: "note"; id: string; text: string }
   | { kind: "surface"; id: string; surface: SurfaceState }
   | { kind: "action"; id: string; name: string; context: Record<string, unknown> }
-  | { kind: "error"; id: string; message: string; code?: string };
+  | { kind: "error"; id: string; message: string; code?: string; /** Rebuilt from the stored history (not announced as a live alert). */ stored?: boolean };
 
 export type ToolItem = Extract<Item, { kind: "tool" }>;
 export type ApprovalItem = Extract<Item, { kind: "approval" }>;

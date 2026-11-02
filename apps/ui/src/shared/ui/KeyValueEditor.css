@@ -7,3 +7,5 @@
   .kve-key, .kve-value { grid-column: 1; }
   .kve-actions { grid-column: 2; grid-row: 1 / span 2; flex-direction: column; justify-content: center; }
 }
+/* A value the server keeps (shown as the mask): not editable until "Cambia". */
+.kve-kept { background: var(--surface-2); color: var(--fg-muted); cursor: default; letter-spacing: 0.1em; }

@@ -18,7 +18,15 @@ export const isBrowserTool = (t: Pick<ToolInfo, "name">) => t.name.startsWith("b
 export const isComputerTool = (t: Pick<ToolInfo, "name">) => t.name.startsWith("computer_");
 
 const FILE_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "move_file", "delete_file", "make_dir"]);
-const AGENT_TOOLS = new Set(["todo", "agent", "skill"]);
+
+/**
+ * Implemented by the agent loop itself (todo, agent, skill, render_ui, code): always on, listed so that an agent
+ * can name them, and with no switch (the backend answers 400 to `PUT /api/tools/{name}`).
+ */
+export const isInternalTool = (t: Pick<ToolInfo, "source">): boolean => t.source === "internal";
+
+/** The tools that have an on/off switch. */
+export const switchableTools = (tools: ToolInfo[]): ToolInfo[] => tools.filter((t) => !isInternalTool(t));
 
 export interface ToolGroup {
   id: string;
@@ -39,19 +47,19 @@ const CATEGORIES: CategoryDef[] = [
   { id: "web", title: "Web", hint: "Pagine scaricate e convertite in testo" },
   { id: "browser", title: "Browser controllato", hint: "Chrome o Edge dedicato, via CDP" },
   { id: "computer", title: "Computer-use", hint: "Schermo, mouse e tastiera" },
-  { id: "agent", title: "Agenti e piano", hint: "Lista dei passi, subagenti e skill" },
+  { id: "internal", title: "Interni", hint: "Del ciclo dell'agente: piano, subagenti, skill, interfacce e codice. Sempre attivi, non si possono spegnere." },
   { id: "other", title: "Altri tool", hint: "" },
 ];
 
 /** Id of the group a tool belongs to: a built-in category, or `mcp:<server>`. */
 export function toolCategory(t: ToolInfo): string {
+  if (isInternalTool(t)) return "internal";
   if (t.source === "mcp") return `mcp:${t.server ?? "?"}`;
   if (isBrowserTool(t)) return "browser";
   if (isComputerTool(t)) return "computer";
   if (FILE_TOOLS.has(t.name)) return "files";
   if (t.name === "shell") return "shell";
   if (t.name === "web_fetch") return "web";
-  if (AGENT_TOOLS.has(t.name)) return "agent";
   return "other";
 }
 

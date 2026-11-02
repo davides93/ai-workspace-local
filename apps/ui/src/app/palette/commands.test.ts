@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { matchesHotkey } from "../../shared/lib/useHotkey";
-import { filterCommands, normalize, type Command } from "./commands";
+import { normalizeText } from "../../shared/lib/text";
+import { filterCommands, type Command } from "./commands";
 
 const cmd = (id: string, label: string, keywords: string[] = [], group: Command["group"] = "Vai a"): Command => ({ id, label, group, icon: "plus", keywords, run: () => undefined });
 const commands = [
@@ -16,7 +17,7 @@ describe("filterCommands", () => {
     expect(filterCommands(commands, "  ")).toHaveLength(commands.length);
   });
   it("ignores accents and case", () => {
-    expect(normalize("Attività")).toBe("attivita");
+    expect(normalizeText("Attività")).toBe("attivita");
     expect(filterCommands(commands, "ATTIVITA").map((c) => c.id)).toEqual(["act"]);
   });
   it("matches keywords", () => {

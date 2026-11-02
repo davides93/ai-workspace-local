@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { MODE_INFO, modeInfo, sandboxInfo } from "./labels";
 import { cachedImageChars, forgetSessionImages, imagesFor, rememberImage } from "./imageCache";
 import type { Item } from "./items";
-import { describeRunError, isStandardErrorMessage, lastRunNotice } from "./runNotice";
+import { describeRunError, errorDetail, isStandardErrorMessage, lastRunNotice, runErrorCode } from "./runNotice";
 import { distanceFromBottom, isNearBottom } from "./scroll";
 
 describe("run errors", () => {
@@ -25,6 +25,25 @@ describe("run errors", () => {
     expect(isStandardErrorMessage("cancelled", "Run annullato dall'utente")).toBe(true);
     expect(isStandardErrorMessage("runtime", "Errore del runtime: boom")).toBe(false);
     expect(isStandardErrorMessage("runtime", " ")).toBe(true);
+  });
+});
+
+describe("stored run errors", () => {
+  it("reads the code back from the message of the runner", () => {
+    expect(runErrorCode("Run annullato")).toBe("cancelled");
+    expect(runErrorCode("Errore del runtime: il runtime si è chiuso")).toBe("runtime");
+    expect(runErrorCode("Runtime non disponibile: connessione rifiutata")).toBe("runtime");
+    expect(runErrorCode("Prompt bloccato da un hook: no")).toBe("hook_blocked");
+    expect(runErrorCode("boom")).toBeUndefined();
+    expect(runErrorCode("Il runtime non risponde")).toBeUndefined();
+  });
+  it("drops the words that only repeat the title, keeps the reason as a sentence", () => {
+    expect(errorDetail("runtime", "Errore del runtime: il runtime si è chiuso")).toBe("Il runtime si è chiuso");
+    expect(errorDetail("runtime", "Runtime non disponibile: connessione rifiutata")).toBe("Runtime non disponibile: connessione rifiutata");
+    expect(errorDetail("hook_blocked", "Prompt bloccato da un hook: parola vietata")).toBe("Parola vietata");
+    expect(errorDetail("cancelled", "Run annullato")).toBeUndefined();
+    expect(errorDetail("runtime", "Errore del runtime: ")).toBeUndefined();
+    expect(errorDetail(undefined, "boom")).toBe("boom");
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgEvent, ChatMessage } from "../../../shared/api/types";
 import { getPath, setPath } from "../a2ui/protocol";
 import { historyToItems } from "./history";
+import { lastRunNotice } from "./runNotice";
 import type { Item, ToolItem } from "./items";
 import { parseImageEvent, reduce, settle } from "./reduce";
 
@@ -176,6 +177,39 @@ describe("historyToItems", () => {
     ]);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "surface", id: "s1" });
+  });
+  describe("run errors (system message aiw.run_error)", () => {
+    const run = (extra: ChatMessage[]): ChatMessage[] => [{ id: "1", role: "user", content: "ciao", created_at: at }, ...extra];
+    const err = (content: string, id = "e1"): ChatMessage => ({ id, role: "system", name: "aiw.run_error", content, created_at: at });
+    it("shows the stored error as the same error row the live RUN_ERROR makes, with the code read back from the wording", () => {
+      const cases: [string, string | undefined][] = [
+        ["Errore del runtime: il runtime si è chiuso", "runtime"],
+        ["Runtime non disponibile: connessione rifiutata", "runtime"],
+        ["Prompt bloccato da un hook: parola vietata", "hook_blocked"],
+        ["Run annullato", "cancelled"],
+        ["qualcosa di nuovo", undefined],
+      ];
+      for (const [content, code] of cases) {
+        expect(historyToItems(run([err(content)])).at(-1), content).toMatchObject({ kind: "error", id: "e1", message: content, code, stored: true });
+      }
+    });
+    it("keeps the error where it happened, after what the run had produced", () => {
+      const items = historyToItems(run([
+        { id: "2", role: "assistant", content: "provo", created_at: at },
+        err("Errore del runtime: boom"),
+      ]));
+      expect(items.map((i) => i.kind)).toEqual(["user", "text", "error"]);
+    });
+    it("skips a system message that is not a run error", () => {
+      expect(historyToItems(run([{ id: "s", role: "system", content: "Sei un assistente", created_at: at }])).map((i) => i.kind)).toEqual(["user"]);
+      expect(historyToItems(run([{ id: "s", role: "system", name: "altro", content: "x", created_at: at }])).map((i) => i.kind)).toEqual(["user"]);
+    });
+    it("leaves the note of the last run out, so the same error is not told twice", () => {
+      const items = historyToItems(run([err("Errore del runtime: boom")]));
+      expect(lastRunNotice("failed", items, false)).toBeNull();
+      // Without the stored error (an older backend) the note still explains how the run ended.
+      expect(lastRunNotice("failed", historyToItems(run([])), false)).not.toBeNull();
+    });
   });
   it("keeps the card of a render_ui call that failed", () => {
     const items = historyToItems([

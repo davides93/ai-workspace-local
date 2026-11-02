@@ -18,12 +18,13 @@
 .cap-tool-why { font-size: var(--fs-xs); color: var(--warn); }
 .cap-tool.is-off .cap-tool-name, .cap-tool.is-off .cap-tool-desc { color: var(--fg-faint); }
 .cap-tool.is-unavailable { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
+.cap-tool-internal { justify-self: end; }
 .cap-tools-nested { border-top: 1px solid var(--line); margin-top: var(--space-2); }
 .cap-tools-nested .cap-tool { padding-inline: 0; }
 @media (max-width: 520px) {
   .cap-tool { grid-template-columns: minmax(0, 1fr) auto; }
   .cap-tool > .pill { grid-column: 1; grid-row: 2; justify-self: start; }
-  .cap-tool > .switch { grid-column: 2; grid-row: 1 / span 2; }
+  .cap-tool > .switch, .cap-tool > .cap-tool-internal { grid-column: 2; grid-row: 1 / span 2; }
 }
 
 /* MCP */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolInfo } from "../../../shared/api/types";
-import { capabilityStatus, countEnabled, groupState, groupTools, matchesTool, serverTools, shortToolName, toolCategory } from "./tools";
+import { capabilityStatus, countEnabled, groupState, groupTools, isInternalTool, matchesTool, serverTools, shortToolName, switchableTools, toolCategory } from "./tools";
 
 const tool = (name: string, over: Partial<ToolInfo> = {}): ToolInfo => ({
   name, description: `descrizione di ${name}`, source: "builtin", risk: "read", enabled: true, available: true, parameters: {}, ...over,
@@ -10,7 +10,7 @@ const mcp = (server: string, name: string, over: Partial<ToolInfo> = {}) => tool
 const ALL: ToolInfo[] = [
   tool("read_file"), tool("write_file", { risk: "write" }), tool("shell", { risk: "exec" }), tool("web_fetch", { risk: "network" }),
   tool("browser_navigate", { risk: "network" }), tool("browser_click", { risk: "computer" }), tool("computer_click", { risk: "computer" }),
-  tool("todo"), tool("mystery"), mcp("github", "list_issues"), mcp("filesystem", "search_files", { enabled: false }),
+  tool("todo", { source: "internal" }), tool("code", { source: "internal" }), tool("mystery"), mcp("github", "list_issues"), mcp("filesystem", "search_files", { enabled: false }),
 ];
 
 describe("toolCategory", () => {
@@ -21,8 +21,15 @@ describe("toolCategory", () => {
     expect(toolCategory(tool("web_fetch"))).toBe("web");
     expect(toolCategory(tool("browser_snapshot"))).toBe("browser");
     expect(toolCategory(tool("computer_key"))).toBe("computer");
-    expect(toolCategory(tool("skill"))).toBe("agent");
     expect(toolCategory(tool("mystery"))).toBe("other");
+  });
+  it("puts the tools of the agent loop (source internal) in their own group, whatever their name", () => {
+    expect(toolCategory(tool("skill", { source: "internal" }))).toBe("internal");
+    expect(toolCategory(tool("render_ui", { source: "internal" }))).toBe("internal");
+    expect(isInternalTool(tool("todo", { source: "internal" }))).toBe(true);
+    expect(isInternalTool(tool("todo"))).toBe(false);
+    expect(switchableTools(ALL).map((t) => t.name)).not.toContain("todo");
+    expect(switchableTools(ALL)).toHaveLength(ALL.length - 2);
   });
   it("gives every MCP server its own group", () => {
     expect(toolCategory(mcp("github", "x"))).toBe("mcp:github");
@@ -39,7 +46,8 @@ describe("shortToolName", () => {
 
 describe("groupTools", () => {
   it("orders built-in groups first and MCP servers by name", () => {
-    expect(groupTools(ALL).map((g) => g.id)).toEqual(["files", "shell", "web", "browser", "computer", "agent", "other", "mcp:filesystem", "mcp:github"]);
+    expect(groupTools(ALL).map((g) => g.id)).toEqual(["files", "shell", "web", "browser", "computer", "internal", "other", "mcp:filesystem", "mcp:github"]);
+    expect(groupTools(ALL).find((g) => g.id === "internal")?.title).toBe("Interni");
     expect(groupTools(ALL).find((g) => g.id === "mcp:github")?.title).toBe("MCP · github");
   });
   it("filters by text and by risk, dropping empty groups", () => {

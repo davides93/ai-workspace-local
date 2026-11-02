@@ -1,14 +1,17 @@
 import type { Transport, TransportCapabilities } from "../transport";
+import { ApiError } from "../http";
+import { isSecretName } from "../../lib/secrets";
+import { SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, WorkflowDef, WorkflowRun, WorktreeStatus,
 } from "../types";
 import {
-  agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, effective, hookConfigs, mcp, models, nid, now, policyRules, profiles,
+  agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
   runtimes, sessionMessages, sessions, sleep, system, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
-import { buildDetail, corpus, providers, searchCorpus } from "./hub";
+import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 
 /** A simulated download: files transferred one after the other, then verified. */
 interface MockJob {
@@ -25,6 +28,55 @@ interface MockJob {
 const MAX_ACTIVE_JOBS = 2;
 const TICKS_TO_COMPLETE = 22;
 const TICK_MS = 400;
+
+/**
+ * Where a direct-URL download lands: every URL has its own folder, `url/<host>[_<port>]/<name without extension>-<8 hex
+ * digits of the URL's hash>/<file>`, so two URLs of the same host are two models (the real hash is a sha256).
+ */
+export function urlDest(url: string, file: string): string {
+  let host = "host";
+  try {
+    const u = new URL(url);
+    host = u.port ? `${u.hostname}_${u.port}` : u.hostname;
+  } catch { /* not a URL: the form already refused it */ }
+  return `~/.aiw/models/url/${host}/${file.replace(/\.[^.]+$/, "")}-${fakeSha(url).slice(0, 8)}/${file}`;
+}
+
+/** The headers and variables the engine hides when it lists a server, as `GET /api/mcp/servers` does. */
+function maskSecrets(rec: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!rec) return rec;
+  return Object.fromEntries(Object.entries(rec).map(([k, v]) => [k, isSecretName(k) && v !== null && v !== "" ? SECRET_MASK : v]));
+}
+
+/** What a client sent with the masks it received put back to the stored value (a mask with nothing behind it is dropped). */
+function restoreSecrets(sent: Record<string, unknown> | undefined, stored: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!sent) return sent;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(sent)) {
+    if (v !== SECRET_MASK) out[k] = v;
+    else if (stored && k in stored) out[k] = stored[k];
+  }
+  return out;
+}
+
+/** `validate_mcp` of the engine, with its messages. */
+function validateMcp(s: { name: string; transport: string; command?: string; url?: string }): void {
+  if (!s.name.trim()) throw new ApiError(400, "serve un nome");
+  if (s.transport === "stdio") {
+    if (!s.command?.trim()) throw new ApiError(400, "un server MCP stdio richiede il comando da avviare");
+  } else if (s.transport === "http") {
+    const url = s.url?.trim();
+    if (!url) throw new ApiError(400, "un server MCP http richiede l'indirizzo (url)");
+    let ok = false;
+    try {
+      const u = new URL(url);
+      ok = (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "";
+    } catch { /* not a URL */ }
+    if (!ok) throw new ApiError(400, `indirizzo MCP non valido: ${url} (serve un URL http o https)`);
+  } else {
+    throw new ApiError(400, `trasporto MCP \`${s.transport}\` non valido: usa stdio o http`);
+  }
+}
 
 export class MockTransport implements Transport {
   readonly kind = "mock" as const;
@@ -198,7 +250,7 @@ export class MockTransport implements Transport {
     }
     const name = req.file_name ?? (req.url.split("/").pop() || "modello.gguf");
     const size = 2.1 * GB;
-    const job = this.makeJob({ ...base, id: nid("dl"), model_id: `url/${name}`, provider: "url", model_ref: req.url, variant: "", file: name, total: size, files_total: 1, dest: `~/.aiw/models/url/${name}`, files: [{ path: name, size_bytes: size, sha256: req.sha256, role: "weights" }] },
+    const job = this.makeJob({ ...base, id: nid("dl"), model_id: `url/${name}`, provider: "url", model_ref: req.url, variant: "", file: name, total: size, files_total: 1, dest: urlDest(req.url, name), files: [{ path: name, size_bytes: size, sha256: req.sha256, role: "weights" }] },
       () => {
         const f = fitFor(size);
         models.push({ id: name.replace(/\.gguf$/i, "").toLowerCase(), name, format: "gguf", size_bytes: size, capabilities: ["chat"], runtimes: ["llama-server"], source: `url:${req.url}`, origin: "aiw", removable: true, runtime_compat: compatForFormat("gguf"), fit: f.fit, fit_detail: f.detail });
@@ -318,6 +370,13 @@ export class MockTransport implements Transport {
   }
   async agents() { return structuredClone(agents); }
   async saveAgent(a: AgentProfile) {
+    // `save_agent` of the engine, with its messages.
+    if (!["plan", "ask", "auto-edit", "auto", "yolo"].includes(a.mode)) throw new ApiError(400, `modalità non valida: ${a.mode}`);
+    if (!["read-only", "workspace-write", "off"].includes(a.sandbox)) throw new ApiError(400, `sandbox non valida: ${a.sandbox}`);
+    if (a.max_turns < 1) throw new ApiError(400, "max_turns deve essere almeno 1");
+    if (!profiles.some((p) => p.id === a.inference_profile)) throw new ApiError(400, `il profilo di inferenza \`${a.inference_profile}\` non esiste`);
+    const unknown = a.tools.filter((t) => t !== "*" && !t.startsWith("mcp__") && !tools.some((x) => x.name === t));
+    if (unknown.length > 0) throw new ApiError(400, `strumenti sconosciuti: ${unknown.join(", ")} (usa "*" oppure i nomi elencati in Strumenti)`);
     const i = agents.findIndex((x) => x.id === a.id);
     if (i >= 0) agents[i] = a; else agents.push(a);
     return a;
@@ -380,11 +439,19 @@ export class MockTransport implements Transport {
   }
   async deleteSession(id: string) {
     const i = sessions.findIndex((s) => s.id === id);
-    if (i >= 0) sessions.splice(i, 1);
+    if (i < 0) throw new ApiError(404, `sessione ${id} non trovata`);
+    sessions.splice(i, 1);
   }
-  async messages(sessionId: string) { return structuredClone(sessionMessages[sessionId] ?? []); }
+  // 404 for a session that is gone, like the backend (the UI leaves a conversation that was deleted elsewhere).
+  async messages(sessionId: string) {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    return structuredClone(sessionMessages[sessionId] ?? []);
+  }
 
-  async activeRun() { return null; }
+  async activeRun(sessionId?: string) {
+    if (sessionId !== undefined && !sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    return null;
+  }
   async runtimeLogs(id: string) {
     return id === "llama-server"
       ? ["main: server is listening on http://127.0.0.1:39281", "srv  load_model: loaded qwen3.5-35b-a3b-q4_k_m (CUDA0: 21.4 GiB)", "slot launch_slot_: id 0 | task 12 | processing task", "slot print_timing: eval time = 1912 ms / 214 tokens (112.0 tokens per second)"]
@@ -419,6 +486,7 @@ export class MockTransport implements Transport {
   }
 
   async startRun(sessionId: string, input: string, kind?: "a2ui.action") {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     const runId = nid("run");
     const msgs = sessionMessages[sessionId] ?? (sessionMessages[sessionId] = []);
     msgs.push({ id: nid("m"), role: "user", content: input, name: kind, created_at: now() });
@@ -458,11 +526,13 @@ export class MockTransport implements Transport {
     }
   }
 
-  private async toolCall(runId: string, name: string, args: unknown, result: string, approval?: { reason: string; risk: ApprovalRequest["risk"] }) {
+  /** `image`: a screenshot the tool produced, sent as the `aiw.image` custom event (base64 data, no `data:` prefix). */
+  private async toolCall(runId: string, name: string, args: unknown, result: string, approval?: { reason: string; risk: ApprovalRequest["risk"] }, image?: { mime: string; data: string }) {
     const toolCallId = nid("call");
     this.emit(runId, { type: "TOOL_CALL_START", toolCallId, toolCallName: name });
     this.emit(runId, { type: "TOOL_CALL_ARGS", toolCallId, delta: JSON.stringify(args) });
     this.emit(runId, { type: "TOOL_CALL_END", toolCallId });
+    if (image) this.emit(runId, { type: "CUSTOM", name: "aiw.image", value: { toolCallId, mime: image.mime, data: image.data } });
     if (approval) {
       const id = nid("apr");
       const req: ApprovalRequest = { id, run_id: runId, tool: name, args, reason: approval.reason, risk: approval.risk };
@@ -483,7 +553,33 @@ export class MockTransport implements Transport {
     return true;
   }
 
+  /** A session of the browser agent: open a page, take its screenshot (an `aiw.image` event), read it, answer. */
+  private async browserRun(runId: string, sessionId: string) {
+    await sleep(150);
+    const threadId = sessionId;
+    this.emit(runId, { type: "RUN_STARTED", threadId, runId });
+    this.emit(runId, { type: "STATE_SNAPSHOT", snapshot: { runtime: "llama-server", model: "gemma-4-e4b-q4_k_m", usage: { prompt_tokens: 2210, completion_tokens: 160, tokens_per_s: 131, context_used: 2370, context_max: 16384 } } });
+
+    const m1 = nid("m");
+    this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m1, role: "assistant" });
+    await this.streamText(runId, m1, "Apro la pagina dei preventivi e guardo com'è fatta.", "text");
+    this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m1 });
+
+    await this.toolCall(runId, "browser_navigate", { url: "https://fornitori.example.com/preventivi" }, "Pagina aperta: «Preventivi fornitori» (200 OK, 3 tabelle).");
+    await this.toolCall(runId, "browser_screenshot", {}, "Screenshot della pagina acquisito (256×160, PNG).", undefined, { mime: "image/png", data: DEMO_SCREENSHOT_PNG });
+    await this.toolCall(runId, "browser_snapshot", {}, "table «Preventivi»\n  row: Rossi Srl · 12.400 € · 45 gg\n  row: Nordtech · 14.950 € · 20 gg\n  row: Alfa Impianti · 13.700 € · 30 gg");
+
+    const final = "La pagina elenca tre preventivi: **Rossi Srl** è il più economico (12.400 €, 45 gg), **Nordtech** il più rapido (20 gg, 14.950 €). Lo screenshot qui sopra mostra la tabella com'è nel browser.";
+    const m2 = nid("m");
+    this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m2, role: "assistant" });
+    await this.streamText(runId, m2, final, "text");
+    this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m2 });
+    this.emit(runId, { type: "RUN_FINISHED", threadId, runId });
+    this.finish(sessionId, final);
+  }
+
   private async scriptedRun(runId: string, sessionId: string, input: string) {
+    if (sessions.find((x) => x.id === sessionId)?.agent_id === "browser") return this.browserRun(runId, sessionId);
     await sleep(150);
     const threadId = sessionId;
     this.emit(runId, { type: "RUN_STARTED", threadId, runId });
@@ -591,22 +687,34 @@ export class MockTransport implements Transport {
 
   async tools() { return structuredClone(tools); }
   async setToolEnabled(name: string, enabled: boolean) {
+    if ((INTERNAL_TOOL_NAMES as readonly string[]).includes(name)) {
+      throw new ApiError(400, `«${name}» è uno strumento interno dell'agente: non si può attivare o disattivare`);
+    }
     const t = tools.find((x) => x.name === name);
-    if (t) t.enabled = enabled;
+    if (!t) throw new ApiError(404, `tool ${name} non trovato`);
+    t.enabled = enabled;
   }
-  async mcpServers() { return structuredClone(mcp); }
+  async mcpServers() {
+    return structuredClone(mcp).map((m) => ({ ...m, env: maskSecrets(m.env), headers: maskSecrets(m.headers) }));
+  }
   async saveMcpServer(s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }) {
-    // Like the engine: the id decides between create and replace, and the name has no spaces.
+    validateMcp(s);
+    // Like the engine: the id decides between create and replace, the name has no spaces, and a secret that comes
+    // back as the mask keeps the stored value.
     const i = s.id ? mcp.findIndex((m) => m.id === s.id) : -1;
     const prev = i >= 0 ? mcp[i] : undefined;
-    const srv = { id: prev?.id ?? nid("mcp"), status: prev?.status ?? "disconnected", tools: prev?.tools ?? [], error: prev?.error, enabled: true, ...s, name: s.name.trim().replace(/ /g, "_") } as McpServer;
+    const srv = {
+      id: prev?.id ?? nid("mcp"), status: prev?.status ?? "disconnected", tools: prev?.tools ?? [], error: prev?.error, enabled: true, ...s, name: s.name.trim().replace(/ /g, "_"),
+      env: restoreSecrets(s.env, prev?.env), headers: restoreSecrets(s.headers, prev?.headers),
+    } as McpServer;
     if (i >= 0) mcp[i] = srv;
     else mcp.push(srv);
-    return structuredClone(srv);
+    return { ...structuredClone(srv), env: maskSecrets(srv.env), headers: maskSecrets(srv.headers) };
   }
   async removeMcpServer(id: string) {
     const i = mcp.findIndex((m) => m.id === id);
-    if (i >= 0) mcp.splice(i, 1);
+    if (i < 0) throw new ApiError(404, `server MCP ${id} non trovato`);
+    mcp.splice(i, 1);
   }
 
   async policy() { return { rules: structuredClone(policyRules) }; }

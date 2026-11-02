@@ -2,6 +2,7 @@ import type {
   AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, Fit, HookConfig, InferenceProfile, LocalModel, McpServer,
   PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, ToolInfo, WorkflowDef, WorkflowRun,
 } from "../types";
+import { RUN_ERROR_MESSAGE } from "../types";
 
 // Demo data for the interactive mockup. Everything here is sample content, clearly labelled
 // in the UI as "demo"; the real values come from the Rust core (crates/aiw-*).
@@ -70,7 +71,7 @@ export const runtimes: RuntimeInfo[] = [
     description: "Server OpenAI-compatibile di llama.cpp, supervisionato dall'app.", accelerators: ["cuda", "vulkan", "cpu"], capabilities: ["chat", "tools", "vision", "embeddings", "grammar"],
     loaded_models: ["qwen3.5-35b-a3b-q4_k_m"], settings_schema: llamaSchema, settings: { ctx_size: 32768, gpu_layers: 999, threads: 0, flash_attn: true, cache_type: "q8_0", parallel: 2, extra_args: [] },
     status_detail: "CUDA · RTX 4090 · 112 tok/s", install_hint: "winget install ggml.llamacpp", homepage: "https://github.com/ggml-org/llama.cpp" }),
-  rt({ id: "llama-embedded", name: "llama.cpp (embedded)", vendor: "ggml-org", kind: "embedded", status: "available", platforms: ["windows", "macos", "linux", "android", "ios"],
+  rt({ id: "llama-embedded", api: "none", name: "llama.cpp (embedded)", vendor: "ggml-org", kind: "embedded", status: "available", platforms: ["windows", "macos", "linux", "android", "ios"],
     description: "llama.cpp collegato in-process via FFI: nessun processo esterno. Default su mobile.", accelerators: ["cuda", "metal", "vulkan", "opencl", "cpu"], capabilities: ["chat", "tools", "embeddings", "grammar"], settings_schema: llamaSchema, settings: { ctx_size: 8192, gpu_layers: 999 } }),
   rt({ id: "ollama", name: "Ollama", vendor: "Ollama", kind: "sidecar", status: "available", endpoint: "http://127.0.0.1:11434", api: "ollama",
     description: "Rilevato su questo PC. Gestione modelli via `ollama pull`.", accelerators: ["cuda", "rocm", "metal", "cpu"], capabilities: ["chat", "tools", "vision", "embeddings"], homepage: "https://ollama.com" }),
@@ -207,7 +208,7 @@ export const sessions: Session[] = [
   { id: "ses_cv", title: "Confronto offerte fornitori", agent_id: "browser", created_at: ago(300), updated_at: ago(75), last_status: "succeeded" },
   { id: "ses_ui", title: "Prenotazione sala riunioni", agent_id: "operator", created_at: ago(1500), updated_at: ago(190), last_status: "succeeded" },
   {
-    id: "ses_bug", title: "Fix test parser GGUF", agent_id: "coder", created_at: ago(3000), updated_at: ago(1450), last_status: "succeeded",
+    id: "ses_bug", title: "Fix test parser GGUF", agent_id: "coder", created_at: ago(3000), updated_at: ago(1450), last_status: "failed",
     worktree: { path: "~/.aiw/worktrees/ai-workspace-local-7c1e9a20", root: "~/.aiw/worktrees/ai-workspace-local-7c1e9a20", branch: "aiw/7c1e9a20", base: "9c39159", repo: "~/code/ai-workspace-local" },
   },
 ];
@@ -237,6 +238,12 @@ new file mode 100644
 `;
 
 export const appliedWorktrees = new Set<string>();
+
+/**
+ * A tiny PNG (256x160) standing for the screenshot of a web page: the scripted browser run sends it as the
+ * `aiw.image` event of `browser_screenshot` (`value.data`: base64 without the `data:` prefix).
+ */
+export const DEMO_SCREENSHOT_PNG = "iVBORw0KGgoAAAANSUhEUgAAAQAAAACgCAIAAABseyVrAAACXUlEQVR42u3bQUoCURzA4TlHCz2C+7yBqEgXcNUqWrXoDhIELWclRItu0cpo0Q0ExRuU7m1hSAwtFId57/m+x7cTQt/4o970n2KxmkO2CluAAEAAzdpa1p8lAEsAcQTwNhpU7F9avlxW7F8aP19XCMASwBEBlNPyzPhaC0AAlgAEYAlAAJYAHIItt0EFYAnAJbeyDgDMAoEAIGAAF602ZEsACAAEAAIAAYAAQACQdwDfr90gXBgEwEEmTw8nSvdnCgABCEAAAhCAAAQgAHAbFAQAAgABgABAACAAEAD8BrDefEG2BIAAQAAgABAACAAEAAIAAYAAQACQWwBGpprh6ygAASAAASAAASAAASAAASAAASAAASAAAeA/wSAAEAAIAAQAAoDaAyinJdROAAhAAAhAAAjAIRgEAAIAAYBDMI6qAkAAAkAAAkAADsEgABAACAAEAAIAAYAAQAAgABAACAAEAEcHsFjNITkCQAACQAACQAD1BNC76keomQ2N//3H+d5C7ZsABCAAAQhAAAIQgAAcgnEIFgACEAACEAACMAyHYTgQAAgABAACAAH85+buNrhQmxX/Z+w8DmsR874JQAACEIAABCAAAQjAIRgEAAIAAYAAQAAgADg5gI/PGSTHbwAQAAgABAACgNSnQUPNh8b/ieLcT+PQAhCAAAQgAAEIQAAeiAF3gUAAIAAQAAgABAAeiAEPxIA/gUAAIAAQAJgGDTQfahrUNKgABCAAAQhAAAIQgAdiwF0gEAAIAM4xgPf7IjkuLQIAAUCGAXgcBIdgEAAIAAQAAgABwM4PimibFSc3vIQAAAAASUVORK5CYII=";
 
 export const BOOKING_UI = {
   surfaceId: "prenotazione",
@@ -274,9 +281,12 @@ export const sessionMessages: Record<string, ChatMessage[]> = {
     { id: "m1", role: "user", content: "Apri i tre preventivi nella cartella Fornitori e fammi una tabella con prezzo, tempi e penali.", created_at: now() },
     { id: "m2", role: "assistant", content: "Ho letto i tre PDF. **Rossi Srl** costa meno (12.400 €) ma ha tempi più lunghi (45 gg). **Nordtech** è il più rapido (20 gg) e prevede penali dello 0,5% al giorno.\n\n| Fornitore | Prezzo | Tempi | Penali |\n|---|---|---|---|\n| Rossi Srl | 12.400 € | 45 gg | nessuna |\n| Nordtech | 14.950 € | 20 gg | 0,5%/giorno |\n| Alfa Impianti | 13.700 € | 30 gg | 0,2%/giorno |", created_at: now() },
   ],
+  // A run that died with the runtime: the history ends with the persisted error (system message `aiw.run_error`).
   ses_bug: [
     { id: "m3", role: "user", content: "Il test `gguf::tests::reads_header` fallisce, sistemalo.", created_at: now() },
-    { id: "m4", role: "assistant", content: "Il run si è fermato: il runtime è stato arrestato dal kill switch durante `cargo test`.", created_at: now() },
+    { id: "m4", role: "assistant", content: "Eseguo il test per vedere l'errore.", tool_calls: [{ id: "c_bug", name: "shell", arguments: JSON.stringify({ command: "cargo test -p aiw-models gguf::tests::reads_header" }) }], created_at: now() },
+    { id: "m5", role: "tool", tool_call_id: "c_bug", name: "shell", content: "ERRORE: exit 101\nthread 'gguf::tests::reads_header' panicked at crates/aiw-models/src/gguf.rs:88:\nassertion `left == right` failed: magic GGUF non riconosciuto", created_at: now() },
+    { id: "m6", role: "system", name: RUN_ERROR_MESSAGE, content: "Errore del runtime: il runtime llama-server si è chiuso durante la richiesta (memoria video esaurita, codice 137). Riavvialo dalla sezione Runtime e riprova.", created_at: now() },
   ],
 };
 
@@ -286,13 +296,30 @@ export const tools: ToolInfo[] = [
   ["web_fetch", "Scarica una pagina e la converte in testo", "network"], ["browser_navigate", "Apre un URL nel browser controllato", "network"], ["browser_snapshot", "Snapshot testuale della pagina", "read"],
   ["browser_click", "Clic su un elemento", "computer"], ["browser_type", "Scrive in un campo", "computer"], ["browser_screenshot", "Screenshot della pagina", "read"],
   ["computer_screenshot", "Screenshot del desktop", "computer"], ["computer_click", "Clic alle coordinate", "computer"], ["computer_type", "Digita testo", "computer"], ["computer_key", "Combinazione di tasti", "computer"], ["computer_scroll", "Scroll", "computer"],
-  ["todo", "Aggiorna la lista dei passi", "read"], ["agent", "Delega a un subagente", "read"], ["skill", "Carica una skill", "read"],
 ].map(([name, description, risk]) => ({ name, description, risk: risk as ToolInfo["risk"], source: "builtin" as const, enabled: true, available: true, parameters: {} }));
 tools.push(
   { name: "mcp__github__list_issues", description: "Elenca le issue di un repository", source: "mcp", server: "github", risk: "network", enabled: true, available: true, parameters: {} },
   { name: "mcp__filesystem__search_files", description: "Ricerca file (server MCP filesystem)", source: "mcp", server: "filesystem", risk: "read", enabled: false, available: true, parameters: {} },
 );
+/**
+ * The tools of the agent loop, as `GET /api/tools` lists them after the built-in and MCP ones: `source: "internal"`,
+ * always on, risk `read`, no switch (crates/aiw-agent/src/internal.rs).
+ */
+export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code"] as const;
+tools.push(
+  ...([
+    ["todo", "Pubblica e aggiorna il piano di lavoro dell'agente: elenco di passi con il loro stato."],
+    ["agent", "Delega un sotto-compito a un altro agente con contesto separato e ne restituisce la risposta finale."],
+    ["skill", "Carica le istruzioni complete di una skill elencata nel prompt di sistema."],
+    ["render_ui", "Mostra all'utente un'interfaccia interattiva (A2UI): moduli, scelte, riepiloghi, tabelle di card."],
+    ["code", "Esegue uno script Rhai che orchestra più strumenti in un solo passo (cicli, filtri, conteggi)."],
+  ] as const).map(([name, description]): ToolInfo => ({ name, description, source: "internal", risk: "read", enabled: true, available: true, parameters: {} })),
+);
 
+/**
+ * MCP servers as the engine stores them, secrets included. The transport masks the values whose name looks like a
+ * secret when it lists them (`mcpServers()`), as `GET /api/mcp/servers` does.
+ */
 export const mcp: McpServer[] = [
   { id: "mcp_fs", name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Workspace"], env: { LOG_LEVEL: "info" }, enabled: true, status: "connected", tools: ["search_files", "read_text_file", "directory_tree"] },
   { id: "mcp_gh", name: "github", transport: "http", url: "http://127.0.0.1:8931/mcp", headers: { Authorization: "Bearer ghp_demo_0000" }, enabled: true, status: "connected", tools: ["list_issues", "create_issue"] },

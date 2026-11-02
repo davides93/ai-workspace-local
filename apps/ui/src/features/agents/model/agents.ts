@@ -3,7 +3,7 @@
 
 import type { AgentProfile } from "../../../shared/api/types";
 import { slugify as slug, uniqueSlug } from "../../../shared/lib/slug";
-import { normalizeTools } from "./tools";
+import { ALL, normalizeTools } from "./tools";
 
 /** Seeded on first run by crates/aiw-engine/src/defaults.rs `agents()`; the backend refuses to delete them (409). */
 export const BUILTIN_AGENT_IDS: readonly string[] = ["operator", "coder", "browser", "desktop", "planner"];
@@ -76,19 +76,45 @@ export interface AgentIssue {
   message: string;
 }
 
-export function validateAgent(a: AgentProfile, ctx: { profileIds: readonly string[]; otherNames: readonly string[] }): AgentIssue[] {
+/** What the checks need to know about the rest of the workspace. */
+export interface AgentContext {
+  profileIds: readonly string[];
+  otherNames: readonly string[];
+  /** The list of profiles was loaded. Default: it is not empty (an empty list may just not have arrived). */
+  profilesLoaded?: boolean;
+  /** Names of the tool catalogue (internal tools included); undefined while it is not loaded, so nothing is flagged. */
+  knownTools?: readonly string[];
+}
+
+/** Names in `tools` the backend would refuse: not `*`, not an MCP tool (`mcp__…`, the server may be offline), not in the catalogue. */
+export function unknownTools(tools: readonly string[], known: readonly string[]): string[] {
+  const names = new Set(known);
+  return tools.filter((t) => t !== ALL && !t.startsWith("mcp__") && !names.has(t));
+}
+
+/**
+ * Checks of the agent form. The errors are the rules of `save_agent` (crates/aiw-engine/src/lib.rs): at least one
+ * turn, an inference profile that exists, only tools the catalogue knows. The backend answers 400 with the same
+ * words if something slips through; the warnings are advice.
+ */
+export function validateAgent(a: AgentProfile, ctx: AgentContext): AgentIssue[] {
   const issues: AgentIssue[] = [];
   const name = a.name.trim();
   if (!name) issues.push({ field: "name", level: "error", message: "Dai un nome all'agente." });
   else if (ctx.otherNames.some((n) => n.trim().toLowerCase() === name.toLowerCase())) {
     issues.push({ field: "name", level: "warn", message: "Esiste già un altro agente con questo nome." });
   }
+  const profilesLoaded = ctx.profilesLoaded ?? ctx.profileIds.length > 0;
   if (!a.inference_profile) issues.push({ field: "inference_profile", level: "error", message: "Scegli un profilo di inferenza." });
-  else if (ctx.profileIds.length > 0 && !ctx.profileIds.includes(a.inference_profile)) {
+  else if (profilesLoaded && !ctx.profileIds.includes(a.inference_profile)) {
     issues.push({ field: "inference_profile", level: "error", message: "Il profilo scelto non esiste più: sceglierne un altro." });
   }
   if (!Number.isFinite(a.max_turns) || a.max_turns < 1 || a.max_turns > MAX_TURNS_LIMIT) {
     issues.push({ field: "max_turns", level: "error", message: `I turni massimi vanno da 1 a ${MAX_TURNS_LIMIT}.` });
+  }
+  const unknown = ctx.knownTools ? unknownTools(a.tools, ctx.knownTools) : [];
+  if (unknown.length > 0) {
+    issues.push({ field: "tools", level: "error", message: `Strumenti sconosciuti: ${unknown.join(", ")} (usa «*» oppure i nomi elencati in Tool). Toglili dall'elenco per salvare.` });
   }
   if (a.system_prompt.length > LONG_PROMPT_CHARS) {
     issues.push({ field: "system_prompt", level: "warn", message: "Un prompt molto lungo riduce lo spazio di contesto disponibile per la conversazione." });

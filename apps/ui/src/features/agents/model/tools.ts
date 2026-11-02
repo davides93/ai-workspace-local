@@ -2,9 +2,11 @@
 //
 // Rules of the backend this mirrors (crates/aiw-agent/src/runner.rs):
 //  - `tools` is a list of names, and `"*"` means every tool that is enabled;
-//  - five tools are internal to the agent loop (todo, agent, skill, render_ui, code): they are not in the
-//    tool catalogue (`GET /api/tools`) but are allowed by name, or by `"*"`, like any other. Dropping them
-//    while editing a list would silently take the plan, sub-agents, skills and code mode away from the agent.
+//  - five tools are internal to the agent loop (todo, agent, skill, render_ui, code): the catalogue
+//    (`GET /api/tools`) lists them with `source: "internal"` and the backend accepts them by name, or by `"*"`,
+//    like any other. Dropping them while editing a list would silently take the plan, sub-agents, skills and
+//    code mode away from the agent. `INTERNAL_TOOLS` is the fallback for a catalogue that does not list them
+//    (an older backend): the catalogue's own entry wins, so there is never a duplicate.
 
 import type { PolicyMode, SandboxMode, ToolInfo, ToolRisk } from "../../../shared/api/types";
 
@@ -25,6 +27,9 @@ export const INTERNAL_TOOLS: InternalTool[] = [
 ];
 
 export const INTERNAL_NAMES: ReadonlySet<string> = new Set(INTERNAL_TOOLS.map((t) => t.name));
+
+/** An internal tool of the agent loop: by the catalogue's `source`, or by name for the five that are known. */
+const isInternal = (t: Pick<ToolInfo, "name"> & Partial<Pick<ToolInfo, "source">>): boolean => t.source === "internal" || INTERNAL_NAMES.has(t.name);
 
 export type CategoryId = "file" | "shell" | "web" | "browser" | "computer" | "internal" | "other" | `mcp:${string}`;
 
@@ -49,7 +54,7 @@ function mcpServer(t: Pick<ToolInfo, "name" | "server">): string {
 }
 
 export function categoryOf(t: Pick<ToolInfo, "name" | "source" | "server">): CategoryId {
-  if (INTERNAL_NAMES.has(t.name)) return "internal";
+  if (isInternal(t)) return "internal";
   if (t.source === "mcp" || t.name.startsWith("mcp__")) return `mcp:${mcpServer(t)}`;
   if (t.name.startsWith("browser_")) return "browser";
   if (t.name.startsWith("computer_")) return "computer";
@@ -65,7 +70,7 @@ export const CATEGORY_LABEL: Record<Exclude<CategoryId, `mcp:${string}`>, string
   web: "Web",
   browser: "Browser",
   computer: "Computer-use",
-  internal: "Interni dell'agente",
+  internal: "Interni",
   other: "Altri tool",
 };
 
@@ -80,17 +85,19 @@ const rank = (c: CategoryId): number => {
   return ORDER.length + 2;
 };
 
-/** Catalogue tools plus the internal ones (which win over a catalogue entry with the same name). */
+/**
+ * Catalogue tools, plus the internal tools the catalogue did not list (the built-in descriptions fill in for an
+ * older backend). An internal tool is never "disattivato": it has no switch.
+ */
 export function buildCatalog(tools: readonly ToolInfo[]): PickerTool[] {
-  const out: PickerTool[] = [];
-  for (const t of tools) {
-    if (INTERNAL_NAMES.has(t.name)) continue;
-    out.push({
-      name: t.name, description: t.description, risk: t.risk, category: categoryOf(t),
-      disabled: !t.enabled, unavailable: t.available ? undefined : t.unavailable_reason || "non disponibile",
-    });
+  const out: PickerTool[] = tools.map((t) => ({
+    name: t.name, description: t.description, risk: t.risk, category: categoryOf(t),
+    disabled: isInternal(t) ? false : !t.enabled, unavailable: t.available ? undefined : t.unavailable_reason || "non disponibile",
+  }));
+  const listed = new Set(out.map((t) => t.name));
+  for (const t of INTERNAL_TOOLS) {
+    if (!listed.has(t.name)) out.push({ name: t.name, description: t.description, risk: t.risk, category: "internal", disabled: false });
   }
-  for (const t of INTERNAL_TOOLS) out.push({ name: t.name, description: t.description, risk: t.risk, category: "internal", disabled: false });
   return out;
 }
 

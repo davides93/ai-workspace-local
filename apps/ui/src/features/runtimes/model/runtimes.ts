@@ -36,6 +36,11 @@ export function runtimeCounts(list: RuntimeInfo[]): { running: number; usable: n
 }
 
 /** How well an installed model fits this device, as label and pill tone. */
+/** How a runtime talks: `none` is an in-process engine with no HTTP API of its own. */
+export function apiLabel(api: RuntimeInfo["api"] | string): string {
+  return api === "none" ? "senza API" : `API ${api}`;
+}
+
 export const FIT_META: Record<Fit, { label: string; tone: PillTone }> = {
   great: { label: "Ci sta comodo", tone: "ok" },
   ok: { label: "Ci sta", tone: "info" },

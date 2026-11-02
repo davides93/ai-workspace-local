@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Link } from "../../../app/router";
-import { Button, DataTable, EmptyState, Icon, IconButton, Pill, QueryState, StatusPill, type Column } from "../../../shared/ui";
-import { DecisionDialog } from "../../../shared/ui/DecisionDialog";
+import { Button, DataTable, EmptyState, Icon, IconButton, Pill, QueryState, StatusPill, type Column, DecisionDialog } from "../../../shared/ui";
 import { formatContext } from "../../../shared/lib/format";
 import type { InferenceProfile } from "../../../shared/api/types";
 import { useAgents, useDeleteProfile, useInstalledModels, useProfiles, useRuntimeList, useSaveProfile } from "../api";

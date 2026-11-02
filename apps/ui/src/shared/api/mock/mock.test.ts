@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DownloadProgress } from "../types";
-import { MockTransport } from "./index";
+import { MockTransport, urlDest } from "./index";
 
 // Basic contract of the demo transport for the model hub (docs/architecture/model-hub.md §3-§4).
 
@@ -299,5 +299,130 @@ describe("other v0.4 methods", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect((await p).length).toBeGreaterThan(5);
     vi.useRealTimers();
+  });
+});
+
+// What the mockup shows of the backend fixes of v0.4 (crates/aiw-core/src/api.rs, aiw-engine).
+describe("backend fixes in the demo", () => {
+  it("lists the tools of the agent loop as internal, always on, and refuses to switch them (400)", async () => {
+    const api = new MockTransport();
+    const internal = (await api.tools()).filter((t) => t.source === "internal");
+    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "render_ui", "skill", "todo"]);
+    expect(internal.every((t) => t.enabled && t.available && t.risk === "read")).toBe(true);
+    await expect(api.setToolEnabled("todo", false)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strumento interno") });
+    await expect(api.setToolEnabled("nope", false)).rejects.toMatchObject({ status: 404 });
+    await api.setToolEnabled("shell", false);
+    await api.setToolEnabled("shell", true);
+  });
+
+  it("masks the secrets of MCP servers and keeps the stored value when the mask comes back", async () => {
+    const api = new MockTransport();
+    const gh = (await api.mcpServers()).find((s) => s.name === "github")!;
+    expect(gh.headers).toEqual({ Authorization: "••••••" });
+    const pg = (await api.mcpServers()).find((s) => s.name === "postgres")!;
+    expect(pg.env).toEqual({ PGPASSWORD: "••••••" });
+    const fs = (await api.mcpServers()).find((s) => s.name === "filesystem")!;
+    expect(fs.env).toEqual({ LOG_LEVEL: "info" });
+    // Saved back unchanged (and with an added header): the stored token survives, the new header is kept.
+    const saved = await api.saveMcpServer({ ...gh, headers: { ...gh.headers, Accept: "application/json" } });
+    expect(saved.headers).toEqual({ Authorization: "••••••", Accept: "application/json" });
+    // Changed: the new value replaces the stored one (and is hidden again on the way out).
+    const changed = await api.saveMcpServer({ ...gh, headers: { Authorization: "Bearer nuovo" } });
+    expect(changed.headers).toEqual({ Authorization: "••••••" });
+    // A mask with nothing behind it is dropped.
+    const fresh = await api.saveMcpServer({ name: "x", transport: "http", url: "http://127.0.0.1:1/mcp", headers: { "X-Token": "••••••" } });
+    expect(fresh.headers).toEqual({});
+  });
+
+  it("validates an MCP server like the engine", async () => {
+    const api = new MockTransport();
+    await expect(api.saveMcpServer({ name: " ", transport: "stdio", command: "npx" })).rejects.toMatchObject({ status: 400, message: "serve un nome" });
+    await expect(api.saveMcpServer({ name: "a", transport: "stdio" })).rejects.toMatchObject({ message: "un server MCP stdio richiede il comando da avviare" });
+    await expect(api.saveMcpServer({ name: "a", transport: "http" })).rejects.toMatchObject({ message: "un server MCP http richiede l'indirizzo (url)" });
+    await expect(api.saveMcpServer({ name: "a", transport: "http", url: "ftp://x" })).rejects.toMatchObject({ message: expect.stringContaining("indirizzo MCP non valido: ftp://x") });
+    await expect(api.saveMcpServer({ name: "a", transport: "ws" as never })).rejects.toMatchObject({ message: expect.stringContaining("non valido: usa stdio o http") });
+  });
+
+  it("validates an agent like the engine", async () => {
+    const api = new MockTransport();
+    const base = (await api.agents())[0];
+    await expect(api.saveAgent({ ...base, max_turns: 0 })).rejects.toMatchObject({ status: 400, message: "max_turns deve essere almeno 1" });
+    await expect(api.saveAgent({ ...base, inference_profile: "ghost" })).rejects.toMatchObject({ message: "il profilo di inferenza `ghost` non esiste" });
+    await expect(api.saveAgent({ ...base, tools: ["read_file", "writ_file", "ghost"] })).rejects.toMatchObject({ message: expect.stringContaining("strumenti sconosciuti: writ_file, ghost") });
+    await expect(api.saveAgent({ ...base, tools: ["*", "mcp__x__y", "todo", "render_ui", "code"] })).resolves.toBeDefined();
+  });
+
+  it("answers 404 for a session that is gone", async () => {
+    const api = new MockTransport();
+    const s = await api.createSession({ agent_id: "operator" });
+    await expect(api.messages(s.id)).resolves.toEqual([]);
+    await api.deleteSession(s.id);
+    await expect(api.messages(s.id)).rejects.toMatchObject({ status: 404 });
+    await expect(api.activeRun(s.id)).rejects.toMatchObject({ status: 404 });
+    await expect(api.startRun(s.id, "ciao")).rejects.toMatchObject({ status: 404 });
+    await expect(api.deleteSession(s.id)).rejects.toMatchObject({ status: 404 });
+    await expect(api.removeMcpServer("nope")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("has a session whose history ends with the persisted run error", async () => {
+    const api = new MockTransport();
+    const msgs = await api.messages("ses_bug");
+    const last = msgs[msgs.length - 1];
+    expect(last).toMatchObject({ role: "system", name: "aiw.run_error" });
+    expect(last.content).toMatch(/^Errore del runtime: /);
+    expect((await api.sessions()).find((s) => s.id === "ses_bug")?.last_status).toBe("failed");
+  });
+});
+
+describe("the scripted browser run", () => {
+  it("sends one aiw.image (a PNG, base64 without prefix) for the screenshot tool, before its result", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new MockTransport();
+      const { run_id } = await api.startRun("ses_cv", "Apri la pagina dei preventivi");
+      const events: import("../types").AgEvent[] = [];
+      api.subscribeRun(run_id, (e) => events.push(e));
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const images = events.filter((e) => e.type === "CUSTOM" && e.name === "aiw.image");
+      expect(images).toHaveLength(1);
+      const v = (images[0] as { value: { toolCallId: string; mime: string; data: string } }).value;
+      expect(v.mime).toBe("image/png");
+      expect(v.data.startsWith("data:")).toBe(false);
+      expect([...atob(v.data).slice(0, 8)].map((c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join("")).toBe("89504e470d0a1a0a");
+      const start = events.findIndex((e) => e.type === "TOOL_CALL_START" && e.toolCallId === v.toolCallId);
+      const result = events.findIndex((e) => e.type === "TOOL_CALL_RESULT" && e.toolCallId === v.toolCallId);
+      const at = events.indexOf(images[0]);
+      expect(start).toBeLessThan(at);
+      expect(at).toBeLessThan(result);
+      expect(events.find((e) => e.type === "TOOL_CALL_START" && e.toolCallId === v.toolCallId)).toMatchObject({ toolCallName: "browser_screenshot" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves the other agents' scripted run without screenshots", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new MockTransport();
+      const { run_id } = await api.startRun("ses_pdf", "Ordina i PDF");
+      const events: import("../types").AgEvent[] = [];
+      api.subscribeRun(run_id, (e) => events.push(e));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(events.some((e) => e.type === "CUSTOM" && e.name === "aiw.image")).toBe(false);
+      expect(events.some((e) => e.type === "TOOL_CALL_START")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("direct URL downloads", () => {
+  it("land in a folder of their own per URL: url/<host>[_<port>]/<name>-<hash>/<file>", () => {
+    const a = urlDest("https://modelli.example.org/m/qwen3-4b-Q4_K_M.gguf", "qwen3-4b-Q4_K_M.gguf");
+    const b = urlDest("https://modelli.example.org/altro/qwen3-4b-Q4_K_M.gguf", "qwen3-4b-Q4_K_M.gguf");
+    expect(a).toMatch(/^~\/\.aiw\/models\/url\/modelli\.example\.org\/qwen3-4b-Q4_K_M-[0-9a-f]{8}\/qwen3-4b-Q4_K_M\.gguf$/);
+    expect(a).not.toBe(b);
+    expect(urlDest("http://192.168.1.5:8080/x/m.gguf", "m.gguf")).toMatch(/\/url\/192\.168\.1\.5_8080\/m-[0-9a-f]{8}\/m\.gguf$/);
   });
 });

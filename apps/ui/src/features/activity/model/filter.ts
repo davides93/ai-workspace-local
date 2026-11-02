@@ -1,6 +1,6 @@
 import { matchesQuery } from "../../../shared/lib/text";
-import type { PillTone } from "../../../shared/ui/Pill";
 import type { AuditEntry } from "../../../shared/api/types";
+import type { PillTone } from "../../../shared/ui";
 
 /** The backend returns only the latest entries of the audit trail (`audit(500)`). */
 export const BACKEND_LIMIT = 500;

@@ -112,7 +112,7 @@ function AuthDialog({ info, onClose }: { info: ModelProviderInfo; onClose: () =>
               value={reset ? "" : endpoint} placeholder={reset ? "Verrà usato l'indirizzo predefinito" : "https://…"}
               disabled={reset} onChange={(e) => setEndpoint(e.target.value)} aria-invalid={endpointError ? true : undefined}
             />
-            <label className="check-row mh-reset">
+            <label className="mh-reset">
               <input type="checkbox" checked={reset} onChange={(e) => setReset(e.target.checked)} />
               Ripristina l'indirizzo predefinito
             </label>

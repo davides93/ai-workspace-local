@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { navigate, useParams } from "../../app/router";
 import { lastChatSession, rememberChatSession } from "../../shared/lib/navMemory";
 import { defaultAgentId } from "../../shared/lib/agents";
 import { forgetSessionRuns } from "../../shared/lib/runIndex";
+import { toast } from "../../shared/lib/toast";
+import { qk } from "../../shared/query/keys";
+import type { Session } from "../../shared/api/types";
 import { Button, Drawer, EmptyState, ModalShell, Sheet } from "../../shared/ui";
 import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
@@ -51,7 +55,23 @@ export function ChatView() {
     if (openId) rememberChatSession(openId);
   }, [openId]);
 
-  const conv = useConversation(openId);
+  // The open session was deleted from another client (404): forget it, go back to the list and say so.
+  const qc = useQueryClient();
+  const gone = useCallback(
+    (id: string) => {
+      forgetSessionImages(id);
+      forgetSessionRuns(id);
+      setDraft(id, "");
+      if (lastChatSession() === id) rememberChatSession(null);
+      // Out of the list at once, so the redirect below never picks it again.
+      qc.setQueryData<Session[]>(qk.sessions.list(), (l) => l?.filter((x) => x.id !== id));
+      void qc.invalidateQueries({ queryKey: qk.sessions.all() });
+      toast("Questa sessione non esiste più: è stata eliminata da un altro dispositivo o client.");
+      navigate("/chat", { replace: true });
+    },
+    [qc],
+  );
+  const conv = useConversation(openId, { onGone: gone });
   const [input, setInput] = useDraft(openId);
   const [focusTick, setFocusTick] = useState(0);
   const [showSessions, setShowSessions] = useState(false);

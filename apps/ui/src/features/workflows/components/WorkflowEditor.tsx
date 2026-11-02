@@ -1,9 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, parseHash, setQuery, useQueryParams } from "../../../app/router";
-import { Button, EmptyState, Icon, Panel, QueryState, Skeleton, TabPanel, Tabs, Toggle } from "../../../shared/ui";
-import { DecisionDialog } from "../../../shared/ui/DecisionDialog";
-import { SaveBar } from "../../../shared/ui/SaveBar";
-import { UnsavedChangesDialog } from "../../../shared/ui/UnsavedChangesDialog";
+import { Button, EmptyState, Icon, Panel, QueryState, Skeleton, TabPanel, Tabs, Toggle, DecisionDialog, SaveBar, UnsavedChangesDialog } from "../../../shared/ui";
 import { useDraft } from "../../../shared/lib/useDraft";
 import { slugify, uniqueSlug } from "../../../shared/lib/slug";
 import { useUnsavedGuard } from "../../../shared/lib/useUnsavedGuard";

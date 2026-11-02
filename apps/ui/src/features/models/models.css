@@ -10,7 +10,8 @@
 .mh-more { justify-content: space-between; }
 .mh-note { margin: 0; font-size: var(--fs-xs); color: var(--fg-muted); }
 .mh-path { overflow-wrap: anywhere; }
-.mh-reset { padding: 0; margin-top: var(--space-1); }
+.field .mh-reset { display: flex; align-items: center; gap: 6px; margin-top: var(--space-1); font-size: var(--fs-xs); font-weight: 400; color: var(--fg-muted); cursor: pointer; }
+.field .mh-reset input { accent-color: var(--accent); }
 
 /* ---------- Cards: installed, search results, catalog ---------- */
 .mh-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 21rem), 1fr)); align-items: stretch; }

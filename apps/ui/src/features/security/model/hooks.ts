@@ -54,19 +54,26 @@ export interface HookIssue {
   message: string;
 }
 
-/** Problems of the hook list: an empty command or a wrong timeout block saving; the rest are warnings. */
+/**
+ * Problems of the hook list: the backend refuses (400) an unknown event, an empty command, a timeout outside 1 to
+ * 600 seconds and a filter that is not a valid glob (`HookConfig::validated`), so those block saving here too;
+ * an event the backend does not fire yet is only a warning.
+ */
 export function checkHooks(hooks: readonly HookConfig[], globProblem: (glob: string) => string | null): HookIssue[] {
   const issues: HookIssue[] = [];
   hooks.forEach((h, index) => {
+    const info = hookEvent(h.event);
+    if (!info) issues.push({ index, level: "error", message: `Evento «${String(h.event)}» non valido: usa ${HOOK_EVENTS.map((e) => e.id).join(", ")}.` });
     if (!h.command.trim()) issues.push({ index, level: "error", message: "Scrivi il comando da eseguire." });
     if (!Number.isInteger(h.timeout_s) || h.timeout_s < 1 || h.timeout_s > MAX_TIMEOUT_S) {
       issues.push({ index, level: "error", message: `Il timeout deve essere tra 1 e ${MAX_TIMEOUT_S} secondi.` });
     }
-    const info = hookEvent(h.event);
     if (info && !info.active) issues.push({ index, level: "warn", message: "Il backend non esegue ancora questo evento: l'hook viene salvato ma non partirà." });
-    if (info?.tools && h.matcher?.trim()) {
-      const p = globProblem(h.matcher.trim());
-      if (p) issues.push({ index, level: "warn", message: `Il filtro non è un glob valido (${p}): verrà confrontato come testo.` });
+    // The filter is sent only for the events that have a tool (see `normalizeHooks`).
+    const matcher = info?.tools ? h.matcher?.trim() : "";
+    if (matcher) {
+      const p = globProblem(matcher);
+      if (p) issues.push({ index, level: "error", message: `Il filtro «${matcher}» non è un glob valido (${p}).` });
     }
   });
   return issues;

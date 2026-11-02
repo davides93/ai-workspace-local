@@ -38,6 +38,34 @@ export const isStandardErrorMessage = (code: string | undefined, message: string
   (code === "cancelled" && /^Run annullato/i.test(message)) || message.trim() === "";
 
 /**
+ * Error code of a run error that was stored in the history. The live `RUN_ERROR` event carries a `code`, the stored
+ * `system` message (`aiw.run_error`) only the text, so the code is read back from the wording of the runner
+ * (crates/aiw-agent/src/runner.rs); anything else is a generic failure.
+ */
+export function runErrorCode(message: string): string | undefined {
+  const m = message.trim();
+  if (/^Run annullato/i.test(m)) return "cancelled";
+  if (/^(Errore del runtime|Runtime non disponibile)\b/.test(m)) return "runtime";
+  if (/^Prompt bloccato da un hook\b/.test(m)) return "hook_blocked";
+  return undefined;
+}
+
+/** Prefixes that only repeat the title of the row ("Errore del runtime: …" under "Errore del runtime"). */
+const TITLE_PREFIX: Record<string, RegExp> = {
+  runtime: /^Errore del runtime:\s*/,
+  hook_blocked: /^Prompt bloccato da un hook:\s*/,
+};
+
+/** The text shown under the title of an error row, or undefined when the title already says everything. */
+export function errorDetail(code: string | undefined, message: string): string | undefined {
+  if (isStandardErrorMessage(code, message)) return undefined;
+  const prefix = code ? TITLE_PREFIX[code] : undefined;
+  const text = (prefix ? message.replace(prefix, "") : message).trim();
+  // What follows the prefix starts a sentence of its own.
+  return text === "" ? undefined : prefix ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+/**
  * Note under a history that ends with a stopped or failed run: the stored messages hold what the
  * run produced, but not how it ended (that came with the live events, which are gone).
  */

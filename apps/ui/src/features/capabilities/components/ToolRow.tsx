@@ -1,11 +1,15 @@
 import type { ToolInfo } from "../../../shared/api/types";
 import { cx } from "../../../shared/lib/cx";
-import { Pill, Toggle } from "../../../shared/ui";
-import { shortToolName, TOOL_RISK } from "../model/tools";
+import { Chip, Pill, Toggle } from "../../../shared/ui";
+import { isInternalTool, shortToolName, TOOL_RISK } from "../model/tools";
 
-/** One tool: name, what it does, its risk and the switch that gives or takes it from every agent. */
+/**
+ * One tool: name, what it does, its risk and the switch that gives or takes it from every agent. An internal tool
+ * (of the agent loop) has no switch: it is always on, and says so with an "Interno" label.
+ */
 export function ToolRow({ tool, onToggle }: { tool: ToolInfo; onToggle: (enabled: boolean) => void }) {
   const risk = TOOL_RISK[tool.risk];
+  const internal = isInternalTool(tool);
   return (
     <li className={cx("cap-tool", !tool.available && "is-unavailable", !tool.enabled && "is-off")}>
       <div className="cap-tool-main">
@@ -16,7 +20,9 @@ export function ToolRow({ tool, onToggle }: { tool: ToolInfo; onToggle: (enabled
         )}
       </div>
       <Pill tone={risk.tone} title={risk.hint}>{risk.label}</Pill>
-      <Toggle label={`Attiva ${tool.name}`} checked={tool.enabled} onChange={onToggle} />
+      {internal
+        ? <Chip className="cap-tool-internal" title="Implementato dal ciclo dell'agente: sempre attivo, non si può disattivare">Interno</Chip>
+        : <Toggle label={`Attiva ${tool.name}`} checked={tool.enabled} onChange={onToggle} />}
     </li>
   );
 }

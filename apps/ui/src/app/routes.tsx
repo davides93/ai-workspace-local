@@ -1,7 +1,7 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 import { lastChatSession } from "../shared/lib/navMemory";
-import type { IconName } from "../shared/ui/Icon";
 import type { RoutePattern } from "./router";
+import type { IconName } from "../shared/ui";
 
 /**
  * THE route table. Rail, tab bar, "Altro" sheet, command palette and view rendering are all

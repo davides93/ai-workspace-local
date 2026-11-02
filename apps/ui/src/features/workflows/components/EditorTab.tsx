@@ -1,6 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import { Field, Input, Textarea } from "../../../shared/ui";
-import { FormSection, FormSections } from "../../../shared/ui/FormSection";
+import { Field, Input, Textarea, FormSection, FormSections } from "../../../shared/ui";
 import type { WorkflowRun } from "../../../shared/api/types";
 import type { Issue, KeyedDraft } from "../model/draft";
 import { InputsEditor } from "./InputsEditor";

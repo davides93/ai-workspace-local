@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { openPalette } from "../../../app/palette/openPalette";
 import { navigate } from "../../../app/router";
 import { defaultAgentId } from "../../../shared/lib/agents";
 import { cx } from "../../../shared/lib/cx";
@@ -8,9 +9,6 @@ import { useCreateSession } from "../../chat/api";
 import { useRuntimeAction, useRuntimes } from "../../runtimes/api";
 import { useConfig } from "../../settings/api";
 import { defaultProfile, runtimeShortcut } from "../model/overview";
-
-/** The command palette listens for Ctrl/Cmd+K on the window: the same key press opens it from here. */
-const openPalette = () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
 
 function Action({ icon, title, hint, onClick, primary, disabled }: { icon: string; title: string; hint: ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean }) {
   return (

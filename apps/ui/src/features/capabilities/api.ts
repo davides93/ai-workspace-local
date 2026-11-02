@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
+import { ignoreNotFound } from "../../shared/lib/errors";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { McpServer, ToolInfo } from "../../shared/api/types";
@@ -61,7 +62,8 @@ export function useRemoveMcpServer() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (s: Pick<McpServer, "id" | "name">) => api.removeMcpServer(s.id),
+    // 404: the server was already removed from another client, which is what was asked.
+    mutationFn: (s: Pick<McpServer, "id" | "name">) => ignoreNotFound(api.removeMcpServer(s.id)),
     onSuccess: (_r, s) => {
       toast(`Server MCP "${s.name}" rimosso`);
       void qc.invalidateQueries({ queryKey: qk.mcp() });
