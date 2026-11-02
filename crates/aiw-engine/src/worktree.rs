@@ -164,6 +164,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path();
         git(p, &["init", "-q", "-b", "main"]).unwrap();
+        // Windows runners default to autocrlf=true: keep the bytes the test compares.
+        git(p, &["config", "core.autocrlf", "false"]).unwrap();
         std::fs::create_dir_all(p.join("src")).unwrap();
         std::fs::write(p.join("src/a.txt"), "uno\n").unwrap();
         std::fs::write(p.join("README.md"), "# Prova\n").unwrap();

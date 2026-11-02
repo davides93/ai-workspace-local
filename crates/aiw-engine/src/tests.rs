@@ -159,6 +159,7 @@ async fn isolated_session_writes_in_its_worktree_until_applied() {
     ];
     let (e, _d, ws) = engine(turns).await;
     git(ws.path(), &["init", "-q"]);
+    git(ws.path(), &["config", "core.autocrlf", "false"]);
     std::fs::write(ws.path().join("README.md"), "x\n").unwrap();
     git(ws.path(), &["add", "."]);
     git(ws.path(), &["commit", "-q", "-m", "init"]);
