@@ -151,4 +151,9 @@ pub trait ChatBackend: Send + Sync {
     async fn list_models(&self) -> Result<Vec<String>>;
     /// Streams a chat completion. Implementations must stop promptly when `cancel` fires.
     async fn chat(&self, req: ChatRequest, cancel: CancellationToken) -> Result<DeltaStream>;
+    /// For in-process engines that depend on something installed separately: why they cannot
+    /// run yet (shown in the runtime list).
+    fn availability(&self) -> std::result::Result<(), String> {
+        Ok(())
+    }
 }

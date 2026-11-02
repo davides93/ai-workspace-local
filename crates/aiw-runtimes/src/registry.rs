@@ -139,8 +139,12 @@ impl RuntimeRegistry {
                 ..Default::default()
             };
         }
-        if self.bridges.read().unwrap().contains_key(&m.id) {
-            return Status { status: "running".into(), detail: Some("motore in-process".into()), ..Default::default() };
+        let bridge = self.bridges.read().unwrap().get(&m.id).cloned();
+        if let Some(b) = bridge {
+            return match b.availability() {
+                Ok(()) => Status { status: "running".into(), detail: Some("motore in-process".into()), ..Default::default() },
+                Err(why) => Status { status: "installable".into(), detail: Some(why), ..Default::default() },
+            };
         }
         let settings = self.settings(&m.id).unwrap_or_default();
         if let Some((endpoint, model)) = self.supervisor.endpoint(&m.id).await {

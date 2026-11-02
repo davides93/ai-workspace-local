@@ -84,6 +84,8 @@ pub(crate) struct Inner {
     pub runtimes: RuntimeRegistry,
     pub downloads: DownloadManager,
     pub models: Arc<RwLock<Vec<LocalModel>>>,
+    /// Model id/name (or path) → file or folder, shared by the in-process engines.
+    pub resolver: aiw_runtimes::ModelResolver,
     pub models_dir: PathBuf,
     pub tools: Arc<ToolRegistry>,
     pub browser: Arc<BrowserManager>,
@@ -154,8 +156,8 @@ impl Engine {
         runtimes.set_model_resolver(resolver.clone());
         #[cfg(feature = "llama-embedded")]
         register_embedded(&runtimes, resolver.clone());
-        #[cfg(not(feature = "llama-embedded"))]
-        let _ = &resolver;
+        #[cfg(not(target_os = "ios"))]
+        register_ort_genai(&runtimes, resolver.clone());
         let token = {
             let p = dirs.root.join("token");
             match std::fs::read_to_string(&p) {
@@ -177,6 +179,7 @@ impl Engine {
             mode: if opts.mode.is_empty() { "embedded".into() } else { opts.mode.clone() },
             started: Instant::now(),
             downloads: DownloadManager::new(models_dir.clone()),
+            resolver,
             models_dir,
             dirs,
             config,
@@ -401,15 +404,14 @@ impl Engine {
     }
     pub fn update_runtime_settings(&self, id: &str, settings: Map<String, Value>) -> Result<RuntimeInfo> {
         let info = self.update_runtime_settings_inner(id, settings)?;
+        // In-process engines read their settings when they are created: recreate them.
         #[cfg(feature = "llama-embedded")]
         if id == "llama-embedded" {
-            let m = self.0.models.clone();
-            register_embedded(
-                &self.0.runtimes,
-                Arc::new(move |mid: &str| {
-                    m.read().unwrap().iter().find(|x| x.id == mid || x.name == mid).and_then(|x| x.path.clone()).map(PathBuf::from)
-                }),
-            );
+            register_embedded(&self.0.runtimes, self.0.resolver.clone());
+        }
+        #[cfg(not(target_os = "ios"))]
+        if id == "ort-genai" {
+            register_ort_genai(&self.0.runtimes, self.0.resolver.clone());
         }
         Ok(info)
     }
@@ -1165,6 +1167,19 @@ fn register_embedded(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelRe
         threads: None,
     };
     runtimes.register_bridge("llama-embedded", Arc::new(aiw_runtimes::embedded::EmbeddedLlama::new(resolver, settings)));
+}
+
+/// Registers ONNX Runtime GenAI (loaded at run time, see `aiw_runtimes::ortgenai`) as `ort-genai`.
+#[cfg(not(target_os = "ios"))]
+fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelResolver) {
+    let s = runtimes.settings("ort-genai").unwrap_or_default();
+    let d = aiw_runtimes::ortgenai::OrtGenAiSettings::default();
+    let settings = aiw_runtimes::ortgenai::OrtGenAiSettings {
+        library_path: s.get("library_path").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        execution_provider: s.get("execution_provider").and_then(|v| v.as_str()).unwrap_or(&d.execution_provider).to_string(),
+        max_length: s.get("max_length").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(d.max_length),
+    };
+    runtimes.register_bridge("ort-genai", Arc::new(aiw_runtimes::ortgenai::OrtGenAi::new(resolver, settings)));
 }
 
 #[cfg(test)]

@@ -93,56 +93,7 @@ impl Inner {
 
 /// Renders the conversation with the model's own chat template (falls back to ChatML).
 pub fn render_prompt(model: &LlamaModel, req: &ChatRequest) -> Result<String> {
-    let mut msgs: Vec<(String, String)> = Vec::new();
-    let tools = if req.tools.is_empty() {
-        String::new()
-    } else {
-        let list: Vec<String> = req
-            .tools
-            .iter()
-            .map(|t| format!("- {}: {} (argomenti: {})", t.function.name, t.function.description, t.function.parameters))
-            .collect();
-        format!(
-            "\n\n# Strumenti\nPer usare uno strumento rispondi SOLO con un blocco <tool_call>{{\"name\": \"nome\", \"arguments\": {{...}}}}</tool_call>.\n{}",
-            list.join("\n")
-        )
-    };
-    let mut system_done = false;
-    for m in &req.messages {
-        let text = m.text();
-        match m.role.as_str() {
-            "system" => {
-                msgs.push(("system".into(), format!("{text}{tools}")));
-                system_done = true;
-            }
-            "assistant" => {
-                let calls = m
-                    .tool_calls
-                    .as_ref()
-                    .map(|c| {
-                        c.iter()
-                            .map(|t| {
-                                format!(
-                                    "<tool_call>{{\"name\": \"{}\", \"arguments\": {}}}</tool_call>",
-                                    t.function.name, t.function.arguments
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_default();
-                msgs.push(("assistant".into(), format!("{text}{calls}")));
-            }
-            "tool" => msgs.push((
-                "user".into(),
-                format!("<tool_response name=\"{}\">\n{text}\n</tool_response>", m.name.clone().unwrap_or_default()),
-            )),
-            _ => msgs.push(("user".into(), text)),
-        }
-    }
-    if !system_done && !tools.is_empty() {
-        msgs.insert(0, ("system".into(), tools.trim_start().to_string()));
-    }
+    let msgs = crate::textproto::chat_turns(req);
     let chat: Vec<LlamaChatMessage> = msgs
         .into_iter()
         .map(|(r, c)| LlamaChatMessage::new(r, c))

@@ -28,6 +28,10 @@ tracing.workspace = true
 which.workspace = true
 bytes.workspace = true
 
+# ONNX Runtime GenAI is loaded at run time (no build-time dependency); not on iOS (no dlopen).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+libloading = "0.8"
+
 # Android: link the NDK C++ runtime statically, so the APK does not need libc++_shared.so.
 [target.'cfg(target_os = "android")'.dependencies]
 llama-cpp-2 = { version = "0.1.160", optional = true, default-features = false, features = ["android-static-stdcxx"] }

@@ -1605,13 +1605,12 @@
   "vendor": "Microsoft",
   "kind": "embedded",
   "api": "native",
-  "description": "Generazione con ONNX Runtime: DirectML, CUDA, QNN, OpenVINO, CoreML, XNNPACK.",
+  "description": "ONNX Runtime GenAI caricato a runtime: DirectML, CUDA, QNN, OpenVINO, CoreML o CPU. Il modello è una cartella ONNX GenAI (genai_config.json).",
   "platforms": [
    "windows",
    "macos",
    "linux",
-   "android",
-   "ios"
+   "android"
   ],
   "accelerators": [
    "directml",
@@ -1625,11 +1624,42 @@
    "onnx"
   ],
   "capabilities": [
-   "chat"
+   "chat",
+   "tools"
   ],
   "settings": {
    "type": "object",
    "properties": {
+    "library_path": {
+     "type": "string",
+     "title": "Libreria onnxruntime-genai",
+     "description": "File o cartella di onnxruntime-genai (.dll/.so/.dylib). Vuoto: accanto all'app, ORT_GENAI_LIB o percorso di sistema. ONNX Runtime va nella stessa cartella.",
+     "default": ""
+    },
+    "execution_provider": {
+     "type": "string",
+     "title": "Execution provider",
+     "enum": [
+      "auto",
+      "cpu",
+      "cuda",
+      "dml",
+      "qnn",
+      "openvino",
+      "coreml",
+      "webgpu"
+     ],
+     "default": "auto",
+     "description": "auto = quello indicato in genai_config.json"
+    },
+    "max_length": {
+     "type": "integer",
+     "title": "Token massimi (prompt + risposta)",
+     "default": 4096,
+     "minimum": 256,
+     "maximum": 131072,
+     "step": 256
+    },
     "temperature": {
      "type": "number",
      "title": "Temperatura",
@@ -1637,19 +1667,16 @@
      "minimum": 0,
      "maximum": 2,
      "step": 0.05
-    },
-    "max_tokens": {
-     "type": "integer",
-     "title": "Token massimi",
-     "default": 1024,
-     "minimum": 16,
-     "maximum": 32768
     }
    }
   },
   "homepage": "https://github.com/microsoft/onnxruntime-genai",
   "detect": {},
-  "install": {}
+  "install": {
+   "windows": "pip install onnxruntime-genai-directml",
+   "linux": "pip install onnxruntime-genai",
+   "macos": "pip install onnxruntime-genai"
+  }
  },
  {
   "id": "windows-ml",
