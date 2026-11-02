@@ -55,9 +55,10 @@ impl DeviceProfile {
     pub fn vram_mb(&self) -> u64 {
         self.accelerators.iter().filter(|a| a.kind != "cpu").filter_map(|a| a.memory_mb).max().unwrap_or(0)
     }
-    /// Apple Silicon / mobile SoCs share memory between CPU and GPU.
+    /// Apple Silicon / mobile SoCs share memory between CPU and GPU. An Intel Mac does not: it has
+    /// a Metal GPU too, but with its own (or carved-out) memory, no Neural Engine and no MLX.
     pub fn unified_memory(&self) -> bool {
-        matches!(self.os.as_str(), "ios" | "android") || (self.os == "macos" && self.has_accelerator("metal"))
+        matches!(self.os.as_str(), "ios" | "android") || (self.os == "macos" && self.arch == "aarch64" && self.has_accelerator("metal"))
     }
 }
 

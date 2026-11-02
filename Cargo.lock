@@ -135,6 +135,7 @@ dependencies = [
  "libc",
  "serde_json",
  "sysinfo",
+ "tempfile",
  "tracing",
 ]
 

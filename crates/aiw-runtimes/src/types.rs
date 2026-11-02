@@ -156,4 +156,10 @@ pub trait ChatBackend: Send + Sync {
     fn availability(&self) -> std::result::Result<(), String> {
         Ok(())
     }
+    /// A view of this backend that runs with the context window of an inference profile.
+    /// Meant for in-process engines whose context is fixed when a generation starts; sidecars
+    /// receive the profile context at launch instead, so the default is `None` (no change).
+    fn with_context(&self, _ctx: u32) -> Option<std::sync::Arc<dyn ChatBackend>> {
+        None
+    }
 }

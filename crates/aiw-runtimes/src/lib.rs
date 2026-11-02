@@ -3,6 +3,7 @@
 #[cfg(feature = "llama-embedded")]
 pub mod embedded;
 pub mod manifest;
+pub mod ollama;
 pub mod openai;
 #[cfg(not(target_os = "ios"))]
 pub mod ortgenai;
@@ -13,6 +14,7 @@ pub mod textproto;
 pub mod types;
 
 pub use manifest::RuntimeManifest;
+pub use ollama::OllamaBackend;
 pub use openai::OpenAiBackend;
 pub use registry::{ModelResolver, RuntimeRegistry};
 pub use scripted::ScriptedBackend;

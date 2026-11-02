@@ -220,8 +220,11 @@
     "serve"
    ],
    "env": {
-    "OLLAMA_HOST": "127.0.0.1:{port}"
+    "OLLAMA_HOST": "127.0.0.1:{port}",
+    "OLLAMA_KEEP_ALIVE": "{keep_alive}",
+    "OLLAMA_CONTEXT_LENGTH": "{ctx_size}"
    },
+   "ctx_setting": "ctx_size",
    "health": "/api/version"
   },
   "settings": {
@@ -245,8 +248,17 @@
     "keep_alive": {
      "type": "string",
      "title": "Keep alive",
+     "description": "Quanto tenere il modello in memoria dopo l'ultima richiesta (es. 5m, 1h, -1 = sempre). Vale solo se AIW avvia `ollama serve` (OLLAMA_KEEP_ALIVE).",
      "default": "5m",
      "advanced": true
+    },
+    "ctx_size": {
+     "type": "integer",
+     "title": "Finestra di contesto",
+     "description": "Vuoto = predefinito di Ollama. Se AIW avvia `ollama serve` il contesto del profilo ha la precedenza (OLLAMA_CONTEXT_LENGTH); un Ollama già attivo non viene modificato.",
+     "minimum": 512,
+     "maximum": 1048576,
+     "step": 512
     }
    }
   },
@@ -652,6 +664,9 @@
   "platforms": [
    "macos"
   ],
+  "arch": [
+   "aarch64"
+  ],
   "accelerators": [
    "metal"
   ],
@@ -729,6 +744,9 @@
   "description": "Modelli vision-language su MLX (utile per il computer-use su Mac).",
   "platforms": [
    "macos"
+  ],
+  "arch": [
+   "aarch64"
   ],
   "accelerators": [
    "metal"
@@ -943,9 +961,11 @@
     "--rest_port",
     "{port}",
     "--source_model",
-    "{model}",
+    "{model_id}",
     "--model_repository_path",
     "{models_dir}",
+    "--task",
+    "text_generation",
     "--target_device",
     "{device}"
    ],
@@ -1206,12 +1226,39 @@
     "--port",
     "{port}"
    ],
+   "settings_args": {
+    "ctx_size": [
+     "-c",
+     "{value}"
+    ],
+    "gpu_layers": [
+     "-ngl",
+     "{value}"
+    ],
+    "extra_args": []
+   },
    "health": "/health",
    "requires_model": true
   },
   "settings": {
    "type": "object",
    "properties": {
+    "ctx_size": {
+     "type": "integer",
+     "title": "Finestra di contesto",
+     "default": 8192,
+     "minimum": 512,
+     "maximum": 1048576,
+     "step": 512
+    },
+    "gpu_layers": {
+     "type": "integer",
+     "title": "Layer su GPU",
+     "description": "999 = tutto su GPU, 0 = solo CPU",
+     "default": 999,
+     "minimum": 0,
+     "maximum": 999
+    },
     "binary": {
      "type": "string",
      "title": "Percorso dell'eseguibile",
@@ -1225,6 +1272,15 @@
      "default": 0,
      "minimum": 0,
      "maximum": 65535,
+     "advanced": true
+    },
+    "extra_args": {
+     "type": "array",
+     "title": "Argomenti extra",
+     "items": {
+      "type": "string"
+     },
+     "default": [],
      "advanced": true
     }
    }
@@ -1333,7 +1389,6 @@
     "mistralrs-server"
    ]
   },
-  "external_endpoint": "http://127.0.0.1:1234/v1",
   "launch": {
    "command": "mistralrs-server",
    "args": [
@@ -1853,6 +1908,9 @@
    "macos",
    "ios"
   ],
+  "arch": [
+   "aarch64"
+  ],
   "accelerators": [
    "metal"
   ],
@@ -2099,6 +2157,9 @@
   "platforms": [
    "macos",
    "ios"
+  ],
+  "arch": [
+   "aarch64"
   ],
   "accelerators": [
    "npu",

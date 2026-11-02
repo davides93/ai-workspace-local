@@ -1,4 +1,5 @@
-use crate::manifest::{builtin, RuntimeManifest};
+use crate::manifest::{builtin, Launch, RuntimeManifest};
+use crate::ollama::{self, OllamaBackend};
 use crate::openai::OpenAiBackend;
 use crate::supervisor::{find_binary, LaunchSpec, Supervisor};
 use crate::types::ChatBackend;
@@ -24,6 +25,8 @@ struct Status {
 pub struct RuntimeRegistry {
     manifests: RwLock<Vec<RuntimeManifest>>,
     os: String,
+    /// CPU architecture (`aarch64`, `x86_64`…), for manifests that gate on it (MLX).
+    arch: RwLock<String>,
     supervisor: Supervisor,
     bridges: RwLock<HashMap<String, Arc<dyn ChatBackend>>>,
     overrides: RwLock<HashMap<String, Map<String, Value>>>,
@@ -49,6 +52,7 @@ impl RuntimeRegistry {
         Self {
             manifests: RwLock::new(manifests),
             os: os.into(),
+            arch: RwLock::new(std::env::consts::ARCH.to_string()),
             supervisor: Supervisor::default(),
             bridges: RwLock::new(HashMap::new()),
             overrides: RwLock::new(HashMap::new()),
@@ -62,6 +66,28 @@ impl RuntimeRegistry {
 
     pub fn os(&self) -> &str {
         &self.os
+    }
+
+    /// Overrides the CPU architecture (defaults to the one this binary was built for); the
+    /// engine passes the one reported by the device profile.
+    pub fn set_arch(&self, arch: &str) {
+        *self.arch.write().unwrap() = arch.to_string();
+    }
+
+    /// Whether the manifest can run on this device: OS and, when the manifest gates on it, CPU
+    /// architecture (an Intel Mac has no MLX).
+    pub fn supports(&self, m: &RuntimeManifest) -> bool {
+        m.supports_platform(&self.os) && m.supports_arch(&self.arch.read().unwrap())
+    }
+
+    fn unsupported_detail(&self, m: &RuntimeManifest) -> String {
+        if !m.supports_platform(&self.os) {
+            format!("disponibile su: {}", m.platforms.join(", "))
+        } else if self.os == "macos" && m.arch.iter().any(|a| a == "aarch64") {
+            "richiede un Mac con Apple Silicon".to_string()
+        } else {
+            format!("richiede un processore {}", m.arch.join("/"))
+        }
     }
 
     pub fn set_model_resolver(&self, r: ModelResolver) {
@@ -131,13 +157,20 @@ impl RuntimeRegistry {
         Some(v["data"].as_array().map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect()).unwrap_or_default())
     }
 
+    /// Models a running server exposes. Ollama lists the **installed** models (`/api/tags`), not
+    /// only what `/v1/models` reports; every other runtime uses `/models`.
+    async fn probe_loaded(&self, m: &RuntimeManifest, endpoint: &str, api_key: Option<&str>) -> Option<Vec<String>> {
+        if m.api == "ollama" {
+            if let Some(models) = ollama::list_installed(&self.http, endpoint, api_key, Duration::from_millis(900)).await {
+                return Some(models);
+            }
+        }
+        self.probe_models(endpoint, api_key).await
+    }
+
     async fn compute_status(&self, m: &RuntimeManifest) -> Status {
-        if !m.supports_platform(&self.os) {
-            return Status {
-                status: "unsupported".into(),
-                detail: Some(format!("disponibile su: {}", m.platforms.join(", "))),
-                ..Default::default()
-            };
+        if !self.supports(m) {
+            return Status { status: "unsupported".into(), detail: Some(self.unsupported_detail(m)), ..Default::default() };
         }
         let bridge = self.bridges.read().unwrap().get(&m.id).cloned();
         if let Some(b) = bridge {
@@ -149,14 +182,14 @@ impl RuntimeRegistry {
         let settings = self.settings(&m.id).unwrap_or_default();
         if let Some((endpoint, model)) = self.supervisor.endpoint(&m.id).await {
             if self.supervisor.is_running(&m.id).await {
-                let loaded = self.probe_models(&endpoint, None).await.unwrap_or_else(|| model.into_iter().collect());
+                let loaded = self.probe_loaded(m, &endpoint, None).await.unwrap_or_else(|| model.into_iter().collect());
                 return Status { status: "running".into(), detail: Some("avviato da AIW".into()), endpoint: Some(endpoint), loaded };
             }
         }
         match m.kind.as_str() {
             "sidecar" => {
                 if let Some(ep) = self.external_endpoint(m, &settings) {
-                    if let Some(models) = self.probe_models(&ep, settings.get("api_key").and_then(|v| v.as_str())).await {
+                    if let Some(models) = self.probe_loaded(m, &ep, settings.get("api_key").and_then(|v| v.as_str())).await {
                         return Status {
                             status: "running".into(),
                             detail: Some("server già attivo".into()),
@@ -169,7 +202,21 @@ impl RuntimeRegistry {
                     return Status { status: "available".into(), detail: Some(bin.display().to_string()), ..Default::default() };
                 }
                 if !m.detect.python_modules.is_empty() && python_has(&m.detect.python_modules).await {
-                    return Status { status: "available".into(), detail: Some("modulo Python presente".into()), ..Default::default() };
+                    // `start` can only run what it can launch: `python3 -m …` recipes, or a
+                    // command found in PATH. A Python module without its CLI is not "available".
+                    return match m.launch.as_ref().map(|l| l.command.as_str()) {
+                        Some("python3") => {
+                            Status { status: "available".into(), detail: Some("modulo Python presente".into()), ..Default::default() }
+                        }
+                        Some(cmd) => Status {
+                            status: "installable".into(),
+                            detail: Some(format!(
+                                "modulo Python presente ma `{cmd}` non è nel PATH: indica il percorso dell'eseguibile nelle impostazioni"
+                            )),
+                            ..Default::default()
+                        },
+                        None => Status { status: "installable".into(), detail: m.install_hint(&self.os), ..Default::default() },
+                    };
                 }
                 Status { status: "installable".into(), detail: m.install_hint(&self.os), ..Default::default() }
             }
@@ -219,10 +266,11 @@ impl RuntimeRegistry {
 
     pub fn info(&self, id: &str) -> Result<RuntimeInfo> {
         let m = self.manifest(id)?;
-        let s = self.status.read().unwrap().get(id).cloned().unwrap_or(Status {
-            status: if m.supports_platform(&self.os) { "stopped".into() } else { "unsupported".into() },
-            ..Default::default()
-        });
+        let s =
+            self.status.read().unwrap().get(id).cloned().unwrap_or(Status {
+                status: if self.supports(&m) { "stopped".into() } else { "unsupported".into() },
+                ..Default::default()
+            });
         let settings = self.settings(id).unwrap_or_default();
         Ok(RuntimeInfo {
             id: m.id.clone(),
@@ -252,9 +300,21 @@ impl RuntimeRegistry {
 
     /// Starts (or connects to) a runtime. `model` is a model id for runtimes that need one.
     pub async fn start(&self, id: &str, model: Option<String>) -> Result<RuntimeInfo> {
+        self.start_with(id, model, None).await
+    }
+
+    /// Like [`start`](Self::start), for an inference profile: `ctx` is the profile's context
+    /// window and overrides the runtime's own context setting (`ctx_size`, `max_model_len`,
+    /// `OLLAMA_CONTEXT_LENGTH`…) for the process that is launched. A server that is already
+    /// answering (started outside AIW) is reused as it is.
+    pub async fn start_with(&self, id: &str, model: Option<String>, ctx: Option<u32>) -> Result<RuntimeInfo> {
         let m = self.manifest(id)?;
-        if !m.supports_platform(&self.os) {
-            return Err(Error::Unsupported(format!("{} non è disponibile su {}", m.name, self.os)));
+        if !self.supports(&m) {
+            return Err(Error::Unsupported(if m.supports_platform(&self.os) {
+                format!("{} {}", m.name, self.unsupported_detail(&m))
+            } else {
+                format!("{} non è disponibile su {}", m.name, self.os)
+            }));
         }
         let settings = self.settings(id)?;
         match m.kind.as_str() {
@@ -291,6 +351,7 @@ impl RuntimeRegistry {
                             model: model.clone(),
                             model_path,
                             models_dir: self.models_dir.clone(),
+                            ctx,
                         },
                         &self.http,
                     )
@@ -328,46 +389,89 @@ impl RuntimeRegistry {
 
     /// Returns a backend for `id`, starting the sidecar with `model` if needed (auto-start).
     pub async fn backend(&self, id: &str, model: Option<&str>) -> Result<Arc<dyn ChatBackend>> {
-        if let Some(b) = self.bridges.read().unwrap().get(id).cloned() {
-            return Ok(b);
+        self.backend_with(id, model, None).await
+    }
+
+    /// Like [`backend`](Self::backend), for an inference profile whose context window is `ctx`:
+    /// - a sidecar started now gets it instead of the runtime's own context setting, and a
+    ///   sidecar that AIW started earlier with a smaller window is restarted (see
+    ///   [`needs_restart`]);
+    /// - an in-process engine runs its generations with it ([`ChatBackend::with_context`]).
+    pub async fn backend_with(&self, id: &str, model: Option<&str>, ctx: Option<u32>) -> Result<Arc<dyn ChatBackend>> {
+        let bridge = self.bridges.read().unwrap().get(id).cloned();
+        if let Some(b) = bridge {
+            return Ok(ctx.and_then(|c| b.with_context(c)).unwrap_or(b));
         }
         let m = self.manifest(id)?;
         let settings = self.settings(id)?;
         let timeout = Duration::from_secs(settings.get("timeout_s").and_then(|v| v.as_u64()).unwrap_or(900));
         let api_key = settings.get("api_key").and_then(|v| v.as_str()).map(String::from);
+        let mut model_to_start = model.map(String::from);
         if self.supervisor.is_running(id).await {
             let (ep, served) = self.supervisor.endpoint(id).await.unwrap_or_default();
-            // Single-model servers must be restarted to switch model.
-            let single_model =
-                m.launch.as_ref().map(|l| l.args.iter().any(|a| a.contains("{model_path}") || a.contains("{model}"))).unwrap_or(false);
-            match (model, served) {
-                (Some(want), Some(have)) if single_model && want != have => {
-                    self.start(id, Some(want.to_string())).await?;
-                    let (ep, _) = self.supervisor.endpoint(id).await.unwrap_or_default();
-                    return Ok(Arc::new(OpenAiBackend::new(ep, api_key, timeout)));
-                }
-                _ => return Ok(Arc::new(OpenAiBackend::new(ep, api_key, timeout))),
+            let served_ctx = self.supervisor.served_ctx(id).await;
+            let single_model = m.launch.as_ref().map(launch_uses_model).unwrap_or(false);
+            if !needs_restart(single_model, m.ctx_setting().is_some(), model, served.as_deref(), ctx, served_ctx) {
+                return Ok(make_backend(&m, ep, api_key, timeout));
             }
+            // Different model or a larger context: stop it and take the start path below.
+            model_to_start = model_to_start.or(served);
+            self.supervisor.stop(id).await?;
         }
         match m.kind.as_str() {
             "remote" => {
                 let ep =
                     self.external_endpoint(&m, &settings).ok_or_else(|| Error::Invalid(format!("configura l'endpoint di {}", m.name)))?;
-                Ok(Arc::new(OpenAiBackend::new(ep, api_key, timeout)))
+                Ok(make_backend(&m, ep, api_key, timeout))
             }
             "sidecar" => {
                 if let Some(ep) = self.external_endpoint(&m, &settings) {
                     if self.probe_models(&ep, api_key.as_deref()).await.is_some() {
-                        return Ok(Arc::new(OpenAiBackend::new(ep, api_key, timeout)));
+                        return Ok(make_backend(&m, ep, api_key, timeout));
                     }
                 }
-                self.start(id, model.map(String::from)).await?;
+                self.start_with(id, model_to_start, ctx).await?;
                 let (ep, _) = self.supervisor.endpoint(id).await.ok_or_else(|| Error::Runtime(format!("{} non è partito", m.name)))?;
-                Ok(Arc::new(OpenAiBackend::new(ep, api_key, timeout)))
+                Ok(make_backend(&m, ep, api_key, timeout))
             }
             _ => Err(Error::Unsupported(format!("{} richiede il plugin nativo dell'app", m.name))),
         }
     }
+}
+
+/// The chat backend for a runtime endpoint: the OpenAI adapter, with the native Ollama bits
+/// (installed-model listing) for `api: "ollama"`.
+fn make_backend(m: &RuntimeManifest, endpoint: String, api_key: Option<String>, timeout: Duration) -> Arc<dyn ChatBackend> {
+    if m.api == "ollama" {
+        Arc::new(OllamaBackend::new(endpoint, api_key, timeout))
+    } else {
+        Arc::new(OpenAiBackend::new(endpoint, api_key, timeout))
+    }
+}
+
+/// The launch recipe names a model (`{model_path}`, `{model}`, `{model_id}`): the server serves a
+/// single model and has to be restarted to change it.
+fn launch_uses_model(l: &Launch) -> bool {
+    l.args.iter().any(|a| a.contains("{model_path}") || a.contains("{model}") || a.contains("{model_id}"))
+}
+
+/// Whether a sidecar that AIW started earlier must be restarted for a new request.
+/// - a single-model server serving another model;
+/// - a context window larger than the one the process was launched with (`served_ctx`, `None`
+///   = the server's own default). A smaller request does not restart anything: a server with
+///   more context serves it correctly, since the profile context only drives compaction, and
+///   alternating profiles would otherwise bounce the process (and cut other runs' streams).
+pub fn needs_restart(
+    single_model: bool,
+    supports_ctx: bool,
+    want_model: Option<&str>,
+    served_model: Option<&str>,
+    want_ctx: Option<u32>,
+    served_ctx: Option<u32>,
+) -> bool {
+    let model_changed = single_model && matches!((want_model, served_model), (Some(w), Some(h)) if w != h);
+    let ctx_grew = supports_ctx && want_ctx.is_some_and(|w| served_ctx.is_none_or(|h| w > h));
+    model_changed || ctx_grew
 }
 
 fn redact(m: &RuntimeManifest, mut s: Map<String, Value>) -> Map<String, Value> {
@@ -419,5 +523,155 @@ async fn python_has(modules: &[String]) -> bool {
             .stderr(std::process::Stdio::null())
             .status();
         matches!(tokio::time::timeout(Duration::from_secs(4), fut).await, Ok(Ok(s)) if s.success())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{ChatRequest, DeltaStream};
+    use axum::{routing::get, Json, Router};
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
+
+    fn registry(os: &str) -> (RuntimeRegistry, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        (RuntimeRegistry::new(os, None, vec![], dir.path().to_path_buf()), dir)
+    }
+
+    /// A server with the response shapes of Ollama: `/v1/models` lists one model, `/api/tags`
+    /// the installed ones.
+    async fn fake_ollama() -> String {
+        let app = Router::new()
+            .route("/v1/models", get(|| async { Json(json!({"object": "list", "data": [{"id": "qwen3:4b"}]})) }))
+            .route(
+                "/api/tags",
+                get(|| async {
+                    Json(json!({"models": [
+                        {"name": "qwen3:4b", "model": "qwen3:4b", "size": 2497293931u64, "digest": "359d7dd4bcda", "details": {"format": "gguf", "parameter_size": "4.0B"}},
+                        {"name": "gemma3:12b", "model": "gemma3:12b", "size": 8149190253u64, "digest": "f4031aab637d", "details": {"format": "gguf", "parameter_size": "12.2B"}}
+                    ]}))
+                }),
+            );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        format!("http://127.0.0.1:{port}/v1")
+    }
+
+    #[tokio::test]
+    async fn ollama_status_lists_installed_models_not_only_loaded_ones() {
+        let (reg, _dir) = registry("linux");
+        reg.update_settings("ollama", json!({"base_url": fake_ollama().await}).as_object().unwrap().clone()).unwrap();
+        let info = reg.refresh_one("ollama").await.unwrap();
+        assert_eq!(info.status, "running");
+        assert_eq!(info.loaded_models, vec!["qwen3:4b", "gemma3:12b"]);
+        assert_eq!(info.api, "ollama");
+        // The backend handed out for the runtime lists the same installed models.
+        let backend = reg.backend("ollama", None).await.unwrap();
+        assert_eq!(backend.list_models().await.unwrap(), vec!["qwen3:4b", "gemma3:12b"]);
+    }
+
+    #[tokio::test]
+    async fn other_runtimes_still_use_v1_models() {
+        let (reg, _dir) = registry("linux");
+        // LM Studio is `api: openai`: its list is /v1/models, whatever /api/tags says.
+        reg.update_settings("lmstudio", json!({"base_url": fake_ollama().await}).as_object().unwrap().clone()).unwrap();
+        let info = reg.refresh_one("lmstudio").await.unwrap();
+        assert_eq!(info.loaded_models, vec!["qwen3:4b"]);
+    }
+
+    #[tokio::test]
+    async fn mlx_needs_apple_silicon() {
+        let (reg, _dir) = registry("macos");
+        reg.set_arch("x86_64");
+        for id in ["mlx-lm", "mlx-vlm"] {
+            let info = reg.refresh_one(id).await.unwrap();
+            assert_eq!(info.status, "unsupported", "{id}");
+            assert!(info.status_detail.unwrap().contains("Apple Silicon"), "{id}");
+            let err = reg.start(id, Some("m".into())).await.unwrap_err().to_string();
+            assert!(err.contains("Apple Silicon"), "{err}");
+        }
+        // Not an MLX runtime: unaffected by the architecture.
+        assert_ne!(reg.refresh_one("llama-server").await.unwrap().status, "unsupported");
+        reg.set_arch("aarch64");
+        assert_ne!(reg.refresh_one("mlx-lm").await.unwrap().status, "unsupported");
+        // Same architecture gate, other OS: still the platform message.
+        let (linux, _d) = registry("linux");
+        assert_eq!(linux.refresh_one("mlx-lm").await.unwrap().status, "unsupported");
+    }
+
+    struct CtxProbe(u32);
+
+    #[async_trait::async_trait]
+    impl ChatBackend for CtxProbe {
+        async fn list_models(&self) -> Result<Vec<String>> {
+            Ok(vec![format!("ctx={}", self.0)])
+        }
+        async fn chat(&self, _req: ChatRequest, _cancel: CancellationToken) -> Result<DeltaStream> {
+            Err(Error::Unsupported("test".into()))
+        }
+        fn with_context(&self, ctx: u32) -> Option<Arc<dyn ChatBackend>> {
+            Some(Arc::new(CtxProbe(ctx)))
+        }
+    }
+
+    #[tokio::test]
+    async fn in_process_engines_receive_the_profile_context() {
+        let (reg, _dir) = registry("linux");
+        reg.register_bridge("llama-embedded", Arc::new(CtxProbe(8192)));
+        let plain = reg.backend("llama-embedded", Some("m")).await.unwrap();
+        assert_eq!(plain.list_models().await.unwrap(), vec!["ctx=8192"]);
+        let with = reg.backend_with("llama-embedded", Some("m"), Some(16384)).await.unwrap();
+        assert_eq!(with.list_models().await.unwrap(), vec!["ctx=16384"]);
+    }
+
+    #[test]
+    fn restart_rules_for_running_sidecars() {
+        // (single_model, supports_ctx, want_model, served_model, want_ctx, served_ctx)
+        assert!(!needs_restart(true, true, Some("a"), Some("a"), Some(8192), Some(8192)));
+        // Another model on a single-model server.
+        assert!(needs_restart(true, true, Some("b"), Some("a"), Some(8192), Some(8192)));
+        assert!(!needs_restart(false, true, Some("b"), Some("a"), Some(8192), Some(8192)));
+        // A larger context restarts; an equal or smaller one does not.
+        assert!(needs_restart(true, true, Some("a"), Some("a"), Some(16384), Some(8192)));
+        assert!(!needs_restart(true, true, Some("a"), Some("a"), Some(4096), Some(8192)));
+        // No context requested: nothing to restart for.
+        assert!(!needs_restart(true, true, Some("a"), Some("a"), None, Some(8192)));
+        // A server launched with its own default context (Ollama) cannot be assumed large enough.
+        assert!(needs_restart(false, true, None, None, Some(16384), None));
+        // Runtimes without a context setting are never restarted for it.
+        assert!(!needs_restart(true, false, Some("a"), Some("a"), Some(65536), None));
+    }
+
+    #[test]
+    fn manifests_are_consistent() {
+        let all = crate::manifest::builtin();
+        // `api` is one of the values the registry understands.
+        for m in &all {
+            assert!(["openai", "ollama", "native", "none"].contains(&m.api.as_str()), "{}: api `{}`", m.id, m.api);
+        }
+        // Two runtimes must not claim the same already-running endpoint, or one would be shown as
+        // `running` just because the other one is (mistral.rs used to share LM Studio's port).
+        let mut seen = std::collections::HashMap::new();
+        for m in &all {
+            if let Some(ep) = &m.external_endpoint {
+                if let Some(other) = seen.insert(ep.clone(), m.id.clone()) {
+                    panic!("{} and {} share the external endpoint {ep}", m.id, other);
+                }
+            }
+        }
+        // Every sidecar that names a model can be told how large its context is, where it has
+        // such a setting, and llamafile can offload to the GPU.
+        let llamafile = all.iter().find(|m| m.id == "llamafile").unwrap();
+        assert!(llamafile.launch.as_ref().unwrap().settings_args.contains_key("gpu_layers"));
+        assert_eq!(llamafile.ctx_setting().as_deref(), Some("ctx_size"));
+        for (id, key) in [("llama-server", "ctx_size"), ("koboldcpp", "ctx_size"), ("vllm", "max_model_len"), ("ollama", "ctx_size")] {
+            let m = all.iter().find(|m| m.id == id).unwrap();
+            assert_eq!(m.ctx_setting().as_deref(), Some(key), "{id}");
+            assert!(m.settings.properties.contains_key(key), "{id} has no `{key}` setting");
+        }
+        // A model-less runtime has none.
+        assert_eq!(all.iter().find(|m| m.id == "lmstudio").unwrap().ctx_setting(), None);
     }
 }

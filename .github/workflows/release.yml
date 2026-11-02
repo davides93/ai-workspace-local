@@ -70,6 +70,9 @@ jobs:
       matrix:
         include:
           # The daemon ships with llama.cpp linked in-process (Metal on macOS, CPU elsewhere).
+          # `llama-metal` (like `llama-cuda` and `llama-vulkan`) implies `llama-embedded`: the
+          # in-process runtime is registered with any of them. GPU builds of Linux/Windows:
+          # see the `daemon-gpu` job below.
           - { os: ubuntu-22.04, features: llama-embedded }
           - { os: windows-latest, features: llama-embedded }
           - { os: macos-14, features: llama-metal }
@@ -85,6 +88,57 @@ jobs:
           path: |
             target/release/aiw
             target/release/aiw.exe
+
+  # GPU builds of the daemon (embedded llama.cpp with Vulkan: NVIDIA, AMD and Intel GPUs from one
+  # binary). Experimental and non-blocking: they need glslc and the Vulkan headers/loader on the
+  # runner, which the stock images do not ship, so a failure here never fails the release.
+  #
+  # CUDA is deliberately not built in CI (multi-GB toolkit, and the binary needs cudart/cublas
+  # next to it). To build it on a machine with an NVIDIA GPU, the CUDA toolkit (12 or newer, nvcc
+  # in PATH) and CMake:
+  #     cargo build --release -p aiw-cli --features llama-cuda
+  #     # desktop app (apps/desktop):  npx tauri build --features cuda
+  # On a GitHub runner install the toolkit first (Jimver/cuda-toolkit, sub-packages nvcc, cudart,
+  # cublas and cublas_dev) and ship cudart64_*.dll, cublas64_*.dll and cublasLt64_*.dll with the exe.
+  daemon-gpu:
+    name: aiw daemon (Vulkan) ${{ matrix.os }}
+    continue-on-error: true
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Pinned Vulkan SDK for Windows (LunarG installer). Bump together with the llama.cpp crate.
+      VULKAN_SDK_VERSION: "1.4.313.2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vulkan
+      - name: Vulkan headers, loader and glslc (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev glslc spirv-headers
+      # humbletim/setup-vulkan-sdk is an alternative that caches the SDK; the installer below is
+      # the one llama.cpp's own CI uses and gives glslc in $VULKAN_SDK/Bin.
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          curl.exe -o "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" -L "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/VulkanSDK-$env:VULKAN_SDK_VERSION-Installer.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_SDK_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_SDK_VERSION\Bin"
+      - run: cargo build --release -p aiw-cli --features llama-vulkan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aiw-${{ matrix.os }}-vulkan
+          path: |
+            target/release/aiw
+            target/release/aiw.exe
+          if-no-files-found: warn
 
   android:
     name: Android (arm64 APK)
