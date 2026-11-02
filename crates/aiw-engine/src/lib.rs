@@ -2,6 +2,7 @@
 
 pub mod defaults;
 mod host;
+mod models;
 pub mod peers;
 pub mod store;
 pub mod webhook;
@@ -15,7 +16,7 @@ use aiw_core::config::{app_schema, Layer, LayeredConfig};
 use aiw_core::events::{AgEvent, SeqEvent, TimedEvent};
 use aiw_core::paths::DataDirs;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
-use aiw_models::DownloadManager;
+use aiw_models::{DownloadManager, DownloadOptions, ExternalRoots, Hub, HubConfig};
 use aiw_runtimes::{ChatBackend, RuntimeRegistry};
 use aiw_tools::browser::BrowserManager;
 use aiw_tools::mcp::{McpClient, McpTool};
@@ -85,6 +86,12 @@ pub(crate) struct Inner {
     pub device: RwLock<DeviceProfile>,
     pub runtimes: RuntimeRegistry,
     pub downloads: DownloadManager,
+    /// Multi-provider model hub (search, variants, download plans).
+    pub hub: Hub,
+    /// `DownloadManager::completed()` at the last `downloads()` poll: rescan only on a change.
+    pub downloads_seen: std::sync::atomic::AtomicU64,
+    /// Where the other apps keep their models (Ollama, LM Studio, Hugging Face cache).
+    pub external_roots: RwLock<ExternalRoots>,
     pub models: Arc<RwLock<Vec<LocalModel>>>,
     /// Model id/name (or path) → file or folder, shared by the in-process engines.
     pub resolver: aiw_runtimes::ModelResolver,
@@ -146,7 +153,11 @@ impl Engine {
         if let Some(d) = store.get_doc::<Vec<String>>("tool_settings", "disabled")? {
             tools.set_disabled(d);
         }
-        let models = Arc::new(RwLock::new(aiw_models::scan_models(&models_dir)));
+        // Tests (`offline`) never look into the real home of the developer.
+        let external_roots = if opts.offline { ExternalRoots::none() } else { ExternalRoots::detect() };
+        let hub = Hub::new(HubConfig::from_env());
+        Engine::load_provider_settings(&hub, &store);
+        let models = Arc::new(RwLock::new(aiw_models::scan_all(&models_dir, &external_roots)));
         let m2 = models.clone();
         let resolver: aiw_runtimes::ModelResolver = Arc::new(move |id: &str| {
             let list = m2.read().unwrap();
@@ -180,7 +191,10 @@ impl Engine {
         let engine = Engine(Arc::new(Inner {
             mode: if opts.mode.is_empty() { "embedded".into() } else { opts.mode.clone() },
             started: Instant::now(),
-            downloads: DownloadManager::new(models_dir.clone()),
+            downloads: DownloadManager::with_options(models_dir.clone(), DownloadOptions::default()),
+            hub,
+            downloads_seen: Default::default(),
+            external_roots: RwLock::new(external_roots),
             resolver,
             models_dir,
             dirs,
@@ -430,62 +444,7 @@ impl Engine {
         self.0.runtimes.info(id)
     }
 
-    // ------------------------------------------------------------------ models
-    pub fn rescan_models(&self) -> Vec<LocalModel> {
-        let found = aiw_models::scan_models(&self.0.models_dir);
-        *self.0.models.write().unwrap() = found.clone();
-        found
-    }
-    pub fn models(&self) -> Vec<LocalModel> {
-        self.rescan_models()
-    }
-    pub fn catalog(&self) -> Vec<CatalogModel> {
-        let device = self.device();
-        let installed = self.0.models.read().unwrap().clone();
-        aiw_models::builtin_catalog()
-            .into_iter()
-            .map(|mut c| {
-                let (fit, detail) = aiw_models::fit(&c, &device);
-                c.fit = fit;
-                c.fit_detail = detail;
-                c.installed = match &c.source {
-                    ModelSource::Hf { file, .. } if !file.is_empty() => {
-                        installed.iter().any(|m| m.path.as_deref().map(|p| p.ends_with(file.as_str())).unwrap_or(false))
-                    }
-                    _ => false,
-                };
-                c
-            })
-            .collect()
-    }
-    /// `{"id": catalog_id}` or `{"repo": "...", "file": "..."}`.
-    pub fn pull_model(&self, req: &Value) -> Result<DownloadProgress> {
-        let (model_id, repo, file) = if let Some(id) = req["id"].as_str() {
-            let c =
-                aiw_models::builtin_catalog().into_iter().find(|c| c.id == id).ok_or_else(|| Error::NotFound(format!("modello {id}")))?;
-            match c.source {
-                ModelSource::Hf { repo, file } if !file.is_empty() => (c.id, repo, file),
-                ModelSource::Hf { .. } => {
-                    return Err(Error::Invalid("questo modello viene scaricato dal suo runtime (es. mlx-lm) al primo avvio".into()))
-                }
-                ModelSource::System { .. } => return Err(Error::Invalid("i modelli di sistema non si scaricano".into())),
-            }
-        } else {
-            let repo = req["repo"].as_str().unwrap_or_default().to_string();
-            let file = req["file"].as_str().unwrap_or_default().to_string();
-            (file.clone(), repo, file)
-        };
-        let d = self.0.downloads.pull_hf(&model_id, &repo, &file)?;
-        self.audit_user("model.pull", &format!("{repo}/{file}"));
-        Ok(d)
-    }
-    pub fn downloads(&self) -> Vec<DownloadProgress> {
-        let list = self.0.downloads.list();
-        if list.iter().any(|d| d.status == "done") {
-            self.rescan_models();
-        }
-        list
-    }
+    // Models, providers and downloads: see models.rs.
 
     // ------------------------------------------------------------------ profiles & agents
     pub fn profiles(&self) -> Result<Vec<InferenceProfile>> {

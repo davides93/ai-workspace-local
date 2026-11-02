@@ -102,8 +102,16 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/runtimes/{id}/{action}", post(runtime_action))
         .route("/api/models", get(models))
         .route("/api/models/catalog", get(catalog))
+        .route("/api/models/providers", get(model_providers))
+        .route("/api/models/providers/{id}/auth", put(provider_auth))
+        .route("/api/models/search", get(search_models))
+        .route("/api/models/remote", get(remote_model))
         .route("/api/models/pull", post(pull))
         .route("/api/models/downloads", get(downloads))
+        .route("/api/models/downloads/{id}/cancel", post(cancel_download))
+        .route("/api/models/downloads/{id}", delete(clear_download))
+        // Model ids can contain `/` (`hf-cache:org/repo/file`): a catch-all keeps them whole.
+        .route("/api/models/{*id}", delete(delete_model))
         .route("/api/profiles", get(profiles))
         .route("/api/profiles/{id}", put(save_profile))
         .route("/api/agents", get(agents))
@@ -204,11 +212,70 @@ async fn models(State(s): State<AppState>) -> ApiResult<Vec<LocalModel>> {
 async fn catalog(State(s): State<AppState>) -> ApiResult<Vec<CatalogModel>> {
     ok(s.engine.catalog())
 }
+async fn model_providers(State(s): State<AppState>) -> ApiResult<Vec<ModelProviderInfo>> {
+    ok(s.engine.model_providers())
+}
+/// `token`: absent leaves it alone, `null` clears it; `endpoint`: absent leaves it alone, `""` restores the default.
+#[derive(Deserialize)]
+struct ProviderAuthBody {
+    #[serde(default, deserialize_with = "present")]
+    token: Option<Option<String>>,
+    endpoint: Option<String>,
+}
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    <Option<String> as Deserialize>::deserialize(d).map(Some)
+}
+async fn provider_auth(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<ProviderAuthBody>) -> ApiResult<ModelProviderInfo> {
+    ok(s.engine.set_provider_auth(&id, b.token, b.endpoint).await?)
+}
+#[derive(Deserialize)]
+struct SearchParams {
+    provider: Option<String>,
+    #[serde(default)]
+    q: String,
+    format: Option<String>,
+    /// downloads | likes | updated
+    sort: Option<String>,
+    /// At most 50.
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+async fn search_models(State(s): State<AppState>, Query(p): Query<SearchParams>) -> ApiResult<SearchPage> {
+    let provider = p.provider.filter(|x| !x.is_empty()).ok_or_else(|| ApiError(Error::Invalid("serve il parametro `provider`".into())))?;
+    let q = aiw_models::hub::SearchQuery { q: p.q, format: p.format, sort: p.sort, limit: p.limit.unwrap_or(0), cursor: p.cursor };
+    ok(s.engine.search_models(&provider, q).await?)
+}
+#[derive(Deserialize)]
+struct RemoteParams {
+    provider: Option<String>,
+    model: Option<String>,
+    revision: Option<String>,
+}
+async fn remote_model(State(s): State<AppState>, Query(p): Query<RemoteParams>) -> ApiResult<RemoteModelDetail> {
+    let (Some(provider), Some(model)) = (p.provider.filter(|x| !x.is_empty()), p.model.filter(|x| !x.is_empty())) else {
+        return Err(ApiError(Error::Invalid("servono i parametri `provider` e `model`".into())));
+    };
+    ok(s.engine.remote_model(&provider, &model, p.revision.as_deref()).await?)
+}
 async fn pull(State(s): State<AppState>, Json(v): Json<Value>) -> ApiResult<DownloadProgress> {
-    ok(s.engine.pull_model(&v)?)
+    let req: PullRequest = serde_json::from_value(v).map_err(|_| {
+        ApiError(Error::Invalid("richiesta di download non valida: usa {provider, model, variant}, {id}, {repo, file} oppure {url}".into()))
+    })?;
+    ok(s.engine.pull_model(req).await?)
 }
 async fn downloads(State(s): State<AppState>) -> ApiResult<Vec<DownloadProgress>> {
     ok(s.engine.downloads())
+}
+async fn cancel_download(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<DownloadProgress> {
+    ok(s.engine.cancel_download(&id)?)
+}
+async fn clear_download(State(s): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    s.engine.clear_download(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn delete_model(State(s): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    s.engine.delete_model(&id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 async fn profiles(State(s): State<AppState>) -> ApiResult<Vec<InferenceProfile>> {
     ok(s.engine.profiles()?)
@@ -518,3 +585,5 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_models;

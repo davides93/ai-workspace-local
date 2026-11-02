@@ -1,6 +1,6 @@
 //! `aiw` — run AI Workspace Local headless (daemon / CLI).
 
-use aiw_core::api::{InferenceParams, InferenceProfile};
+use aiw_core::api::{InferenceParams, InferenceProfile, PullRequest};
 use aiw_core::events::AgEvent;
 use aiw_engine::{Engine, EngineOptions};
 use anyhow::{bail, Context, Result};
@@ -89,15 +89,77 @@ enum RtCmd {
 
 #[derive(Subcommand)]
 enum ModelCmd {
+    /// Elenca i modelli installati (anche quelli di Ollama, LM Studio e della cache Hugging Face)
     List,
+    /// Elenca i modelli consigliati con la compatibilità per questo dispositivo
     Catalog,
-    /// Scarica un modello del catalogo (id) oppure un file Hugging Face (--repo/--file)
+    /// Cerca modelli su un provider (catalog, hf, modelscope, ollama)
+    Search {
+        /// Testo da cercare
+        #[arg(default_value = "")]
+        query: String,
+        #[arg(long, default_value = "hf")]
+        provider: String,
+        /// gguf, mlx, onnx, safetensors…
+        #[arg(long)]
+        format: Option<String>,
+        /// downloads, likes o updated
+        #[arg(long)]
+        sort: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Mostra le varianti scaricabili di un modello, con fit e runtime compatibili
+    Show {
+        provider: String,
+        model: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    /// Scarica un modello: un id del catalogo, --provider/--model/--variant oppure --url
     Pull {
+        /// Id di un modello del catalogo
         id: Option<String>,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        /// Variante (es. Q4_K_M); se manca si usa la consigliata
+        #[arg(long)]
+        variant: Option<String>,
+        #[arg(long)]
+        revision: Option<String>,
+        /// Scarica un singolo file da un indirizzo diretto
+        #[arg(long)]
+        url: Option<String>,
+        /// Nome da dare al file scaricato da --url
+        #[arg(long)]
+        file_name: Option<String>,
+        /// sha256 atteso del file scaricato da --url
+        #[arg(long)]
+        sha256: Option<String>,
+        /// Hugging Face: repository (con --file), come nella v0.3
         #[arg(long)]
         repo: Option<String>,
         #[arg(long)]
         file: Option<String>,
+    },
+    /// Elimina un modello installato in AIW (mai quelli di altre app)
+    Rm { id: String },
+    /// Elenca i provider di modelli
+    Providers,
+    /// Imposta il token o l'endpoint di un provider
+    Auth {
+        provider: String,
+        /// Token di accesso (per i repository gated di Hugging Face)
+        #[arg(long)]
+        token: Option<String>,
+        /// Endpoint alternativo (mirror); vuoto per tornare a quello predefinito
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// Rimuove il token memorizzato
+        #[arg(long)]
+        clear: bool,
     },
 }
 
@@ -166,56 +228,7 @@ async fn main() -> Result<()> {
                 engine.runtime_action(&id, "stop", None).await?;
             }
         },
-        Cmd::Models { cmd } => match cmd.unwrap_or(ModelCmd::List) {
-            ModelCmd::List => {
-                for m in engine.models() {
-                    println!(
-                        "{:<40} {:<6} {:<8} {:>8.2} GB  {}",
-                        m.id,
-                        m.format,
-                        m.quant.unwrap_or_default(),
-                        m.size_bytes as f64 / 1e9,
-                        m.path.unwrap_or_default()
-                    );
-                }
-            }
-            ModelCmd::Catalog => {
-                for c in engine.catalog() {
-                    println!(
-                        "{:<24} {:<7} {:<6} {:>7.1} GB  {:<6} {}",
-                        c.id,
-                        c.format,
-                        c.quant,
-                        c.size_bytes as f64 / 1e9,
-                        c.fit,
-                        c.fit_detail
-                    );
-                }
-            }
-            ModelCmd::Pull { id, repo, file } => {
-                let req = match (id, repo, file) {
-                    (Some(id), _, _) => serde_json::json!({"id": id}),
-                    (None, Some(r), Some(f)) => serde_json::json!({"repo": r, "file": f}),
-                    _ => bail!("indica un id del catalogo oppure --repo e --file"),
-                };
-                let d = engine.pull_model(&req)?;
-                loop {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    let cur = engine.downloads().into_iter().find(|x| x.id == d.id).context("download perso")?;
-                    let pct = if cur.total > 0 { cur.received as f64 * 100.0 / cur.total as f64 } else { 0.0 };
-                    eprint!("\r{}  {:.1}%  ({:.2}/{:.2} GB)   ", cur.file, pct, cur.received as f64 / 1e9, cur.total as f64 / 1e9);
-                    match cur.status.as_str() {
-                        "done" => {
-                            eprintln!("\nCompletato.");
-                            break;
-                        }
-                        "error" => bail!("download fallito: {}", cur.error.unwrap_or_default()),
-                        "cancelled" => bail!("download annullato"),
-                        _ => {}
-                    }
-                }
-            }
-        },
+        Cmd::Models { cmd } => models_cmd(&engine, cmd.unwrap_or(ModelCmd::List)).await?,
         Cmd::Profile { id, runtime, model, context } => {
             let p = engine.save_profile(InferenceProfile {
                 id: id.clone(),
@@ -261,6 +274,162 @@ async fn main() -> Result<()> {
                         println!("Esito: {}", r.status);
                         break;
                     }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn size(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.2} GB", bytes as f64 / 1e9)
+    } else {
+        format!("{:.1} MB", bytes as f64 / 1e6)
+    }
+}
+
+async fn models_cmd(engine: &Engine, cmd: ModelCmd) -> Result<()> {
+    match cmd {
+        ModelCmd::List => {
+            for m in engine.models() {
+                println!(
+                    "{:<44} {:<9} {:<6} {:<8} {:>9}  {:<5} {}",
+                    m.id,
+                    m.origin,
+                    m.format,
+                    m.quant.unwrap_or_default(),
+                    size(m.size_bytes),
+                    m.fit,
+                    m.path.unwrap_or_default()
+                );
+            }
+        }
+        ModelCmd::Catalog => {
+            for c in engine.catalog() {
+                println!(
+                    "{:<24} {:<7} {:<6} {:>9}  {:<6} {}{}",
+                    c.id,
+                    c.format,
+                    c.quant,
+                    size(c.size_bytes),
+                    c.fit,
+                    c.fit_detail,
+                    if c.installed { "  [installato]" } else { "" }
+                );
+            }
+        }
+        ModelCmd::Providers => {
+            for p in engine.model_providers() {
+                println!("{:<10} {:<22} {:<9} {:<9} {}", p.id, p.name, p.auth, if p.auth_configured { "token ok" } else { "" }, p.endpoint);
+            }
+        }
+        ModelCmd::Search { query, provider, format, sort, limit } => {
+            let page =
+                engine.search_models(&provider, aiw_models::hub::SearchQuery { q: query, format, sort, limit, cursor: None }).await?;
+            if page.items.is_empty() {
+                println!("Nessun risultato su {provider}.");
+            }
+            for m in &page.items {
+                println!(
+                    "{:<46} {:>12} {:>8}  {:<14} {}",
+                    m.id,
+                    m.downloads.map(|d| format!("{d} scaric.")).unwrap_or_default(),
+                    m.likes.map(|l| format!("{l} ♥")).unwrap_or_default(),
+                    m.formats.join(","),
+                    m.capabilities.join(",")
+                );
+            }
+            if page.next_cursor.is_some() {
+                eprintln!("(altri risultati: aumenta --limit)");
+            }
+        }
+        ModelCmd::Show { provider, model, revision } => {
+            let d = engine.remote_model(&provider, &model, revision.as_deref()).await?;
+            let m = &d.model;
+            println!("{} · {} · revisione {}", m.id, m.publisher, d.revision);
+            if let Some(desc) = &m.description {
+                println!("{desc}");
+            }
+            println!(
+                "Formati: {}  Capacità: {}  Licenza: {}{}",
+                m.formats.join(","),
+                m.capabilities.join(","),
+                m.license.clone().unwrap_or_else(|| "?".into()),
+                if m.gated { "  (gated: serve un token)" } else { "" }
+            );
+            println!();
+            println!("{:<34} {:<8} {:>10}  {:<6} {:<4} {:<4} RUNTIME DISPONIBILI", "VARIANTE", "QUANT", "DIMENSIONE", "FIT", "FILE", "OK");
+            for v in &d.variants {
+                let rts: Vec<&str> = v.runtimes.iter().filter(|r| r.available).map(|r| r.id.as_str()).collect();
+                println!(
+                    "{:<34} {:<8} {:>10}  {:<6} {:<4} {:<4} {}{}",
+                    v.id,
+                    v.quant.clone().unwrap_or_default(),
+                    size(v.size_bytes),
+                    v.fit,
+                    v.files.len(),
+                    if v.installed { "sì" } else { "" },
+                    if rts.is_empty() { "nessuno (vedi `aiw runtimes`)".to_string() } else { rts.join(",") },
+                    if v.recommended { "  ★ consigliata" } else { "" }
+                );
+            }
+            if d.variants.is_empty() {
+                println!("Nessuna variante scaricabile.");
+            }
+        }
+        ModelCmd::Rm { id } => {
+            engine.delete_model(&id)?;
+            println!("Eliminato: {id}");
+        }
+        ModelCmd::Auth { provider, token, endpoint, clear } => {
+            let token = if clear { Some(None) } else { token.map(Some) };
+            if token.is_none() && endpoint.is_none() {
+                bail!("indica --token, --endpoint o --clear");
+            }
+            let p = engine.set_provider_auth(&provider, token, endpoint).await?;
+            println!("{} → {}{}", p.name, p.endpoint, if p.auth_configured { " (token impostato)" } else { "" });
+        }
+        ModelCmd::Pull { id, provider, model, variant, revision, url, file_name, sha256, repo, file } => {
+            let req = match (id, provider, model, url, repo, file) {
+                (Some(id), None, None, None, None, None) => PullRequest::Catalog { id },
+                (None, Some(provider), Some(model), None, None, None) => {
+                    PullRequest::Hub { provider, model, variant: variant.unwrap_or_default(), revision }
+                }
+                (None, None, None, Some(url), None, None) => PullRequest::Url { url, file_name, sha256 },
+                (None, None, None, None, Some(repo), Some(file)) => PullRequest::HfFile { repo, file },
+                _ => bail!("indica un id del catalogo, oppure --provider e --model (con --variant), oppure --url, oppure --repo e --file"),
+            };
+            let d = engine.pull_model(req).await?;
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                    _ = tokio::signal::ctrl_c() => {
+                        engine.cancel_download(&d.id)?;
+                        bail!("download annullato (il file parziale resta e si riprende col prossimo pull)");
+                    }
+                }
+                let cur = engine.downloads().into_iter().find(|x| x.id == d.id).context("download perso")?;
+                let pct = if cur.total > 0 { cur.received as f64 * 100.0 / cur.total as f64 } else { 0.0 };
+                eprint!(
+                    "\r[{}/{}] {}  {:.1}%  ({}/{})  {:.1} MB/s  {}   ",
+                    cur.files_done.min(cur.files_total),
+                    cur.files_total,
+                    cur.file,
+                    pct,
+                    size(cur.received),
+                    size(cur.total),
+                    cur.speed_bps as f64 / 1e6,
+                    if cur.status == "queued" { "in coda" } else { "" }
+                );
+                match cur.status.as_str() {
+                    "done" => {
+                        eprintln!("\nCompletato: {}", cur.dest);
+                        break;
+                    }
+                    "error" => bail!("download fallito: {}", cur.error.unwrap_or_default()),
+                    "cancelled" => bail!("download annullato"),
+                    _ => {}
                 }
             }
         }

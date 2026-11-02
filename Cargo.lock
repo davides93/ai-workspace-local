@@ -58,6 +58,7 @@ version = "0.1.0"
 dependencies = [
  "aiw-core",
  "aiw-engine",
+ "aiw-models",
  "aiw-server",
  "anyhow",
  "clap",
@@ -143,12 +144,18 @@ version = "0.1.0"
 dependencies = [
  "aiw-core",
  "aiw-hw",
+ "async-trait",
+ "axum",
  "futures",
+ "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
+ "sysinfo",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -179,6 +186,7 @@ version = "0.1.0"
 dependencies = [
  "aiw-core",
  "aiw-engine",
+ "aiw-models",
  "aiw-runtimes",
  "aiw-tools",
  "axum",
@@ -190,6 +198,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-stream",

@@ -15,6 +15,15 @@ pub enum Error {
     Conflict(String),
     #[error("runtime error: {0}")]
     Runtime(String),
+    /// A provider rejected the credentials (HTTP 401): a token is missing or invalid.
+    #[error("{0}")]
+    Unauthorized(String),
+    /// Not enough free disk space (HTTP 507).
+    #[error("{0}")]
+    InsufficientStorage(String),
+    /// A remote service failed or is unreachable (HTTP 502).
+    #[error("{0}")]
+    Upstream(String),
     #[error("cancelled")]
     Cancelled,
     #[error("io error: {0}")]
@@ -31,9 +40,12 @@ impl Error {
             Error::NotFound(_) => 404,
             Error::Invalid(_) | Error::Json(_) => 400,
             Error::Unsupported(_) => 422,
+            Error::Unauthorized(_) => 401,
             Error::Denied(_) => 403,
             Error::Conflict(_) => 409,
             Error::Cancelled => 499,
+            Error::InsufficientStorage(_) => 507,
+            Error::Upstream(_) => 502,
             _ => 500,
         }
     }

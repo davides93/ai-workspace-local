@@ -52,6 +52,19 @@ impl GgufInfo {
     pub fn has_vision(&self) -> bool {
         self.metadata.keys().any(|k| k.starts_with("clip.") || k.contains("vision"))
     }
+    /// Estimated f16 KV cache for `ctx` tokens, when the header carries the attention shape.
+    pub fn kv_cache_bytes(&self, ctx: u64) -> Option<u64> {
+        let a = self.architecture()?;
+        let layers = self.u64(&format!("{a}.block_count"))?;
+        let heads = self.u64(&format!("{a}.attention.head_count"))?;
+        let kv_heads = self.u64(&format!("{a}.attention.head_count_kv")).unwrap_or(heads);
+        let head_dim = match self.u64(&format!("{a}.attention.key_length")) {
+            Some(d) => d,
+            None => self.u64(&format!("{a}.embedding_length"))?.checked_div(heads)?,
+        };
+        // K and V, 2 bytes per f16 element.
+        layers.checked_mul(kv_heads)?.checked_mul(head_dim)?.checked_mul(ctx)?.checked_mul(4)
+    }
 }
 
 /// llama.cpp `llama_ftype` → conventional quantization label.
@@ -115,6 +128,10 @@ fn string<R: Read>(r: &mut R) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&b).into_owned())
 }
 
+fn invalid(msg: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, msg.to_string())
+}
+
 fn scalar_size(t: u32) -> Option<i64> {
     Some(match t {
         0 | 1 | 7 => 1,
@@ -141,12 +158,16 @@ fn value<R: Read + Seek>(r: &mut R, t: u32) -> std::io::Result<GgufValue> {
             let len = u64le(r)?;
             match scalar_size(et) {
                 Some(sz) => {
-                    r.seek(SeekFrom::Current(sz * len as i64))?;
+                    // A corrupted header can carry any length: never overflow, never seek backwards.
+                    let bytes =
+                        (sz as u64).checked_mul(len).filter(|b| *b <= i64::MAX as u64).ok_or_else(|| invalid("array length overflows"))?;
+                    r.seek(SeekFrom::Current(bytes as i64))?;
                 }
                 None if et == 8 => {
                     for _ in 0..len {
                         let n = u64le(r)?;
-                        r.seek(SeekFrom::Current(n as i64))?;
+                        let n = i64::try_from(n).map_err(|_| invalid("string length overflows"))?;
+                        r.seek(SeekFrom::Current(n))?;
                     }
                 }
                 None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "nested arrays unsupported")),
@@ -236,5 +257,46 @@ pub(crate) mod tests {
     #[test]
     fn rejects_non_gguf() {
         assert!(read_gguf_from(&mut Cursor::new(b"NOPE....".to_vec())).is_err());
+    }
+
+    /// One key holding an array of `elem_type` with a corrupted `len`.
+    fn corrupted(elem_type: u32, len: u64) -> Vec<u8> {
+        let mut b = b"GGUF".to_vec();
+        b.extend(3u32.to_le_bytes());
+        b.extend(0u64.to_le_bytes());
+        b.extend(1u64.to_le_bytes());
+        s(&mut b, "tokenizer.ggml.scores");
+        b.extend(9u32.to_le_bytes());
+        b.extend(elem_type.to_le_bytes());
+        b.extend(len.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn corrupted_array_length_is_an_error_not_a_panic() {
+        // f32 elements: 4 * u64::MAX overflows, and any huge length must not wrap to a negative seek.
+        for len in [u64::MAX, u64::MAX / 4 + 1, i64::MAX as u64, 1 << 62] {
+            assert!(read_gguf_from(&mut Cursor::new(corrupted(6, len))).is_err(), "len {len}");
+        }
+        // Strings with an absurd per-item length.
+        let mut b = corrupted(8, 2);
+        b.extend(u64::MAX.to_le_bytes());
+        assert!(read_gguf_from(&mut Cursor::new(b)).is_err());
+        // A plausible length that runs past the end of the file is an error as well.
+        assert!(read_gguf_from(&mut Cursor::new(corrupted(6, 1_000_000))).is_ok_and(|i| i.metadata.len() == 1));
+    }
+
+    #[test]
+    fn estimates_kv_cache_from_header() {
+        let mut i = GgufInfo::default();
+        i.metadata.insert("general.architecture".into(), GgufValue::Str("llama".into()));
+        i.metadata.insert("llama.block_count".into(), GgufValue::U64(32));
+        i.metadata.insert("llama.attention.head_count".into(), GgufValue::U64(32));
+        i.metadata.insert("llama.attention.head_count_kv".into(), GgufValue::U64(8));
+        i.metadata.insert("llama.embedding_length".into(), GgufValue::U64(4096));
+        // 32 layers * 8 kv heads * 128 dim * 4096 tokens * 4 bytes (K+V, f16) = 512 MiB
+        assert_eq!(i.kv_cache_bytes(4096), Some(512 << 20));
+        i.metadata.remove("llama.block_count");
+        assert_eq!(i.kv_cache_bytes(4096), None);
     }
 }

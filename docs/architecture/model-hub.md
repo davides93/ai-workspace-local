@@ -201,3 +201,48 @@ L'id dei modelli esterni ha un prefisso (`ollama:qwen3:4b`, `lmstudio:<publisher
 
 GitHub Releases (llamafile, bundle `.pte`/`.task`), Kaggle Models, aggiornamento firmato del
 catalogo curato, eventi SSE per i download al posto del polling, pausa/ripresa esplicite.
+
+## 9. Note di implementazione del backend (v0.4)
+
+Dettagli che il contratto sopra lascia aperti e su cui UI e integrazione possono contare.
+
+- **Errori HTTP**: `404` modello/provider/variante/download inesistente, `400` richiesta non valida
+  (anche il corpo di `pull` che non combacia con nessuna forma), `401` token mancante o rifiutato dal
+  provider (repository gated, token non valido in `PUT …/auth`), `403` accesso vietato, `409` file già
+  in scrittura da un altro download, `502` provider irraggiungibile o in errore, `507` spazio
+  insufficiente (rifiutato **prima** di accodare il download). Il corpo è sempre `{"error": "…"}` in
+  italiano. `aiw-core::Error` ha le varianti nuove `Unauthorized`, `InsufficientStorage`, `Upstream`.
+- **`POST /api/models/pull`**: in `Hub` `variant` può mancare o essere vuoto (si usa l'unica variante o
+  quella `recommended`); `variant` accetta `id`, etichetta o quant (senza distinzione tra maiuscole).
+  Una voce del catalogo si installa come il repository Hugging Face a cui punta (cartella `hf/…`,
+  sidecar con `provider: "hf"`), ma il download mantiene `model_id` = id del catalogo.
+  `DownloadProgress.model_id` è l'id del catalogo oppure `provider:model`; per associare un download a
+  una card usare `provider` + `model_ref` + `variant`. Lo stesso `(provider, model_ref, variant)` già in
+  coda o in corso restituisce il job esistente.
+- **`PUT /api/models/providers/{id}/auth`**: `token` assente = invariato, `null` = rimosso; `endpoint`
+  assente = invariato, `""` = predefinito. Un token nuovo viene verificato col provider (Hugging Face:
+  `/api/whoami-v2`): un rifiuto definitivo dà `401` e non salva nulla; se il servizio non risponde il
+  token viene salvato lo stesso. All'avvio, se non c'è un token salvato per `hf`, vale `HF_TOKEN`.
+  Il provider `ollama` accetta solo `endpoint`, `url` e `catalog` nessuna impostazione.
+- **Sidecar `.aiw-model.json`**: la radice del documento è sempre l'ultima installazione (forma del
+  contratto); in più `installs[]` elenca tutte le installazioni della cartella, perché lo stesso
+  repository può ospitare più varianti (Q4_K_M e Q8_0). I file condivisi (l'`mmproj`) non vengono
+  cancellati finché un'altra variante li usa.
+- **Id e provenienza dei modelli locali**: i file della v0.3 e quelli copiati a mano hanno `origin:
+  "manual"` (rimovibili, senza `source`); le installazioni con sidecar hanno `origin: "aiw"` e
+  `source = "provider:model@revisione#variante"`. L'id è il nome file senza estensione né shard (per
+  Ollama `nome:tag`, per i repository `nome-del-repo`); se due modelli hanno lo stesso id, quelli nel
+  layout nuovo prendono il percorso relativo in minuscolo (`hf/owner/repo/file`). I modelli esterni
+  usano `ollama:…`, `lmstudio:<publisher>/<file>.gguf`, `hf-cache:<org>/<repo>/<file>` (o `…/<repo>`
+  per i repository non GGUF) e hanno `removable: false`.
+- **Eliminazione**: `DELETE /api/models/{id}` accetta id con `/` (percorso catch-all). Toglie i soli file
+  dell'installazione e la cartella quando non resta nessun'altra variante; rifiuta i modelli esterni
+  (`400`) e quelli raggiunti tramite un link a una cartella fuori da `models.dir` (`403`).
+- **Ollama**: le varianti sono i tag del registro (verificati con un manifest ciascuno, in parallelo);
+  `latest` non compare se è lo stesso blob di un altro tag. `model` è `nome` o `utente/nome`: un
+  `nome:tag` restituisce la sola variante `tag`. Quant e parametri vengono dal blob di configurazione.
+- **Scansione esterna**: `Engine::set_external_roots` (e `aiw_models::ExternalRoots`) sostituisce i
+  percorsi di Ollama (`$OLLAMA_MODELS`), LM Studio e cache Hugging Face (`$HF_HUB_CACHE`,
+  `$HF_HOME/hub`); con `EngineOptions.offline` la scansione esterna è disattivata.
+- **Variabili d'ambiente**: `HF_ENDPOINT`, `AIW_MODELSCOPE_ENDPOINT`, `AIW_OLLAMA_REGISTRY` (letti da
+  `HubConfig::from_env`) e `HF_TOKEN`.

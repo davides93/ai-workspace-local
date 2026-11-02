@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 aiw-core.workspace = true
 aiw-engine.workspace = true
+aiw-models.workspace = true
 aiw-runtimes.workspace = true
 axum.workspace = true
 futures.workspace = true
@@ -27,5 +28,6 @@ reqwest.workspace = true
 
 [dev-dependencies]
 aiw-tools.workspace = true
+sha2.workspace = true
 tempfile = "3"
 http-body-util = "0.1"

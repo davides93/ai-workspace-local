@@ -393,7 +393,7 @@
   "name": "Qwen3 4B (MLX 4-bit)",
   "family": "Qwen3",
   "publisher": "Alibaba / mlx-community",
-  "description": "Per MLX LM e MLX Swift su Apple Silicon: il runtime scarica il repository.",
+  "description": "Per MLX LM e MLX Swift su Apple Silicon: si scarica l'intero repository Hugging Face.",
   "params_b": 4,
   "format": "mlx",
   "quant": "4bit",

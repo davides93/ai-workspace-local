@@ -119,7 +119,7 @@ pub struct RuntimeInfo {
 
 // ---------------------------------------------------------------- models
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct LocalModel {
     pub id: String,
     pub name: String,
@@ -136,9 +136,24 @@ pub struct LocalModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arch: Option<String>,
     pub capabilities: Vec<String>,
+    /// Ids of `runtime_compat`, available runtimes first.
     pub runtimes: Vec<String>,
+    /// Exact provenance (`provider:model@revision`, `ollama:qwen3:4b`, …) when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// aiw | ollama | lmstudio | hf-cache | manual
+    #[serde(default)]
+    pub origin: String,
+    /// Can be deleted from `models.dir` through the API (never true for other apps' stores).
+    #[serde(default)]
+    pub removable: bool,
+    #[serde(default)]
+    pub runtime_compat: Vec<RuntimeCompat>,
+    /// great | ok | tight | no — computed for the current device
+    #[serde(default)]
+    pub fit: String,
+    #[serde(default)]
+    pub fit_detail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -174,19 +189,186 @@ pub struct CatalogModel {
     pub fit_detail: String,
     #[serde(default)]
     pub installed: bool,
+    #[serde(default)]
+    pub runtime_compat: Vec<RuntimeCompat>,
+    /// False for system models (Apple FM, Gemini Nano, Phi Silica): nothing to download.
+    #[serde(default)]
+    pub downloadable: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DownloadProgress {
     pub id: String,
     pub model_id: String,
+    /// Current file.
     pub file: String,
+    /// Aggregated over every file of the job.
     pub received: u64,
     pub total: u64,
-    /// running | done | error | cancelled
+    /// queued | running | verifying | done | error | cancelled
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model_ref: String,
+    #[serde(default)]
+    pub variant: String,
+    #[serde(default)]
+    pub files_total: u32,
+    #[serde(default)]
+    pub files_done: u32,
+    #[serde(default)]
+    pub speed_bps: u64,
+    /// Destination folder (absolute).
+    #[serde(default)]
+    pub dest: String,
+}
+
+// ---------------------------------------------------------------- model hub (docs/architecture/model-hub.md §3)
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelProviderInfo {
+    /// catalog | hf | modelscope | ollama | url
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub homepage: String,
+    /// search | files | auth | multi_file
+    pub capabilities: Vec<String>,
+    /// Formats the provider can supply: gguf, mlx, onnx, safetensors, litertlm, …
+    pub formats: Vec<String>,
+    /// none | optional | required
+    pub auth: String,
+    pub auth_configured: bool,
+    /// Effective base URL ("" when not applicable).
+    pub endpoint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteModel {
+    pub provider: String,
+    /// Reference inside the provider: `Qwen/Qwen3-4B-GGUF`, `qwen3:4b`, `https://…`.
+    pub id: String,
+    pub name: String,
+    pub publisher: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub formats: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// chat | tools | vision | embeddings | reasoning (deduced from tags and pipeline)
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub likes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    #[serde(default)]
+    pub gated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params_b: Option<f64>,
+    /// Web page of the model ("" when there is none).
+    #[serde(default)]
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SearchPage {
+    pub items: Vec<RemoteModel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteFile {
+    /// Path inside the repository.
+    pub path: String,
+    pub size_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// weights | mmproj | config | tokenizer | other
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelVariant {
+    /// Stable key inside the model: `Q4_K_M`, `repo`, `cpu-int4`, `latest`.
+    pub id: String,
+    pub label: String,
+    pub format: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quant: Option<String>,
+    /// Every shard plus the mmproj, or every file of the repository / sub-folder.
+    pub files: Vec<RemoteFile>,
+    pub size_bytes: u64,
+    /// great | ok | tight | no
+    #[serde(default)]
+    pub fit: String,
+    #[serde(default)]
+    pub fit_detail: String,
+    /// At most one variant per model.
+    #[serde(default)]
+    pub recommended: bool,
+    #[serde(default)]
+    pub runtimes: Vec<RuntimeCompat>,
+    #[serde(default)]
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteModelDetail {
+    pub model: RemoteModel,
+    /// Commit sha, or `main` / `master` / tag.
+    pub revision: String,
+    pub variants: Vec<ModelVariant>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeCompat {
+    pub id: String,
+    pub name: String,
+    /// Installed or registered on this device.
+    pub available: bool,
+    /// Why it is not available ("solo macOS", "da installare", …) — empty when available.
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// Body of `POST /api/models/pull`: untagged, the first shape that matches wins.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum PullRequest {
+    Hub {
+        provider: String,
+        model: String,
+        /// Empty or absent: the recommended variant (or the only one).
+        #[serde(default)]
+        variant: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<String>,
+    },
+    Catalog {
+        id: String,
+    },
+    /// v0.3 compatibility: one file of a Hugging Face repository.
+    HfFile {
+        repo: String,
+        file: String,
+    },
+    Url {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------- profiles & agents
@@ -547,6 +729,60 @@ pub struct AuditEntry {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn pull_request_takes_the_first_shape_that_matches() {
+        let p = |v: Value| serde_json::from_value::<PullRequest>(v);
+        assert_eq!(
+            p(json!({"provider": "hf", "model": "Qwen/Qwen3-4B-GGUF", "variant": "Q4_K_M", "revision": "abc"})).unwrap(),
+            PullRequest::Hub {
+                provider: "hf".into(),
+                model: "Qwen/Qwen3-4B-GGUF".into(),
+                variant: "Q4_K_M".into(),
+                revision: Some("abc".into())
+            }
+        );
+        // No variant: the recommended one.
+        assert_eq!(
+            p(json!({"provider": "ollama", "model": "qwen3"})).unwrap(),
+            PullRequest::Hub { provider: "ollama".into(), model: "qwen3".into(), variant: String::new(), revision: None }
+        );
+        assert_eq!(p(json!({"id": "qwen3-4b"})).unwrap(), PullRequest::Catalog { id: "qwen3-4b".into() });
+        assert_eq!(p(json!({"repo": "a/b", "file": "c.gguf"})).unwrap(), PullRequest::HfFile { repo: "a/b".into(), file: "c.gguf".into() });
+        assert_eq!(
+            p(json!({"url": "https://x/y.gguf", "sha256": "ab"})).unwrap(),
+            PullRequest::Url { url: "https://x/y.gguf".into(), file_name: None, sha256: Some("ab".into()) }
+        );
+        // Order: Hub wins over Catalog when both would match.
+        assert!(matches!(p(json!({"provider": "hf", "model": "a/b", "variant": "Q4", "id": "x"})).unwrap(), PullRequest::Hub { .. }));
+        assert!(p(json!({"nonsense": 1})).is_err());
+        assert!(p(json!({"provider": "hf"})).is_err());
+    }
+
+    #[test]
+    fn model_types_stay_compatible_with_v03_payloads() {
+        // Payloads written before the hub (no new fields) still parse, with defaults.
+        let m: LocalModel = serde_json::from_value(
+            json!({"id": "a", "name": "A", "format": "gguf", "size_bytes": 1, "capabilities": ["chat"], "runtimes": ["llama-server"]}),
+        )
+        .unwrap();
+        assert_eq!((m.origin.as_str(), m.removable, m.runtime_compat.len(), m.fit.as_str()), ("", false, 0, ""));
+        let d: DownloadProgress =
+            serde_json::from_value(json!({"id": "d", "model_id": "m", "file": "f", "received": 1, "total": 2, "status": "running"}))
+                .unwrap();
+        assert_eq!((d.files_total, d.files_done, d.speed_bps, d.provider.as_str()), (0, 0, 0, ""));
+        let c = serde_json::to_value(RuntimeCompat { id: "x".into(), name: "X".into(), available: false, reason: "da installare".into() })
+            .unwrap();
+        assert_eq!(c, json!({"id": "x", "name": "X", "available": false, "reason": "da installare"}));
+        // Optional fields are omitted, not null, on the wire.
+        let v = serde_json::to_value(SearchPage { items: vec![], next_cursor: None }).unwrap();
+        assert_eq!(v, json!({"items": []}));
+        let r = serde_json::to_value(DownloadProgress { status: "queued".into(), ..Default::default() }).unwrap();
+        assert!(r.get("error").is_none());
+        for k in ["provider", "model_ref", "variant", "files_total", "files_done", "speed_bps", "dest"] {
+            assert!(r.get(k).is_some(), "{k}");
+        }
+    }
 
     #[test]
     fn workflow_steps_roundtrip_with_ui_shape() {
