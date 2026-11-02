@@ -915,6 +915,113 @@ impl Engine {
         Ok((self.0.runtimes.backend(&p.runtime_id, Some(&p.model)).await?, p.model))
     }
 
+    /// Runs one tool on behalf of an external caller (workflow, MCP client, API) with the
+    /// workspace defaults: policy from `policy.mode` + rules, approvals in the global inbox,
+    /// sandbox from `sandbox.mode`, audit trail.
+    pub async fn execute_tool(
+        &self,
+        run_id: &str,
+        actor_kind: &str,
+        actor: &str,
+        tool: &str,
+        args: Value,
+    ) -> Result<aiw_tools::ToolOutput> {
+        let reg = self.tool_registry();
+        let t = reg.get(tool).ok_or_else(|| Error::NotFound(format!("tool {tool}")))?;
+        if !reg.is_enabled(tool) {
+            return Err(Error::Denied(format!("il tool {tool} è disattivato")));
+        }
+        if let Err(why) = t.available() {
+            return Err(Error::Unsupported(why));
+        }
+        let mode = self.0.config.get_str("policy.mode").unwrap_or_else(|| "ask".into());
+        let policy = Policy { mode, rules: self.policy_rules(), sandbox_available: aiw_tools::shell::sandbox_backend().is_some() };
+        let subject = t.subject(&args);
+        let audit = |decision: &str| {
+            let _ = self.0.store.add_audit(&AuditEntry {
+                id: new_id("aud"),
+                ts: now_rfc3339(),
+                run_id: Some(run_id.into()),
+                actor: actor_kind.into(),
+                action: "tool".into(),
+                tool: Some(tool.into()),
+                decision: Some(decision.into()),
+                detail: format!("{actor}: {}", subject.clone().unwrap_or_default()),
+            });
+        };
+        match policy.evaluate(tool, t.risk(), subject.as_deref(), false) {
+            aiw_agent::Decision::Allow => audit("allow"),
+            aiw_agent::Decision::Deny(r) => {
+                audit("deny");
+                return Err(Error::Denied(r));
+            }
+            aiw_agent::Decision::Ask(reason) => {
+                let req = ApprovalRequest {
+                    id: new_id("apr"),
+                    run_id: run_id.into(),
+                    tool: tool.into(),
+                    args: args.clone(),
+                    reason: format!("{actor}: {reason}"),
+                    risk: aiw_agent::policy::risk_level(t.risk()).into(),
+                };
+                if !self.wait_approval(req, None).await {
+                    audit("rejected");
+                    return Err(Error::Denied("rifiutato dall'utente".into()));
+                }
+                audit("approved");
+            }
+        }
+        let mut ctx = ToolContext::new(run_id, self.workspace_root());
+        ctx.sandbox = SandboxMode::parse(&self.0.config.get_str("sandbox.mode").unwrap_or_else(|| "workspace-write".into()));
+        ctx.checkpoint_dir = Some(self.0.dirs.checkpoints());
+        ctx.allow_domains = self.0.config.get("network.allow_domains").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        t.call(args, &ctx).await
+    }
+
+    /// Runs an agent to completion and returns `(final answer, session id)`. Reuses
+    /// `session_id` when given, otherwise creates a session titled `title`.
+    pub async fn run_agent_task(&self, agent_id: &str, prompt: &str, session_id: Option<&str>, title: &str) -> Result<(String, String)> {
+        let session_id = match session_id {
+            Some(s) => s.to_string(),
+            None => self.create_session(agent_id, Some(title.to_string()))?.id,
+        };
+        let mut rx = self.subscribe();
+        let run_id = self.start_run(&session_id, prompt.to_string()).await?;
+        loop {
+            if self.run_done(&run_id) {
+                break;
+            }
+            match tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
+                Ok(Ok(m)) if m.run_id == run_id && m.event.event.is_terminal() => break,
+                _ => {}
+            }
+        }
+        // Let the run task persist its messages.
+        for _ in 0..50 {
+            if self.0.store.session(&session_id).ok().and_then(|s| s.last_status).as_deref() != Some("running") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if let Some(err) = self.run_events(&run_id).iter().find_map(|e| {
+            if let AgEvent::RunError { message, .. } = &e.event.event {
+                Some(message.clone())
+            } else {
+                None
+            }
+        }) {
+            return Err(Error::Runtime(err));
+        }
+        let text = self
+            .messages(&session_id)?
+            .into_iter()
+            .rev()
+            .find(|m| m.role == "assistant" && !m.content.is_empty())
+            .map(|m| m.content)
+            .unwrap_or_default();
+        Ok((text, session_id))
+    }
+
     /// Tool execution for workflows and the API (policy + approval apply).
     pub(crate) fn tool_registry(&self) -> Arc<ToolRegistry> {
         self.0.tools.clone()

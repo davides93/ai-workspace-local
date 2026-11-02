@@ -16,10 +16,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: Linux x64, os: ubuntu-22.04, args: "" }
-          - { name: Windows x64, os: windows-latest, args: "" }
-          - { name: macOS Apple Silicon, os: macos-14, args: "--target aarch64-apple-darwin" }
-          - { name: macOS Intel, os: macos-13, args: "--target x86_64-apple-darwin" }
+          # xcap (computer-use) needs newer PipeWire headers than Ubuntu 22.04 ships: Linux builds without it.
+          - { name: Linux x64, os: ubuntu-22.04, args: "", targets: "" }
+          - { name: Windows x64, os: windows-latest, args: "--features computer-use", targets: "" }
+          - { name: macOS universale, os: macos-14, args: "--features computer-use --target universal-apple-darwin", targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -27,15 +27,17 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@v2
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
       - run: npm ci --prefix apps/ui
       - run: npm ci --prefix apps/desktop
       - name: Build bundles
         working-directory: apps/desktop
-        run: npx tauri build ${{ matrix.args }} -- --features computer-use
+        run: npx tauri build ${{ matrix.args }}
       - uses: actions/upload-artifact@v4
         with:
           name: aiw-desktop-${{ matrix.os }}
@@ -47,6 +49,19 @@ jobs:
             target/**/release/bundle/**/*.exe
             target/**/release/bundle/**/*.dmg
           if-no-files-found: warn
+
+  core-tests:
+    name: Core tests ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
 
   daemon:
     name: aiw daemon ${{ matrix.os }}
@@ -79,24 +94,25 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager "ndk;27.0.12077973" "platforms;android-36" "build-tools;36.0.0"
+      # The runner image ships the Android SDK and recent NDKs ($ANDROID_HOME, $ANDROID_NDK_LATEST_HOME).
+      - name: Android SDK platform
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null || true
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
       - run: npm ci --prefix apps/ui && npm ci --prefix apps/desktop
       - name: Init and build
         working-directory: apps/desktop
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           npx tauri android init --ci
-          npx tauri android build --apk --target aarch64
+          npx tauri android build --apk --target aarch64 --ci
       - uses: actions/upload-artifact@v4
         with:
           name: aiw-android
           path: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
 
   ios:
     name: iOS (Rust + Swift compile, unsigned)

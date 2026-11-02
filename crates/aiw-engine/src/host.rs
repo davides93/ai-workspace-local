@@ -1,12 +1,12 @@
 //! The engine side of [`aiw_agent::RunHost`] and [`aiw_workflow::WorkflowHost`].
 
 use crate::Engine;
-use aiw_agent::{AgentRunner, Decision, Policy, RunHost, RunInput, Skill};
+use aiw_agent::{AgentRunner, RunHost, RunInput, Skill};
 use aiw_core::api::{ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun};
 use aiw_core::events::AgEvent;
-use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
+use aiw_core::{ids::new_id, Error, Result};
 use aiw_runtimes::{ChatBackend, ChatDelta, ChatRequest, Msg};
-use aiw_tools::{SandboxMode, ToolContext, ToolRegistry};
+use aiw_tools::ToolRegistry;
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{json, Value};
@@ -140,53 +140,8 @@ fn mode_rank(m: &str) -> u8 {
 #[async_trait]
 impl aiw_workflow::WorkflowHost for EngineHost {
     async fn call_tool(&self, run_id: &str, tool: &str, args: Value) -> Result<String> {
-        let reg = self.engine.tool_registry();
-        let t = reg.get(tool).ok_or_else(|| Error::NotFound(format!("tool {tool}")))?;
-        if !reg.is_enabled(tool) {
-            return Err(Error::Denied(format!("il tool {tool} è disattivato")));
-        }
-        let mode = self.engine.0.config.get_str("policy.mode").unwrap_or_else(|| "ask".into());
-        let policy = Policy { mode, rules: self.engine.policy_rules(), sandbox_available: aiw_tools::shell::sandbox_backend().is_some() };
-        let subject = t.subject(&args);
-        let actor = self.workflow.as_ref().map(|w| w.name.clone()).unwrap_or_default();
-        let audit = |decision: &str| {
-            let _ = self.engine.0.store.add_audit(&AuditEntry {
-                id: new_id("aud"),
-                ts: now_rfc3339(),
-                run_id: Some(run_id.into()),
-                actor: "workflow".into(),
-                action: "tool".into(),
-                tool: Some(tool.into()),
-                decision: Some(decision.into()),
-                detail: format!("{actor}: {}", subject.clone().unwrap_or_default()),
-            });
-        };
-        match policy.evaluate(tool, t.risk(), subject.as_deref(), false) {
-            Decision::Allow => audit("allow"),
-            Decision::Deny(r) => {
-                audit("deny");
-                return Err(Error::Denied(r));
-            }
-            Decision::Ask(reason) => {
-                let req = ApprovalRequest {
-                    id: new_id("apr"),
-                    run_id: run_id.into(),
-                    tool: tool.into(),
-                    args: args.clone(),
-                    reason: format!("Workflow \"{actor}\": {reason}"),
-                    risk: aiw_agent::policy::risk_level(t.risk()).into(),
-                };
-                if !self.engine.wait_approval(req, None).await {
-                    audit("rejected");
-                    return Err(Error::Denied("rifiutato dall'utente".into()));
-                }
-                audit("approved");
-            }
-        }
-        let mut ctx = ToolContext::new(run_id, self.engine.workspace_root());
-        ctx.sandbox = SandboxMode::parse(&self.engine.0.config.get_str("sandbox.mode").unwrap_or_else(|| "workspace-write".into()));
-        ctx.checkpoint_dir = Some(self.engine.0.dirs.checkpoints());
-        let out = t.call(args, &ctx).await?;
+        let actor = self.workflow.as_ref().map(|w| format!("Workflow \"{}\"", w.name)).unwrap_or_else(|| "Workflow".into());
+        let out = self.engine.execute_tool(run_id, "workflow", &actor, tool, args).await?;
         if out.is_error {
             return Err(Error::Runtime(out.content));
         }
@@ -195,45 +150,11 @@ impl aiw_workflow::WorkflowHost for EngineHost {
 
     async fn run_agent(&self, _run_id: &str, agent_id: &str, prompt: &str) -> Result<String> {
         // Each workflow keeps one session per run so the work is inspectable in the Workspace view.
-        let session_id = {
-            let existing = self.workflow_session.lock().unwrap().clone();
-            match existing {
-                Some(s) => s,
-                None => {
-                    let name = self.workflow.as_ref().map(|w| w.name.clone()).unwrap_or_else(|| "Workflow".into());
-                    let s = self.engine.create_session(agent_id, Some(format!("⚙ {name}")))?;
-                    *self.workflow_session.lock().unwrap() = Some(s.id.clone());
-                    s.id
-                }
-            }
-        };
-        let run_id = self.engine.start_run(&session_id, prompt.to_string()).await?;
-        let mut rx = self.engine.subscribe();
-        loop {
-            if self.engine.run_done(&run_id) {
-                break;
-            }
-            match tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv()).await {
-                Ok(Ok(m)) if m.run_id == run_id && m.event.event.is_terminal() => break,
-                _ => {}
-            }
-        }
-        // Give the run task a moment to persist the messages.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let msgs = self.engine.messages(&session_id)?;
-        let last = msgs.iter().rev().find(|m| m.role == "assistant" && !m.content.is_empty()).map(|m| m.content.clone());
-        let failed = self.engine.run_events(&run_id).iter().find_map(|e| {
-            if let AgEvent::RunError { message, .. } = &e.event.event {
-                Some(message.clone())
-            } else {
-                None
-            }
-        });
-        match (last, failed) {
-            (_, Some(err)) => Err(Error::Runtime(err)),
-            (Some(t), None) => Ok(t),
-            (None, None) => Ok(String::new()),
-        }
+        let existing = self.workflow_session.lock().unwrap().clone();
+        let name = self.workflow.as_ref().map(|w| w.name.clone()).unwrap_or_else(|| "Workflow".into());
+        let (text, session_id) = self.engine.run_agent_task(agent_id, prompt, existing.as_deref(), &format!("⚙ {name}")).await?;
+        *self.workflow_session.lock().unwrap() = Some(session_id);
+        Ok(text)
     }
 
     async fn complete(&self, _run_id: &str, profile_id: &str, prompt: &str) -> Result<String> {

@@ -11,20 +11,12 @@ mod probes;
 
 /// Detects the current device. Takes up to a few seconds the first time (external tools).
 pub fn probe() -> DeviceProfile {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    sys.refresh_cpu_all();
-
     let os = normalized_os();
-    let name = sysinfo::System::host_name().unwrap_or_else(|| "this-device".into());
-    let os_version = sysinfo::System::long_os_version().or_else(sysinfo::System::os_version).unwrap_or_default();
     let arch = std::env::consts::ARCH.to_string();
-    let memory_mb = sys.total_memory() / (1024 * 1024);
-    let available_memory_mb = sys.available_memory() / (1024 * 1024);
-
-    let brand = sys.cpus().first().map(|c| c.brand().trim().to_string()).filter(|b| !b.is_empty()).unwrap_or_else(|| arch.clone());
-    let threads = sys.cpus().len().max(1) as u32;
-    let cores = sysinfo::System::physical_core_count().map(|c| c as u32).unwrap_or(threads);
+    let base = base_info();
+    let (name, os_version, memory_mb, available_memory_mb) = (base.name, base.os_version, base.memory_mb, base.available_mb);
+    let brand = if base.brand.is_empty() { arch.clone() } else { base.brand };
+    let (threads, cores) = (base.threads.max(1), base.cores.max(1));
     let cpu = CpuInfo { brand: brand.clone(), cores, threads, features: cpu_features() };
 
     let mut accelerators = vec![Accelerator {
@@ -53,6 +45,70 @@ pub fn probe() -> DeviceProfile {
     };
     profile.tier = tier_for(&profile).to_string();
     profile
+}
+
+struct BaseInfo {
+    name: String,
+    os_version: String,
+    memory_mb: u64,
+    available_mb: u64,
+    brand: String,
+    threads: u32,
+    cores: u32,
+}
+
+#[cfg(not(target_os = "ios"))]
+fn base_info() -> BaseInfo {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    sys.refresh_cpu_all();
+    let threads = sys.cpus().len().max(1) as u32;
+    BaseInfo {
+        name: sysinfo::System::host_name().unwrap_or_else(|| "this-device".into()),
+        os_version: sysinfo::System::long_os_version().or_else(sysinfo::System::os_version).unwrap_or_default(),
+        memory_mb: sys.total_memory() / (1024 * 1024),
+        available_mb: sys.available_memory() / (1024 * 1024),
+        brand: sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default(),
+        threads,
+        cores: sysinfo::System::physical_core_count().map(|c| c as u32).unwrap_or(threads),
+    }
+}
+
+#[cfg(target_os = "ios")]
+fn base_info() -> BaseInfo {
+    fn sysctl_string(name: &str) -> Option<String> {
+        let c = std::ffi::CString::new(name).ok()?;
+        let mut len: libc::size_t = 0;
+        unsafe {
+            if libc::sysctlbyname(c.as_ptr(), std::ptr::null_mut(), &mut len, std::ptr::null_mut(), 0) != 0 || len == 0 {
+                return None;
+            }
+            let mut buf = vec![0u8; len];
+            if libc::sysctlbyname(c.as_ptr(), buf.as_mut_ptr() as *mut libc::c_void, &mut len, std::ptr::null_mut(), 0) != 0 {
+                return None;
+            }
+            Some(String::from_utf8_lossy(&buf[..len.saturating_sub(1)]).into_owned())
+        }
+    }
+    fn sysctl_u64(name: &str) -> Option<u64> {
+        let c = std::ffi::CString::new(name).ok()?;
+        let mut v: u64 = 0;
+        let mut len = std::mem::size_of::<u64>() as libc::size_t;
+        let ok = unsafe { libc::sysctlbyname(c.as_ptr(), &mut v as *mut u64 as *mut libc::c_void, &mut len, std::ptr::null_mut(), 0) } == 0;
+        ok.then_some(v)
+    }
+    let threads = std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1);
+    let memory_mb = sysctl_u64("hw.memsize").unwrap_or(0) / (1024 * 1024);
+    BaseInfo {
+        name: sysctl_string("hw.machine").unwrap_or_else(|| "iPhone".into()),
+        os_version: sysctl_string("kern.osproductversion").map(|v| format!("iOS {v}")).unwrap_or_else(|| "iOS".into()),
+        memory_mb,
+        // iOS does not expose free memory to apps; assume roughly half is usable.
+        available_mb: memory_mb / 2,
+        brand: "Apple Silicon".into(),
+        threads,
+        cores: threads,
+    }
 }
 
 /// `windows | macos | linux | android | ios`

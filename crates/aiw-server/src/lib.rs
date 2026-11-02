@@ -1,7 +1,9 @@
 //! HTTP surface of the engine (architecture §8). The same [`router`] serves `aiw serve` over TCP
 //! and the Tauri shells in-process (tower `oneshot`), so every client sees one API.
 
+mod anthropic;
 mod gateway;
+mod mcp_server;
 
 use aiw_core::api::*;
 use aiw_core::events::AgEvent;
@@ -64,12 +66,18 @@ fn is_local(req: &Request) -> bool {
 
 async fn auth(State(st): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    let needs_auth = path.starts_with("/api/") || path.starts_with("/v1/");
+    let needs_auth = path.starts_with("/api/") || path.starts_with("/v1/") || path == "/mcp";
     if !needs_auth || path == "/api/pair" || is_local(&req) {
         return next.run(req).await;
     }
-    let bearer =
-        req.headers().get("authorization").and_then(|h| h.to_str().ok()).and_then(|h| h.strip_prefix("Bearer ")).map(str::to_string);
+    let bearer = req
+        .headers()
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(str::to_string)
+        // Anthropic SDKs send the key as `x-api-key`.
+        .or_else(|| req.headers().get("x-api-key").and_then(|h| h.to_str().ok()).map(str::to_string));
     let query_token = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=").map(str::to_string)));
     if bearer.or(query_token).as_deref() == Some(st.engine.token()) {
         next.run(req).await
@@ -121,7 +129,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/config", get(config).put(set_config))
         .route("/api/audit", get(audit))
         .route("/v1/models", get(gateway::models))
-        .route("/v1/chat/completions", post(gateway::chat_completions));
+        .route("/v1/chat/completions", post(gateway::chat_completions))
+        .route("/v1/messages", post(anthropic::messages))
+        .route("/v1/messages/count_tokens", post(anthropic::count_tokens))
+        .route("/mcp", post(mcp_server::handle).get(mcp_server::get_stream).delete(|| async { StatusCode::OK }));
     let mut app = api.with_state(st.clone());
     if let Some(dir) = ui_dir.filter(|d| d.join("index.html").exists()) {
         let index = dir.join("index.html");

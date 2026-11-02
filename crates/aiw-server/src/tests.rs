@@ -121,3 +121,60 @@ async fn reqwest_like_get(url: &str, token: Option<&str>) -> (u16, Value) {
     let end = body.rfind('}').map(|i| i + 1).unwrap_or(body.len());
     (status, serde_json::from_str(&body[start..end]).unwrap_or(Value::Null))
 }
+
+#[tokio::test]
+async fn anthropic_messages_gateway() {
+    let (app, _e, _d, _w) = app().await;
+    // first scripted turn is a tool call → Anthropic tool_use block
+    let (st, out) = dispatch(
+        app.clone(),
+        "POST",
+        "/v1/messages",
+        Some(json!({"model": "claude-sonnet-x", "max_tokens": 200, "tools": [{"name": "list_dir", "description": "d", "input_schema": {"type": "object"}}], "messages": [{"role": "user", "content": "elenca"}]})),
+    )
+    .await;
+    assert_eq!(st, 200, "{out}");
+    assert_eq!(out["type"], "message");
+    assert_eq!(out["stop_reason"], "tool_use");
+    assert_eq!(out["content"][0]["type"], "tool_use");
+    assert_eq!(out["content"][0]["input"]["path"], ".");
+    let (st, out) = dispatch(
+        app.clone(),
+        "POST",
+        "/v1/messages",
+        Some(json!({"model": "default", "max_tokens": 50, "messages": [{"role": "user", "content": "ciao"}]})),
+    )
+    .await;
+    assert_eq!(st, 200);
+    assert_eq!(out["content"][0]["text"], "Vuota");
+    assert_eq!(out["stop_reason"], "end_turn");
+    let (_, n) =
+        dispatch(app, "POST", "/v1/messages/count_tokens", Some(json!({"messages": [{"role": "user", "content": "ciao a tutti"}]}))).await;
+    assert!(n["input_tokens"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn mcp_server_works_with_our_mcp_client() {
+    let (app, _e, _d, ws) = app().await;
+    std::fs::write(ws.path().join("hello.txt"), "ciao").unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
+    let cfg = McpServerConfig {
+        id: "x".into(),
+        name: "aiw".into(),
+        transport: "http".into(),
+        command: None,
+        args: None,
+        url: Some(format!("http://{addr}/mcp")),
+        env: None,
+        enabled: true,
+    };
+    let client = aiw_tools::mcp::McpClient::connect(&cfg).await.unwrap();
+    assert!(client.tools.iter().any(|t| t.name == "list_dir" && t.read_only));
+    assert!(client.tools.iter().any(|t| t.name == "aiw_agent_run"));
+    let out = client.call_tool("list_dir", json!({"path": "."})).await.unwrap();
+    assert!(!out.is_error && out.content.contains("hello.txt"), "{}", out.content);
+    let denied = client.call_tool("read_file", json!({"path": "/etc/passwd"})).await.unwrap();
+    assert!(denied.is_error, "outside the workspace must fail: {}", denied.content);
+}

@@ -114,6 +114,7 @@ name = "aiw-hw"
 version = "0.1.0"
 dependencies = [
  "aiw-core",
+ "libc",
  "serde_json",
  "sysinfo",
  "tracing",
@@ -160,6 +161,7 @@ dependencies = [
  "aiw-core",
  "aiw-engine",
  "aiw-runtimes",
+ "aiw-tools",
  "axum",
  "chrono",
  "futures",

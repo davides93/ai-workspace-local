@@ -22,5 +22,6 @@ tracing.workspace = true
 chrono.workspace = true
 
 [dev-dependencies]
+aiw-tools.workspace = true
 tempfile = "3"
 http-body-util = "0.1"
