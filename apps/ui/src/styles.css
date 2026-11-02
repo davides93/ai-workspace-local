@@ -452,3 +452,18 @@ pre.diff .meta { color: var(--fg-faint); }
 .webhook-info { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; margin-bottom: 14px; border: 1px dashed var(--line); border-radius: var(--r-sm); background: var(--surface-2); font-size: var(--fs-sm); }
 .webhook-info .row { gap: 10px; align-items: center; flex-wrap: wrap; }
 .webhook-info .wrap { overflow-wrap: anywhere; min-width: 0; }
+
+/* ---------- Device mesh ---------- */
+.mesh-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; }
+@media (max-width: 1000px) { .mesh-grid { grid-template-columns: minmax(0, 1fr); } }
+.mesh-me { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 520px) { .mesh-me { grid-template-columns: minmax(0, 1fr); } .mesh-me .qr { justify-self: center; } }
+.qr { width: 196px; height: 196px; border-radius: var(--r-md); border: 1px solid var(--line); background: #fff; display: grid; place-items: center; padding: 8px; text-align: center; font-size: var(--fs-xs); }
+.qr .faint { color: #6b6b6b; padding: 0 10px; }
+.qr img { width: 100%; height: 100%; display: block; }
+.pair-code { font-size: 1.5rem; letter-spacing: 0.22em; font-weight: 600; }
+.pair-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; border-top: 1px solid var(--line); }
+.pair-form .field:first-child { flex: 1 1 200px; }
+.pair-form .field:nth-child(2) { flex: 0 1 120px; }
+.peer-models { justify-content: flex-end; }
+@media (max-width: 640px) { .peer-models { display: none; } }

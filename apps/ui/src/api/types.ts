@@ -43,6 +43,25 @@ export interface SystemInfo {
   peers: PeerDevice[];
 }
 
+export interface DiscoveredDevice {
+  id: string;
+  name: string;
+  os: string;
+  tier: string;
+  version: string;
+  address: string;
+  last_seen: string;
+}
+
+export interface MeshState {
+  /** mDNS discovery running (the LAN server is on). */
+  discovery: boolean;
+  /** This device's address on the LAN, when reachable. */
+  address: string | null;
+  discovered: DiscoveredDevice[];
+  peers: PeerDevice[];
+}
+
 export interface PeerDevice {
   id: string;
   name: string;

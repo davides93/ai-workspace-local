@@ -1,9 +1,11 @@
 //! HTTP surface of the engine (architecture §8). The same [`router`] serves `aiw serve` over TCP
 //! and the Tauri shells in-process (tower `oneshot`), so every client sees one API.
 
+mod a2a;
 mod anthropic;
 mod gateway;
 mod mcp_server;
+pub mod mesh;
 
 use aiw_core::api::*;
 use aiw_core::events::AgEvent;
@@ -66,7 +68,7 @@ fn is_local(req: &Request) -> bool {
 
 async fn auth(State(st): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    let needs_auth = path.starts_with("/api/") || path.starts_with("/v1/") || path == "/mcp";
+    let needs_auth = path.starts_with("/api/") || path.starts_with("/v1/") || path == "/mcp" || path == "/a2a";
     if !needs_auth || path == "/api/pair" || is_local(&req) {
         return next.run(req).await;
     }
@@ -126,6 +128,13 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/workflows/{id}/run", post(run_workflow))
         // Outside /api: authenticated by the workflow's own secret, not by the pairing token.
         .route("/hooks/{id}", post(webhook))
+        // Device mesh and A2A.
+        .route("/api/mesh", get(mesh_state))
+        .route("/api/mesh/pair", post(mesh_pair))
+        .route("/api/mesh/peers/{id}", delete(mesh_remove_peer))
+        .route("/api/pairing/qr", get(pairing_qr))
+        .route("/.well-known/agent-card.json", get(a2a::agent_card))
+        .route("/a2a", post(a2a::handle))
         .route("/api/tools", get(tools))
         .route("/api/tools/{name}", put(set_tool))
         .route("/api/mcp/servers", get(mcp_servers).post(save_mcp))
@@ -354,6 +363,61 @@ async fn webhook(
     ok(json!({"run_id": run.id, "status": run.status}))
 }
 
+/// Port and LAN exposure of the HTTP listener started by [`serve`] in this process. The router
+/// also runs without it (the desktop shell over IPC, tests): then the settings are the reference.
+static LISTENER: std::sync::OnceLock<(u16, bool)> = std::sync::OnceLock::new();
+
+fn server_port(s: &AppState) -> u16 {
+    match LISTENER.get() {
+        Some(&(port, _)) => port,
+        None => s.engine.config().effective.get("server.port").and_then(|v| v.as_u64()).unwrap_or(7777) as u16,
+    }
+}
+
+fn lan_enabled(s: &AppState) -> bool {
+    match LISTENER.get() {
+        Some(&(_, lan)) => lan,
+        None => s.engine.config().effective.get("server.lan").and_then(|v| v.as_bool()).unwrap_or(false),
+    }
+}
+
+async fn mesh_state(State(s): State<AppState>) -> ApiResult<Value> {
+    let address = mesh::lan_ip().filter(|_| lan_enabled(&s)).map(|ip| format!("http://{ip}:{}", server_port(&s)));
+    ok(json!({
+        "discovery": mesh::discovery_running(),
+        "address": address,
+        "discovered": mesh::discovered(),
+        "peers": s.engine.peers(),
+    }))
+}
+
+#[derive(Deserialize)]
+struct MeshPair {
+    address: String,
+    code: String,
+}
+async fn mesh_pair(State(s): State<AppState>, Json(b): Json<MeshPair>) -> ApiResult<PeerDevice> {
+    ok(s.engine.pair_with_peer(&b.address, &b.code).await?)
+}
+async fn mesh_remove_peer(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.remove_peer(&id).await?;
+    ok(json!({}))
+}
+
+/// Pairing link + QR (only for this device: it carries the current code).
+async fn pairing_qr(State(s): State<AppState>, req: Request) -> ApiResult<Value> {
+    if !is_local(&req) {
+        return Err(ApiError(Error::Denied("il QR di pairing si mostra solo sul dispositivo stesso".into())));
+    }
+    if !lan_enabled(&s) {
+        return Err(ApiError(Error::Invalid("attiva l'accesso dalla LAN (server.lan) per accoppiare altri dispositivi".into())));
+    }
+    let ip = mesh::lan_ip().ok_or_else(|| ApiError(Error::Unsupported("nessuna interfaccia di rete locale".into())))?;
+    let (url, svg) =
+        mesh::pairing_qr(&format!("http://{ip}:{}", server_port(&s)), &s.engine.pairing_code()).map_err(|e| ApiError(Error::Runtime(e)))?;
+    ok(json!({"url": url, "svg": svg}))
+}
+
 async fn workflows(State(s): State<AppState>) -> ApiResult<Vec<WorkflowDef>> {
     ok(s.engine.workflows()?)
 }
@@ -442,7 +506,12 @@ pub async fn dispatch(app: Router, method: &str, path: &str, body: Option<Value>
 pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>) -> std::io::Result<()> {
     let host = if lan { "0.0.0.0" } else { "127.0.0.1" };
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
-    tracing::info!("AI Workspace Local in ascolto su http://{}:{port} (LAN: {lan})", if lan { "0.0.0.0" } else { "127.0.0.1" });
+    let port = listener.local_addr()?.port();
+    let _ = LISTENER.set((port, lan));
+    tracing::info!("AI Workspace Local in ascolto su http://{host}:{port} (LAN: {lan})");
+    if lan {
+        mesh::start(&engine, port);
+    }
     let app = router(engine, ui_dir);
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await
 }

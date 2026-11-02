@@ -1,7 +1,7 @@
 import type {
   AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
-  WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus,
+  WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
 } from "./types";
 
 /**
@@ -57,6 +57,12 @@ export interface Transport {
   saveMcpServer(s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }): Promise<McpServer>;
   removeMcpServer(id: string): Promise<void>;
 
+  mesh(): Promise<MeshState>;
+  pairPeer(address: string, code: string): Promise<PeerDevice>;
+  removePeer(id: string): Promise<void>;
+  /** Link that pairs a phone in one step (its camera opens the web UI) and its QR as SVG. */
+  pairingQr(): Promise<{ url: string; svg: string }>;
+
   config(): Promise<ConfigView>;
   setConfig(layer: "global" | "device" | "workspace", key: string, value: unknown): Promise<ConfigView>;
   audit(): Promise<AuditEntry[]>;
@@ -78,6 +84,18 @@ export async function createTransport(): Promise<Transport> {
   }
   const { HttpTransport } = await import("./http");
   const http = new HttpTransport(params.get("server") ?? "", params.get("token") ?? localStorageGet("aiw.token"));
+  // Opened from the pairing QR (…/?pair=123456): pair at once, then drop the code from the URL.
+  const pairCode = params.get("pair");
+  if (pairCode && /^\d{6}$/.test(pairCode)) {
+    try {
+      await http.pair(pairCode);
+    } catch {
+      /* expired code: the pairing screen asks for a new one */
+    }
+    params.delete("pair");
+    const q = params.toString();
+    history.replaceState(null, "", `${location.pathname}${q ? `?${q}` : ""}${location.hash}`);
+  }
   try {
     await http.system();
     return http;

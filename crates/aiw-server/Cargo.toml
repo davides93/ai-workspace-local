@@ -20,6 +20,10 @@ tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+# Device mesh: LAN discovery and pairing QR codes.
+mdns-sd = "0.21"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+reqwest.workspace = true
 
 [dev-dependencies]
 aiw-tools.workspace = true

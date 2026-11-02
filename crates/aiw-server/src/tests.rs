@@ -4,6 +4,11 @@ use aiw_runtimes::ScriptedBackend;
 use std::sync::Arc;
 
 async fn app() -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
+    app_on(None).await
+}
+
+/// `device` overrides the probed hardware (two engines in one test are two devices).
+async fn app_on(device: Option<DeviceProfile>) -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
     let data = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     let e = Engine::new(EngineOptions {
@@ -11,6 +16,7 @@ async fn app() -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
         workspace_root: Some(ws.path().into()),
         mode: "daemon".into(),
         offline: true,
+        device,
         ..Default::default()
     })
     .await
@@ -168,6 +174,7 @@ async fn mcp_server_works_with_our_mcp_client() {
         args: None,
         url: Some(format!("http://{addr}/mcp")),
         env: None,
+        headers: None,
         enabled: true,
     };
     let client = aiw_tools::mcp::McpClient::connect(&cfg).await.unwrap();
@@ -227,4 +234,88 @@ async fn webhook_runs_the_workflow_with_the_payload() {
     // The plain secret works too.
     let r = tower::ServiceExt::oneshot(app, call(Some(("x-aiw-secret", secret.clone())))).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
+}
+
+async fn rpc(app: &Router, body: Value) -> Value {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/a2a")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let r = tower::ServiceExt::oneshot(app.clone(), req).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn a2a_card_and_tasks() {
+    let (app, _e, _d, _w) = app().await;
+    let req = Request::builder().uri("/.well-known/agent-card.json").header("host", "pc.local:7777").body(Body::empty()).unwrap();
+    let r = tower::ServiceExt::oneshot(app.clone(), req).await.unwrap();
+    let card: Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(card["supportedInterfaces"][0]["url"], "http://pc.local:7777/a2a");
+    assert_eq!(card["supportedInterfaces"][0]["protocolBinding"], "JSONRPC");
+    assert!(card["skills"].as_array().unwrap().iter().any(|s| s["id"] == "operator"));
+
+    // A2A 1.0: SendMessage (blocking) → completed Task with the answer as artifact.
+    let v = rpc(
+        &app,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": {
+            "message": {"role": "ROLE_USER", "messageId": "m1", "parts": [{"text": "Cosa c'è nella cartella?"}]}
+        }}),
+    )
+    .await;
+    let task = &v["result"]["task"];
+    assert_eq!(task["status"]["state"], "TASK_STATE_COMPLETED", "{v}");
+    assert_eq!(task["artifacts"][0]["parts"][0]["text"], "Vuota");
+    assert_eq!(task["history"][1]["role"], "ROLE_AGENT");
+    let tid = task["id"].as_str().unwrap();
+    let ctx = task["contextId"].as_str().unwrap();
+    let got = rpc(&app, json!({"jsonrpc": "2.0", "id": 2, "method": "GetTask", "params": {"id": tid}})).await;
+    assert_eq!(got["result"]["id"], tid);
+
+    // 0.3 names and shapes, same context → same session.
+    let v = rpc(&app, json!({"jsonrpc": "2.0", "id": 3, "method": "message/send", "params": {
+        "message": {"role": "user", "kind": "message", "messageId": "m2", "contextId": ctx, "parts": [{"kind": "text", "text": "E poi?"}]}
+    }}))
+    .await;
+    assert_eq!(v["result"]["kind"], "task");
+    assert_eq!(v["result"]["status"]["state"], "completed", "{v}");
+    assert_eq!(v["result"]["artifacts"][0]["parts"][0]["kind"], "text");
+
+    let bad = rpc(&app, json!({"jsonrpc": "2.0", "id": 4, "method": "SendMessage", "params": {"message": {"parts": [{"text": "x"}]}, "metadata": {"agent": "nessuno"}}})).await;
+    assert_eq!(bad["error"]["code"], -32602);
+    let none = rpc(&app, json!({"jsonrpc": "2.0", "id": 5, "method": "CancelTask", "params": {"id": "task_x"}})).await;
+    assert_eq!(none["error"]["code"], -32001);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pairs_with_another_device_over_http() {
+    let (_app_a, a, _da, _wa) = app().await;
+    let mut phone = a.device();
+    phone.id = "telefono-di-prova".into();
+    phone.name = "Telefono di prova".into();
+    phone.os = "android".into();
+    let (app_b, b, _db, _wb) = app_on(Some(phone)).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app_b.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
+
+    assert!(a.pair_with_peer(&addr.to_string(), "000000").await.is_err(), "wrong code is refused");
+    let peer = a.pair_with_peer(&format!("http://{addr}/"), &b.pairing_code()).await.unwrap();
+    assert_eq!(peer.name, "Telefono di prova");
+    assert_eq!(peer.address, format!("http://{addr}"));
+    assert!(a.peers().iter().any(|p| p.id == peer.id));
+
+    // Its gateway is now the aiw-peer runtime, its tools and agents an MCP server.
+    let rt = a.runtimes().into_iter().find(|r| r.id == "aiw-peer").unwrap();
+    assert_eq!(rt.settings["base_url"], format!("http://{addr}/v1"));
+    let mcp = a.mcp_servers().into_iter().find(|m| m.config.id == format!("peer-{}", peer.id)).unwrap();
+    assert_eq!(mcp.status, "connected", "{:?}", mcp.error);
+    assert!(mcp.tools.iter().any(|t| t.ends_with("aiw_agent_run")), "{:?}", mcp.tools);
+
+    a.remove_peer(&peer.id).await.unwrap();
+    assert!(a.peers().is_empty());
+    assert!(a.mcp_servers().iter().all(|m| m.config.id != format!("peer-{}", peer.id)));
 }

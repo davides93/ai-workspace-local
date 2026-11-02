@@ -2,6 +2,7 @@
 
 pub mod defaults;
 mod host;
+pub mod peers;
 pub mod store;
 pub mod webhook;
 pub mod worktree;
@@ -329,7 +330,7 @@ impl Engine {
         }
     }
 
-    fn audit_system(&self, action: &str, detail: &str) {
+    pub(crate) fn audit_system(&self, action: &str, detail: &str) {
         let _ = self.0.store.add_audit(&AuditEntry {
             id: new_id("aud"),
             ts: now_rfc3339(),

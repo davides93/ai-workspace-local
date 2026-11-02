@@ -1,7 +1,7 @@
 import type { Transport } from "./transport";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
-  DownloadProgress, InferenceProfile, LocalModel, McpServer, RunState, RuntimeInfo, Session, SettingsSchema, WorktreeStatus,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, RunState, RuntimeInfo, Session, SettingsSchema, WorktreeStatus, MeshState,
   SystemInfo, ToolInfo, WorkflowDef, WorkflowRun,
 } from "./types";
 
@@ -658,6 +658,32 @@ export class MockTransport implements Transport {
   async removeMcpServer(id: string) {
     const i = mcp.findIndex((m) => m.id === id);
     if (i >= 0) mcp.splice(i, 1);
+  }
+
+  async mesh(): Promise<MeshState> {
+    return {
+      discovery: true,
+      address: "http://192.168.1.10:7777",
+      discovered: [
+        { id: "dev_nas", name: "Mini PC del soggiorno", os: "linux", tier: "m", version: "0.1.0", address: "http://192.168.1.31:7777", last_seen: now() },
+        { id: "dev_mbp", name: "MacBook Pro M4 Max", os: "macos", tier: "xl", version: "0.1.0", address: "http://192.168.1.42:7777", last_seen: now() },
+      ],
+      peers: structuredClone(system.peers),
+    };
+  }
+  async pairPeer(address: string, code: string) {
+    await sleep(500);
+    if (!/^\d{6}$/.test(code)) throw new Error("Il codice è di 6 cifre");
+    const peer = { id: nid("dev"), name: address.includes(".31") ? "Mini PC del soggiorno" : "Nuovo dispositivo", os: "linux" as const, address, status: "online" as const, shared_runtimes: ["llama-server"] };
+    system.peers.push(peer);
+    return peer;
+  }
+  async removePeer(id: string) {
+    const i = system.peers.findIndex((p) => p.id === id);
+    if (i >= 0) system.peers.splice(i, 1);
+  }
+  async pairingQr(): Promise<{ url: string; svg: string }> {
+    throw new Error("Il QR richiede il backend: avvia aiw serve --lan");
   }
 
   async config() { return { layers: structuredClone(configLayers), effective: effective(), schema: configSchema }; }

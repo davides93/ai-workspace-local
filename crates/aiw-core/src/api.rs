@@ -487,6 +487,9 @@ pub struct McpServerConfig {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<Map<String, Value>>,
+    /// Extra HTTP headers for the `http` transport (e.g. `Authorization` for a paired device).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<Map<String, Value>>,
     #[serde(default = "yes")]
     pub enabled: bool,
 }
@@ -576,6 +579,7 @@ mod tests {
                 args: None,
                 url: None,
                 env: None,
+                headers: None,
                 enabled: true,
             },
             status: "connected".into(),

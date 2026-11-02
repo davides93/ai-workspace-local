@@ -61,15 +61,27 @@ impl McpClient {
     pub async fn connect(cfg: &McpServerConfig) -> Result<Self> {
         let transport = match cfg.transport.as_str() {
             "stdio" => Self::spawn_stdio(cfg)?,
-            "http" => Transport::Http {
-                url: cfg.url.clone().filter(|u| !u.is_empty()).ok_or_else(|| Error::Invalid("server MCP HTTP senza url".into()))?,
-                http: reqwest::Client::builder()
-                    .connect_timeout(Duration::from_secs(5))
-                    .timeout(Duration::from_secs(120))
-                    .build()
-                    .map_err(Error::other)?,
-                session: Mutex::new(None),
-            },
+            "http" => {
+                let mut headers = reqwest::header::HeaderMap::new();
+                for (k, v) in cfg.headers.iter().flatten() {
+                    let (Ok(name), Some(Ok(value))) =
+                        (reqwest::header::HeaderName::from_bytes(k.as_bytes()), v.as_str().map(reqwest::header::HeaderValue::from_str))
+                    else {
+                        return Err(Error::Invalid(format!("header MCP non valido: {k}")));
+                    };
+                    headers.insert(name, value);
+                }
+                Transport::Http {
+                    url: cfg.url.clone().filter(|u| !u.is_empty()).ok_or_else(|| Error::Invalid("server MCP HTTP senza url".into()))?,
+                    http: reqwest::Client::builder()
+                        .connect_timeout(Duration::from_secs(5))
+                        .timeout(Duration::from_secs(600))
+                        .default_headers(headers)
+                        .build()
+                        .map_err(Error::other)?,
+                    session: Mutex::new(None),
+                }
+            }
             other => return Err(Error::Invalid(format!("trasporto MCP sconosciuto: {other}"))),
         };
         let mut c = Self { name: cfg.name.clone(), transport, next: AtomicU64::new(1), tools: vec![], server_info: Value::Null };
@@ -355,6 +367,7 @@ for line in sys.stdin:
             args: Some(vec!["-c".into(), script.into()]),
             url: None,
             env: None,
+            headers: None,
             enabled: true,
         };
         let client = Arc::new(McpClient::connect(&cfg).await.unwrap());

@@ -2,7 +2,7 @@ import type { Transport } from "./transport";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
-  ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus,
+  ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
 } from "./types";
 
 export class ApiError extends Error {
@@ -62,6 +62,10 @@ export class HttpTransport implements Transport {
   sessions = () => this.req<Session[]>("GET", "/sessions");
   createSession = (input: { agent_id: string; title?: string; isolation?: "none" | "worktree" }) => this.req<Session>("POST", "/sessions", input);
   deleteSession = (id: string) => this.req<void>("DELETE", `/sessions/${encodeURIComponent(id)}`);
+  mesh = () => this.req<MeshState>("GET", "/mesh");
+  pairPeer = (address: string, code: string) => this.req<PeerDevice>("POST", "/mesh/pair", { address, code });
+  removePeer = (id: string) => this.req<void>("DELETE", `/mesh/peers/${encodeURIComponent(id)}`);
+  pairingQr = () => this.req<{ url: string; svg: string }>("GET", "/pairing/qr");
   worktreeStatus = (sessionId: string) => this.req<WorktreeStatus>("GET", `/sessions/${encodeURIComponent(sessionId)}/worktree`);
   worktreeApply = (sessionId: string) => this.req<WorktreeStatus>("POST", `/sessions/${encodeURIComponent(sessionId)}/worktree/apply`);
   worktreeDiscard = (sessionId: string) => this.req<void>("DELETE", `/sessions/${encodeURIComponent(sessionId)}/worktree`);
