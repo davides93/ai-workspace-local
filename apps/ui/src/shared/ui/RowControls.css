@@ -1,0 +1,5 @@
+/* Controls of a row of an editable list (RowControls.tsx) and the small warning line used under such rows. */
+.row-controls { display: flex; align-items: center; gap: var(--space-1); flex: none; }
+.row-controls .flip svg { transform: rotate(180deg); }
+.row-controls .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.row-warn { font-size: var(--fs-xs); color: var(--warn); }

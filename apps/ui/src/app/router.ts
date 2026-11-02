@@ -1,4 +1,5 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, type AnchorHTMLAttributes, type ReactNode } from "react";
+import { navGate } from "../shared/lib/navGate";
 
 // Hash router written in-house (no dependency). Locations look like `#/models/discover?provider=hf&q=qwen`.
 // Everything up to `useRoute` is pure so it can be unit tested without a DOM.
@@ -127,8 +128,13 @@ export function legacyRedirect(hash: string): string | null {
 // ---------------------------------------------------------------- React bindings
 
 function subscribe(cb: () => void) {
-  window.addEventListener("hashchange", cb);
-  return () => window.removeEventListener("hashchange", cb);
+  // The gate lets a form with unsaved changes veto the change (and restore the old hash) before it renders.
+  const onChange = () => {
+    navGate.check();
+    cb();
+  };
+  window.addEventListener("hashchange", onChange);
+  return () => window.removeEventListener("hashchange", onChange);
 }
 const snapshot = () => location.hash;
 

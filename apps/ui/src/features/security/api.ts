@@ -4,6 +4,12 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { HookConfig, PolicyRule } from "../../shared/api/types";
 
+/** Tool catalogue (same query as the Capabilities page): names and risks for the rule tester. */
+export function useToolList() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.tools(), queryFn: () => api.tools() });
+}
+
 export function usePolicy() {
   const api = useApi();
   return useQuery({ queryKey: qk.policy(), queryFn: () => api.policy() });
