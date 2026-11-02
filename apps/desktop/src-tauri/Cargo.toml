@@ -20,6 +20,8 @@ tauri-build = { version = "2", features = [] }
 default = []
 # Screen capture + synthetic input for the desktop computer-use agent.
 computer-use = ["aiw-engine/computer-use"]
+# GPU variants of the embedded engine: `aiw-engine/llama-cuda|vulkan` imply `llama-embedded`
+# (see crates/aiw-engine/Cargo.toml). Never enable them on macOS/iOS, where Metal is automatic.
 cuda = ["aiw-engine/llama-cuda"]
 vulkan = ["aiw-engine/llama-vulkan"]
 
@@ -36,7 +38,9 @@ tokio = { version = "1", features = ["full"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-# In-process llama.cpp everywhere; Metal on Apple platforms.
+# In-process llama.cpp everywhere; Metal on Apple platforms. `llama-metal` implies the engine's
+# `llama-embedded` feature, which is what registers the `llama-embedded` runtime (before the
+# implication existed, macOS and iOS linked llama.cpp+Metal without ever registering it).
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 aiw-engine = { workspace = true, features = ["llama-metal"] }
 

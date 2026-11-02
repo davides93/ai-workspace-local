@@ -12,7 +12,11 @@ mod probes;
 /// Detects the current device. Takes up to a few seconds the first time (external tools).
 pub fn probe() -> DeviceProfile {
     let os = normalized_os();
-    let arch = std::env::consts::ARCH.to_string();
+    // A process translated by Rosetta reports x86_64 on an Apple Silicon Mac: the device is aarch64.
+    let arch = match std::env::consts::ARCH {
+        "x86_64" if os == "macos" && probes::mac_is_apple_silicon() => "aarch64".to_string(),
+        other => other.to_string(),
+    };
     let base = base_info();
     let (name, os_version, memory_mb, available_memory_mb) = (base.name, base.os_version, base.memory_mb, base.available_mb);
     let brand = if base.brand.is_empty() { arch.clone() } else { base.brand };
@@ -27,7 +31,7 @@ pub fn probe() -> DeviceProfile {
         driver: None,
         details: Some(format!("{cores} core / {threads} thread")),
     }];
-    accelerators.extend(probes::gpus_and_npus(&os, memory_mb));
+    accelerators.extend(probes::gpus_and_npus(&os, &arch, memory_mb));
 
     let form_factor = probes::form_factor(&os);
     let mut profile = DeviceProfile {
@@ -123,10 +127,32 @@ pub fn normalized_os() -> String {
     .to_string()
 }
 
+/// Share of RAM that a unified-memory SoC (Apple Silicon, phones) can give to a model: Metal's
+/// working-set limit is about two thirds to three quarters of RAM, and iOS/Android kill apps that
+/// grow past their share. 100 % of RAM is never available.
+pub const UNIFIED_MEMORY_PERCENT: u64 = 70;
+
+/// Memory a model can use on a unified-memory device with `ram_mb` of RAM.
+pub fn unified_budget_mb(ram_mb: u64) -> u64 {
+    ram_mb * UNIFIED_MEMORY_PERCENT / 100
+}
+
 /// Memory budget usable for model weights + KV cache, in MB.
+///
+/// - Unified memory (Apple Silicon, phones): CPU and GPU draw from the same pool, so the
+///   "GPU memory" is a share of RAM ([`unified_budget_mb`]), never the whole of it. A smaller
+///   limit reported for the GPU (`iogpu.wired_limit_mb`) is honoured; a larger one, or the total
+///   RAM that a platform plugin may have reported as VRAM, is capped.
+/// - Otherwise: the larger of the dedicated VRAM and half of the RAM (CPU offload).
 pub fn model_budget_mb(p: &DeviceProfile) -> u64 {
-    let ram_share = if p.unified_memory() { p.memory_mb * 7 / 10 } else { p.memory_mb / 2 };
-    p.vram_mb().max(ram_share)
+    if p.unified_memory() {
+        let share = unified_budget_mb(p.memory_mb);
+        return match p.vram_mb() {
+            0 => share,
+            gpu => gpu.min(share),
+        };
+    }
+    p.vram_mb().max(p.memory_mb / 2)
 }
 
 /// Device class used for recommendations (DESIGN §Dispositivi).
@@ -196,6 +222,11 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 /// Runs an external probe with a timeout. Never used on mobile (no process spawning there).
+///
+/// Stdout is drained by a separate thread: a tool that prints more than a pipe buffer
+/// (`rocminfo` on a multi-GPU box) would otherwise block on write and always hit the timeout.
+/// On timeout the child is killed and the reader thread is left to finish on its own, because a
+/// grandchild may still hold the pipe open; nothing ever waits for it unboundedly.
 pub(crate) fn run(cmd: &str, args: &[&str], timeout: Duration) -> Option<String> {
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
@@ -207,20 +238,29 @@ pub(crate) fn run(cmd: &str, args: &[&str], timeout: Duration) -> Option<String>
         use std::io::Read;
         use std::process::{Command, Stdio};
         let mut child = Command::new(cmd).args(args).stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null()).spawn().ok()?;
+        let mut stdout = child.stdout.take()?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = String::new();
+            let _ = stdout.read_to_string(&mut out);
+            let _ = tx.send(out);
+        });
         let start = std::time::Instant::now();
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let mut out = String::new();
-                    child.stdout.take()?.read_to_string(&mut out).ok()?;
+                    // The process has exited; the pipe normally closes with it. Bounded wait: a
+                    // daemonized grandchild could keep it open.
+                    let out = rx.recv_timeout(Duration::from_millis(500)).ok()?;
                     return status.success().then_some(out);
                 }
                 Ok(None) if start.elapsed() > timeout => {
                     let _ = child.kill();
+                    let _ = child.wait();
                     tracing::debug!(cmd, "hardware probe timed out");
                     return None;
                 }
-                Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
                 Err(_) => return None,
             }
         }
@@ -239,6 +279,84 @@ mod tests {
         assert_eq!(p.accelerators[0].kind, "cpu");
         assert!(["xs", "s", "m", "l", "xl"].contains(&p.tier.as_str()));
         assert!(p.id.starts_with("dev_"));
+    }
+
+    fn profile(os: &str, arch: &str, ram_gb: u64, accelerators: Vec<Accelerator>) -> DeviceProfile {
+        let mut p = probe();
+        p.os = os.into();
+        p.arch = arch.into();
+        p.memory_mb = ram_gb * 1024;
+        let cpu = p.accelerators.remove(0);
+        p.accelerators = std::iter::once(cpu).chain(accelerators).collect();
+        p
+    }
+
+    fn gpu(kind: &str, memory_mb: Option<u64>) -> Accelerator {
+        Accelerator { kind: kind.into(), name: kind.into(), vendor: None, memory_mb, driver: None, details: None }
+    }
+
+    #[test]
+    fn unified_memory_devices_get_70_percent_of_ram_not_all_of_it() {
+        // Apple Silicon with the GPU memory reported as the total RAM (what the probe used to do,
+        // and what a platform plugin may still send): capped.
+        let mac = profile("macos", "aarch64", 16, vec![gpu("metal", Some(16 * 1024))]);
+        assert!(mac.unified_memory());
+        assert_eq!(unified_budget_mb(16 * 1024), 11468);
+        assert_eq!(model_budget_mb(&mac), 11468);
+        assert_eq!(tier_for(&mac), "m");
+        // No GPU memory reported at all: the same share.
+        assert_eq!(model_budget_mb(&profile("macos", "aarch64", 16, vec![gpu("metal", None)])), 11468);
+        // A lower limit (`iogpu.wired_limit_mb`) is honoured.
+        assert_eq!(model_budget_mb(&profile("macos", "aarch64", 16, vec![gpu("metal", Some(8192))])), 8192);
+        // Android with a SoC GPU that claims all the RAM.
+        let phone = profile("android", "aarch64", 12, vec![gpu("vulkan", Some(12 * 1024))]);
+        assert_eq!(model_budget_mb(&phone), 8601);
+        assert_eq!(tier_for(&phone), "m");
+        // 8 GB iPhone: 5.6 GB, class `s`.
+        let iphone = profile("ios", "aarch64", 8, vec![gpu("metal", Some(8 * 1024))]);
+        assert_eq!(model_budget_mb(&iphone), 5734);
+        assert_eq!(tier_for(&iphone), "s");
+    }
+
+    #[test]
+    fn an_intel_mac_is_not_unified_memory() {
+        let intel = profile("macos", "x86_64", 16, vec![gpu("metal", None)]);
+        assert!(!intel.unified_memory());
+        // Half of the RAM for CPU inference, like any discrete-GPU PC; not 70 %.
+        assert_eq!(model_budget_mb(&intel), 8 * 1024);
+        // A discrete AMD GPU with its own VRAM on that Mac still counts as VRAM.
+        let with_vram = profile("macos", "x86_64", 16, vec![gpu("metal", Some(16 * 1024))]);
+        assert_eq!(model_budget_mb(&with_vram), 16 * 1024);
+        // Same RAM on Apple Silicon is a different budget.
+        assert!(model_budget_mb(&profile("macos", "aarch64", 16, vec![gpu("metal", None)])) > model_budget_mb(&intel));
+    }
+
+    /// A tool that prints more than a pipe buffer must not deadlock against its own timeout, and a
+    /// hung one must be cut off.
+    #[cfg(unix)]
+    #[test]
+    fn external_probes_handle_big_output_and_time_out() {
+        let big = run("sh", &["-c", "yes aiw | head -c 300000"], Duration::from_secs(5)).expect("big output is read to the end");
+        assert_eq!(big.len(), 300000);
+        let started = std::time::Instant::now();
+        assert!(run("sleep", &["30"], Duration::from_millis(200)).is_none());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(run("sh", &["-c", "exit 3"], Duration::from_secs(2)).is_none(), "a failing tool yields nothing");
+        assert!(run("definitely-not-a-tool-aiw", &[], Duration::from_secs(2)).is_none());
+    }
+
+    #[test]
+    fn probe_output_matches_the_architecture_rules() {
+        let p = probe();
+        if p.os == "macos" && p.arch == "x86_64" {
+            assert!(!p.unified_memory());
+            assert!(!p.has_accelerator("npu"));
+        }
+        // No desktop device is ever credited with all of its RAM as GPU memory unless the GPU
+        // reports it itself: on unified-memory devices the budget stays below total RAM.
+        if p.unified_memory() {
+            assert!(model_budget_mb(&p) < p.memory_mb);
+        }
     }
 
     #[test]

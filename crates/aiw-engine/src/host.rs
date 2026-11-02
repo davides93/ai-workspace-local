@@ -90,7 +90,13 @@ impl RunHost for EngineHost {
     }
 
     async fn backend(&self, profile: &InferenceProfile) -> Result<Arc<dyn ChatBackend>> {
-        self.engine.0.runtimes.backend(&profile.runtime_id, (!profile.model.is_empty()).then_some(profile.model.as_str())).await
+        // The profile's context window goes to the runtime (launch argument of a sidecar, or the
+        // in-process engine), not only to the compaction threshold of the runner.
+        self.engine
+            .0
+            .runtimes
+            .backend_with(&profile.runtime_id, (!profile.model.is_empty()).then_some(profile.model.as_str()), profile.params.context)
+            .await
     }
 
     fn tools(&self) -> Arc<ToolRegistry> {
@@ -159,7 +165,8 @@ impl aiw_workflow::WorkflowHost for EngineHost {
 
     async fn complete(&self, _run_id: &str, profile_id: &str, prompt: &str) -> Result<String> {
         let p = self.engine.profile(profile_id)?;
-        let backend = self.engine.0.runtimes.backend(&p.runtime_id, (!p.model.is_empty()).then_some(p.model.as_str())).await?;
+        let backend =
+            self.engine.0.runtimes.backend_with(&p.runtime_id, (!p.model.is_empty()).then_some(p.model.as_str()), p.params.context).await?;
         let req = ChatRequest {
             model: p.model.clone(),
             messages: vec![Msg::user(prompt)],

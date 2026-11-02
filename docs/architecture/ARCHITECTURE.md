@@ -139,11 +139,24 @@ Ogni runtime è un file JSON dichiarativo (vedi `crates/aiw-runtimes/manifests/`
   compatibile, bridge nativo registrato. Lo stato è uno di `available`, `installable`, `running`,
   `unsupported`.
 - **Adapter**: `openai` copre la maggior parte dei sidecar (llama-server, vLLM, SGLang, mlx-lm,
-  TRT-LLM, Foundry Local, Lemonade, LM Studio, LocalAI…); `ollama` aggiunge la gestione dei
-  modelli; `native` instrada verso un *bridge* fornito dalla shell (plugin Swift o Kotlin, embedded FFI).
+  TRT-LLM, Foundry Local, Lemonade, LM Studio, LocalAI…); `ollama` è lo stesso adapter più la
+  parte nativa minima (elenco dei modelli **installati** da `GET /api/tags`; `num_ctx` e
+  `keep_alive` non passano da `/v1`, quindi vanno nell'ambiente di `ollama serve`:
+  `OLLAMA_CONTEXT_LENGTH` e `OLLAMA_KEEP_ALIVE`); `native` instrada verso un *bridge* fornito dalla
+  shell (plugin Swift o Kotlin, embedded FFI).
 - **Supervisor**: avvia il processo, assegna la porta, sostituisce i placeholder (`{model_path}`,
-  `{port}`, impostazioni), attende l'health check, raccoglie i log, riavvia secondo la policy e
-  ferma tutto all'uscita.
+  `{model}`, `{model_id}`, `{port}`, impostazioni), attende l'health check, raccoglie i log,
+  riavvia secondo la policy e ferma tutto all'uscita. `{model}` è il percorso locale (file o
+  cartella) quando il modello del profilo è un modello locale, altrimenti l'id così com'è (repo
+  Hugging Face che il runtime scarica da solo); `{model_id}` è sempre l'id. Le variabili `env`
+  senza valore non vengono esportate.
+- **Contesto del profilo**: la finestra di contesto del profilo (`InferenceParams.context`) ha la
+  precedenza sul setting di contesto del runtime (`ctx_size`, `max_model_len`, oppure il setting
+  indicato da `launch.ctx_setting`) per il processo avviato per quel profilo, e per le generazioni
+  di un motore in-process. Un sidecar già avviato da AIW con un contesto più piccolo viene
+  riavviato; uno più grande viene riusato. Un server avviato fuori da AIW non si modifica.
+- **Architettura**: `arch` (opzionale, es. `["aarch64"]`) limita un runtime a una CPU oltre che al
+  sistema operativo: MLX e Apple Foundation Models non sono offerti su un Mac Intel.
 - **Manifest utente**: ogni JSON in `~/.aiw/runtimes/*.json` si aggiunge al catalogo. Così si
   integra qualsiasi motore futuro senza ricompilare.
 

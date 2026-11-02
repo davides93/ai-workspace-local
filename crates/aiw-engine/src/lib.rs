@@ -134,6 +134,7 @@ impl Engine {
         let mut bin_dirs = vec![dirs.root.join("bin")];
         bin_dirs.extend(opts.extra_bin_dirs.clone());
         let runtimes = RuntimeRegistry::new(device.os.clone(), Some(&dirs.runtimes()), bin_dirs, models_dir.clone());
+        runtimes.set_arch(&device.arch); // MLX needs Apple Silicon, not just macOS
         let store = Store::open(&dirs.db_file())?;
         let overrides: Vec<Value> = store.list_docs("runtime_settings")?;
         runtimes.load_overrides(
@@ -221,11 +222,10 @@ impl Engine {
             }
         }
         if s.get_doc::<InferenceProfile>("profile", "default")?.is_none() {
-            let running_ollama =
-                self.0.runtimes.info("ollama").ok().filter(|r| r.status == "running").and_then(|r| r.loaded_models.first().cloned());
-            // Phones cannot run sidecars: the in-process engine is the default there.
-            let prefer_embedded = matches!(self.device().os.as_str(), "android" | "ios");
-            let p = defaults::default_profile(&self.0.models.read().unwrap(), running_ollama.as_deref(), prefer_embedded);
+            // Runtime and model are chosen for this device: what is installed/registered (phones
+            // have no sidecars, so the in-process engine wins there) and what fits in memory.
+            let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
+            let p = defaults::default_profile(&self.0.models.read().unwrap(), &self.device(), &avail);
             s.put_doc("profile", &p.id, &p)?;
         }
         if s.list_docs::<WorkflowDef>("workflow")?.is_empty() {
@@ -390,9 +390,14 @@ impl Engine {
     pub async fn runtime_action(&self, id: &str, action: &str, model: Option<String>) -> Result<RuntimeInfo> {
         let r = match action {
             "start" => {
-                let model = model
-                    .or_else(|| self.profiles().ok()?.into_iter().find(|p| p.runtime_id == id && !p.model.is_empty()).map(|p| p.model));
-                self.0.runtimes.start(id, model).await
+                // The profile that uses this runtime (and the requested model, if any) supplies
+                // the model and its context window, which overrides the runtime's `ctx_size`.
+                let profile = self.profiles().ok().and_then(|ps| {
+                    ps.into_iter().find(|p| p.runtime_id == id && !p.model.is_empty() && model.as_deref().is_none_or(|m| m == p.model))
+                });
+                let ctx = profile.as_ref().and_then(|p| p.params.context);
+                let model = model.or_else(|| profile.map(|p| p.model));
+                self.0.runtimes.start_with(id, model, ctx).await
             }
             "stop" => self.0.runtimes.stop(id).await,
             "refresh" => self.0.runtimes.refresh_one(id).await,
@@ -1069,10 +1074,13 @@ impl Engine {
     /// Resolves a gateway model name to a backend and the model to send to it.
     pub async fn gateway_backend(&self, model: &str) -> Result<(Arc<dyn ChatBackend>, String)> {
         if let Ok(p) = self.profile(model) {
-            return Ok((self.0.runtimes.backend(&p.runtime_id, Some(&p.model)).await?, p.model));
+            return Ok((self.0.runtimes.backend_with(&p.runtime_id, Some(&p.model), p.params.context).await?, p.model));
         }
         if self.0.models.read().unwrap().iter().any(|m| m.id == model) {
-            return Ok((self.0.runtimes.backend("llama-server", Some(model)).await?, model.to_string()));
+            // A bare local GGUF: llama-server when it is there, else the in-process engine.
+            let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
+            let runtime = avail.gguf_runtime().unwrap_or("llama-server");
+            return Ok((self.0.runtimes.backend(runtime, Some(model)).await?, model.to_string()));
         }
         if let Some((rt, m)) = model.split_once('/') {
             if self.0.runtimes.manifest(rt).is_ok() {
@@ -1080,7 +1088,7 @@ impl Engine {
             }
         }
         let p = self.profile("default")?;
-        Ok((self.0.runtimes.backend(&p.runtime_id, Some(&p.model)).await?, p.model))
+        Ok((self.0.runtimes.backend_with(&p.runtime_id, Some(&p.model), p.params.context).await?, p.model))
     }
 
     /// Runs one tool on behalf of an external caller (workflow, MCP client, API) with the
@@ -1223,3 +1231,5 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_inference;

@@ -13,9 +13,11 @@ path = "src/main.rs"
 default = []
 computer-use = ["aiw-engine/computer-use"]
 llama-embedded = ["aiw-engine/llama-embedded"]
-llama-metal = ["aiw-engine/llama-metal"]
-llama-cuda = ["aiw-engine/llama-cuda"]
-llama-vulkan = ["aiw-engine/llama-vulkan"]
+# Each GPU backend implies `aiw-engine/llama-embedded` (see aiw-engine/Cargo.toml), so the
+# in-process runtime is registered; `llama-embedded` is listed here too to make that explicit.
+llama-metal = ["llama-embedded", "aiw-engine/llama-metal"]
+llama-cuda = ["llama-embedded", "aiw-engine/llama-cuda"]
+llama-vulkan = ["llama-embedded", "aiw-engine/llama-vulkan"]
 
 [dependencies]
 aiw-core.workspace = true

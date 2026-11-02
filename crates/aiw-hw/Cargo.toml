@@ -16,3 +16,6 @@ sysinfo.workspace = true
 
 [target.'cfg(target_os = "ios")'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

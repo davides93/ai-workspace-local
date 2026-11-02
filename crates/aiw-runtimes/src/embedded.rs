@@ -55,6 +55,9 @@ impl Default for EmbeddedSettings {
 
 pub struct EmbeddedLlama {
     inner: Arc<Inner>,
+    /// Context window of the inference profile this view was made for (see
+    /// [`ChatBackend::with_context`]); it wins over `EmbeddedSettings::ctx_size`.
+    ctx_override: Option<u32>,
 }
 
 struct Inner {
@@ -65,12 +68,22 @@ struct Inner {
 
 impl EmbeddedLlama {
     pub fn new(resolver: ModelResolver, settings: EmbeddedSettings) -> Self {
-        Self { inner: Arc::new(Inner { resolver, settings: Mutex::new(settings), models: Mutex::new(HashMap::new()) }) }
+        Self { inner: Arc::new(Inner { resolver, settings: Mutex::new(settings), models: Mutex::new(HashMap::new()) }), ctx_override: None }
     }
 
     pub fn set_settings(&self, s: EmbeddedSettings) {
         *self.inner.settings.lock().unwrap() = s;
     }
+}
+
+/// Settings of one generation: the runtime settings with the profile context applied over
+/// `ctx_size` (never below the 512 tokens `generate` needs).
+fn effective_settings(base: &EmbeddedSettings, ctx_override: Option<u32>) -> EmbeddedSettings {
+    let mut s = base.clone();
+    if let Some(c) = ctx_override {
+        s.ctx_size = c.max(512);
+    }
+    s
 }
 
 impl Inner {
@@ -232,9 +245,15 @@ impl ChatBackend for EmbeddedLlama {
         Ok(vec![])
     }
 
+    /// Same engine and resident model, with the profile's context window instead of the
+    /// `ctx_size` setting.
+    fn with_context(&self, ctx: u32) -> Option<Arc<dyn ChatBackend>> {
+        Some(Arc::new(EmbeddedLlama { inner: self.inner.clone(), ctx_override: Some(ctx) }))
+    }
+
     async fn chat(&self, req: ChatRequest, cancel: CancellationToken) -> Result<DeltaStream> {
         let inner = self.inner.clone();
-        let settings = inner.settings.lock().unwrap().clone();
+        let settings = effective_settings(&inner.settings.lock().unwrap(), self.ctx_override);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let tx2 = tx.clone();
         // Model loading and generation run on a dedicated thread (blocking FFI).
@@ -256,6 +275,19 @@ impl ChatBackend for EmbeddedLlama {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_context_overrides_the_runtime_setting() {
+        let base = EmbeddedSettings { ctx_size: 8192, gpu_layers: 20, threads: Some(4) };
+        let s = effective_settings(&base, Some(16384));
+        assert_eq!((s.ctx_size, s.gpu_layers, s.threads), (16384, 20, Some(4)));
+        assert_eq!(effective_settings(&base, None).ctx_size, 8192);
+        assert_eq!(effective_settings(&base, Some(100)).ctx_size, 512);
+        // The view shares the engine (and its resident model) with the original.
+        let engine = EmbeddedLlama::new(Arc::new(|_| None), base);
+        let view = engine.with_context(4096).expect("embedded engine supports per-profile context");
+        assert!(view.availability().is_ok());
+    }
 
     #[test]
     fn utf8_pieces_are_reassembled() {

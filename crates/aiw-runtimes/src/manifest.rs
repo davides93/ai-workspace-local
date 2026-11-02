@@ -16,11 +16,17 @@ pub struct RuntimeManifest {
     #[serde(default)]
     pub description: String,
     pub platforms: Vec<String>,
+    /// Optional CPU architecture gate (`aarch64`, `x86_64`); empty = any. MLX is `macos` and
+    /// `aarch64` only: an Intel Mac must not offer it.
+    #[serde(default)]
+    pub arch: Vec<String>,
     #[serde(default)]
     pub accelerators: Vec<String>,
     #[serde(default)]
     pub formats: Vec<String>,
-    /// openai | ollama | native
+    /// openai | ollama | native | none (`none`: a helper process that is not a chat backend,
+    /// e.g. the llama.cpp RPC worker). `ollama` = OpenAI adapter plus the native bits of
+    /// [`crate::ollama`] (model listing from `/api/tags`).
     #[serde(default = "openai")]
     pub api: String,
     #[serde(default)]
@@ -82,6 +88,11 @@ pub struct Launch {
     /// Needs a model file (`{model_path}`) or a model name (`{model}`) to start.
     #[serde(default)]
     pub requires_model: bool,
+    /// Name of the setting that carries the context window (default: `ctx_size`, then
+    /// `max_model_len`, whichever is wired in `settings_args`). The context of the inference
+    /// profile overrides it when the sidecar is started for that profile.
+    #[serde(default)]
+    pub ctx_setting: Option<String>,
 }
 
 fn health() -> String {
@@ -94,9 +105,46 @@ fn ready_timeout() -> u64 {
     180
 }
 
+/// Settings that carry the context window when a launch recipe does not name one explicitly.
+const CTX_SETTING_KEYS: [&str; 2] = ["ctx_size", "max_model_len"];
+
 impl RuntimeManifest {
     pub fn supports_platform(&self, os: &str) -> bool {
         self.platforms.iter().any(|p| p == os || p == "any")
+    }
+
+    /// CPU architecture gate (`aarch64`, `x86_64`…); empty = any. Used for MLX, which needs
+    /// Apple Silicon even though the OS is `macos`.
+    pub fn supports_arch(&self, arch: &str) -> bool {
+        self.arch.is_empty() || self.arch.iter().any(|a| a == arch)
+    }
+
+    /// The setting the profile context overrides, if this runtime has one.
+    pub fn ctx_setting(&self) -> Option<String> {
+        let launch = self.launch.as_ref()?;
+        if let Some(k) = &launch.ctx_setting {
+            return Some(k.clone());
+        }
+        CTX_SETTING_KEYS.iter().find(|k| launch.settings_args.contains_key(**k)).map(|k| k.to_string())
+    }
+
+    /// Applies the context window of an inference profile over `settings` (clamped to the range
+    /// declared by the schema). Returns the value actually stored, or `None` when the runtime
+    /// has no context setting.
+    pub fn apply_ctx(&self, settings: &mut Map<String, Value>, ctx: u32) -> Option<u32> {
+        let key = self.ctx_setting()?;
+        let mut v = ctx as f64;
+        if let Some(f) = self.settings.properties.get(&key) {
+            if let Some(min) = f.minimum {
+                v = v.max(min);
+            }
+            if let Some(max) = f.maximum {
+                v = v.min(max);
+            }
+        }
+        let v = v as u32;
+        settings.insert(key, Value::from(v));
+        Some(v)
     }
     pub fn install_hint(&self, os: &str) -> Option<String> {
         self.install.get(os).or_else(|| self.install.get("any")).cloned()
@@ -126,6 +174,43 @@ pub fn expand_args(launch: &Launch, settings: &Map<String, Value>, vars: &BTreeM
                 out.extend(template.iter().map(|t| subst(&t.replace("{value}", &value))));
             }
         }
+    }
+    out
+}
+
+/// Expands the `env` templates of a launch recipe. An entry whose template references a
+/// placeholder that has no (or an empty) value is skipped instead of exporting a literal
+/// `{ctx_size}` or an empty variable: Ollama's `OLLAMA_CONTEXT_LENGTH` must stay unset when no
+/// context was requested, so the server keeps its own default.
+pub fn expand_env(launch: &Launch, vars: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (name, template) in &launch.env {
+        let mut value = template.clone();
+        let mut skip = false;
+        for key in placeholders(template) {
+            match vars.get(&key) {
+                Some(v) if !v.is_empty() => value = value.replace(&format!("{{{key}}}"), v),
+                _ => skip = true,
+            }
+        }
+        if !skip {
+            out.push((name.clone(), value));
+        }
+    }
+    out
+}
+
+/// `{identifier}` placeholders of a template, in order.
+fn placeholders(template: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let Some(len) = rest[open..].find('}') else { break };
+        let key = &rest[open + 1..open + len];
+        if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            out.push(key.to_string());
+        }
+        rest = &rest[open + len + 1..];
     }
     out
 }
