@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ApiError, HttpTransport } from "./http";
-import type { AgEvent } from "./types";
+import type { AgEvent, Transcript } from "./types";
 
 interface IpcResponse {
   status: number;
@@ -27,6 +27,18 @@ export class TauriTransport extends HttpTransport {
       throw new ApiError(res.status, msg);
     }
     return res.body as T;
+  }
+
+  /** The IPC bridge carries JSON only: the audio travels as base64. */
+  override async transcribe(wav: Blob, language?: string): Promise<Transcript> {
+    const bytes = new Uint8Array(await wav.arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return this.req<Transcript>("POST", "/voice/transcribe", {
+      audio: btoa(bin),
+      mime: wav.type || "audio/wav",
+      language: language && language !== "auto" ? language : undefined,
+    });
   }
 
   override subscribeRun(runId: string, onEvent: (e: AgEvent) => void): () => void {

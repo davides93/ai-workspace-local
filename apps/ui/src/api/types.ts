@@ -62,6 +62,30 @@ export interface MeshState {
   peers: PeerDevice[];
 }
 
+/** Voice mode: which speech-to-text backend would be used, and the voice settings. */
+export interface VoiceStatus {
+  available: boolean;
+  runtime: string | null;
+  model: string | null;
+  /** e.g. "whisper.cpp server · ggml-small-q8_0" */
+  backend: string | null;
+  /** Why voice is unavailable, or what to do to enable it. */
+  detail: string | null;
+  /** ISO 639-1 code or "auto". */
+  language: string;
+  /** Preferred local system voice for replies ("" = first one for the language). */
+  tts_voice: string;
+  models: string[];
+}
+
+export interface Transcript {
+  text: string;
+  language: string | null;
+  backend: string;
+  duration_ms: number | null;
+  elapsed_ms: number;
+}
+
 export interface PeerDevice {
   id: string;
   name: string;

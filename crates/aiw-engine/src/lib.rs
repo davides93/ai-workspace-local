@@ -4,6 +4,7 @@ pub mod defaults;
 mod host;
 pub mod peers;
 pub mod store;
+pub mod voice;
 pub mod webhook;
 pub mod worktree;
 

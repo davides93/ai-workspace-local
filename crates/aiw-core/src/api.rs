@@ -61,6 +61,36 @@ impl DeviceProfile {
     }
 }
 
+/// Voice mode: which speech-to-text backend would be used, and the voice settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct VoiceStatus {
+    pub available: bool,
+    /// Runtime that transcribes (`whisper-server`, `localai`, `aiw-peer`…).
+    pub runtime: Option<String>,
+    /// Model it uses, when the runtime needs one.
+    pub model: Option<String>,
+    /// Human description, e.g. "whisper.cpp server · ggml-small-q8_0".
+    pub backend: Option<String>,
+    /// Why voice is unavailable, or what to do to enable it.
+    pub detail: Option<String>,
+    /// ISO 639-1 code or `auto`.
+    pub language: String,
+    /// Preferred local system voice for reading replies aloud (empty = first one for the language).
+    pub tts_voice: String,
+    /// Installed speech-to-text models.
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Transcript {
+    pub text: String,
+    pub language: Option<String>,
+    pub backend: String,
+    /// Length of the audio, when known (WAV).
+    pub duration_ms: Option<u64>,
+    pub elapsed_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PeerDevice {
     pub id: String,

@@ -131,6 +131,13 @@ impl RuntimeRegistry {
         Some(v["data"].as_array().map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect()).unwrap_or_default())
     }
 
+    /// Readiness of a server that has no OpenAI `/models` (e.g. whisper-server): its health path.
+    async fn probe_health(&self, endpoint: &str, m: &RuntimeManifest) -> bool {
+        let path = m.launch.as_ref().map(|l| l.health.as_str()).filter(|h| *h != "tcp").unwrap_or("/");
+        let url = format!("{}{path}", endpoint.trim_end_matches('/'));
+        matches!(self.http.get(url).timeout(Duration::from_millis(900)).send().await, Ok(r) if r.status().is_success())
+    }
+
     async fn compute_status(&self, m: &RuntimeManifest) -> Status {
         if !m.supports_platform(&self.os) {
             return Status {
@@ -156,12 +163,21 @@ impl RuntimeRegistry {
         match m.kind.as_str() {
             "sidecar" => {
                 if let Some(ep) = self.external_endpoint(m, &settings) {
-                    if let Some(models) = self.probe_models(&ep, settings.get("api_key").and_then(|v| v.as_str())).await {
+                    if m.api == "openai" || m.api == "ollama" {
+                        if let Some(models) = self.probe_models(&ep, settings.get("api_key").and_then(|v| v.as_str())).await {
+                            return Status {
+                                status: "running".into(),
+                                detail: Some("server già attivo".into()),
+                                endpoint: Some(ep),
+                                loaded: models,
+                            };
+                        }
+                    } else if self.probe_health(&ep, m).await {
                         return Status {
                             status: "running".into(),
                             detail: Some("server già attivo".into()),
                             endpoint: Some(ep),
-                            loaded: models,
+                            loaded: vec![],
                         };
                     }
                 }
@@ -324,6 +340,50 @@ impl RuntimeRegistry {
     /// Model currently served by an AIW-started sidecar (single-model servers like llama-server).
     pub async fn served_model(&self, id: &str) -> Option<String> {
         self.supervisor.endpoint(id).await.and_then(|(_, m)| m)
+    }
+
+    /// Where to send audio for `id` (a runtime that transcribes, or a paired device), starting its
+    /// sidecar with `model` when it is not running or serves another model.
+    pub async fn stt_target(&self, id: &str, model: Option<&str>) -> Result<crate::stt::SttTarget> {
+        use crate::stt::{SttApi, SttTarget};
+        let m = self.manifest(id)?;
+        if !m.capabilities.iter().any(|c| c == "stt") {
+            return Err(Error::Unsupported(format!("{} non trascrive l'audio", m.name)));
+        }
+        let settings = self.settings(id)?;
+        let api_key = settings.get("api_key").and_then(|v| v.as_str()).filter(|k| !k.is_empty()).map(String::from);
+        let api = if m.api == "openai" { SttApi::OpenAi } else { SttApi::Whisper };
+        let target = |endpoint: String| SttTarget { api, endpoint, api_key: api_key.clone(), model: None };
+        match m.kind.as_str() {
+            "remote" => {
+                let ep =
+                    self.external_endpoint(&m, &settings).ok_or_else(|| Error::Invalid(format!("configura l'endpoint di {}", m.name)))?;
+                Ok(target(ep))
+            }
+            "sidecar" => {
+                if self.supervisor.is_running(id).await {
+                    if let Some((ep, served)) = self.supervisor.endpoint(id).await {
+                        if model.is_none() || served.as_deref() == model {
+                            return Ok(target(ep));
+                        }
+                    }
+                }
+                // A server the user already runs (settings `base_url`) is used as it is.
+                if let Some(ep) = self.external_endpoint(&m, &settings) {
+                    let up = match api {
+                        SttApi::OpenAi => self.probe_models(&ep, api_key.as_deref()).await.is_some(),
+                        SttApi::Whisper => self.probe_health(&ep, &m).await,
+                    };
+                    if up {
+                        return Ok(target(ep));
+                    }
+                }
+                self.start(id, model.map(String::from)).await?;
+                let (ep, _) = self.supervisor.endpoint(id).await.ok_or_else(|| Error::Runtime(format!("{} non è partito", m.name)))?;
+                Ok(target(ep))
+            }
+            _ => Err(Error::Unsupported(format!("{} richiede il plugin nativo dell'app", m.name))),
+        }
     }
 
     /// Returns a backend for `id`, starting the sidecar with `model` if needed (auto-start).

@@ -1,7 +1,7 @@
 import type {
   AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
-  WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
+  WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice, VoiceStatus, Transcript,
 } from "./types";
 
 /**
@@ -62,6 +62,10 @@ export interface Transport {
   removePeer(id: string): Promise<void>;
   /** Link that pairs a phone in one step (its camera opens the web UI) and its QR as SVG. */
   pairingQr(): Promise<{ url: string; svg: string }>;
+
+  voice(): Promise<VoiceStatus>;
+  /** Speech to text of a 16 kHz mono WAV recorded by the app; `language` overrides the setting. */
+  transcribe(wav: Blob, language?: string): Promise<Transcript>;
 
   config(): Promise<ConfigView>;
   setConfig(layer: "global" | "device" | "workspace", key: string, value: unknown): Promise<ConfigView>;

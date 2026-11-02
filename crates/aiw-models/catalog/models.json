@@ -490,5 +490,83 @@
   "tags": [
    "system"
   ]
+ },
+ {
+  "id": "whisper-base-q8",
+  "name": "Whisper Base",
+  "family": "Whisper",
+  "publisher": "OpenAI (ggml: ggml-org)",
+  "description": "Trascrizione multilingue veloce per la voice mode: va bene anche su CPU modeste e telefoni.",
+  "params_b": 0.074,
+  "format": "ggml",
+  "quant": "Q8_0",
+  "size_bytes": 81768585,
+  "context_length": 448,
+  "capabilities": [
+   "stt"
+  ],
+  "license": "MIT",
+  "source": {
+   "kind": "hf",
+   "repo": "ggerganov/whisper.cpp",
+   "file": "ggml-base-q8_0.bin"
+  },
+  "min_memory_mb": 400,
+  "tags": [
+   "voce",
+   "mobile",
+   "fast"
+  ]
+ },
+ {
+  "id": "whisper-small-q8",
+  "name": "Whisper Small",
+  "family": "Whisper",
+  "publisher": "OpenAI (ggml: ggml-org)",
+  "description": "Buon equilibrio tra qualità e velocità in italiano su CPU.",
+  "params_b": 0.244,
+  "format": "ggml",
+  "quant": "Q8_0",
+  "size_bytes": 264464607,
+  "context_length": 448,
+  "capabilities": [
+   "stt"
+  ],
+  "license": "MIT",
+  "source": {
+   "kind": "hf",
+   "repo": "ggerganov/whisper.cpp",
+   "file": "ggml-small-q8_0.bin"
+  },
+  "min_memory_mb": 900,
+  "tags": [
+   "voce"
+  ]
+ },
+ {
+  "id": "whisper-large-v3-turbo-q5",
+  "name": "Whisper Large v3 Turbo",
+  "family": "Whisper",
+  "publisher": "OpenAI (ggml: ggml-org)",
+  "description": "La qualità migliore: decoder ridotto, rapido con GPU o Apple Silicon.",
+  "params_b": 0.809,
+  "format": "ggml",
+  "quant": "Q5_0",
+  "size_bytes": 574041195,
+  "context_length": 448,
+  "capabilities": [
+   "stt"
+  ],
+  "license": "MIT",
+  "source": {
+   "kind": "hf",
+   "repo": "ggerganov/whisper.cpp",
+   "file": "ggml-large-v3-turbo-q5_0.bin"
+  },
+  "min_memory_mb": 1800,
+  "tags": [
+   "voce",
+   "quality"
+  ]
  }
 ]

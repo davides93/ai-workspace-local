@@ -34,6 +34,8 @@ const paths: Record<string, string> = {
   refresh: "M15 6a6 6 0 1 0 1 5M15 3v3h-3",
   bolt: "M11 2L4 11h5l-1 7 7-9h-5z",
   branch: "M6 3v14M6 13a4 4 0 0 0 4-4h1a3 3 0 0 0 3-3M14 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM6 15a2 2 0 1 1 0 4",
+  mic: "M10 3a2.5 2.5 0 0 1 2.5 2.5v4a2.5 2.5 0 0 1-5 0v-4A2.5 2.5 0 0 1 10 3zM5.5 9.5a4.5 4.5 0 0 0 9 0M10 14v3M7.5 17h5",
+  wave: "M3 9v2M6 6.5v7M9 4v12M12 7v6M15 5.5v9M17.5 9v2",
 };
 
 export function Icon({ name, size = 18, className }: { name: keyof typeof paths | string; size?: number; className?: string }) {

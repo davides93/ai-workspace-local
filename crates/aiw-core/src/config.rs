@@ -49,7 +49,11 @@ pub fn app_schema() -> SettingsSchema {
             "server.port": {"type": "integer", "title": "Porta API", "default": 7777, "minimum": 1024, "maximum": 65535},
             "models.dir": {"type": "string", "title": "Cartella modelli", "default": ""},
             "workspace.root": {"type": "string", "title": "Cartella di lavoro degli agenti", "default": ""},
-            "telemetry.otlp": {"type": "string", "title": "Endpoint OTLP (vuoto = disattivato)", "default": ""}
+            "telemetry.otlp": {"type": "string", "title": "Endpoint OTLP (vuoto = disattivato)", "default": ""},
+            "voice.language": {"type": "string", "title": "Lingua della voce", "description": "Codice ISO 639-1 (it, en…) o auto per riconoscerla", "default": "auto"},
+            "voice.stt_runtime": {"type": "string", "title": "Motore di trascrizione", "description": "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", "enum": ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], "default": "auto"},
+            "voice.stt_model": {"type": "string", "title": "Modello Whisper", "description": "Vuoto = il più grande installato che sta in memoria", "default": ""},
+            "voice.tts_voice": {"type": "string", "title": "Voce per leggere le risposte", "description": "Nome di una voce locale del sistema; vuoto = la prima per la lingua", "default": ""}
         }
     }))
     .expect("static schema")

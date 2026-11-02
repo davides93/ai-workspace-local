@@ -156,7 +156,7 @@ export function AgentsView() {
           <h2>Profili di inferenza</h2>
           <span className="muted">Runtime, modello e parametri riutilizzabili da agenti e workflow.</span>
         </div>
-        <ProfilesTable profiles={profiles.data ?? []} runtimes={(runtimes.data ?? []).map((r) => r.id)} models={(models.data ?? []).map((m) => m.id)} onSave={async (p) => { await api.saveProfile(p); profiles.reload(); toast("Profilo salvato"); }} />
+        <ProfilesTable profiles={profiles.data ?? []} runtimes={(runtimes.data ?? []).map((r) => r.id)} models={(models.data ?? []).filter((m) => m.capabilities.some((c) => c !== "stt")).map((m) => m.id)} onSave={async (p) => { await api.saveProfile(p); profiles.reload(); toast("Profilo salvato"); }} />
       </section>
     </div>
   );

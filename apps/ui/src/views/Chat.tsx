@@ -6,6 +6,15 @@ import {
   type A2uiAction, type A2uiMessage, type SurfaceState,
 } from "../components/A2ui";
 import type { AgEvent, AgentProfile, ApprovalRequest, ChatMessage, InferenceProfile, RunState, Session, WorktreeStatus } from "../api/types";
+import { localVoices, micError, pickVoice, record, speak, ttsSupported, type Recording } from "../lib/voice";
+
+type Convo = "off" | "listening" | "transcribing" | "thinking" | "speaking";
+const CONVO_LABEL: Record<Exclude<Convo, "off">, string> = {
+  listening: "Ti ascolto…",
+  transcribing: "Trascrivo…",
+  thinking: "L'agente sta lavorando…",
+  speaking: "Rispondo…",
+};
 
 type Item =
   | { kind: "user"; id: string; text: string }
@@ -165,7 +174,25 @@ export function ChatView() {
   const [newAgent, setNewAgent] = useState<string>("operator");
   const [isolated, setIsolated] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const unsub = useRef<(() => void) | null>(null);
+  // Voice: dictation into the composer, and hands-free conversation (listen → send → read aloud).
+  const voice = useAsync(() => api.voice(), [api]);
+  const [dictation, setDictation] = useState<"off" | "rec" | "busy">("off");
+  const [convo, setConvo] = useState<Convo>("off");
+  const [level, setLevel] = useState(0);
+  const recording = useRef<Recording | null>(null);
+  const speaking = useRef<AbortController | null>(null);
+  const voiceRun = useRef<string | null>(null);
+  // The ref is the source of truth for the async voice loop: it changes together with the state,
+  // not one render later.
+  const convoRef = useRef<Convo>("off");
+  const goto = useCallback((c: Convo) => {
+    convoRef.current = c;
+    setConvo(c);
+  }, []);
+  const itemsRef = useRef<Item[]>([]);
+  itemsRef.current = items;
 
   const active = sessions.data?.find((s) => s.id === activeId) ?? null;
   const agent = agents.data?.find((a) => a.id === active?.agent_id) ?? null;
@@ -221,20 +248,140 @@ export function ChatView() {
   }, []);
   onEventRef.current = onEvent;
 
+  /** Starts a run with `text`; returns its id (null if it could not start). */
+  const sendText = async (text: string, fromVoice = false): Promise<string | null> => {
+    if (!text || !activeId || runId) return null;
+    setItems((prev) => [...prev, { kind: "user", id: `u-${Date.now()}`, text }]);
+    try {
+      const { run_id } = await api.startRun(activeId, text);
+      if (fromVoice) voiceRun.current = run_id;
+      setRunId(run_id);
+      unsub.current?.();
+      unsub.current = api.subscribeRun(run_id, onEvent);
+      return run_id;
+    } catch (e) {
+      toast(`Impossibile avviare il run: ${String((e as Error).message ?? e)}`, "crit");
+      return null;
+    }
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || !activeId || runId) return;
     setInput("");
-    setItems((prev) => [...prev, { kind: "user", id: `u-${Date.now()}`, text }]);
+    await sendText(text);
+  };
+
+  const language = voice.data?.language && voice.data.language !== "auto" ? voice.data.language : undefined;
+  const voiceUnavailable = () => {
+    if (voice.data && !voice.data.available) {
+      toast(`Voce non disponibile: ${voice.data.detail ?? "nessun motore di trascrizione"}`, "crit");
+      return true;
+    }
+    return false;
+  };
+
+  const dictate = async () => {
+    if (dictation === "rec") return recording.current?.stop();
+    if (dictation === "busy" || voiceUnavailable()) return;
     try {
-      const { run_id } = await api.startRun(activeId, text);
-      setRunId(run_id);
-      unsub.current?.();
-      unsub.current = api.subscribeRun(run_id, onEvent);
+      const rec = await record({ silenceMs: 2500, onLevel: setLevel });
+      recording.current = rec;
+      setDictation("rec");
+      const wav = await rec.result;
+      recording.current = null;
+      if (!wav) return toast("Non ho sentito nulla: riprova più vicino al microfono");
+      setDictation("busy");
+      const t = await api.transcribe(wav, language);
+      if (!t.text) return toast("Nessuna parola riconosciuta");
+      setInput((prev) => (prev.trim() ? `${prev.trimEnd()} ${t.text}` : t.text));
+      composerRef.current?.focus();
     } catch (e) {
-      toast(`Impossibile avviare il run: ${String((e as Error).message ?? e)}`, "crit");
+      toast(micError(e), "crit");
+    } finally {
+      recording.current = null;
+      setDictation("off");
+      setLevel(0);
     }
   };
+
+  const stopConvo = useCallback(() => {
+    goto("off");
+    recording.current?.cancel();
+    recording.current = null;
+    speaking.current?.abort();
+    speaking.current = null;
+    voiceRun.current = null;
+    setLevel(0);
+  }, [goto]);
+
+  /** One conversation turn: listen until a pause, transcribe, send. The reply is read in an effect. */
+  const listen = async () => {
+    // A function, so TypeScript does not narrow the ref across the awaits below.
+    const stopped = () => convoRef.current === "off";
+    try {
+      goto("listening");
+      const rec = await record({ silenceMs: 1100, noSpeechMs: 9000, maxMs: 60_000, onLevel: setLevel });
+      if (stopped()) return rec.cancel();
+      recording.current = rec;
+      const wav = await rec.result;
+      recording.current = null;
+      if (stopped()) return;
+      if (!wav) {
+        stopConvo();
+        return toast("Conversazione a voce in pausa: non ho sentito nulla");
+      }
+      goto("transcribing");
+      const t = await api.transcribe(wav, language);
+      if (stopped()) return;
+      if (!t.text) return void listen();
+      goto("thinking");
+      if (!(await sendText(t.text, true))) stopConvo();
+    } catch (e) {
+      stopConvo();
+      toast(micError(e), "crit");
+    }
+  };
+
+  const startConvo = () => {
+    if (convo !== "off") return stopConvo();
+    if (!active) return toast("Apri o crea una sessione per parlare con l'agente");
+    if (voiceUnavailable() || runId) return;
+    void listen();
+  };
+
+  // The voice turn's run ended: read the reply aloud, then listen again.
+  useEffect(() => {
+    if (runId || convo !== "thinking" || !voiceRun.current) return;
+    voiceRun.current = null;
+    const its = itemsRef.current;
+    const lastUser = its.map((i) => i.kind).lastIndexOf("user");
+    const after = its.slice(lastUser + 1);
+    const reply = after.filter((i): i is Extract<Item, { kind: "text" }> => i.kind === "text").map((i) => i.text).join("\n\n");
+    const failed = after.find((i): i is Extract<Item, { kind: "error" }> => i.kind === "error");
+    const text = reply || (failed ? `Non sono riuscito a completare: ${failed.message}` : "");
+    goto("speaking");
+    void (async () => {
+      const v = ttsSupported() ? pickVoice(await localVoices(), language ?? navigator.language ?? "it", voice.data?.tts_voice ?? "") : null;
+      if (text && v && convoRef.current === "speaking") {
+        const ac = new AbortController();
+        speaking.current = ac;
+        await speak(text, v, ac.signal);
+        speaking.current = null;
+      }
+      if (convoRef.current === "speaking") void listen();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, convo]);
+
+  // Leaving the session (or the page) ends the conversation.
+  useEffect(() => stopConvo, [activeId, stopConvo]);
+  useEffect(() => {
+    if (convo === "off") return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") stopConvo(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [convo, stopConvo]);
 
   const sendAction = async (a: A2uiAction) => {
     if (!activeId || runId) return;
@@ -266,6 +413,20 @@ export function ChatView() {
   };
 
   const pendingApprovals = items.filter((i) => i.kind === "approval" && i.resolved === undefined) as Extract<Item, { kind: "approval" }>[];
+  const waitingApproval = convo === "thinking" && pendingApprovals.length > 0;
+
+  // Hands-free: say that the agent is waiting for a confirmation (tapping it stays a deliberate act).
+  const announced = useRef<string | null>(null);
+  const firstPending = pendingApprovals[0]?.req;
+  useEffect(() => {
+    if (convo !== "thinking" || !firstPending || announced.current === firstPending.id) return;
+    announced.current = firstPending.id;
+    void (async () => {
+      const v = ttsSupported() ? pickVoice(await localVoices(), language ?? navigator.language ?? "it", voice.data?.tts_voice ?? "") : null;
+      if (v && convoRef.current === "thinking") await speak(`Serve la tua conferma: ${firstPending.reason}`, v);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convo, firstPending?.id]);
 
   return (
     <div className={`chat ${showInspector ? "show-inspector" : ""} ${showSessions ? "show-sessions" : ""}`}>
@@ -323,8 +484,23 @@ export function ChatView() {
           ))}
         </div>
         <div className="composer">
+          {convo !== "off" && (
+            <div className={`voice-bar ${convo} ${waitingApproval ? "waiting" : ""}`} role="status" aria-live="polite">
+              <span className="voice-orb" aria-hidden="true" style={{ transform: `scale(${1 + level * 0.9})` }} />
+              <div className="grow" style={{ minWidth: 0 }}>
+                <b>{waitingApproval ? "Serve la tua conferma" : CONVO_LABEL[convo]}</b>
+                <div className="faint ellipsis" style={{ fontSize: "var(--fs-xs)" }}>
+                  {waitingApproval
+                    ? "Tocca Consenti o Nega per continuare"
+                    : convo === "listening" ? "Parla pure: invio quando fai una pausa · Esc per terminare" : voice.data?.backend ?? ""}
+                </div>
+              </div>
+              <button className="btn sm" onClick={stopConvo}>Termina</button>
+            </div>
+          )}
           <div className="composer-box">
             <textarea
+              ref={composerRef}
               id="composer"
               aria-label="Messaggio"
               rows={1}
@@ -333,6 +509,27 @@ export function ChatView() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
             />
+            <button
+              className={`icon-btn mic ${dictation}`}
+              aria-label={dictation === "rec" ? "Ferma la dettatura" : "Detta il messaggio"}
+              title={voice.data && !voice.data.available ? `Voce non disponibile: ${voice.data.detail ?? ""}` : dictation === "rec" ? "Ferma la dettatura" : `Detta (${voice.data?.backend ?? "trascrizione locale"})`}
+              aria-pressed={dictation === "rec"}
+              disabled={!active || dictation === "busy" || convo !== "off"}
+              onClick={() => void dictate()}
+            >
+              {dictation === "rec" && <span className="mic-level" aria-hidden="true" style={{ transform: `scale(${1 + level})` }} />}
+              <Icon name={dictation === "busy" ? "more" : "mic"} size={18} />
+            </button>
+            <button
+              className={`icon-btn talk ${convo !== "off" ? "on" : ""}`}
+              aria-label={convo !== "off" ? "Termina la conversazione a voce" : "Conversazione a voce"}
+              title={convo !== "off" ? "Termina la conversazione a voce (Esc)" : "Conversazione a voce: parli, l'agente risponde ad alta voce"}
+              aria-pressed={convo !== "off"}
+              disabled={!active || dictation !== "off"}
+              onClick={startConvo}
+            >
+              <Icon name="wave" size={18} />
+            </button>
             {runId ? (
               <button className="btn danger" onClick={() => api.cancelRun(runId)}><Icon name="stop" size={15} /> Ferma</button>
             ) : (

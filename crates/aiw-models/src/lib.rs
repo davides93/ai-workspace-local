@@ -23,6 +23,7 @@ pub fn runtimes_for_format(format: &str) -> Vec<&'static str> {
         "litertlm" => vec!["litert-lm"],
         "pte" => vec!["executorch"],
         "safetensors" => vec!["vllm", "sglang", "trtllm", "mistralrs"],
+        "ggml" => vec!["whisper-server"],
         _ => vec![],
     }
 }
@@ -135,6 +136,8 @@ fn scan_dir(dir: &Path, depth: usize, out: &mut Vec<LocalModel>) {
                 continue; // multimodal projector, attached to its model by llama-server settings
             }
             out.push(local_gguf(&p, meta.len()));
+        } else if lower.ends_with(".bin") && is_whisper_ggml(&p) {
+            out.push(local_whisper(&p, meta.len()));
         } else if let Some(fmt) = [(".litertlm", "litertlm"), (".task", "litertlm"), (".pte", "pte"), (".llamafile", "llamafile")]
             .iter()
             .find(|(ext, _)| lower.ends_with(ext))
@@ -155,6 +158,36 @@ fn scan_dir(dir: &Path, depth: usize, out: &mut Vec<LocalModel>) {
                 source: None,
             });
         }
+    }
+}
+
+/// whisper.cpp models (`ggml-*.bin`) start with the ggml magic 0x67676d6c, little endian.
+fn is_whisper_ggml(p: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(p).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && u32::from_le_bytes(magic) == 0x6767_6d6c
+}
+
+fn local_whisper(p: &Path, size: u64) -> LocalModel {
+    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let short = stem.trim_start_matches("ggml-");
+    let (variant, quant) = match short.rsplit_once('-') {
+        Some((v, q)) if q.starts_with('q') || q == "f16" => (v, Some(q.to_uppercase())),
+        _ => (short, None),
+    };
+    LocalModel {
+        id: stem.to_lowercase(),
+        name: format!("Whisper {variant}"),
+        path: Some(p.display().to_string()),
+        format: "ggml".into(),
+        size_bytes: size,
+        quant,
+        params_b: None,
+        context_length: None,
+        arch: Some("whisper".into()),
+        capabilities: vec!["stt".into()],
+        runtimes: runtimes_for_format("ggml").into_iter().map(String::from).collect(),
+        source: None,
     }
 }
 
@@ -425,6 +458,28 @@ mod tests {
         assert_eq!(m.context_length, Some(40960));
         assert!(m.capabilities.contains(&"tools".to_string()));
         assert_eq!(m.id, "qwen3-test-q4_k_m");
+    }
+
+    #[test]
+    fn scans_whisper_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut model = 0x6767_6d6cu32.to_le_bytes().to_vec();
+        model.extend_from_slice(&[0; 64]);
+        std::fs::write(dir.path().join("ggml-small-q8_0.bin"), &model).unwrap();
+        std::fs::write(dir.path().join("ggml-base.bin"), &model).unwrap();
+        std::fs::write(dir.path().join("weights.bin"), b"not a whisper model").unwrap();
+        let found = scan_models(dir.path());
+        assert_eq!(found.len(), 2, "{found:?}");
+        let small = found.iter().find(|m| m.id == "ggml-small-q8_0").unwrap();
+        assert_eq!((small.name.as_str(), small.quant.as_deref(), small.format.as_str()), ("Whisper small", Some("Q8_0"), "ggml"));
+        assert_eq!(small.capabilities, vec!["stt".to_string()]);
+        assert_eq!(small.runtimes, vec!["whisper-server".to_string()]);
+        assert_eq!(found.iter().find(|m| m.id == "ggml-base").unwrap().quant, None);
+        // Catalog entries download to the file names the scan recognises.
+        assert!(builtin_catalog()
+            .iter()
+            .filter(|c| c.format == "ggml")
+            .all(|c| matches!(&c.source, ModelSource::Hf { file, .. } if file.starts_with("ggml-") && file.ends_with(".bin"))));
     }
 
     #[test]

@@ -319,3 +319,131 @@ async fn pairs_with_another_device_over_http() {
     assert!(a.peers().is_empty());
     assert!(a.mcp_servers().iter().all(|m| m.config.id != format!("peer-{}", peer.id)));
 }
+
+/// 16 kHz mono 16-bit PCM WAV of `ms` milliseconds of silence.
+fn wav(ms: u32) -> Vec<u8> {
+    let data_len = 32 * ms;
+    let mut b = Vec::new();
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + data_len).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&16_000u32.to_le_bytes());
+    b.extend_from_slice(&32_000u32.to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&data_len.to_le_bytes());
+    b.resize(b.len() + data_len as usize, 0);
+    b
+}
+
+/// Sends a non-JSON body through the router; returns the status and the body (JSON or text).
+async fn send_bytes(app: Router, path: &str, content_type: &str, body: Vec<u8>) -> (u16, Value) {
+    use tower::ServiceExt;
+    let req = axum::http::Request::builder().method("POST").uri(path).header("content-type", content_type).body(Body::from(body)).unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    let status = res.status().as_u16();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned())))
+}
+
+/// OpenAI-style multipart upload to `/v1/audio/transcriptions`.
+async fn upload(app: Router, audio: Vec<u8>, response_format: &str) -> (u16, Value) {
+    let b = "aiwBoundary7MA4YWxk";
+    let mut body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&audio);
+    body.extend_from_slice(
+        format!("\r\n--{b}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--{b}\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\n{response_format}\r\n--{b}--\r\n").as_bytes(),
+    );
+    send_bytes(app, "/v1/audio/transcriptions", &format!("multipart/form-data; boundary={b}"), body).await
+}
+
+/// Stand-in for whisper.cpp's server: `GET /` and multipart `POST /inference`. Records the fields.
+async fn fake_whisper() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let log = seen.clone();
+    let app = Router::new().route("/", get(|| async { "whisper.cpp server" })).route(
+        "/inference",
+        post(move |mut form: axum::extract::Multipart| {
+            let log = log.clone();
+            async move {
+                let mut fields = Vec::new();
+                while let Some(f) = form.next_field().await.unwrap() {
+                    let name = f.name().unwrap_or_default().to_string();
+                    let ct = f.content_type().unwrap_or_default().to_string();
+                    let data = f.bytes().await.unwrap();
+                    fields.push(match name.as_str() {
+                        "file" => format!("file:{ct}:{}", aiw_runtimes::stt::wav_info(&data).map(|w| w.duration_ms).unwrap_or(0)),
+                        _ => format!("{name}={}", String::from_utf8_lossy(&data)),
+                    });
+                }
+                log.lock().unwrap().push(fields.join(" "));
+                Json(json!({"text": " Ciao dal microfono.\n [BLANK_AUDIO]"}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), seen)
+}
+
+#[tokio::test]
+async fn voice_transcribes_with_whisper_and_never_bounces_between_devices() {
+    use base64::Engine as _;
+    let (app, e, _d, _w) = app().await;
+    let set = |e: &Engine, id: &str, key: &str, v: &str| {
+        let mut m = Map::new();
+        m.insert(key.into(), json!(v));
+        e.update_runtime_settings(id, m).unwrap();
+    };
+    let (_, st) = dispatch(app.clone(), "GET", "/api/voice", None).await;
+    assert_eq!(st["available"], false, "{st}");
+    assert!(st["detail"].as_str().unwrap().contains("whisper.cpp"), "{st}");
+
+    // whisper-server already running (started by the user): used as it is.
+    let (base, seen) = fake_whisper().await;
+    set(&e, "whisper-server", "base_url", &base);
+    e.refresh_runtimes().await;
+    let (_, st) = dispatch(app.clone(), "GET", "/api/voice", None).await;
+    assert_eq!((st["available"].as_bool(), st["runtime"].as_str()), (Some(true), Some("whisper-server")), "{st}");
+
+    // Raw WAV from the web UI.
+    let (code, t) = send_bytes(app.clone(), "/api/voice/transcribe?language=it", "audio/wav", wav(1200)).await;
+    assert_eq!(code, 200, "{t}");
+    assert_eq!(
+        (t["text"].as_str(), t["duration_ms"].as_u64(), t["language"].as_str()),
+        (Some("Ciao dal microfono."), Some(1200), Some("it"))
+    );
+    // JSON + base64 from the app's IPC bridge.
+    let audio = base64::engine::general_purpose::STANDARD.encode(wav(500));
+    let (code, t) = dispatch(app.clone(), "POST", "/api/voice/transcribe", Some(json!({"audio": audio, "mime": "audio/wav"}))).await;
+    assert_eq!((code, t["duration_ms"].as_u64()), (200, Some(500)), "{t}");
+    // OpenAI-compatible multipart (other apps, paired devices).
+    let (code, t) = upload(app.clone(), wav(300), "text").await;
+    assert_eq!((code, t.as_str()), (200, Some("Ciao dal microfono.")));
+    let (code, t) = upload(app.clone(), wav(300), "verbose_json").await;
+    assert_eq!((code, t["duration"].as_f64()), (200, Some(0.3)), "{t}");
+    // Not audio.
+    let (code, _) = send_bytes(app.clone(), "/api/voice/transcribe", "audio/wav", b"not audio".to_vec()).await;
+    assert_eq!(code, 400);
+    let log = seen.lock().unwrap().clone();
+    assert!(log[0].contains("file:audio/wav:1200") && log[0].contains("language=it") && log[0].contains("response_format=json"), "{log:?}");
+    assert!(!log[1].contains("language="), "with language auto nothing is forced: {log:?}");
+
+    // Only a paired device left: the app may use it, but a request that came from another device
+    // is not forwarded (two devices without whisper would bounce the audio forever).
+    set(&e, "whisper-server", "base_url", "");
+    set(&e, "aiw-peer", "base_url", "http://127.0.0.1:9/v1");
+    e.refresh_runtimes().await;
+    let (_, st) = dispatch(app.clone(), "GET", "/api/voice", None).await;
+    assert_eq!(st["runtime"], "aiw-peer", "{st}");
+    let (code, err) = upload(app.clone(), wav(300), "json").await;
+    assert_eq!(code, 422, "{err}");
+}

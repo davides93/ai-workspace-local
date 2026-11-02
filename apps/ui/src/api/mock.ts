@@ -1,7 +1,7 @@
 import type { Transport } from "./transport";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
-  DownloadProgress, InferenceProfile, LocalModel, McpServer, RunState, RuntimeInfo, Session, SettingsSchema, WorktreeStatus, MeshState,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, RunState, RuntimeInfo, Session, SettingsSchema, WorktreeStatus, MeshState, VoiceStatus, Transcript,
   SystemInfo, ToolInfo, WorkflowDef, WorkflowRun,
 } from "./types";
 
@@ -138,6 +138,7 @@ const models: LocalModel[] = [
   { id: "holo2-8b-q5_k_m", name: "Holo2 8B (computer-use)", format: "gguf", quant: "Q5_K_M", size_bytes: 5.8 * GB, params_b: 8, context_length: 65536, arch: "qwen3vl", capabilities: ["chat", "vision", "gui-grounding"], runtimes: ["llama-server", "lmstudio"], source: "hf:Hcompany/Holo2-8B-GGUF" },
   { id: "gemma-4-e4b-q4_k_m", name: "Gemma 4 E4B", format: "gguf", quant: "Q4_K_M", size_bytes: 3.1 * GB, params_b: 8, context_length: 131072, arch: "gemma4", capabilities: ["chat", "tools", "vision", "audio"], runtimes: ["llama-server", "llama-embedded", "ollama"], source: "hf:google/gemma-4-E4B-it-GGUF" },
   { id: "qwen3-embedding-0.6b-q8_0", name: "Qwen3 Embedding 0.6B", format: "gguf", quant: "Q8_0", size_bytes: 0.64 * GB, params_b: 0.6, context_length: 32768, arch: "qwen3", capabilities: ["embeddings"], runtimes: ["llama-server", "llama-embedded"] },
+  { id: "ggml-large-v3-turbo-q5_0", name: "Whisper large-v3-turbo", format: "ggml", quant: "Q5_0", size_bytes: 0.53 * GB, arch: "whisper", capabilities: ["stt"], runtimes: ["whisper-server"], path: "models\\ggml-large-v3-turbo-q5_0.bin" },
   { id: "phi-4-mini-onnx-dml", name: "Phi-4 mini (ONNX DirectML)", format: "onnx", quant: "int4", size_bytes: 2.4 * GB, params_b: 3.8, context_length: 131072, capabilities: ["chat", "tools"], runtimes: ["foundry-local", "windows-ml"] },
 ];
 
@@ -303,6 +304,8 @@ const audit: AuditEntry[] = [
   { id: "a5", ts: now(), actor: "system", action: "kill", detail: "Kill switch: 1 run e 1 sidecar fermati" },
 ];
 
+let voiceTurn = 0;
+
 const configSchema: SettingsSchema = {
   type: "object",
   properties: {
@@ -316,6 +319,10 @@ const configSchema: SettingsSchema = {
     "server.port": { type: "integer", title: "Porta API", default: 7777, minimum: 1024, maximum: 65535 },
     "models.dir": { type: "string", title: "Cartella modelli", default: "~/.aiw/models" },
     "telemetry.otlp": { type: "string", title: "Endpoint OTLP (vuoto = disattivato)", default: "" },
+    "voice.language": { type: "string", title: "Lingua della voce", description: "Codice ISO 639-1 (it, en…) o auto per riconoscerla", default: "auto" },
+    "voice.stt_runtime": { type: "string", title: "Motore di trascrizione", description: "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", enum: ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], default: "auto" },
+    "voice.stt_model": { type: "string", title: "Modello Whisper", description: "Vuoto = il più grande installato che sta in memoria", default: "" },
+    "voice.tts_voice": { type: "string", title: "Voce per leggere le risposte", description: "Nome di una voce locale del sistema; vuoto = la prima per la lingua", default: "" },
   },
 };
 const configLayers: ConfigView["layers"] = [
@@ -684,6 +691,22 @@ export class MockTransport implements Transport {
   }
   async pairingQr(): Promise<{ url: string; svg: string }> {
     throw new Error("Il QR richiede il backend: avvia aiw serve --lan");
+  }
+
+  async voice(): Promise<VoiceStatus> {
+    const lang = String(effective()["voice.language"] ?? "auto");
+    return {
+      available: true, runtime: "whisper-server", model: "ggml-large-v3-turbo-q5_0", backend: "whisper.cpp server · ggml-large-v3-turbo-q5_0",
+      detail: null, language: lang === "auto" ? "it" : lang, tts_voice: String(effective()["voice.tts_voice"] ?? ""), models: ["ggml-large-v3-turbo-q5_0"],
+    };
+  }
+  /** Demo: a plausible sentence per request (the audio itself stays in the browser). */
+  async transcribe(wav: Blob): Promise<Transcript> {
+    await sleep(650);
+    const said = ["Quali file ho modificato oggi nel workspace?", "Riassumi in due righe il preventivo più recente", "Grazie, per ora è tutto"];
+    const text = said[voiceTurn++ % said.length];
+    // 16 kHz mono 16-bit: 32 bytes per millisecond after the 44-byte header.
+    return { text, language: "it", backend: "whisper.cpp server · ggml-large-v3-turbo-q5_0", duration_ms: Math.round(Math.max(0, wav.size - 44) / 32), elapsed_ms: 640 };
   }
 
   async config() { return { layers: structuredClone(configLayers), effective: effective(), schema: configSchema }; }
