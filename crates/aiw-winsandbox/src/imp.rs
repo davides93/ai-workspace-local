@@ -103,7 +103,7 @@ fn sid(s: &str) -> io::Result<LocalSid> {
     Ok(LocalSid(p))
 }
 
-/// Privilege-less copy of this process token at Low integrity, with Administrators deny-only.
+/// Privilege-less copy of this process token at Low integrity (optionally Administrators deny-only).
 fn low_token(h: Hardening) -> io::Result<Owned> {
     unsafe {
         let mut process_token: HANDLE = null_mut();
@@ -436,7 +436,10 @@ pub struct Hardening {
 
 impl Default for Hardening {
     fn default() -> Self {
-        Self { low_integrity: true, deny_admins: true, own_desktop: true }
+        // deny_admins stays off: on an elevated token (e.g. a CI runner or a service) it stops
+        // processes from initialising (0xC0000142), and UAC-filtered tokens already carry
+        // Administrators as deny-only. Low integrity blocks writes before the DACL is checked.
+        Self { low_integrity: true, deny_admins: false, own_desktop: true }
     }
 }
 
