@@ -39,7 +39,7 @@ jobs:
       - run: cargo test --no-fail-fast
 
   ui:
-    name: UI (typecheck, build, mockup)
+    name: UI (typecheck, test, build, mockup)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -53,6 +53,7 @@ jobs:
           cache-dependency-path: apps/ui/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npm test
       - run: npm run build
       - run: npm run build:mockup
 
