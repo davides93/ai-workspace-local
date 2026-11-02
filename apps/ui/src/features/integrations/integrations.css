@@ -1,0 +1,10 @@
+/* Integrations: access notes and endpoint cards. Tokens only. */
+.int-notes { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.int-note { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.int-note h3 { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; font-size: var(--fs-md); }
+.int-note h3 svg { color: var(--accent-ink); flex: none; }
+.int-note code, .int-warn code { overflow-wrap: anywhere; }
+.int-urls { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+.int-warn { display: flex; gap: var(--space-2); align-items: flex-start; margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--r-sm); background: var(--warn-soft); color: var(--fg); }
+.int-warn > svg { flex: none; margin-top: 2px; color: var(--warn); }
+.int-warn > span { flex: 1; min-width: 0; }

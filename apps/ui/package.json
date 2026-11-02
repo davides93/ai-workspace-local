@@ -10,7 +10,8 @@
     "build:mockup": "tsc -b && vite build --mode mockup",
     "typecheck": "tsc -b --noEmit",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "5.104.2",
@@ -22,6 +23,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^4.7.0",
+    "playwright": "1.63.0",
     "typescript": "^5.9.3",
     "vite": "^6.4.5",
     "vite-plugin-singlefile": "^2.3.4",

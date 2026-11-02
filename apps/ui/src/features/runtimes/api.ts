@@ -6,7 +6,8 @@ import type { RuntimeInfo } from "../../shared/api/types";
 
 /** Polling of the runtime list while the runtimes view is open. */
 export const RUNTIMES_POLL_MS = 5_000;
-const LOGS_POLL_MS = 2_000;
+/** Polling of the process log while a runtime drawer is open. */
+export const LOGS_POLL_MS = 2_000;
 
 export function useRuntimes(opts: { poll?: boolean } = {}) {
   const api = useApi();
@@ -49,16 +50,19 @@ export function useUpdateRuntimeSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; settings: Record<string, unknown> }) => api.updateRuntimeSettings(v.id, v.settings),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.runtimes.all() }),
+    onSuccess: (r) => {
+      toast(`Impostazioni di ${r.name} salvate`);
+      void qc.invalidateQueries({ queryKey: qk.runtimes.all() });
+    },
   });
 }
 
-/** Process log of a runtime; polled only while the runtime is running. */
-export function useRuntimeLogs(id: string, running: boolean) {
+/** Process log of a runtime; `poll` refreshes it every couple of seconds (the drawer is open and live). */
+export function useRuntimeLogs(id: string, opts: { poll: boolean }) {
   const api = useApi();
   return useQuery({
     queryKey: qk.runtimes.logs(id),
     queryFn: () => api.runtimeLogs(id),
-    refetchInterval: running ? LOGS_POLL_MS : false,
+    refetchInterval: opts.poll ? LOGS_POLL_MS : false,
   });
 }

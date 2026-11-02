@@ -585,9 +585,13 @@ export class MockTransport implements Transport {
   }
   async mcpServers() { return structuredClone(mcp); }
   async saveMcpServer(s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }) {
-    const srv: McpServer = { id: nid("mcp"), enabled: true, status: "disconnected", tools: [], ...s } as McpServer;
-    mcp.push(srv);
-    return srv;
+    // Like the engine: the id decides between create and replace, and the name has no spaces.
+    const i = s.id ? mcp.findIndex((m) => m.id === s.id) : -1;
+    const prev = i >= 0 ? mcp[i] : undefined;
+    const srv = { id: prev?.id ?? nid("mcp"), status: prev?.status ?? "disconnected", tools: prev?.tools ?? [], error: prev?.error, enabled: true, ...s, name: s.name.trim().replace(/ /g, "_") } as McpServer;
+    if (i >= 0) mcp[i] = srv;
+    else mcp.push(srv);
+    return structuredClone(srv);
   }
   async removeMcpServer(id: string) {
     const i = mcp.findIndex((m) => m.id === id);
@@ -636,7 +640,9 @@ export class MockTransport implements Transport {
   async config() { return { layers: structuredClone(configLayers), effective: effective(), schema: configSchema }; }
   async setConfig(layer: "global" | "device" | "workspace", key: string, value: unknown) {
     const l = configLayers.find((x) => x.name === layer)!;
-    l.values[key] = value;
+    // `null` removes the key from the layer, as the real config does.
+    if (value === null) delete l.values[key];
+    else l.values[key] = value;
     return this.config();
   }
   async audit() { return structuredClone(audit); }

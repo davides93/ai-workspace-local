@@ -1,4 +1,6 @@
 import type { FieldSchema, SettingsSchema } from "../api/types";
+import { splitShellWords } from "../lib/tokens";
+import { TagInput } from "./TagInput";
 import { Toggle } from "./Toggle";
 
 // Generated settings form (JSON Schema subset).
@@ -69,8 +71,8 @@ function SchemaField({ id, name, field, value, onChange }: { id: string; name: s
     return (
       <div className="field">
         <label htmlFor={id}>{label}</label>
-        <input id={id} className="input mono" placeholder={field.placeholder ?? "valori separati da spazio"} value={arr.join(" ")}
-          onChange={(e) => onChange(e.target.value.split(/\s+/).filter(Boolean))} />
+        <TagInput id={id} label={label} value={arr} onChange={onChange} parse={splitShellWords}
+          placeholder={field.placeholder ?? "un argomento, poi Invio"} />
         {hint && <span className="hint">{hint}</span>}
       </div>
     );
