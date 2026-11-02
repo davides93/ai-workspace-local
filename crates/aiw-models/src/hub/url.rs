@@ -3,6 +3,7 @@
 
 use super::http::{net_error, status_error, USER_AGENT};
 use super::{FileJob, ModelProvider, SearchQuery};
+use crate::relpath::native_rel;
 use aiw_core::api::{ModelProviderInfo, ModelVariant, RemoteFile, RemoteModel, RemoteModelDetail, SearchPage};
 use aiw_core::{Error, Result};
 use async_trait::async_trait;
@@ -181,16 +182,19 @@ impl ModelProvider for UrlProvider {
 
     fn plan(&self, detail: &RemoteModelDetail, variant: &str) -> Result<Vec<FileJob>> {
         let v = detail.variants.iter().find(|v| v.id == variant).ok_or_else(|| Error::NotFound(format!("variante `{variant}`")))?;
-        Ok(v.files
+        let folder = self.folder(detail, variant);
+        v.files
             .iter()
-            .map(|f| FileJob {
-                url: detail.model.id.clone(),
-                dest: PathBuf::from("url").join(host_dir(&detail.model.id)).join(&f.path),
-                size: f.size_bytes,
-                sha256: f.sha256.clone(),
-                headers: vec![],
+            .map(|f| {
+                Ok(FileJob {
+                    url: detail.model.id.clone(),
+                    dest: folder.join(native_rel(&f.path)?),
+                    size: f.size_bytes,
+                    sha256: f.sha256.clone(),
+                    headers: vec![],
+                })
             })
-            .collect())
+            .collect()
     }
 
     fn folder(&self, detail: &RemoteModelDetail, _variant: &str) -> PathBuf {

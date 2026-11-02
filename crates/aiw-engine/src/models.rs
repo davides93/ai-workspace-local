@@ -4,6 +4,7 @@
 
 use super::*;
 use aiw_models::hub::{AuthCheck, SearchQuery};
+use aiw_models::relpath::{native_rel, to_logical};
 use aiw_models::sidecar;
 use std::sync::atomic::Ordering;
 
@@ -290,7 +291,8 @@ impl Engine {
     /// Variants of `repo` for a v0.3 `{repo, file}` request; when the Hub cannot be reached the
     /// file alone is pulled straight from `resolve/main`.
     async fn hf_file_detail(&self, repo: &str, file: &str) -> Result<RemoteModelDetail> {
-        if !aiw_models::hub::hf::valid_repo(repo) || file.is_empty() || file.contains("..") || file.starts_with('/') {
+        // The file is a repository path: `/`-separated, relative, without `..` (a `\` is not one).
+        if !aiw_models::hub::hf::valid_repo(repo) || file.contains("..") || native_rel(file).is_err() {
             return Err(Error::Invalid("serve un repository e un file Hugging Face validi".into()));
         }
         match self.0.hub.detail("hf", repo, None).await {
@@ -444,8 +446,8 @@ fn remove_model(root: &Path, path: &Path) -> Result<()> {
     }
     match record {
         Some(dir) => {
-            let rel = |p: &Path| p.strip_prefix(&dir).unwrap_or(p).to_string_lossy().replace('\\', "/");
-            let target = rel(path);
+            // The install record speaks in logical paths (`/` on every OS): compare in that spelling.
+            let target = to_logical(path.strip_prefix(&dir).unwrap_or(path));
             let installs = sidecar::read(&dir);
             let inst = installs.iter().find(|i| {
                 i.files.iter().any(|f| f.path == target || (is_dir && (target.is_empty() || f.path.starts_with(&format!("{target}/")))))
@@ -459,7 +461,8 @@ fn remove_model(root: &Path, path: &Path) -> Result<()> {
                         .flat_map(|i| i.files.iter().map(|f| f.path.as_str()))
                         .collect();
                     for f in inst.files.iter().filter(|f| !shared.contains(f.path.as_str())) {
-                        let p = dir.join(&f.path);
+                        // A record entry that is not a plain relative path never reaches outside `dir`.
+                        let Some(p) = f.native(&dir) else { continue };
                         let _ = std::fs::remove_file(&p);
                         let _ = std::fs::remove_file(format!("{}.part", p.display()));
                         prune_empty(&dir, p.parent());
@@ -494,10 +497,18 @@ fn remove_path(path: &Path, is_link: bool, is_dir: bool) -> Result<()> {
 }
 
 /// Removes empty folders from `from` upwards, stopping at `stop` (never removed).
+///
+/// Both ends are compared in canonical form: callers hand over a canonical `stop` (the models
+/// directory) next to non-canonical folders, and on Windows the two spell the same place
+/// differently (`\\?\C:\Users\runneradmin\…` against `C:\Users\RUNNER~1\…`), which would
+/// stop the walk before it removed anything.
 fn prune_empty(stop: &Path, from: Option<&Path>) {
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let stop = canon(stop);
     let mut cur = from.map(Path::to_path_buf);
     while let Some(dir) = cur {
-        if dir == stop || !dir.starts_with(stop) || std::fs::remove_dir(&dir).is_err() {
+        let here = canon(&dir);
+        if here == stop || !here.starts_with(&stop) || std::fs::remove_dir(&dir).is_err() {
             break;
         }
         cur = dir.parent().map(Path::to_path_buf);
@@ -833,6 +844,40 @@ mod tests {
         assert!(models.exists(), "the models directory itself stays");
         assert!(e.models().is_empty());
         assert_eq!(e.audit().iter().filter(|a| a.action == "model.delete").count(), 4);
+    }
+
+    /// The Windows failure in miniature: the models directory is spelled one way (a link, or an 8.3
+    /// short name) and its canonical form another. The walk up must still reach and prune the
+    /// empty parents.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn deleting_prunes_empty_parents_when_the_models_dir_is_not_spelled_canonically() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let e = engine_in(&link).await;
+        let models = e.0.models_dir.clone();
+        assert_ne!(models.canonicalize().unwrap(), models, "the test needs a non-canonical spelling");
+        let repo = models.join("hf/acme/tiny");
+        put(&repo.join("tiny-Q4_K_M.gguf"), &tiny_gguf());
+        record(&repo, "acme/tiny", "Q4_K_M", "gguf", &["tiny-Q4_K_M.gguf"]);
+        let id = e.models().into_iter().next().unwrap().id;
+        e.delete_model(&id).unwrap();
+        assert!(!repo.exists());
+        assert!(!models.join("hf").exists(), "empty parents are pruned");
+        assert!(models.exists(), "the models directory itself stays");
+        // The helper alone: a canonical stop and folders reached through the link.
+        let deep = models.join("a/b/c");
+        std::fs::create_dir_all(&deep).unwrap();
+        prune_empty(&models.canonicalize().unwrap(), Some(&deep));
+        assert!(!models.join("a").exists() && models.exists());
+        // It never goes above `stop`, and never removes a folder that still has something in it.
+        std::fs::create_dir_all(models.join("keep/x")).unwrap();
+        put(&models.join("keep/file"), b"x");
+        prune_empty(&models.canonicalize().unwrap(), Some(&models.join("keep/x")));
+        assert!(models.join("keep").exists() && !models.join("keep/x").exists());
     }
 
     #[tokio::test]

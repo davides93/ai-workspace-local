@@ -4,6 +4,7 @@
 use super::http::{next_link, Api};
 use super::variants::{build_variants, capabilities, dedup, detect_formats, params_from_name, RepoFile, RepoHints};
 use super::{enc_path, enc_segment, same_origin, AuthCheck, FileJob, ModelProvider, ProviderSettings, SearchQuery};
+use crate::relpath::{native_join, native_rel};
 use aiw_core::api::{ModelProviderInfo, RemoteModel, RemoteModelDetail, SearchPage};
 use aiw_core::{Error, Result};
 use async_trait::async_trait;
@@ -249,23 +250,25 @@ impl ModelProvider for HfProvider {
         }
         let v =
             detail.variants.iter().find(|v| v.id == variant).ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {repo}")))?;
-        Ok(v.files
+        let folder = native_join("hf", repo);
+        v.files
             .iter()
             .map(|f| {
                 let url = format!("{ep}/{repo}/resolve/{}/{}", enc_segment(&detail.revision), enc_path(&f.path));
-                FileJob {
+                Ok(FileJob {
                     headers: self.auth_header(&url).into_iter().collect(),
-                    dest: PathBuf::from("hf").join(repo).join(&f.path),
+                    // `Q4_K_M/x.gguf` is nested folders on every OS, never one name with a slash.
+                    dest: folder.join(native_rel(&f.path)?),
                     size: f.size_bytes,
                     sha256: f.sha256.clone(),
                     url,
-                }
+                })
             })
-            .collect())
+            .collect()
     }
 
     fn folder(&self, detail: &RemoteModelDetail, _variant: &str) -> PathBuf {
-        PathBuf::from("hf").join(&detail.model.id)
+        native_join("hf", &detail.model.id)
     }
 
     fn auth_header(&self, url: &str) -> Option<(String, String)> {
@@ -600,6 +603,24 @@ mod tests {
         assert!(p.plan(&d, "nope").is_err());
         assert!(p.detail("../x", None).await.is_err());
         assert!(matches!(p.detail("acme/missing", None).await, Err(Error::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn plan_nests_remote_paths_and_refuses_the_ones_that_escape() {
+        let fake = new_fake(None);
+        let base = start(fake).await;
+        let p = HfProvider::new(&base);
+        let mut d = p.detail(REPO, None).await.unwrap();
+        // The remote path is `/`-separated; the destination is built component by component.
+        d.variants[0].files[0].path = "Q4_K_M/sub/x.gguf".into();
+        let jobs = p.plan(&d, "Q4_K_M").unwrap();
+        assert_eq!(jobs[0].dest, PathBuf::from("hf").join("acme").join("tiny-GGUF").join("Q4_K_M").join("sub").join("x.gguf"));
+        assert_eq!(jobs[0].dest.components().count(), 6);
+        assert!(jobs[0].url.ends_with("/resolve/0123456789abcdef0123456789abcdef01234567/Q4_K_M/sub/x.gguf"), "{}", jobs[0].url);
+        for bad in ["../x.gguf", "a/../../x.gguf", "/etc/x.gguf", "C:/x.gguf", "a\\b.gguf", "..\\x.gguf", ""] {
+            d.variants[0].files[0].path = bad.into();
+            assert!(matches!(p.plan(&d, "Q4_K_M"), Err(Error::Invalid(_))), "{bad:?} must be refused");
+        }
     }
 
     #[tokio::test]

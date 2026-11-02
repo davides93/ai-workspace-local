@@ -6,6 +6,7 @@
 pub mod download;
 pub mod gguf;
 pub mod hub;
+pub mod relpath;
 mod scan;
 pub mod sidecar;
 

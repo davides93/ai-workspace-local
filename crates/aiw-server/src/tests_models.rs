@@ -335,7 +335,8 @@ async fn pull_download_list_and_delete_a_hub_model() {
         (done["files_done"].as_u64(), done["received"].as_u64(), done["total"].as_u64()),
         (Some(1), Some(q4.len() as u64), Some(q4.len() as u64))
     );
-    assert!(done["dest"].as_str().unwrap().ends_with("acme/tiny-GGUF"));
+    // `dest` is a real OS path: compared by components, not as a '/' string (Windows uses '\\').
+    assert!(std::path::Path::new(done["dest"].as_str().unwrap()).ends_with("acme/tiny-GGUF"));
     assert!(data.path().join("models/hf/acme/tiny-GGUF/tiny-Q4_K_M.gguf").is_file());
     assert!(data.path().join("models/hf/acme/tiny-GGUF/.aiw-model.json").is_file());
     assert!(fake.log.lock().unwrap().iter().any(|(p, _)| p == "resolve acme/tiny-GGUF/tiny-Q4_K_M.gguf"));

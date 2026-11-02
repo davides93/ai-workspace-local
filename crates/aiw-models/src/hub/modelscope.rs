@@ -5,6 +5,7 @@
 use super::http::{net_error, status_error, Api};
 use super::variants::{build_variants, capabilities, dedup, detect_formats, params_from_name, RepoFile, RepoHints};
 use super::{enc_segment, same_origin, FileJob, ModelProvider, ProviderSettings, SearchQuery};
+use crate::relpath::{native_join, native_rel};
 use aiw_core::api::{ModelProviderInfo, RemoteModel, RemoteModelDetail, SearchPage};
 use aiw_core::{Error, Result};
 use async_trait::async_trait;
@@ -219,24 +220,25 @@ impl ModelProvider for ModelScopeProvider {
             return Err(Error::Invalid(format!("riferimento ModelScope non valido: `{id}`")));
         }
         let v = detail.variants.iter().find(|v| v.id == variant).ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {id}")))?;
-        Ok(v.files
+        let folder = native_join("modelscope", id);
+        v.files
             .iter()
             .map(|f| {
                 let url =
                     format!("{ep}/api/v1/models/{id}/repo?Revision={}&FilePath={}", enc_segment(&detail.revision), enc_segment(&f.path));
-                FileJob {
+                Ok(FileJob {
                     headers: self.auth_header(&url).into_iter().collect(),
-                    dest: PathBuf::from("modelscope").join(id).join(&f.path),
+                    dest: folder.join(native_rel(&f.path)?),
                     size: f.size_bytes,
                     sha256: f.sha256.clone(),
                     url,
-                }
+                })
             })
-            .collect())
+            .collect()
     }
 
     fn folder(&self, detail: &RemoteModelDetail, _variant: &str) -> PathBuf {
-        PathBuf::from("modelscope").join(&detail.model.id)
+        native_join("modelscope", &detail.model.id)
     }
 
     fn auth_header(&self, url: &str) -> Option<(String, String)> {

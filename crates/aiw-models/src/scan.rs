@@ -4,6 +4,7 @@
 
 use crate::gguf::{self, GgufInfo};
 use crate::hub::variants::shard_info;
+use crate::relpath::to_logical;
 use crate::sidecar::{self, Install, SIDECAR};
 use aiw_core::api::LocalModel;
 use serde_json::Value;
@@ -77,7 +78,7 @@ pub fn gguf_info_cached(path: &Path) -> Option<Arc<GgufInfo>> {
 /// A model plus what is needed to give it a unique id.
 struct Scanned {
     model: LocalModel,
-    /// Path of the model below its root, lower-cased and without extension.
+    /// Path of the model below its root, lower-cased, without extension, `/`-separated on every OS.
     qualified: String,
     /// A v0.3 file directly in the models directory keeps its short id.
     flat: bool,
@@ -140,9 +141,10 @@ fn finish(mut found: Vec<Scanned>) -> Vec<LocalModel> {
     out
 }
 
+/// Id of a model found at `p` below `root`: its logical path (components joined with `/`, never
+/// the OS separator), lower-cased, without the model file extension.
 fn qualified_id(root: &Path, p: &Path) -> String {
-    let rel = p.strip_prefix(root).unwrap_or(p);
-    let s = rel.to_string_lossy().replace('\\', "/").to_lowercase();
+    let s = to_logical(p.strip_prefix(root).unwrap_or(p)).to_lowercase();
     match s.rsplit_once('.') {
         Some((stem, ext)) if !ext.contains('/') && matches!(ext, "gguf" | "litertlm" | "task" | "pte" | "llamafile") => stem.to_string(),
         _ => s,
@@ -396,9 +398,10 @@ fn sidecar_models(root: &Path, dir: &Path, out: &mut Vec<Scanned>) {
     for inst in sidecar::read(dir) {
         let mut files: Vec<(PathBuf, u64)> = Vec::new();
         for f in &inst.files {
-            match std::fs::metadata(dir.join(&f.path)) {
-                Ok(m) if m.is_file() => files.push((dir.join(&f.path), m.len())),
-                _ => {
+            // A path that is not a plain relative one counts as a missing file: stale record.
+            match f.native(dir).and_then(|p| std::fs::metadata(&p).ok().filter(|m| m.is_file()).map(|m| (p, m.len()))) {
+                Some(found) => files.push(found),
+                None => {
                     files.clear();
                     break;
                 }
@@ -503,7 +506,7 @@ pub struct InstalledEntry {
     pub revision: String,
     /// Folder holding the sidecar (absolute).
     pub folder: PathBuf,
-    /// Files of the install, relative to `folder`.
+    /// Files of the install, relative to `folder`, logical paths (`/` on every OS).
     pub files: Vec<String>,
 }
 
@@ -514,7 +517,7 @@ pub fn installed_index(dir: &Path) -> Vec<InstalledEntry> {
         let entries: Vec<_> = rd.flatten().collect();
         if entries.iter().any(|e| e.file_name() == SIDECAR) {
             for i in sidecar::read(dir) {
-                if i.files.iter().all(|f| dir.join(&f.path).is_file()) {
+                if i.files.iter().all(|f| f.native(dir).is_some_and(|p| p.is_file())) {
                     out.push(InstalledEntry {
                         provider: i.provider,
                         model: i.model,
@@ -674,7 +677,8 @@ fn scan_hf_cache(root: &Path, out: &mut Vec<LocalModel>) {
     }
 }
 
-/// `(relative path with '/', absolute path, size)` of the files below `dir` (symlinks followed).
+/// `(logical relative path with '/', native absolute path, size)` of the files below `dir`
+/// (symlinks followed).
 fn collect_files(root: &Path, dir: &Path, depth: usize, out: &mut Vec<(String, PathBuf, u64)>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
@@ -685,8 +689,7 @@ fn collect_files(root: &Path, dir: &Path, depth: usize, out: &mut Vec<(String, P
                 collect_files(root, &p, depth + 1, out);
             }
         } else {
-            let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
-            out.push((rel, p, m.len()));
+            out.push((to_logical(p.strip_prefix(root).unwrap_or(&p)), p, m.len()));
         }
     }
 }
@@ -829,7 +832,8 @@ mod tests {
         assert_eq!((ol.name.as_str(), ol.format.as_str()), ("qwen3:4b", "gguf"));
         let mlx = found.iter().find(|m| m.format == "mlx").unwrap();
         assert_eq!((mlx.id.as_str(), mlx.name.as_str()), ("qwen3-4b-4bit", "Qwen3-4B-4bit"));
-        assert_eq!(mlx.path.as_deref(), Some(repo.display().to_string().as_str()));
+        // A real OS path, in the OS spelling: compared as a path, not as a string.
+        assert_eq!(Path::new(mlx.path.as_deref().unwrap()), repo.as_path());
         assert_eq!((mlx.context_length, mlx.arch.as_deref(), mlx.quant.as_deref()), (Some(40960), Some("qwen3"), Some("4bit")));
         assert_eq!(mlx.origin, "aiw");
     }
@@ -923,7 +927,7 @@ mod tests {
         };
         let q3 = by_id("ollama:qwen3:4b");
         assert_eq!((q3.origin.as_str(), q3.removable, q3.format.as_str(), q3.size_bytes), ("ollama", false, "gguf", g.len() as u64));
-        assert!(q3.path.as_deref().unwrap().ends_with("blobs/sha256-aaaa"));
+        assert!(Path::new(q3.path.as_deref().unwrap()).ends_with("blobs/sha256-aaaa"));
         assert_eq!(by_id("ollama:someone/tuned:latest").name, "someone/tuned:latest");
         assert!(found.iter().all(|m| !m.id.contains("missing")), "a manifest without its blob is skipped");
         let lmm = by_id("lmstudio:lmstudio-community/Qwen3-4B-Q4_K_M.gguf");
@@ -954,6 +958,23 @@ mod tests {
         assert_eq!((idx[0].provider.as_str(), idx[0].model.as_str(), idx[0].variant.as_str()), ("hf", "acme/tiny", "Q4_K_M"));
         assert_eq!(idx[0].folder, repo);
         assert_eq!(idx[0].files, ["a.gguf"]);
+    }
+
+    #[test]
+    fn a_record_pointing_outside_its_folder_is_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("models");
+        let repo = root.join("hf/acme/tiny");
+        write(&repo.join("a.gguf"), &gguf::tests::synthetic());
+        write(&dir.path().join("outside.gguf"), &gguf::tests::synthetic());
+        let files = [("a.gguf", 1), ("../../../../outside.gguf", 1)];
+        sidecar::upsert(&repo, install("hf", "acme/tiny", "Q4_K_M", "gguf", &files)).unwrap();
+        assert!(installed_index(&root).is_empty(), "a file outside the folder is never part of an install");
+        assert!(scan_models(&root).is_empty());
+        // The same install without the stray entry is fine, and its files are plain `/` paths.
+        sidecar::upsert(&repo, install("hf", "acme/tiny", "Q4_K_M", "gguf", &[("a.gguf", 1)])).unwrap();
+        assert_eq!(installed_index(&root)[0].files, ["a.gguf"]);
+        assert_eq!(scan_models(&root).len(), 1);
     }
 
     #[test]

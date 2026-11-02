@@ -5,6 +5,7 @@
 use super::http::Api;
 use super::variants::dedup;
 use super::{FileJob, ModelProvider, ProviderSettings, SearchQuery};
+use crate::relpath::native_rel;
 use aiw_core::api::{ModelProviderInfo, ModelVariant, RemoteFile, RemoteModel, RemoteModelDetail, SearchPage};
 use aiw_core::{Error, Result};
 use async_trait::async_trait;
@@ -307,7 +308,7 @@ impl ModelProvider for OllamaProvider {
                 let hex = f.sha256.clone().ok_or_else(|| Error::Invalid(format!("{} senza digest", f.path)))?;
                 Ok(FileJob {
                     url: format!("{ep}/v2/{ns}/{name}/blobs/sha256:{hex}"),
-                    dest: dir.join(&f.path),
+                    dest: dir.join(native_rel(&f.path)?),
                     size: f.size_bytes,
                     sha256: Some(hex),
                     headers: vec![],
@@ -448,7 +449,7 @@ mod tests {
         let jobs = p.plan(&d, "4b").unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].url, format!("{base}/v2/library/qwen3/blobs/sha256:{}", hex('b')));
-        assert_eq!(jobs[0].dest, PathBuf::from("ollama/library/qwen3/4b/model.gguf"));
+        assert_eq!(jobs[0].dest, PathBuf::from("ollama").join("library").join("qwen3").join("4b").join("model.gguf"));
         assert_eq!(jobs[0].sha256.as_deref(), Some(hex('b').as_str()));
         assert_eq!(p.folder(&d, "4b"), PathBuf::from("ollama/library/qwen3/4b"));
 
@@ -458,10 +459,15 @@ mod tests {
         assert_eq!(g.model.id, "gemma3");
         assert_eq!(g.revision, "4b");
         let jobs = p.plan(&g, "4b").unwrap();
+        // `dest` is a native path (the OS separator): compared as paths, component by component.
         assert_eq!(
-            jobs.iter().map(|j| j.dest.to_string_lossy().to_string()).collect::<Vec<_>>(),
-            ["ollama/library/gemma3/4b/model.gguf", "ollama/library/gemma3/4b/mmproj.gguf"]
+            jobs.iter().map(|j| j.dest.clone()).collect::<Vec<_>>(),
+            [
+                PathBuf::from("ollama").join("library").join("gemma3").join("4b").join("model.gguf"),
+                PathBuf::from("ollama").join("library").join("gemma3").join("4b").join("mmproj.gguf"),
+            ]
         );
+        assert!(jobs.iter().all(|j| j.dest.components().count() == 5), "one component per level");
         assert_eq!(g.variants[0].files[1].role, "mmproj");
 
         // User namespace, default tag.

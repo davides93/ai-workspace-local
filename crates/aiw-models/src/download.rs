@@ -4,6 +4,7 @@
 //! provider's host.
 
 use crate::hub::{same_origin, FileJob};
+use crate::relpath::{is_plain_component, to_logical};
 use crate::sidecar::{self, Install, SidecarFile};
 use aiw_core::api::DownloadProgress;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
@@ -30,7 +31,8 @@ pub struct DownloadRequest {
     pub revision: String,
     pub format: String,
     pub quant: Option<String>,
-    /// Folder of the model, relative to the models directory (holds `.aiw-model.json`).
+    /// Folder of the model, relative to the models directory (holds `.aiw-model.json`): a native
+    /// path, one component per level.
     pub folder: PathBuf,
     pub files: Vec<FileJob>,
 }
@@ -105,14 +107,15 @@ fn io_err(e: std::io::Error) -> FileErr {
     }
 }
 
-/// A relative path made only of plain components (no `..`, no root, no drive, no stream suffix).
+/// A relative path made only of plain components (no `..`, no root, no drive, no stream suffix),
+/// rebuilt component by component so that it is nested folders on every OS.
 pub fn safe_rel(p: &Path) -> Result<PathBuf> {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
             Component::Normal(s) => {
                 let s = s.to_string_lossy();
-                if s.contains(['\\', ':', '\0']) || s == sidecar::SIDECAR {
+                if !is_plain_component(&s) || s == sidecar::SIDECAR {
                     return Err(Error::Invalid(format!("percorso di file non valido: {}", p.display())));
                 }
                 out.push(&*s);
@@ -377,7 +380,13 @@ impl DownloadManager {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let rel = dest.strip_prefix(dir).unwrap_or(dest).strip_prefix(&folder).unwrap_or(dest).to_string_lossy().replace('\\', "/");
+            // The name recorded in the sidecar and shown to the UI is a logical path: `/` on every OS.
+            let rel = dest
+                .strip_prefix(dir)
+                .ok()
+                .and_then(|r| r.strip_prefix(&folder).ok())
+                .map(to_logical)
+                .ok_or_else(|| Error::Invalid(format!("il file {} è fuori dalla cartella del modello", dest.display())))?;
             self.modify(id, |p| {
                 p.file = rel.clone();
                 p.status = "running".into();
@@ -892,6 +901,24 @@ mod tests {
         panic!("never reached {status}: {:?}", m.get(id));
     }
 
+    #[test]
+    fn destinations_are_nested_folders_and_cannot_escape() {
+        let nested = safe_rel(&PathBuf::from("hf").join("acme").join("m").join("Q4_K_M").join("x.gguf")).unwrap();
+        assert_eq!(nested.components().count(), 5);
+        assert_eq!(to_logical(&nested), "hf/acme/m/Q4_K_M/x.gguf");
+        // A remote path is turned into components before it is joined: nested on every OS.
+        let from_remote = PathBuf::from("hf/acme/m").join(crate::relpath::native_rel("Q4_K_M/x.gguf").unwrap());
+        assert_eq!(safe_rel(&from_remote).unwrap(), nested);
+        for bad in ["", ".", "..", "../x.gguf", "a/../../x.gguf", "/etc/passwd", "a/.aiw-model.json", "a:stream/x.gguf", "C:/x.gguf"] {
+            assert!(safe_rel(Path::new(bad)).is_err(), "{bad:?} must be refused");
+        }
+        // A backslash is a separator on Windows and a forbidden character elsewhere: either way
+        // it never reaches the disk as part of a name.
+        for bad in ["..\\x.gguf", "a\\..\\..\\x.gguf", "\\\\srv\\share\\x.gguf"] {
+            assert!(safe_rel(Path::new(bad)).is_err(), "{bad:?} must be refused");
+        }
+    }
+
     #[tokio::test]
     async fn downloads_a_multi_file_job_and_writes_the_sidecar() {
         let (a, b) = (data(5000, 1), data(3000, 2));
@@ -910,7 +937,8 @@ mod tests {
         assert_eq!(std::fs::read(d.path().join("hf/acme/m/sub/b.gguf")).unwrap(), b);
         assert!(!d.path().join("hf/acme/m/a.gguf.part").exists());
         assert_eq!(m.completed(), 1);
-        assert_eq!(p.dest, d.path().join("hf/acme/m").display().to_string());
+        // `dest` is a real OS path: compared as a path (the OS separator is not '/' everywhere).
+        assert_eq!(Path::new(&p.dest), d.path().join("hf").join("acme").join("m"));
         let installs = sidecar::read(&d.path().join("hf/acme/m"));
         assert_eq!(installs.len(), 1);
         let i = &installs[0];

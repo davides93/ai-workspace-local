@@ -4,20 +4,33 @@
 //! A repository folder can hold several variants (Q4_K_M and Q8_0 of the same repo). The newest
 //! install is the top level of the document, as the contract says; every install, the newest
 //! included, is also listed in `installs`.
+//!
+//! The `files[].path` entries are logical paths, relative to the folder holding the sidecar and
+//! always spelled with `/` (see [`crate::relpath`]): the record means the same on every OS.
 
+use crate::relpath;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const SIDECAR: &str = ".aiw-model.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SidecarFile {
-    /// Relative to the folder holding the sidecar.
+    /// Relative to the folder holding the sidecar, components separated by `/` on every OS.
     pub path: String,
     pub size_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+}
+
+impl SidecarFile {
+    /// The file on disk, below `dir` (the folder holding the sidecar), built component by
+    /// component. `None` when the recorded path is not a plain relative path: a hand-edited
+    /// record must not point outside `dir`.
+    pub fn native(&self, dir: &Path) -> Option<PathBuf> {
+        relpath::native_rel(&self.path).ok().map(|rel| dir.join(rel))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,17 +48,27 @@ pub struct Install {
     pub installed_at: String,
 }
 
+/// File paths spelled with `/`, whoever wrote the record.
+fn normalized(mut install: Install) -> Install {
+    for f in &mut install.files {
+        f.path = relpath::normalize_logical(&f.path);
+    }
+    install
+}
+
 /// Every install recorded in `dir` (empty when there is no sidecar or it is unreadable).
 pub fn read(dir: &Path) -> Vec<Install> {
     let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR)) else { return vec![] };
     let Ok(v) = serde_json::from_str::<Value>(&text) else { return vec![] };
-    match v.get("installs").and_then(Value::as_array) {
+    let installs: Vec<Install> = match v.get("installs").and_then(Value::as_array) {
         Some(list) => list.iter().filter_map(|i| serde_json::from_value(i.clone()).ok()).collect(),
         None => serde_json::from_value(v).ok().into_iter().collect(),
-    }
+    };
+    installs.into_iter().map(normalized).collect()
 }
 
 pub fn write(dir: &Path, installs: &[Install]) -> std::io::Result<()> {
+    let installs: Vec<Install> = installs.iter().cloned().map(normalized).collect();
     let Some(latest) = installs.last() else {
         return match std::fs::remove_file(dir.join(SIDECAR)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
@@ -53,7 +76,7 @@ pub fn write(dir: &Path, installs: &[Install]) -> std::io::Result<()> {
         };
     };
     let mut doc = serde_json::to_value(latest)?;
-    doc["installs"] = json!(installs);
+    doc["installs"] = json!(&installs);
     let tmp = dir.join(format!("{SIDECAR}.tmp"));
     std::fs::write(&tmp, serde_json::to_vec_pretty(&doc)?)?;
     std::fs::rename(&tmp, dir.join(SIDECAR))
@@ -116,6 +139,35 @@ mod tests {
         assert_eq!(read(d.path())[0].variant, "Q8_0");
         assert!(remove_variant(d.path(), "Q8_0").unwrap().is_empty());
         assert!(!d.path().join(SIDECAR).exists());
+    }
+
+    #[test]
+    fn file_paths_are_always_spelled_with_slashes() {
+        let d = tempfile::tempdir().unwrap();
+        // A caller that hands over a Windows-style relative path still records a `/` path...
+        upsert(d.path(), install("Q4_K_M", "sub\\dir\\a.gguf")).unwrap();
+        let raw: Value = serde_json::from_str(&std::fs::read_to_string(d.path().join(SIDECAR)).unwrap()).unwrap();
+        assert_eq!(raw["files"][0]["path"], "sub/dir/a.gguf");
+        assert_eq!(raw["installs"][0]["files"][0]["path"], "sub/dir/a.gguf");
+        assert_eq!(read(d.path())[0].files[0].path, "sub/dir/a.gguf");
+        // ...and a record written elsewhere with backslashes reads back the same way.
+        let mut old = install("Q8_0", "x\\b.gguf");
+        old.files.push(SidecarFile { path: "y\\c.gguf".into(), size_bytes: 1, sha256: None });
+        std::fs::write(d.path().join(SIDECAR), serde_json::to_vec(&old).unwrap()).unwrap();
+        let paths: Vec<String> = read(d.path())[0].files.iter().map(|f| f.path.clone()).collect();
+        assert_eq!(paths, ["x/b.gguf", "y/c.gguf"]);
+    }
+
+    #[test]
+    fn a_recorded_file_is_resolved_below_its_folder_and_never_outside() {
+        let dir = Path::new("models").join("hf").join("acme");
+        let f = |p: &str| SidecarFile { path: p.into(), size_bytes: 1, sha256: None };
+        assert_eq!(f("a.gguf").native(&dir), Some(dir.join("a.gguf")));
+        assert_eq!(f("sub/b.gguf").native(&dir), Some(dir.join("sub").join("b.gguf")));
+        assert_eq!(f("sub/b.gguf").native(&dir).unwrap().components().count(), dir.components().count() + 2);
+        for bad in ["../x.gguf", "sub/../../x.gguf", "/etc/passwd", "C:/x.gguf", "", "a//b.gguf"] {
+            assert_eq!(f(bad).native(&dir), None, "{bad:?}");
+        }
     }
 
     #[test]
