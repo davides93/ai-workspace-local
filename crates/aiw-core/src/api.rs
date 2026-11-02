@@ -1,4 +1,4 @@
-//! Wire DTOs. Field names match `apps/ui/src/api/types.ts` exactly.
+//! Wire DTOs. Field names match `apps/ui/src/shared/api/types.ts` exactly.
 
 use crate::schema::SettingsSchema;
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,6 @@
 //! Core types shared by every layer of AI Workspace Local.
 //!
-//! * [`api`] — DTOs exposed over IPC/HTTP (mirrored in `apps/ui/src/api/types.ts`).
+//! * [`api`] — DTOs exposed over IPC/HTTP (mirrored in `apps/ui/src/shared/api/types.ts`).
 //! * [`events`] — AG-UI 1.0 run events (ADR 0004).
 //! * [`schema`] — settings schemas used to generate configuration forms (ADR 0003).
 //! * [`config`] — layered configuration: defaults → global → device → workspace.

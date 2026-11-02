@@ -26,6 +26,9 @@ pub(crate) fn runtime_compat(runtimes: &[RuntimeInfo], os: &str, format: &str) -
     let mut out: Vec<RuntimeCompat> = runtimes
         .iter()
         .filter(|r| r.formats.iter().any(|f| f == format) && r.platforms.iter().any(|p| p == os || p == "any"))
+        // The registry marks a manifest `unsupported` when this device cannot run it at all
+        // (OS or CPU architecture, e.g. MLX on an Intel Mac): such runtimes are not compatible.
+        .filter(|r| r.status != "unsupported")
         .map(|r| {
             let (available, reason) = if MANIFEST_ONLY.contains(&r.id.as_str()) {
                 (false, "non ancora implementato".to_string())
@@ -558,6 +561,9 @@ mod tests {
         assert_eq!(runtime_compat(&all, "linux", "pte")[0].reason, "non ancora implementato");
         // Not on this OS: not listed at all.
         assert!(runtime_compat(&all, "linux", "mlx").iter().all(|c| c.id != "mlx-lm" && c.id != "mlx-swift"));
+        // Unsupported on this device (e.g. MLX on an Intel Mac): not listed either.
+        let intel_mac = vec![rt("mlx-lm", "sidecar", "unsupported", &["mlx"], &["macos"])];
+        assert!(runtime_compat(&intel_mac, "macos", "mlx").is_empty());
         assert_eq!(runtime_compat(&all, "linux", "litertlm")[0].reason, "serve il plugin nativo dell'app");
         assert!(runtime_compat(&all, "linux", "unknown-format").is_empty());
     }

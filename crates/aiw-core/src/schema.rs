@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 /// Subset of JSON Schema used by every configurable component. The UI renders a form from it
-/// (`apps/ui/src/components/ui.tsx::SchemaForm`).
+/// (`apps/ui/src/shared/ui/SchemaForm.tsx`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SettingsSchema {
     #[serde(rename = "type", default = "object_type")]
