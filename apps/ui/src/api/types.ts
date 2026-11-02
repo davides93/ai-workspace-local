@@ -270,7 +270,8 @@ export type WorkflowTrigger =
   | { kind: "manual" }
   | { kind: "interval"; seconds: number }
   | { kind: "cron"; expr: string }
-  | { kind: "file"; path: string };
+  | { kind: "file"; path: string }
+  | { kind: "webhook"; secret?: string };
 
 export type WorkflowStep =
   | { id: string; kind: "tool"; tool: string; args: Record<string, unknown> }

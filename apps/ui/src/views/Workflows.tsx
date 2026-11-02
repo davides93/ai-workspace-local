@@ -9,7 +9,34 @@ export function triggerLabel(t: WorkflowTrigger): string {
     case "interval": return t.seconds % 3600 === 0 ? `Ogni ${t.seconds / 3600} h` : `Ogni ${Math.round(t.seconds / 60)} min`;
     case "cron": return `Cron ${t.expr}`;
     case "file": return `Quando cambia ${t.path}`;
+    case "webhook": return "Webhook";
   }
+}
+
+/** Where external services send the webhook: the daemon address when the UI is served by it. */
+function webhookUrl(id: string): string {
+  const base = location.protocol.startsWith("http") ? location.origin : "http://<indirizzo-del-daemon>:7777";
+  return `${base}/hooks/${encodeURIComponent(id)}`;
+}
+
+function WebhookInfo({ id, secret }: { id: string; secret?: string }) {
+  const [show, setShow] = useState(false);
+  const url = webhookUrl(id);
+  const copy = (t: string) => void navigator.clipboard?.writeText(t).catch(() => undefined);
+  return (
+    <div className="webhook-info">
+      <div className="row"><b>URL</b><span className="mono grow wrap">POST {url}</span><button className="btn sm" onClick={() => copy(url)}>Copia</button></div>
+      <div className="row">
+        <b>Segreto</b>
+        <span className="mono grow wrap">{secret ? (show ? secret : "•".repeat(16)) : "generato al salvataggio"}</span>
+        {secret && <button className="btn sm" onClick={() => setShow((v) => !v)}>{show ? "Nascondi" : "Mostra"}</button>}
+        {secret && <button className="btn sm" onClick={() => copy(secret)}>Copia</button>}
+      </div>
+      <span className="faint" style={{ fontSize: "var(--fs-xs)" }}>
+        Invia il segreto nell'header <span className="mono">X-AIW-Secret</span> oppure firma il corpo con <span className="mono">X-Hub-Signature-256</span> (HMAC-SHA256, come GitHub). Il JSON ricevuto diventa gli input del workflow.
+      </span>
+    </div>
+  );
 }
 
 const STEP_META: Record<WorkflowStep["kind"], { label: string; icon: string }> = {
@@ -124,6 +151,7 @@ export function WorkflowsView() {
                   <span className="pill info"><Icon name="refresh" size={13} /> {triggerLabel(wf.trigger)}</span>
                   {Object.entries(wf.inputs).map(([k, v]) => <span key={k} className="chip">{k}={String(v)}</span>)}
                 </div>
+                {wf.trigger.kind === "webhook" && <WebhookInfo id={wf.id} secret={wf.trigger.secret} />}
                 {showSource ? (
                   <div className="stack">
                     <textarea className="input" aria-label="Definizione del workflow (JSON)" rows={18} value={source} onChange={(e) => setSource(e.target.value)} />

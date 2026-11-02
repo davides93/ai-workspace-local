@@ -178,3 +178,53 @@ async fn mcp_server_works_with_our_mcp_client() {
     let denied = client.call_tool("read_file", json!({"path": "/etc/passwd"})).await.unwrap();
     assert!(denied.is_error, "outside the workspace must fail: {}", denied.content);
 }
+
+#[tokio::test]
+async fn webhook_runs_the_workflow_with_the_payload() {
+    let (app, e, _d, ws) = app().await;
+    std::fs::write(ws.path().join("ordine-42.txt"), "x").unwrap();
+    let wf = e
+        .save_workflow(
+            serde_json::from_value(json!({
+                "id": "hook", "name": "Da webhook", "enabled": true, "trigger": {"kind": "webhook"}, "inputs": {},
+                "steps": [{"id": "find", "kind": "tool", "tool": "glob", "args": {"pattern": "*{{inputs.order}}*"}}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let WorkflowTrigger::Webhook { secret } = &wf.trigger else { panic!("trigger") };
+    assert!(secret.len() >= 32, "secret generated on save");
+
+    let call = |hdr: Option<(&'static str, String)>| {
+        let mut b = Request::builder().method("POST").uri("/hooks/hook").header("content-type", "application/json");
+        if let Some((k, v)) = hdr {
+            b = b.header(k, v);
+        }
+        b.body(Body::from(r#"{"order": "42"}"#)).unwrap()
+    };
+    let r = tower::ServiceExt::oneshot(app.clone(), call(Some(("x-aiw-secret", "sbagliato".into())))).await.unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    let r = tower::ServiceExt::oneshot(app.clone(), call(None)).await.unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+
+    // GitHub-style HMAC signature of the body.
+    let mac = aiw_engine::webhook::hmac_sha256(secret.as_bytes(), br#"{"order": "42"}"#);
+    let sig = format!("sha256={}", mac.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    let r = tower::ServiceExt::oneshot(app.clone(), call(Some(("x-hub-signature-256", sig)))).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let v: Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap()).unwrap();
+    let run_id = v["run_id"].as_str().unwrap().to_string();
+    for _ in 0..200 {
+        if e.workflow_runs().iter().any(|r| r.id == run_id && r.status == "succeeded") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let run = e.workflow_runs().into_iter().find(|r| r.id == run_id).unwrap();
+    assert_eq!(run.status, "succeeded", "{run:?}");
+    assert!(run.steps[0].output.as_deref().unwrap_or_default().contains("ordine-42.txt"));
+
+    // The plain secret works too.
+    let r = tower::ServiceExt::oneshot(app, call(Some(("x-aiw-secret", secret.clone())))).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+}

@@ -124,6 +124,8 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/workflows/runs", get(workflow_runs))
         .route("/api/workflows/{id}", put(save_workflow).delete(delete_workflow))
         .route("/api/workflows/{id}/run", post(run_workflow))
+        // Outside /api: authenticated by the workflow's own secret, not by the pairing token.
+        .route("/hooks/{id}", post(webhook))
         .route("/api/tools", get(tools))
         .route("/api/tools/{name}", put(set_tool))
         .route("/api/mcp/servers", get(mcp_servers).post(save_mcp))
@@ -339,6 +341,19 @@ async fn respond_approval(State(s): State<AppState>, Path(id): Path<String>, Jso
     s.engine.respond_approval(&id, b.decision == "allow", b.remember)?;
     ok(json!({}))
 }
+async fn webhook(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult<Value> {
+    let secret = headers.get("x-aiw-secret").and_then(|h| h.to_str().ok()).map(String::from).or_else(|| q.get("secret").cloned());
+    let signature = headers.get("x-hub-signature-256").and_then(|h| h.to_str().ok());
+    let run = s.engine.trigger_webhook(&id, secret.as_deref(), signature, &body).await?;
+    ok(json!({"run_id": run.id, "status": run.status}))
+}
+
 async fn workflows(State(s): State<AppState>) -> ApiResult<Vec<WorkflowDef>> {
     ok(s.engine.workflows()?)
 }

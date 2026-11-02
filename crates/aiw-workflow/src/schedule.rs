@@ -51,7 +51,7 @@ impl Scheduler {
         for wf in workflows.iter().filter(|w| w.enabled) {
             let last = *self.last_fired.entry(wf.id.clone()).or_insert(now);
             let fire = match &wf.trigger {
-                WorkflowTrigger::Manual => false,
+                WorkflowTrigger::Manual | WorkflowTrigger::Webhook { .. } => false,
                 WorkflowTrigger::Interval { seconds } => (now - last).num_seconds() >= (*seconds).max(30) as i64,
                 WorkflowTrigger::Cron { expr } => match parse_cron(expr) {
                     Ok(s) => s.after(&last).next().map(|next| next <= now).unwrap_or(false),

@@ -3,6 +3,7 @@
 pub mod defaults;
 mod host;
 pub mod store;
+pub mod webhook;
 pub mod worktree;
 
 pub use host::EngineHost;
@@ -885,10 +886,47 @@ impl Engine {
     pub fn workflows(&self) -> Result<Vec<WorkflowDef>> {
         self.0.store.list_docs("workflow")
     }
-    pub fn save_workflow(&self, w: WorkflowDef) -> Result<WorkflowDef> {
+    pub fn save_workflow(&self, mut w: WorkflowDef) -> Result<WorkflowDef> {
         aiw_workflow::validate(&w)?;
+        if let WorkflowTrigger::Webhook { secret } = &mut w.trigger {
+            if secret.trim().len() < 16 {
+                *secret = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+            }
+        }
         self.0.store.put_doc("workflow", &w.id, &w)?;
         Ok(w)
+    }
+
+    /// Starts a webhook-triggered workflow after checking its secret (plain or HMAC-SHA256 of
+    /// the body, GitHub style). A JSON object body is merged into the inputs; any body is also
+    /// available as `{{inputs.payload}}`.
+    pub async fn trigger_webhook(&self, id: &str, secret: Option<&str>, signature: Option<&str>, body: &[u8]) -> Result<WorkflowRun> {
+        let wf: WorkflowDef = self.0.store.get_doc("workflow", id)?.ok_or_else(|| Error::NotFound(format!("workflow {id}")))?;
+        let WorkflowTrigger::Webhook { secret: expected } = &wf.trigger else {
+            return Err(Error::NotFound(format!("workflow {id} senza trigger webhook")));
+        };
+        if !wf.enabled {
+            return Err(Error::Denied("workflow disattivato".into()));
+        }
+        let by_secret = secret.map(|s| webhook::constant_time_eq(s.as_bytes(), expected.as_bytes())).unwrap_or(false);
+        let by_signature = signature.map(|sig| webhook::verify_signature(expected.as_bytes(), body, sig)).unwrap_or(false);
+        if expected.is_empty() || !(by_secret || by_signature) {
+            return Err(Error::Denied("segreto del webhook non valido".into()));
+        }
+        let mut inputs = Map::new();
+        match serde_json::from_slice::<Value>(body) {
+            Ok(Value::Object(o)) => {
+                inputs.insert("payload".into(), Value::String(String::from_utf8_lossy(body).into_owned()));
+                inputs.extend(o);
+            }
+            Ok(other) => {
+                inputs.insert("payload".into(), other);
+            }
+            Err(_) => {
+                inputs.insert("payload".into(), Value::String(String::from_utf8_lossy(body).chars().take(100_000).collect()));
+            }
+        }
+        self.run_workflow(id, inputs, "webhook").await
     }
     pub fn delete_workflow(&self, id: &str) -> Result<bool> {
         self.0.store.delete_doc("workflow", id)

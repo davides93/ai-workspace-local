@@ -355,9 +355,21 @@ pub struct ApprovalRequest {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum WorkflowTrigger {
     Manual,
-    Interval { seconds: u64 },
-    Cron { expr: String },
-    File { path: String },
+    Interval {
+        seconds: u64,
+    },
+    Cron {
+        expr: String,
+    },
+    File {
+        path: String,
+    },
+    /// `POST /hooks/{id}` with the secret (header `X-AIW-Secret` or `?secret=`) or a GitHub-style
+    /// `X-Hub-Signature-256` HMAC of the body. The JSON body becomes the workflow inputs.
+    Webhook {
+        #[serde(default)]
+        secret: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

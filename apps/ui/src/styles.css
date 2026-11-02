@@ -449,3 +449,6 @@ pre.diff .meta { color: var(--fg-faint); }
 .btn.ghost { border-color: transparent; background: transparent; }
 .action-chip { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-size: var(--fs-xs); max-width: 100%; }
 .action-chip .mono { opacity: 0.85; overflow-wrap: anywhere; }
+.webhook-info { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; margin-bottom: 14px; border: 1px dashed var(--line); border-radius: var(--r-sm); background: var(--surface-2); font-size: var(--fs-sm); }
+.webhook-info .row { gap: 10px; align-items: center; flex-wrap: wrap; }
+.webhook-info .wrap { overflow-wrap: anywhere; min-width: 0; }

@@ -264,6 +264,12 @@ const mcp: McpServer[] = [
 ];
 
 const workflows: WorkflowDef[] = [
+  { id: "ordine-ricevuto", name: "Ordine dal negozio online", description: "Il negozio chiama il webhook a ogni ordine: l'agente prepara la bozza della mail di conferma e chiede l'ok.", enabled: true,
+    trigger: { kind: "webhook", secret: "3f9a61c0d2b84e57a1c9e0f4b7d26a53" }, inputs: {},
+    steps: [
+      { id: "bozza", kind: "agent", agent: "operator", prompt: "Scrivi in bozze/ una mail di conferma per l'ordine {{inputs.order_id}} di {{inputs.customer}}." },
+      { id: "ok", kind: "approval", message: "Invio la conferma a {{inputs.customer}}?" },
+    ] },
   { id: "inbox-digest", name: "Digest mattutino dei download", description: "Ogni giorno feriale alle 8 classifica i nuovi file e propone dove spostarli.", enabled: true, trigger: { kind: "cron", expr: "0 8 * * 1-5" }, inputs: { folder: "~/Downloads" },
     steps: [
       { id: "scan", kind: "tool", tool: "list_dir", args: { path: "{{inputs.folder}}" } },
