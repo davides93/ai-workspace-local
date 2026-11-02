@@ -13,12 +13,12 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, LocalFree, SetHandleInformation, ERROR_SUCCESS, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-    WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, GetLastError, LocalFree, SetHandleInformation, ERROR_SUCCESS, GENERIC_ALL, HANDLE, HANDLE_FLAG_INHERIT,
+    INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, GetNamedSecurityInfoW, SetNamedSecurityInfoW,
-    SDDL_REVISION_1, SE_FILE_OBJECT,
+    SetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT, SE_WINDOW_OBJECT,
 };
 use windows_sys::Win32::Security::{
     CreateRestrictedToken, EqualSid, GetAce, GetLengthSid, GetSecurityDescriptorSacl, SetTokenInformation, TokenIntegrityLevel, ACE_HEADER,
@@ -37,6 +37,9 @@ use windows_sys::Win32::System::JobObjects::{
     JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
+use windows_sys::Win32::System::StationsAndDesktops::{
+    CreateDesktopW, CreateWindowStationW, GetProcessWindowStation, GetUserObjectInformationW, SetProcessWindowStation, UOI_NAME,
+};
 use windows_sys::Win32::System::SystemServices::{SE_GROUP_INTEGRITY, SYSTEM_MANDATORY_LABEL_ACE_TYPE};
 use windows_sys::Win32::System::Threading::{
     CreateProcessAsUserW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess, InitializeProcThreadAttributeList,
@@ -197,6 +200,75 @@ pub fn label_low(dir: &Path) -> io::Result<()> {
     }
 }
 
+/// SACL with a Low integrity label for window stations and desktops (no inheritance there).
+const LOW_WINDOW_LABEL_SDDL: &str = "S:(ML;;NW;;;LW)";
+
+fn label_window_object(handle: HANDLE, what: &str) -> std::result::Result<(), String> {
+    unsafe {
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        if ConvertStringSecurityDescriptorToSecurityDescriptorW(wide(LOW_WINDOW_LABEL_SDDL).as_ptr(), SDDL_REVISION_1, &mut sd, null_mut())
+            == 0
+        {
+            return Err(format!("etichetta {what}: {}", io::Error::last_os_error()));
+        }
+        let (mut present, mut defaulted) = (0, 0);
+        let mut sacl: *mut ACL = null_mut();
+        let err = if GetSecurityDescriptorSacl(sd, &mut present, &mut sacl, &mut defaulted) == 0 {
+            GetLastError()
+        } else {
+            SetSecurityInfo(handle, SE_WINDOW_OBJECT, LABEL_SECURITY_INFORMATION, null_mut(), null_mut(), null(), sacl)
+        };
+        LocalFree(sd as _);
+        if err != ERROR_SUCCESS {
+            return Err(format!("etichetta {what}: errore {err}"));
+        }
+        Ok(())
+    }
+}
+
+fn object_name(handle: HANDLE) -> std::result::Result<String, String> {
+    unsafe {
+        let mut needed = 0u32;
+        GetUserObjectInformationW(handle, UOI_NAME, null_mut(), 0, &mut needed);
+        let mut buf = vec![0u16; (needed as usize / 2).max(64)];
+        if GetUserObjectInformationW(handle, UOI_NAME, buf.as_mut_ptr() as *mut c_void, (buf.len() * 2) as u32, &mut needed) == 0 {
+            return Err(format!("nome della window station: {}", io::Error::last_os_error()));
+        }
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        Ok(String::from_utf16_lossy(&buf[..end]))
+    }
+}
+
+/// Window station and desktop reserved to sandboxed commands (the approach of Chromium's
+/// sandbox): labelled Low, so that Low integrity processes can initialise user32 even when the
+/// app runs in a service session, and isolated from the user's clipboard, atoms and windows.
+/// Created once; the handles stay open for the life of the process.
+fn sandbox_desktop() -> io::Result<&'static [u16]> {
+    static DESKTOP: OnceLock<std::result::Result<Vec<u16>, String>> = OnceLock::new();
+    let created = DESKTOP.get_or_init(|| unsafe {
+        let winsta = CreateWindowStationW(null(), 0, GENERIC_ALL, null());
+        if winsta.is_null() {
+            return Err(format!("CreateWindowStation: {}", io::Error::last_os_error()));
+        }
+        let name = object_name(winsta)?;
+        // A desktop is created in the process window station: switch to the new one briefly.
+        let previous = GetProcessWindowStation();
+        if SetProcessWindowStation(winsta) == 0 {
+            return Err(format!("SetProcessWindowStation: {}", io::Error::last_os_error()));
+        }
+        let desktop = CreateDesktopW(wide("aiw-sandbox").as_ptr(), null(), null(), 0, GENERIC_ALL, null());
+        let desktop_error = io::Error::last_os_error();
+        SetProcessWindowStation(previous);
+        if desktop.is_null() {
+            return Err(format!("CreateDesktop: {desktop_error}"));
+        }
+        label_window_object(winsta, "window station")?;
+        label_window_object(desktop, "desktop")?;
+        Ok(wide(format!("{name}\\aiw-sandbox")))
+    });
+    created.as_deref().map_err(|e| io::Error::other(e.clone()))
+}
+
 /// Labels the workspace once per process (labelling walks the whole tree).
 fn ensure_low_label(dir: &Path) -> io::Result<()> {
     static DONE: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
@@ -307,6 +379,7 @@ pub fn run(
     env.extend_from_slice(extra_env);
     let token = low_token()?;
     let job = new_job()?;
+    let desktop = sandbox_desktop()?;
 
     unsafe {
         // One pipe for stdout and stderr, so the output keeps its order.
@@ -355,6 +428,7 @@ pub fn run(
         let mut si: STARTUPINFOEXW = zeroed();
         si.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.lpDesktop = desktop.as_ptr() as *mut u16;
         si.StartupInfo.hStdInput = nul.0;
         si.StartupInfo.hStdOutput = write.0;
         si.StartupInfo.hStdError = write.0;

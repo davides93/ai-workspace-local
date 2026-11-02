@@ -10,6 +10,9 @@
 //! * The process tree lives in a **job object**: killed as a whole on timeout or cancellation and
 //!   when the job handle closes, without clipboard, desktop and global-atom access.
 //! * Only the stdin (`NUL`) and output pipe handles are inherited (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`).
+//! * It runs on a window station and desktop of its own, labelled Low (as in Chromium's sandbox):
+//!   user32 initialises even when the app runs as a service, and the command cannot reach the
+//!   user's clipboard, global atoms or windows.
 //!
 //! Network access is not restricted by this mechanism (Low integrity processes can still open
 //! sockets): the caller reports that to the user.
