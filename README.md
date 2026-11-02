@@ -128,7 +128,7 @@ apre l'interfaccia già accoppiata. Un dispositivo accoppiato presta i suoi mode
 | Area | Stato | Verifica |
 |---|---|---|
 | Core Rust (11 crate) | Implementato | 87 test unitari e di integrazione su Linux, più i test reali della sandbox su Windows |
-| Build di rilascio | Windows, macOS universale, Linux, Android (APK arm64), iOS (Rust + Swift, senza firma), daemon ×3 | `release.yml`: tutti i job verdi |
+| Build di rilascio | Windows, macOS universale, Linux, Android (APK arm64), iOS (app per simulatore, senza firma), daemon ×3 | `release.yml`: tutti i job verdi |
 | Inferenza reale | llama.cpp sidecar avviato, supervisionato e fermato dal kill switch | E2E con Qwen3-1.7B su CPU: `aiw run` e chat dalla UI con tool reali |
 | Catalogo runtime | 33 manifest (sidecar, embedded, sistema, LAN) con form generati | Test di validità del catalogo |
 | llama.cpp in-process | Su tutte le piattaforme (Metal su Apple), runtime `llama-embedded` | E2E con Qwen3-1.7B: worktree, A2UI e tool reali |
