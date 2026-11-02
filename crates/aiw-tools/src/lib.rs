@@ -122,6 +122,24 @@ impl ToolContext {
         } else if !inside && !self.read_roots.iter().any(|r| norm.starts_with(aiw_core::paths::normalize(r))) {
             return Err(Error::Denied(format!("{} è fuori dal workspace ({})", norm.display(), root.display())));
         }
+        // The check above is lexical. A symlink inside the workspace can still point outside of it
+        // (a cloned repository may ship one, a sandboxed command can create one), so also require
+        // that the path, with every symlink resolved, stays inside the workspace.
+        let canon = canonical_lenient(&norm)
+            .ok_or_else(|| Error::Denied(format!("{} passa da un collegamento simbolico che non si può risolvere", norm.display())))?;
+        let canon_root = std::fs::canonicalize(&self.workspace_root).unwrap_or_else(|_| root.clone());
+        let readable = !write
+            && self
+                .read_roots
+                .iter()
+                .any(|r| canon.starts_with(std::fs::canonicalize(r).unwrap_or_else(|_| aiw_core::paths::normalize(r))));
+        if !canon.starts_with(&canon_root) && !readable {
+            return Err(Error::Denied(format!(
+                "{} punta fuori dal workspace tramite un collegamento simbolico ({})",
+                norm.display(),
+                canon.display()
+            )));
+        }
         Ok(norm)
     }
 
@@ -149,6 +167,26 @@ impl ToolContext {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::copy(path, &target);
+    }
+}
+
+/// `p` with symlinks resolved, also when its tail does not exist yet: the deepest existing
+/// ancestor is canonicalised and the missing components are appended (so a file about to be
+/// created is judged by the folder it will be created in). `None` when a component exists but
+/// cannot be resolved (a dangling or looping symlink): writing through it would land anywhere.
+fn canonical_lenient(p: &Path) -> Option<PathBuf> {
+    let mut missing = Vec::new();
+    let mut cur = p.to_path_buf();
+    loop {
+        if std::fs::symlink_metadata(&cur).is_ok() {
+            let mut base = std::fs::canonicalize(&cur).ok()?;
+            base.extend(missing.iter().rev());
+            return Some(base);
+        }
+        missing.push(cur.file_name()?.to_os_string());
+        if !cur.pop() {
+            return None;
+        }
     }
 }
 

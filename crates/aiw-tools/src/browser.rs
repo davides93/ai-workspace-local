@@ -329,6 +329,7 @@ impl Tool for BrowserTool {
         match self.op {
             Op::Navigate => {
                 let url = check_url(arg_str(&args, "url")?, ctx).await?.to_string();
+                let policy = ctx.clone();
                 self.mgr
                     .with(|cdp| {
                         Box::pin(async move {
@@ -345,6 +346,21 @@ impl Tool for BrowserTool {
                                 }
                             })
                             .await;
+                            // The browser follows redirects on its own, so the page that actually
+                            // loaded gets the same network policy as the requested address: when it
+                            // is not allowed (a public page bouncing to localhost or the LAN) it is
+                            // dropped before anything of it reaches the model.
+                            let landed =
+                                cdp.eval("location.href").await.ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
+                            // (about:blank and browser error pages are not network targets.)
+                            if landed.starts_with("http://") || landed.starts_with("https://") {
+                                if let Err(Error::Denied(why)) = check_url(&landed, &policy).await {
+                                    let _ = cdp.call("Page.navigate", json!({"url": "about:blank"})).await;
+                                    return Ok(ToolOutput::error(format!(
+                                        "Navigazione annullata: la pagina ha reindirizzato a {landed}, non consentito ({why})"
+                                    )));
+                                }
+                            }
                             let snap = cdp.eval(SNAPSHOT_JS).await?;
                             Ok(ToolOutput::text(snap.as_str().unwrap_or_default().to_string()))
                         })
@@ -475,6 +491,55 @@ mod tests {
         assert!(snap.content.contains("Ricerca inviata"), "{}", snap.content);
         let shot = t[4].call(json!({}), &ctx).await.unwrap();
         assert!(shot.images[0].starts_with("data:image/png;base64,"));
+        assert!(mgr.close().await);
+    }
+
+    /// A page that redirects to an address outside the policy is dropped. Needs a real Chrome:
+    /// `cargo test -p aiw-tools -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn redirect_off_the_allowlist_is_dropped() {
+        if find_chrome().is_none() {
+            return;
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 4096];
+                    let n = s.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let resp = if req.starts_with("GET /bounce") {
+                        format!("HTTP/1.1 302 Found\r\nLocation: http://localhost:{port}/segreto\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    } else {
+                        let body = "<html><head><title>Pagina</title></head><body>contenuto</body></html>";
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    };
+                    let _ = s.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("AIW_BROWSER_HEADLESS", "1");
+        let mgr = Arc::new(BrowserManager::new(dir.path().join("profile")));
+        let t = tools(mgr.clone());
+        let mut ctx = ToolContext::new("r", dir.path().to_path_buf());
+        // The server is on loopback: allowed, but only under its numeric name.
+        ctx.allow_private_network = true;
+        ctx.allow_domains = vec!["127.0.0.1".into()];
+        let ok = t[0].call(json!({"url": format!("http://127.0.0.1:{port}/")}), &ctx).await.unwrap();
+        assert!(!ok.is_error && ok.content.contains("contenuto"), "{}", ok.content);
+        let bounced = t[0].call(json!({"url": format!("http://127.0.0.1:{port}/bounce")}), &ctx).await.unwrap();
+        assert!(bounced.is_error && bounced.content.contains("non consentito"), "{}", bounced.content);
+        assert!(!bounced.content.contains("contenuto"), "the page content must not reach the model");
+        let after = t[1].call(json!({}), &ctx).await.unwrap();
+        assert!(after.content.contains("URL: about:blank"), "{}", after.content);
         assert!(mgr.close().await);
     }
 }

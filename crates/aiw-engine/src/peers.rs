@@ -40,6 +40,14 @@ impl Engine {
         let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build().map_err(Error::other)?;
         let r =
             http.post(format!("{base}/api/pair")).json(&json!({ "code": code.trim() })).send().await.map_err(|e| http_error(&base, e))?;
+        if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            // The other device is rate limiting pairing attempts: its message says when to retry.
+            let why = r.json::<Value>().await.ok().and_then(|v| v["error"].as_str().map(String::from));
+            return Err(Error::Denied(format!(
+                "{base}: {}",
+                why.unwrap_or_else(|| "troppi tentativi di pairing, riprova più tardi".into())
+            )));
+        }
         if !r.status().is_success() {
             return Err(Error::Denied(format!("{base} ha rifiutato il codice di pairing")));
         }

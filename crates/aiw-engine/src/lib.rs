@@ -2,12 +2,14 @@
 
 pub mod defaults;
 mod host;
+pub mod pairing;
 pub mod peers;
 pub mod store;
 pub mod webhook;
 pub mod worktree;
 
 pub use host::EngineHost;
+pub use pairing::PairOutcome;
 
 use aiw_agent::{to_msgs, AgentRunner, HookConfig, Policy, PolicyRule, RunInput};
 use aiw_core::api::*;
@@ -102,10 +104,15 @@ pub(crate) struct Inner {
     pub scheduler: Mutex<aiw_workflow::Scheduler>,
     pub token: String,
     pub pairing: Mutex<(String, Instant)>,
+    /// Failed-attempt limiter of the pairing endpoint.
+    pub pair_guard: Mutex<pairing::PairGuard>,
 }
 
 #[derive(Clone)]
 pub struct Engine(pub(crate) Arc<Inner>);
+
+/// Longest session title accepted by [`Engine::rename_session`].
+pub const MAX_TITLE_CHARS: usize = 200;
 
 fn random_digits(n: usize) -> String {
     let u = uuid::Uuid::new_v4().as_u128();
@@ -202,6 +209,7 @@ impl Engine {
             scheduler: Default::default(),
             token,
             pairing: Mutex::new((random_digits(6), Instant::now())),
+            pair_guard: Default::default(),
         }));
         if !opts.offline {
             engine.0.runtimes.refresh().await;
@@ -304,15 +312,40 @@ impl Engine {
         }
         p.0.clone()
     }
-    /// Exchanges a pairing code for the API token (LAN devices).
+    /// Exchanges a pairing code for the API token (LAN devices). `None` when the code is wrong or
+    /// pairing is locked; use [`Engine::pair_attempt`] to tell the two apart.
     pub fn pair(&self, code: &str) -> Option<String> {
-        let ok = code.replace(' ', "") == self.pairing_code();
-        if ok {
+        match self.pair_attempt(code, None) {
+            PairOutcome::Paired(token) => Some(token),
+            _ => None,
+        }
+    }
+
+    /// One pairing attempt from `client` (its address, when known). Failures are rate limited
+    /// across all clients and per client: after too many the code is rotated and every attempt,
+    /// even with the right code, is refused with a retry hint (see [`pairing`]).
+    pub fn pair_attempt(&self, code: &str, client: Option<&str>) -> PairOutcome {
+        let now = Instant::now();
+        if let Some(retry_after) = self.0.pair_guard.lock().unwrap().check(client, now) {
+            return PairOutcome::Locked { retry_after };
+        }
+        let given = code.replace(' ', "");
+        if pairing::constant_time_eq(&given, &self.pairing_code()) {
+            self.0.pair_guard.lock().unwrap().record_success(client);
             *self.0.pairing.lock().unwrap() = (random_digits(6), Instant::now());
             self.audit_system("pair", "nuovo dispositivo accoppiato");
-            Some(self.0.token.clone())
+            PairOutcome::Paired(self.0.token.clone())
         } else {
-            None
+            let tripped = self.0.pair_guard.lock().unwrap().record_failure(client, now);
+            if tripped {
+                // The guesses made so far are void: whoever was trying now faces a new code.
+                *self.0.pairing.lock().unwrap() = (random_digits(6), Instant::now());
+                self.audit_system(
+                    "pair_lockout",
+                    &format!("{} tentativi di pairing falliti: codice rinnovato, nuovi tentativi sospesi", pairing::MAX_FAILURES),
+                );
+            }
+            PairOutcome::Invalid
         }
     }
 
@@ -518,6 +551,54 @@ impl Engine {
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
     }
+    /// Deletes a custom agent. The agents seeded by [`defaults::agents`] and the ones a workflow
+    /// still delegates to are refused with a conflict.
+    pub fn delete_agent(&self, id: &str) -> Result<()> {
+        let agent = self.agent(id)?;
+        if defaults::is_builtin_agent(id) {
+            return Err(Error::Conflict(format!(
+                "«{}» è un agente integrato e non si può eliminare: puoi modificarlo o crearne una copia.",
+                agent.name
+            )));
+        }
+        let used_by: Vec<String> = self
+            .workflows()?
+            .into_iter()
+            .filter(|w| w.steps.iter().any(|s| matches!(s, WorkflowStep::Agent { agent: a, .. } if a == id)))
+            .map(|w| w.name)
+            .collect();
+        if !used_by.is_empty() {
+            return Err(Error::Conflict(format!(
+                "L'agente «{}» è usato dai workflow: {}. Modificali prima di eliminarlo.",
+                agent.name,
+                used_by.join(", ")
+            )));
+        }
+        self.0.store.delete_doc("agent", id)?;
+        self.audit_user("agent.delete", &format!("{} ({id})", agent.name));
+        Ok(())
+    }
+    /// Deletes an inference profile that no agent (or workflow step) uses any more.
+    pub fn delete_profile(&self, id: &str) -> Result<()> {
+        let profile = self.profile(id)?;
+        let mut used_by: Vec<String> = self.agents()?.into_iter().filter(|a| a.inference_profile == id).map(|a| a.name).collect();
+        used_by.extend(
+            self.workflows()?
+                .into_iter()
+                .filter(|w| w.steps.iter().any(|s| matches!(s, WorkflowStep::Llm { profile: p, .. } if p == id)))
+                .map(|w| format!("workflow {}", w.name)),
+        );
+        if !used_by.is_empty() {
+            return Err(Error::Conflict(format!(
+                "Il profilo «{}» è usato da: {}. Assegna loro un altro profilo prima di eliminarlo.",
+                profile.name,
+                used_by.join(", ")
+            )));
+        }
+        self.0.store.delete_doc("profile", id)?;
+        self.audit_user("profile.delete", &format!("{} ({id})", profile.name));
+        Ok(())
+    }
     pub fn policy_rules(&self) -> Vec<PolicyRule> {
         self.0.store.get_doc::<PolicyDoc>("policy", "default").ok().flatten().unwrap_or_default().rules
     }
@@ -571,6 +652,18 @@ impl Engine {
         }
         self.0.store.upsert_session(&s)?;
         Ok(s)
+    }
+    /// Renames a session; the title is a single trimmed line of at most [`MAX_TITLE_CHARS`].
+    pub fn rename_session(&self, id: &str, title: &str) -> Result<Session> {
+        let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+        if title.is_empty() {
+            return Err(Error::Invalid("il titolo non può essere vuoto".into()));
+        }
+        if title.chars().count() > MAX_TITLE_CHARS {
+            return Err(Error::Invalid(format!("il titolo supera i {MAX_TITLE_CHARS} caratteri")));
+        }
+        self.0.store.rename_session(id, &title)?;
+        self.session(id)
     }
     pub fn delete_session(&self, id: &str) -> Result<()> {
         if let Some(wt) = self.worktree_info(id) {
@@ -821,12 +914,13 @@ impl Engine {
         let rid = run_id.clone();
         tokio::spawn(async move {
             let host = Arc::new(EngineHost::new(engine.clone(), Some(session.id.clone()), None));
-            let res = AgentRunner::run(run_input, host).await;
+            // What the run produced is stored whatever its outcome: when it was cancelled or failed
+            // its files were still written and its commands run, and the next turn must know.
+            // (`new_messages[0]` is the user message, stored above.)
+            let (out, res) = AgentRunner::run_partial(run_input, host).await;
+            let _ = engine.0.store.append_messages(&session.id, out.new_messages.get(1..).unwrap_or(&[]));
             let status = match &res {
-                Ok(out) => {
-                    let _ = engine.0.store.append_messages(&session.id, out.new_messages.get(1..).unwrap_or(&[]));
-                    "succeeded"
-                }
+                Ok(()) => "succeeded",
                 Err(Error::Cancelled) => "cancelled",
                 Err(_) => "failed",
             };
@@ -1223,3 +1317,5 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_hardening;

@@ -29,7 +29,7 @@ struct Mesh {
 
 static MESH: OnceLock<Mesh> = OnceLock::new();
 
-fn host_label(name: &str) -> String {
+pub(crate) fn host_label(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
     let s = s.trim_matches('-').to_string();
     if s.is_empty() {

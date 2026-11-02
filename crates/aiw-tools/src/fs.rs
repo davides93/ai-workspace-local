@@ -450,6 +450,101 @@ mod tests {
         assert!(t("write_file").call(json!({"path":"../evil.txt","content":"x"}), &ctx).await.is_err());
     }
 
+    /// Symlinks cannot be created without privileges on Windows, hence unix only.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinks_cannot_leave_the_workspace() {
+        use std::os::unix::fs::symlink;
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "segreto fuori").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let w = ws.path();
+        symlink(outside.path(), w.join("link_dir")).unwrap();
+        symlink(&secret, w.join("link_file")).unwrap();
+        symlink(outside.path().join("nuovo.txt"), w.join("dangling")).unwrap();
+        std::fs::create_dir(w.join("sub")).unwrap();
+        symlink("../..", w.join("sub/up")).unwrap(); // relative link climbing out of the workspace
+        std::fs::write(w.join("dentro.txt"), "ok dentro").unwrap();
+        symlink(w.join("dentro.txt"), w.join("alias_interno")).unwrap();
+
+        let ctx = ToolContext::new("run_t", w.to_path_buf());
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        let denied = |r: Result<ToolOutput>, what: &str| match r {
+            Err(Error::Denied(m)) => assert!(m.contains("collegamento simbolico"), "{what}: {m}"),
+            other => panic!("{what}: expected a denial, got {other:?}"),
+        };
+
+        // Read.
+        denied(t("read_file").call(json!({"path": "link_file"}), &ctx).await, "read through a file link");
+        denied(t("read_file").call(json!({"path": "link_dir/secret.txt"}), &ctx).await, "read through a directory link");
+        denied(t("read_file").call(json!({"path": "sub/up/secret.txt"}), &ctx).await, "read through a relative link");
+        denied(t("read_file").call(json!({"path": "dangling"}), &ctx).await, "read a dangling link");
+        denied(t("list_dir").call(json!({"path": "link_dir"}), &ctx).await, "list through a link");
+        denied(t("glob").call(json!({"pattern": "*", "path": "link_dir"}), &ctx).await, "glob in a linked folder");
+        denied(t("grep").call(json!({"pattern": "segreto", "path": "link_dir"}), &ctx).await, "grep in a linked folder");
+
+        // Write: the outside files stay as they were and nothing is created there.
+        denied(t("write_file").call(json!({"path": "link_dir/pwned.txt", "content": "x"}), &ctx).await, "create through a directory link");
+        denied(t("write_file").call(json!({"path": "link_dir/a/b/pwned.txt", "content": "x"}), &ctx).await, "create deep through a link");
+        denied(t("write_file").call(json!({"path": "link_file", "content": "x"}), &ctx).await, "overwrite through a file link");
+        denied(
+            t("write_file").call(json!({"path": "link_file", "content": "x", "append": true}), &ctx).await,
+            "append through a file link",
+        );
+        denied(t("write_file").call(json!({"path": "dangling", "content": "x"}), &ctx).await, "create through a dangling link");
+        denied(
+            t("edit_file").call(json!({"path": "link_file", "old_string": "segreto", "new_string": "x"}), &ctx).await,
+            "edit through a link",
+        );
+        denied(
+            t("edit_file").call(json!({"path": "link_dir/nuovo2.txt", "old_string": "", "new_string": "x"}), &ctx).await,
+            "append-create through a link",
+        );
+        assert_eq!(std::fs::read_to_string(&secret).unwrap(), "segreto fuori");
+        let left: Vec<_> =
+            std::fs::read_dir(outside.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(left, vec!["secret.txt"], "nothing was created outside");
+
+        // Move: neither as source nor as destination.
+        denied(t("move_file").call(json!({"from": "link_file", "to": "copia.txt"}), &ctx).await, "move from a link");
+        denied(t("move_file").call(json!({"from": "dentro.txt", "to": "link_dir/dentro.txt"}), &ctx).await, "move into a linked folder");
+        assert!(w.join("dentro.txt").exists() && !outside.path().join("dentro.txt").exists());
+
+        // Searching from the workspace root does not walk into linked folders.
+        let g = t("grep").call(json!({"pattern": "segreto"}), &ctx).await.unwrap();
+        assert!(!g.content.contains("segreto"), "{}", g.content);
+        let g = t("glob").call(json!({"pattern": "**/*.txt"}), &ctx).await.unwrap();
+        assert!(g.content.contains("dentro.txt") && !g.content.contains("secret"), "{}", g.content);
+
+        // A link that stays inside the workspace is fine, for reading and writing.
+        let r = t("read_file").call(json!({"path": "alias_interno"}), &ctx).await.unwrap();
+        assert!(r.content.contains("ok dentro"), "{}", r.content);
+        let r = t("edit_file").call(json!({"path": "alias_interno", "old_string": "ok", "new_string": "OK"}), &ctx).await.unwrap();
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(std::fs::read_to_string(w.join("dentro.txt")).unwrap(), "OK dentro");
+        // New files are judged by the folder they are created in.
+        let r = t("write_file").call(json!({"path": "nuova/cartella/file.txt", "content": "x"}), &ctx).await.unwrap();
+        assert!(!r.is_error && w.join("nuova/cartella/file.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_roots_are_readable_through_links_but_never_writable() {
+        use std::os::unix::fs::symlink;
+        let skills = tempfile::tempdir().unwrap();
+        std::fs::write(skills.path().join("SKILL.md"), "istruzioni").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        symlink(skills.path(), ws.path().join("skills")).unwrap();
+        let mut ctx = ToolContext::new("run_t", ws.path().to_path_buf());
+        ctx.read_roots = vec![skills.path().to_path_buf()];
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        let r = t("read_file").call(json!({"path": "skills/SKILL.md"}), &ctx).await.unwrap();
+        assert!(r.content.contains("istruzioni"), "{}", r.content);
+        assert!(t("write_file").call(json!({"path": "skills/SKILL.md", "content": "x", "append": true}), &ctx).await.is_err());
+        assert_eq!(std::fs::read_to_string(skills.path().join("SKILL.md")).unwrap(), "istruzioni");
+    }
+
     #[tokio::test]
     async fn agents_read_before_overwriting() {
         let dir = tempfile::tempdir().unwrap();

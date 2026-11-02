@@ -69,6 +69,11 @@ pub fn agents() -> Vec<AgentProfile> {
     ]
 }
 
+/// Agents seeded on first run can be edited but not deleted.
+pub fn is_builtin_agent(id: &str) -> bool {
+    agents().iter().any(|a| a.id == id)
+}
+
 /// Picks a sensible default profile from what is installed or running.
 pub fn default_profile(models: &[LocalModel], running_ollama: Option<&str>, prefer_embedded: bool) -> InferenceProfile {
     let chat_models: Vec<&LocalModel> =

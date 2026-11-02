@@ -287,8 +287,20 @@ ripresa dopo un'approvazione.
 | POST | `/api/kill` | Kill switch |
 | — | `/v1/models`, `/v1/chat/completions` | Gateway OpenAI-compatibile verso i runtime locali |
 
-Autenticazione: in loopback non serve; per l'accesso dalla LAN serve un **token di pairing**
-(QR mostrato nell'app) inviato come `Authorization: Bearer`.
+Autenticazione: in loopback (e nel canale in-process della shell Tauri) non serve; per l'accesso
+dalla LAN serve un **token di pairing** (QR mostrato nell'app) inviato come `Authorization: Bearer`.
+Una pagina web non deve poter pilotare l'API locale (CSRF, DNS rebinding), quindi senza token:
+- da loopback l'header `Host` deve essere `localhost`, `127.0.0.1` o `[::1]` (qualsiasi porta), altrimenti `403`;
+- un `Origin` fuori dalla allowlist (`tauri://localhost`, `http(s)://tauri.localhost`,
+  `http(s)://localhost|127.0.0.1|[::1]:*` e l'origine LAN del dispositivo stesso) o un fetch
+  `Sec-Fetch-Site: cross-site` senza `Origin` ammesso danno `403`;
+- il CORS risponde solo alla allowlist e non imposta mai `Access-Control-Allow-Credentials`;
+  `/hooks/{id}` accetta qualsiasi origine perché il suo segreto è la credenziale.
+
+`POST /api/pair` è l'unico endpoint LAN senza token: i tentativi falliti sono limitati
+(10 ogni 10 minuti in totale, 5 per indirizzo); al superamento il codice viene rinnovato e si
+risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/events` riprende da
+`Last-Event-ID` (o `?after=<seq>`) e rimanda solo gli eventi successivi.
 
 ## 9. Storage
 
