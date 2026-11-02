@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { viteSingleFile } from "vite-plugin-singlefile";
 
@@ -14,6 +14,12 @@ export default defineConfig(({ mode }) => ({
     outDir: mode === "mockup" ? "dist-mockup" : "dist",
     emptyOutDir: true,
     target: "es2022",
+  },
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
+    // tokens.test.ts reads tokens.css as text to check the contrast of the palette.
+    css: { include: [/tokens\.css/] },
   },
   server: {
     port: 5173,
