@@ -176,6 +176,12 @@
 .kv dt { color: var(--fg-faint); }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .kv .kv-row { display: contents; }
+.kv dd .pill { white-space: normal; max-width: 100%; }
+/* Phones: a long label (max-content) would squeeze the values, so label and value stack. */
+@media (max-width: 560px) {
+  .kv { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+  .kv dd { margin-bottom: 8px; }
+}
 
 .table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
 table.data { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
