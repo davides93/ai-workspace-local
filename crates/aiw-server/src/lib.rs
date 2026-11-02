@@ -109,7 +109,9 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/policy", get(get_policy).put(put_policy))
         .route("/api/hooks", get(get_hooks).put(put_hooks))
         .route("/api/sessions", get(sessions).post(create_session))
-        .route("/api/sessions/{id}", delete(delete_session))
+        .route("/api/sessions/{id}", get(get_session).delete(delete_session))
+        .route("/api/sessions/{id}/worktree", get(worktree_status).delete(worktree_discard))
+        .route("/api/sessions/{id}/worktree/apply", post(worktree_apply))
         .route("/api/sessions/{id}/messages", get(messages))
         .route("/api/sessions/{id}/active-run", get(active_run))
         .route("/api/sessions/{id}/runs", post(start_run))
@@ -236,9 +238,24 @@ async fn sessions(State(s): State<AppState>) -> ApiResult<Vec<Session>> {
 struct NewSession {
     agent_id: String,
     title: Option<String>,
+    /// none | worktree
+    isolation: Option<String>,
 }
 async fn create_session(State(s): State<AppState>, Json(b): Json<NewSession>) -> ApiResult<Session> {
-    ok(s.engine.create_session(&b.agent_id, b.title)?)
+    ok(s.engine.create_session_with(&b.agent_id, b.title, b.isolation.as_deref())?)
+}
+async fn get_session(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Session> {
+    ok(s.engine.session(&id)?)
+}
+async fn worktree_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::WorktreeStatus> {
+    ok(s.engine.worktree_status(&id)?)
+}
+async fn worktree_apply(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::WorktreeStatus> {
+    ok(s.engine.worktree_apply(&id)?)
+}
+async fn worktree_discard(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.worktree_discard(&id)?;
+    ok(json!({}))
 }
 async fn delete_session(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.delete_session(&id)?;

@@ -61,6 +61,17 @@ pub struct RunOutcome {
     pub usage: Usage,
 }
 
+const MAX_SELF_CHECKS: u32 = 2;
+/// `name` of the stored user messages written by the self-check (the UI shows them as notes).
+pub const SELF_CHECK_NAME: &str = "aiw.self_check";
+
+fn self_check_note(failed: &[(String, String)]) -> String {
+    let list = failed.iter().map(|(n, e)| format!("- {n}: {e}")).collect::<Vec<_>>().join("\n");
+    format!(
+        "[Controllo automatico] Prima di concludere: queste azioni sono fallite e non le hai ripetute:\n{list}\nCorreggi la chiamata e riprova; se non è possibile, di' chiaramente all'utente cosa non è stato fatto. Non dichiarare completate azioni fallite."
+    )
+}
+
 /// Converts stored chat messages to the OpenAI wire format.
 pub fn to_msgs(history: &[ChatMessage]) -> Vec<Msg> {
     history
@@ -227,6 +238,9 @@ impl AgentRunner {
         };
         let ctx_max = input.profile.params.context.map(|c| c as u64).unwrap_or(8192);
         let mut strip_images = false;
+        // Tool errors of the latest batch that the model has not retried yet (self-check, below).
+        let mut unresolved: Vec<(String, String)> = Vec::new();
+        let mut self_checks = 0u32;
 
         for turn in 0..input.agent.max_turns.max(1) {
             if input.tool_ctx.cancel.is_cancelled() {
@@ -324,9 +338,33 @@ impl AgentRunner {
                 created_at: now_rfc3339(),
             });
             if tool_calls.is_empty() {
+                // Small local models often report success right after a failed tool call. Before
+                // accepting the final answer, hand the errors back once (at most twice per run).
+                if !unresolved.is_empty() && self_checks < MAX_SELF_CHECKS && turn + 1 < input.agent.max_turns {
+                    self_checks += 1;
+                    let note = self_check_note(&unresolved);
+                    ev.emit(AgEvent::Custom {
+                        name: "aiw.self_check".into(),
+                        value: json!({"failed": unresolved.iter().map(|(n, _)| n).collect::<Vec<_>>()}),
+                    });
+                    messages.push(Msg::user(note.clone()));
+                    outcome.new_messages.push(ChatMessage {
+                        id: new_id("msg"),
+                        role: "user".into(),
+                        content: note,
+                        reasoning: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: Some(SELF_CHECK_NAME.into()),
+                        created_at: now_rfc3339(),
+                    });
+                    unresolved.clear();
+                    continue;
+                }
                 outcome.final_text = text;
                 break;
             }
+            unresolved.clear();
             // Execute in the order the model asked for: consecutive read-only registry tools
             // run concurrently as one batch; anything with side effects (and internal tools such
             // as todo/agent/skill) runs alone, so a later read sees the effect of an earlier write.
@@ -366,6 +404,10 @@ impl AgentRunner {
             let mut images = Vec::new();
             for (_, (tc, out)) in results {
                 let content = aiw_tools::truncate_middle(&out.content, MAX_TOOL_OUTPUT);
+                // User/policy denials are final: they are not handed back by the self-check.
+                if out.is_error && !content.starts_with("Negato") && content != "annullato" {
+                    unresolved.push((tc.name.clone(), content.chars().take(300).collect()));
+                }
                 let content = if out.is_error { format!("ERRORE: {content}") } else { content };
                 ev.emit(AgEvent::ToolCallResult { message_id: new_id("msg"), tool_call_id: tc.id.clone(), content: content.clone() });
                 messages.push(Msg::tool(&tc.id, &tc.name, &content));

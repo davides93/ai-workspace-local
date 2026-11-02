@@ -103,6 +103,7 @@ impl Store {
                     created_at: r.get(3)?,
                     updated_at: r.get(4)?,
                     last_status: r.get(5)?,
+                    worktree: None,
                 })
             })
             .optional()
@@ -123,6 +124,7 @@ impl Store {
                     created_at: r.get(3)?,
                     updated_at: r.get(4)?,
                     last_status: r.get(5)?,
+                    worktree: None,
                 })
             })
             .map_err(db)?;
@@ -264,6 +266,7 @@ mod tests {
             created_at: "1".into(),
             updated_at: "1".into(),
             last_status: None,
+            worktree: None,
         };
         s.upsert_session(&ses).unwrap();
         let m = |id: &str| ChatMessage {

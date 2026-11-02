@@ -66,6 +66,9 @@ enum Cmd {
         /// Approva automaticamente tutte le richieste di conferma
         #[arg(long)]
         yes: bool,
+        /// Lavora in un git worktree separato (branch aiw/<id>) invece che nel workspace
+        #[arg(long)]
+        worktree: bool,
     },
     /// Esegue un workflow
     Workflow { id: String },
@@ -229,7 +232,7 @@ async fn main() -> Result<()> {
             })?;
             println!("Profilo {} → {} · {}", p.id, p.runtime_id, p.model);
         }
-        Cmd::Run { prompt, agent, yes } => run(&engine, &agent, prompt, yes).await?,
+        Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Workflow { id } => {
             let first = engine.run_workflow(&id, Default::default(), "user").await?;
             loop {
@@ -295,8 +298,11 @@ fn aiw_engine_sandbox() -> &'static str {
     }
 }
 
-async fn run(engine: &Engine, agent: &str, prompt: String, yes: bool) -> Result<()> {
-    let session = engine.create_session(agent, None)?;
+async fn run(engine: &Engine, agent: &str, prompt: String, yes: bool, worktree: bool) -> Result<()> {
+    let session = engine.create_session_with(agent, None, worktree.then_some("worktree"))?;
+    if let Some(wt) = &session.worktree {
+        eprintln!("Worktree isolato: {} (branch {})", wt.path, wt.branch);
+    }
     let mut rx = engine.subscribe();
     let run_id = engine.start_run(&session.id, prompt).await?;
     let mut out = std::io::stdout();
@@ -341,6 +347,16 @@ async fn run(engine: &Engine, agent: &str, prompt: String, yes: bool) -> Result<
         }
         if engine.run_done(&run_id) && rx.is_empty() {
             break;
+        }
+    }
+    if session.worktree.is_some() {
+        if let Ok(st) = engine.worktree_status(&session.id) {
+            if st.files.is_empty() {
+                eprintln!("\nNessuna modifica nel worktree.");
+            } else {
+                eprintln!("\nModifiche nel worktree {} (branch {}):\n{}", st.info.path, st.info.branch, st.diff_stat.trim_end());
+                eprintln!("Applicale dalla UI (Chat → Applica) o con: git -C {} diff {}", st.info.path, st.info.base);
+            }
         }
     }
     Ok(())

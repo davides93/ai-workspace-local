@@ -183,6 +183,28 @@ export interface Session {
   created_at: string;
   updated_at: string;
   last_status?: RunStatus;
+  /** Present when the session works in its own git worktree (branch `aiw/<id>`). */
+  worktree?: WorktreeInfo;
+}
+
+export interface WorktreeInfo {
+  path: string;
+  root: string;
+  branch: string;
+  base: string;
+  repo: string;
+}
+
+export interface ChangedFile {
+  status: string;
+  path: string;
+}
+
+export interface WorktreeStatus extends WorktreeInfo {
+  files: ChangedFile[];
+  diff_stat: string;
+  diff: string;
+  truncated: boolean;
 }
 
 export type RunStatus = "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled";

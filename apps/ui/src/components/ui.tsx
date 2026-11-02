@@ -33,6 +33,7 @@ const paths: Record<string, string> = {
   mouse: "M10 3a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V7a4 4 0 0 1 4-4zM10 3v5",
   refresh: "M15 6a6 6 0 1 0 1 5M15 3v3h-3",
   bolt: "M11 2L4 11h5l-1 7 7-9h-5z",
+  branch: "M6 3v14M6 13a4 4 0 0 0 4-4h1a3 3 0 0 0 3-3M14 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM6 15a2 2 0 1 1 0 4",
 };
 
 export function Icon({ name, size = 18, className }: { name: keyof typeof paths | string; size?: number; className?: string }) {

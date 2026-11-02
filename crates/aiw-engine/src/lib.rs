@@ -3,6 +3,7 @@
 pub mod defaults;
 mod host;
 pub mod store;
+pub mod worktree;
 
 pub use host::EngineHost;
 
@@ -20,7 +21,7 @@ use aiw_tools::{SandboxMode, ToolContext, ToolRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use store::Store;
@@ -528,24 +529,108 @@ impl Engine {
 
     // ------------------------------------------------------------------ sessions & runs
     pub fn sessions(&self) -> Result<Vec<Session>> {
-        self.0.store.sessions()
+        let mut list = self.0.store.sessions()?;
+        for s in &mut list {
+            s.worktree = self.worktree_info(&s.id);
+        }
+        Ok(list)
+    }
+    pub fn session(&self, id: &str) -> Result<Session> {
+        let mut s = self.0.store.session(id)?;
+        s.worktree = self.worktree_info(id);
+        Ok(s)
     }
     pub fn create_session(&self, agent_id: &str, title: Option<String>) -> Result<Session> {
+        self.create_session_with(agent_id, title, None)
+    }
+    /// `isolation: Some("worktree")` gives the session its own git worktree and branch.
+    pub fn create_session_with(&self, agent_id: &str, title: Option<String>, isolation: Option<&str>) -> Result<Session> {
         self.agent(agent_id)?;
         let now = now_rfc3339();
-        let s = Session {
+        let mut s = Session {
             id: new_id("ses"),
             title: title.unwrap_or_else(|| "Nuova sessione".into()),
             agent_id: agent_id.into(),
             created_at: now.clone(),
             updated_at: now,
             last_status: None,
+            worktree: None,
         };
+        match isolation.unwrap_or("none") {
+            "none" | "" => {}
+            "worktree" => {
+                let wt = worktree::create(&self.workspace_root(), &self.0.dirs.worktrees(), &s.id)?;
+                self.0.store.put_doc("worktree", &s.id, &wt)?;
+                s.worktree = Some(wt);
+            }
+            other => return Err(Error::Invalid(format!("isolamento sconosciuto: {other} (usa none o worktree)"))),
+        }
         self.0.store.upsert_session(&s)?;
         Ok(s)
     }
     pub fn delete_session(&self, id: &str) -> Result<()> {
+        if let Some(wt) = self.worktree_info(id) {
+            if let Err(e) = worktree::remove(&wt) {
+                tracing::warn!("worktree {}: {e}", wt.path);
+            }
+            self.0.store.delete_doc("worktree", id)?;
+        }
         self.0.store.delete_session(id)
+    }
+
+    // ------------------------------------------------------------------ worktrees
+    fn worktree_info(&self, session_id: &str) -> Option<WorktreeInfo> {
+        self.0.store.get_doc::<WorktreeInfo>("worktree", session_id).ok().flatten()
+    }
+    /// Directory the tools of a session work in: its worktree, or the shared workspace.
+    pub fn session_root(&self, session_id: &str) -> PathBuf {
+        match self.worktree_info(session_id) {
+            Some(wt) if Path::new(&wt.root).is_dir() => PathBuf::from(wt.root),
+            _ => self.workspace_root(),
+        }
+    }
+    fn session_worktree(&self, session_id: &str) -> Result<WorktreeInfo> {
+        self.0.store.session(session_id)?;
+        self.worktree_info(session_id).ok_or_else(|| Error::Invalid("Questa sessione non usa un worktree.".into()))
+    }
+    fn ensure_idle(&self, session_id: &str) -> Result<()> {
+        if self.active_run(session_id).is_some() {
+            return Err(Error::Invalid("Aspetta la fine del run in corso (o fermalo) prima di applicare o scartare.".into()));
+        }
+        Ok(())
+    }
+    pub fn worktree_status(&self, session_id: &str) -> Result<WorktreeStatus> {
+        worktree::status(&self.session_worktree(session_id)?)
+    }
+    /// Applies the session changes to the user's checkout (as uncommitted changes).
+    pub fn worktree_apply(&self, session_id: &str) -> Result<WorktreeStatus> {
+        self.ensure_idle(session_id)?;
+        let mut wt = self.session_worktree(session_id)?;
+        let files = worktree::apply(&mut wt)?;
+        self.0.store.put_doc("worktree", session_id, &wt)?;
+        self.audit_worktree(session_id, "worktree_apply", format!("{} file applicati da {} al workspace", files.len(), wt.branch));
+        worktree::status(&wt)
+    }
+    /// Deletes the worktree and its branch; the session continues on the shared workspace.
+    pub fn worktree_discard(&self, session_id: &str) -> Result<()> {
+        self.ensure_idle(session_id)?;
+        let wt = self.session_worktree(session_id)?;
+        worktree::remove(&wt)?;
+        self.0.store.delete_doc("worktree", session_id)?;
+        self.audit_worktree(session_id, "worktree_discard", format!("worktree {} e branch {} eliminati", wt.path, wt.branch));
+        Ok(())
+    }
+    fn audit_worktree(&self, session_id: &str, action: &str, detail: String) {
+        let _ = self.0.store.add_audit(&AuditEntry {
+            id: new_id("aud"),
+            ts: now_rfc3339(),
+            run_id: None,
+            actor: "user".into(),
+            action: action.into(),
+            tool: None,
+            decision: Some("approved".into()),
+            detail: format!("{detail} (sessione {session_id})"),
+        });
     }
     pub fn messages(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
         self.0.store.messages(session_id)
@@ -619,17 +704,22 @@ impl Engine {
         depth: u32,
         session_allow: Arc<Mutex<HashSet<String>>>,
     ) -> RunInput {
-        let ws = self.workspace_root();
+        // Chat runs and their sub-agents use the session id as thread id: an isolated session
+        // works in its worktree.
+        let ws = self.session_root(thread_id);
+        let isolated =
+            self.worktree_info(thread_id).map(|wt| format!(" (git worktree isolato, branch `{}`)", wt.branch)).unwrap_or_default();
         let device = self.device();
         let mut tool_ctx = ToolContext::new(run_id, ws.clone());
         tool_ctx.read_roots = vec![self.0.dirs.skills(), ws.join(".aiw")];
         tool_ctx.sandbox = SandboxMode::parse(&agent.sandbox);
+        tool_ctx.require_read_before_overwrite = true;
         tool_ctx.cancel = cancel;
         tool_ctx.checkpoint_dir = Some(self.0.dirs.checkpoints());
         tool_ctx.allow_domains =
             self.0.config.get("network.allow_domains").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         let env = format!(
-            "# Ambiente\n- Data e ora: {}\n- Dispositivo: {} ({} {}, classe {})\n- Cartella di lavoro: {}\n- Inferenza locale: runtime `{}`, modello `{}`",
+            "# Ambiente\n- Data e ora: {}\n- Dispositivo: {} ({} {}, classe {})\n- Cartella di lavoro: {}{isolated}\n- Inferenza locale: runtime `{}`, modello `{}`",
             chrono::Local::now().format("%A %d %B %Y, %H:%M"),
             device.name,
             device.os,

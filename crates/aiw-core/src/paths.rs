@@ -42,6 +42,10 @@ impl DataDirs {
     pub fn checkpoints(&self) -> PathBuf {
         self.root.join("checkpoints")
     }
+    /// Git worktrees of isolated sessions (outside the user's checkout).
+    pub fn worktrees(&self) -> PathBuf {
+        self.root.join("worktrees")
+    }
     pub fn logs(&self) -> PathBuf {
         self.root.join("logs")
     }

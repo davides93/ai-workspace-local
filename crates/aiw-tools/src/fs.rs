@@ -50,6 +50,7 @@ impl Tool for ReadFile {
         if bytes.iter().take(8000).any(|b| *b == 0) {
             return Ok(ToolOutput::text(format!("{} è un file binario ({} byte).", rel(ctx, &p), bytes.len())));
         }
+        ctx.mark_seen(&p);
         let text = String::from_utf8_lossy(&bytes);
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(400) as usize;
@@ -72,10 +73,14 @@ impl Tool for WriteFile {
         "write_file"
     }
     fn description(&self) -> &str {
-        "Crea o sovrascrive un file di testo (le cartelle mancanti vengono create)."
+        "Crea o sovrascrive un file di testo (le cartelle mancanti vengono create). Con append=true aggiunge content in fondo al file esistente."
     }
     fn parameters(&self) -> Value {
-        json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})
+        json!({"type":"object","properties":{
+            "path":{"type":"string"},
+            "content":{"type":"string"},
+            "append":{"type":"boolean","description":"true = aggiunge in fondo invece di sostituire il file"}
+        },"required":["path","content"]})
     }
     fn risk(&self) -> Risk {
         Risk::Write
@@ -83,15 +88,36 @@ impl Tool for WriteFile {
     async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let p = ctx.resolve(arg_str(&args, "path")?, true)?;
         let content = arg_str(&args, "content")?;
+        let append = args.get("append").and_then(|v| v.as_bool()).unwrap_or(false);
+        let existed = p.exists();
+        if existed && !append && ctx.require_read_before_overwrite && !ctx.was_seen(&p) {
+            return Ok(ToolOutput::error(format!(
+                "{} esiste già e non l'hai ancora letto: per aggiungere testo in fondo richiama write_file con append=true; per cambiarlo leggilo con read_file e usa edit_file.",
+                rel(ctx, &p)
+            )));
+        }
         ctx.checkpoint(&p);
         if let Some(parent) = p.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        let existed = p.exists();
-        tokio::fs::write(&p, content).await?;
+        if append && existed {
+            let mut current = tokio::fs::read_to_string(&p).await.map_err(|e| Error::Invalid(format!("{}: {e}", p.display())))?;
+            if !current.is_empty() && !current.ends_with('\n') && !content.starts_with('\n') {
+                current.push('\n');
+            }
+            current.push_str(content);
+            tokio::fs::write(&p, &current).await?;
+        } else {
+            tokio::fs::write(&p, content).await?;
+        }
+        ctx.mark_seen(&p);
         Ok(ToolOutput::text(format!(
             "{} {} ({} righe, {} byte)",
-            if existed { "Sovrascritto" } else { "Creato" },
+            match (existed, append) {
+                (true, true) => "Aggiunto in fondo a",
+                (true, false) => "Sovrascritto",
+                _ => "Creato",
+            },
             rel(ctx, &p),
             content.lines().count(),
             content.len()
@@ -141,6 +167,7 @@ impl Tool for EditFile {
         ctx.checkpoint(&p);
         let updated = if all { text.replace(old, new) } else { text.replacen(old, new, 1) };
         tokio::fs::write(&p, &updated).await?;
+        ctx.mark_seen(&p);
         let line = text.find(old).map(|i| text[..i].lines().count() + 1).unwrap_or(1);
         Ok(ToolOutput::text(format!(
             "Modificato {} ({} sostituzion{}, dalla riga {line})",
@@ -399,5 +426,29 @@ mod tests {
         assert!(!out.is_error, "{}", out.content);
         assert!(dir.path().join("archivio/2026/a.md").exists());
         assert!(t("write_file").call(json!({"path":"../evil.txt","content":"x"}), &ctx).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn agents_read_before_overwriting() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("note.md"), "riga 1\n").unwrap();
+        let mut ctx = ToolContext::new("run_t", dir.path().to_path_buf());
+        ctx.require_read_before_overwrite = true;
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+
+        let out = t("write_file").call(json!({"path":"note.md","content":"solo questa"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("read_file"), "{}", out.content);
+        assert_eq!(std::fs::read_to_string(dir.path().join("note.md")).unwrap(), "riga 1\n");
+        t("read_file").call(json!({"path":"./note.md"}), &ctx).await.unwrap();
+        let out = t("write_file").call(json!({"path":"note.md","content":"riga 1\nriga 2\n"}), &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        let out = t("write_file").call(json!({"path":"note.md","content":"riga 3","append":true}), &ctx).await.unwrap();
+        assert!(out.content.starts_with("Aggiunto in fondo"), "{}", out.content);
+        assert_eq!(std::fs::read_to_string(dir.path().join("note.md")).unwrap(), "riga 1\nriga 2\nriga 3");
+        // New files, and files this run already wrote, need no read.
+        for content in ["a", "b"] {
+            let out = t("write_file").call(json!({"path":"nuovo.md","content":content}), &ctx).await.unwrap();
+            assert!(!out.is_error, "{}", out.content);
+        }
     }
 }

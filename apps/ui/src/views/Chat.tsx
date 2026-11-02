@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/app";
 import { Icon, Markdown, Meter, relTime, useAsync } from "../components/ui";
-import type { AgEvent, AgentProfile, ApprovalRequest, ChatMessage, InferenceProfile, RunState, Session } from "../api/types";
+import type { AgEvent, AgentProfile, ApprovalRequest, ChatMessage, InferenceProfile, RunState, Session, WorktreeStatus } from "../api/types";
 
 type Item =
   | { kind: "user"; id: string; text: string }
@@ -10,12 +10,21 @@ type Item =
   | { kind: "tool"; id: string; name: string; args: string; result?: string; status: "running" | "done" | "denied" }
   | { kind: "approval"; req: ApprovalRequest; resolved?: boolean }
   | { kind: "subagent"; id: string; name: string; result?: string }
+  | { kind: "note"; id: string; text: string }
   | { kind: "error"; message: string };
+
+/** Stored user messages written by the agent loop's self-check (not typed by the user). */
+const SELF_CHECK = "aiw.self_check";
+const selfCheckText = (failed: string[]) =>
+  `Controllo automatico: ${failed.length === 1 ? "un'azione era fallita" : "alcune azioni erano fallite"} (${failed.join(", ")}). L'agente le riprende prima di concludere.`;
 
 function historyToItems(msgs: ChatMessage[]): Item[] {
   const items: Item[] = [];
   for (const m of msgs) {
-    if (m.role === "user") items.push({ kind: "user", id: m.id, text: m.content });
+    if (m.role === "user" && m.name === SELF_CHECK) {
+      const failed = [...m.content.matchAll(/^- ([\w.-]+):/gm)].map((x) => x[1]);
+      items.push({ kind: "note", id: m.id, text: selfCheckText(failed) });
+    } else if (m.role === "user") items.push({ kind: "user", id: m.id, text: m.content });
     else if (m.role === "assistant") {
       if (m.reasoning) items.push({ kind: "reasoning", id: `${m.id}-r`, text: m.reasoning, streaming: false });
       if (m.content) items.push({ kind: "text", id: m.id, text: m.content, streaming: false });
@@ -86,6 +95,7 @@ function reduce(items: Item[], e: AgEvent): Item[] {
       break;
     }
     case "CUSTOM":
+      if (e.name === SELF_CHECK) next.push({ kind: "note", id: `sc-${next.length}`, text: selfCheckText((e.value as { failed: string[] }).failed ?? []) });
       if (e.name === "aiw.approval_request") next.push({ kind: "approval", req: e.value as ApprovalRequest });
       if (e.name === "aiw.approval_resolved") {
         const v = e.value as { id: string; allowed: boolean };
@@ -113,6 +123,7 @@ export function ChatView() {
   const [showInspector, setShowInspector] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
   const [newAgent, setNewAgent] = useState<string>("operator");
+  const [isolated, setIsolated] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const unsub = useRef<(() => void) | null>(null);
 
@@ -186,10 +197,14 @@ export function ChatView() {
   };
 
   const newSession = async () => {
-    const s = await api.createSession({ agent_id: newAgent });
-    await sessions.reload();
-    setActiveId(s.id);
-    setShowSessions(false);
+    try {
+      const s = await api.createSession({ agent_id: newAgent, isolation: isolated ? "worktree" : "none" });
+      await sessions.reload();
+      setActiveId(s.id);
+      setShowSessions(false);
+    } catch (e) {
+      toast(String((e as Error).message ?? e), "crit");
+    }
   };
 
   const respond = async (req: ApprovalRequest, decision: "allow" | "deny", remember = false) => {
@@ -212,6 +227,10 @@ export function ChatView() {
           </select>
           <button className="btn primary" onClick={newSession} title="Nuova sessione"><Icon name="plus" size={16} /></button>
         </div>
+        <label className="check-row" title="L'agente lavora su un branch aiw/… in una copia separata del repository: rivedi le differenze e applicale quando vuoi.">
+          <input type="checkbox" checked={isolated} onChange={(e) => setIsolated(e.target.checked)} />
+          <Icon name="branch" size={14} /> Isola in un worktree git
+        </label>
         <div className="sessions-list">
           {sessions.data?.map((s) => (
             <SessionItem key={s.id} s={s} agents={agents.data ?? []} active={s.id === activeId} onClick={() => { setActiveId(s.id); setShowSessions(false); }} />
@@ -226,6 +245,11 @@ export function ChatView() {
           <h2 className="grow">{active?.title ?? "Workspace"}</h2>
           {agent && <span className="pill neutral"><Icon name="agent" size={13} /> {agent.name}</span>}
           {agent && <span className="pill info" title="Modalità di approvazione"><Icon name="shield" size={13} /> {agent.mode}</span>}
+          {active?.worktree && (
+            <button className="pill neutral mono pill-btn" onClick={() => setShowInspector(true)} title={`Worktree isolato: ${active.worktree.path}`}>
+              <Icon name="branch" size={13} /> {active.worktree.branch}
+            </button>
+          )}
           {runId ? <span className="pill run"><span className="led run" style={{ width: 7, height: 7, boxShadow: "none" }} />In esecuzione</span> : null}
           <button className="icon-btn" onClick={() => setShowInspector((v) => !v)} aria-label="Pannello run"><Icon name="panel" /></button>
         </div>
@@ -267,7 +291,8 @@ export function ChatView() {
         </div>
       </section>
 
-      <Inspector runState={runState} agent={agent} profile={profile} pending={pendingApprovals} onRespond={respond} onClose={() => setShowInspector(false)} running={!!runId} />
+      <Inspector runState={runState} agent={agent} profile={profile} pending={pendingApprovals} onRespond={respond} onClose={() => setShowInspector(false)} running={!!runId}
+        session={active} onWorktreeGone={() => void sessions.reload()} />
     </div>
   );
 }
@@ -280,6 +305,7 @@ function SessionItem({ s, agents, active, onClick }: { s: Session; agents: Agent
       <span className="m">
         <span className={`led ${s.last_status === "failed" ? "crit" : s.last_status === "running" ? "run" : s.last_status ? "ok" : "off"}`} style={{ width: 6, height: 6, boxShadow: "none" }} />
         {a?.name ?? s.agent_id} · {relTime(s.updated_at)}
+        {s.worktree && <span title={s.worktree.branch} style={{ display: "inline-flex" }}><Icon name="branch" size={12} /></span>}
       </span>
     </button>
   );
@@ -376,14 +402,17 @@ function ItemView({ it, onRespond }: { it: Item; onRespond: (r: ApprovalRequest,
           </div>
         </div>
       );
+    case "note":
+      return <div className="msg assistant"><div className="loop-note"><Icon name="refresh" size={14} /> {it.text}</div></div>;
     case "error":
       return <div className="msg assistant"><span className="pill crit">{it.message}</span></div>;
   }
 }
 
-function Inspector({ runState, agent, profile, pending, onRespond, onClose, running }: {
+function Inspector({ runState, agent, profile, pending, onRespond, onClose, running, session, onWorktreeGone }: {
   runState: RunState; agent: AgentProfile | null; profile: InferenceProfile | null;
   pending: Extract<Item, { kind: "approval" }>[]; onRespond: (r: ApprovalRequest, d: "allow" | "deny") => void; onClose: () => void; running: boolean;
+  session: Session | null; onWorktreeGone: () => void;
 }) {
   const u = runState.usage;
   const ctxPct = u?.context_used && u.context_max ? u.context_used / u.context_max : 0;
@@ -424,6 +453,7 @@ function Inspector({ runState, agent, profile, pending, onRespond, onClose, runn
           </div>
         ))}
       </div>
+      {session?.worktree && <WorktreePanel key={session.id} session={session} running={running} onGone={onWorktreeGone} />}
       {pending.length > 0 && (
         <div className="stack">
           <h3>Conferme in attesa</h3>
@@ -439,5 +469,110 @@ function Inspector({ runState, agent, profile, pending, onRespond, onClose, runn
         </div>
       )}
     </aside>
+  );
+}
+
+const FILE_STATUS: Record<string, string> = { A: "aggiunto", M: "modificato", D: "eliminato", R: "rinominato", C: "copiato", T: "tipo cambiato" };
+
+/** Changes of an isolated session: review the diff, apply it to the workspace or throw it away. */
+function WorktreePanel({ session, running, onGone }: { session: Session; running: boolean; onGone: () => void }) {
+  const { api, toast } = useApp();
+  const [st, setSt] = useState<WorktreeStatus | null>(null);
+  const [showDiff, setShowDiff] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const wt = session.worktree!;
+
+  const load = useCallback(async () => {
+    try {
+      setSt(await api.worktreeStatus(session.id));
+    } catch (e) {
+      toast(String((e as Error).message ?? e), "crit");
+    }
+  }, [api, session.id, toast]);
+  // Refresh when the session changes and whenever a run ends.
+  useEffect(() => {
+    if (!running) void load();
+  }, [load, running]);
+
+  const apply = async () => {
+    setBusy(true);
+    try {
+      setSt(await api.worktreeApply(session.id));
+      setShowDiff(false);
+      toast("Modifiche applicate al workspace (non ancora committate)");
+    } catch (e) {
+      toast(String((e as Error).message ?? e), "crit");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const discard = async () => {
+    if (!confirmDiscard) {
+      setConfirmDiscard(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.worktreeDiscard(session.id);
+      toast(`Worktree ${wt.branch} eliminato`);
+      onGone();
+    } catch (e) {
+      toast(String((e as Error).message ?? e), "crit");
+    } finally {
+      setBusy(false);
+      setConfirmDiscard(false);
+    }
+  };
+
+  const files = st?.files ?? [];
+  return (
+    <div className="stack worktree">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h3>Worktree</h3>
+        <span className="pill neutral mono"><Icon name="branch" size={13} /> {wt.branch}</span>
+      </div>
+      <span className="faint mono wt-path" title={wt.path}>{wt.path}</span>
+      {st && files.length === 0 && <span className="faint" style={{ fontSize: "var(--fs-sm)" }}>Nessuna modifica da applicare.</span>}
+      {files.length > 0 && (
+        <ul className="changed" aria-label="File modificati">
+          {files.map((f) => (
+            <li key={f.path}>
+              <span className={`fs fs-${f.status}`} title={FILE_STATUS[f.status] ?? f.status}>{f.status}</span>
+              <span className="mono">{f.path}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="row">
+        <button className="btn sm" disabled={files.length === 0} onClick={() => setShowDiff((v) => !v)} aria-expanded={showDiff}>
+          {showDiff ? "Nascondi differenze" : "Differenze"}
+        </button>
+        <button className="btn primary sm" disabled={busy || running || files.length === 0} onClick={() => void apply()}>
+          <Icon name="check" size={14} /> Applica al workspace
+        </button>
+        <button className="btn danger sm" disabled={busy || running} onClick={() => void discard()} onBlur={() => setConfirmDiscard(false)}>
+          {confirmDiscard ? "Conferma: elimina" : "Scarta"}
+        </button>
+      </div>
+      {running && <span className="faint" style={{ fontSize: "var(--fs-xs)" }}>Applica e scarta tornano disponibili alla fine del run.</span>}
+      {showDiff && st && <Diff text={st.diff} truncated={st.truncated} />}
+    </div>
+  );
+}
+
+function Diff({ text, truncated }: { text: string; truncated: boolean }) {
+  const lines = text.split("\n");
+  const cls = (l: string) =>
+    l.startsWith("+++") || l.startsWith("---") || l.startsWith("diff ") || l.startsWith("new file") || l.startsWith("index ")
+      ? "meta"
+      : l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : l.startsWith("@@") ? "hunk" : undefined;
+  return (
+    <pre className="diff" aria-label="Differenze">
+      <code>
+        {lines.map((l, i) => <span key={i} className={cls(l)}>{l || " "}</span>)}
+        {truncated && <span className="meta">… differenze troncate</span>}
+      </code>
+    </pre>
   );
 }

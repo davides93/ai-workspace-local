@@ -138,3 +138,56 @@ async fn workflow_runs_tool_and_condition_steps() {
     assert_eq!(run.status, "succeeded", "{run:?}");
     assert!(run.steps[2].output.as_deref().unwrap_or_default().contains("a.pdf"));
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let ok = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(args)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git {args:?}");
+}
+
+#[tokio::test]
+async fn isolated_session_writes_in_its_worktree_until_applied() {
+    let turns = vec![
+        ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "nota.md", "content": "# Dal worktree\n"})),
+        ScriptedBackend::text_turn("Fatto"),
+    ];
+    let (e, _d, ws) = engine(turns).await;
+    git(ws.path(), &["init", "-q"]);
+    std::fs::write(ws.path().join("README.md"), "x\n").unwrap();
+    git(ws.path(), &["add", "."]);
+    git(ws.path(), &["commit", "-q", "-m", "init"]);
+
+    let s = e.create_session_with("operator", None, Some("worktree")).unwrap();
+    let wt = s.worktree.clone().expect("worktree");
+    assert!(wt.branch.starts_with("aiw/"));
+    assert_eq!(e.session_root(&s.id), std::path::PathBuf::from(&wt.root));
+    let run = e.start_run(&s.id, "Scrivi una nota".into()).await.unwrap();
+    for _ in 0..200 {
+        if let Some(a) = e.approvals().first() {
+            e.respond_approval(&a.id.clone(), true, false).unwrap();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    wait_finished(&e, &run).await;
+
+    // Written in the worktree only.
+    assert!(!ws.path().join("nota.md").exists());
+    let st = e.worktree_status(&s.id).unwrap();
+    assert_eq!(st.files.iter().map(|f| (f.status.as_str(), f.path.as_str())).collect::<Vec<_>>(), vec![("A", "nota.md")]);
+    assert!(e.sessions().unwrap().iter().any(|x| x.id == s.id && x.worktree.is_some()));
+
+    e.worktree_apply(&s.id).unwrap();
+    assert_eq!(std::fs::read_to_string(ws.path().join("nota.md")).unwrap(), "# Dal worktree\n");
+    e.worktree_discard(&s.id).unwrap();
+    assert!(!std::path::Path::new(&wt.path).exists());
+    assert_eq!(e.session_root(&s.id), e.workspace_root());
+    assert!(e.audit().iter().any(|a| a.action == "worktree_apply"));
+    assert!(e.create_session_with("operator", None, Some("altro")).is_err());
+}

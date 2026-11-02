@@ -2,7 +2,7 @@ import type { Transport } from "./transport";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
-  ToolInfo, WorkflowDef, WorkflowRun,
+  ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus,
 } from "./types";
 
 export class ApiError extends Error {
@@ -60,8 +60,11 @@ export class HttpTransport implements Transport {
   saveAgent = (a: AgentProfile) => this.req<AgentProfile>("PUT", `/agents/${encodeURIComponent(a.id)}`, a);
 
   sessions = () => this.req<Session[]>("GET", "/sessions");
-  createSession = (input: { agent_id: string; title?: string }) => this.req<Session>("POST", "/sessions", input);
+  createSession = (input: { agent_id: string; title?: string; isolation?: "none" | "worktree" }) => this.req<Session>("POST", "/sessions", input);
   deleteSession = (id: string) => this.req<void>("DELETE", `/sessions/${encodeURIComponent(id)}`);
+  worktreeStatus = (sessionId: string) => this.req<WorktreeStatus>("GET", `/sessions/${encodeURIComponent(sessionId)}/worktree`);
+  worktreeApply = (sessionId: string) => this.req<WorktreeStatus>("POST", `/sessions/${encodeURIComponent(sessionId)}/worktree/apply`);
+  worktreeDiscard = (sessionId: string) => this.req<void>("DELETE", `/sessions/${encodeURIComponent(sessionId)}/worktree`);
   messages = (sessionId: string) => this.req<ChatMessage[]>("GET", `/sessions/${encodeURIComponent(sessionId)}/messages`);
   startRun = (sessionId: string, input: string) =>
     this.req<{ run_id: string }>("POST", `/sessions/${encodeURIComponent(sessionId)}/runs`, { input });

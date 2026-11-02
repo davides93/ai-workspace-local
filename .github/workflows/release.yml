@@ -114,6 +114,9 @@ jobs:
           export ANDROID_NDK="$ANDROID_NDK_LATEST_HOME" ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
           export ANDROID_API_LEVEL=26
           npx tauri android init --ci
+          # LiteRT-LM and ML Kit GenAI ship Kotlin 2.4 metadata: align the generated project.
+          sed -i -E 's/(kotlin-gradle-plugin:)[0-9.]+/\12.4.0/' src-tauri/gen/android/build.gradle.kts
+          grep -n "kotlin-gradle-plugin" src-tauri/gen/android/build.gradle.kts
           npx tauri android build --apk --target aarch64 --ci
       - uses: actions/upload-artifact@v4
         with:

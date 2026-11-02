@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +69,11 @@ pub struct ToolContext {
     pub allow_domains: Vec<String>,
     /// Lets web tools reach localhost/LAN addresses.
     pub allow_private_network: bool,
+    /// Agent runs must read an existing file before overwriting it with `write_file` (small
+    /// models otherwise replace whole files when asked to append a line).
+    pub require_read_before_overwrite: bool,
+    /// Files read or written during this run (shared by the clones of the context).
+    pub seen_files: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl ToolContext {
@@ -82,7 +87,16 @@ impl ToolContext {
             checkpoint_dir: None,
             allow_domains: vec![],
             allow_private_network: false,
+            require_read_before_overwrite: false,
+            seen_files: Arc::default(),
         }
+    }
+
+    pub fn mark_seen(&self, path: &Path) {
+        self.seen_files.lock().unwrap().insert(path.to_path_buf());
+    }
+    pub fn was_seen(&self, path: &Path) -> bool {
+        self.seen_files.lock().unwrap().contains(path)
     }
 
     /// Resolves a user/model supplied path and enforces the workspace boundary.
@@ -117,9 +131,17 @@ impl ToolContext {
         if !path.is_file() {
             return;
         }
-        let rel = path.strip_prefix(&self.workspace_root).unwrap_or(path);
-        let rel = rel.to_string_lossy().replace([':', '\\'], "_");
-        let target = dir.join(&self.run_id).join(rel.trim_start_matches('/'));
+        // Same folder structure as the workspace (files outside it go under `_esterni`), built
+        // from path components so that Windows drive prefixes and separators are handled.
+        let (mut target, rel) = match path.strip_prefix(&self.workspace_root) {
+            Ok(r) => (dir.join(&self.run_id), r),
+            Err(_) => (dir.join(&self.run_id).join("_esterni"), path),
+        };
+        for c in rel.components() {
+            if let std::path::Component::Normal(part) = c {
+                target.push(part);
+            }
+        }
         if target.exists() {
             return;
         }

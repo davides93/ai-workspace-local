@@ -1,7 +1,7 @@
 import type { Transport } from "./transport";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
-  DownloadProgress, InferenceProfile, LocalModel, McpServer, RunState, RuntimeInfo, Session, SettingsSchema,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, RunState, RuntimeInfo, Session, SettingsSchema, WorktreeStatus,
   SystemInfo, ToolInfo, WorkflowDef, WorkflowRun,
 } from "./types";
 
@@ -169,8 +169,37 @@ const agents: AgentProfile[] = [
 const sessions: Session[] = [
   { id: "ses_pdf", title: "Riordino PDF in Downloads", agent_id: "operator", created_at: now(), updated_at: now(), last_status: "succeeded" },
   { id: "ses_cv", title: "Confronto offerte fornitori", agent_id: "browser", created_at: now(), updated_at: now(), last_status: "succeeded" },
-  { id: "ses_bug", title: "Fix test parser GGUF", agent_id: "coder", created_at: now(), updated_at: now(), last_status: "failed" },
+  {
+    id: "ses_bug", title: "Fix test parser GGUF", agent_id: "coder", created_at: now(), updated_at: now(), last_status: "succeeded",
+    worktree: { path: "~/.aiw/worktrees/ai-workspace-local-7c1e9a20", root: "~/.aiw/worktrees/ai-workspace-local-7c1e9a20", branch: "aiw/7c1e9a20", base: "9c39159", repo: "~/code/ai-workspace-local" },
+  },
 ];
+
+const MOCK_DIFF = `diff --git a/crates/aiw-models/src/gguf.rs b/crates/aiw-models/src/gguf.rs
+--- a/crates/aiw-models/src/gguf.rs
++++ b/crates/aiw-models/src/gguf.rs
+@@ -88,7 +88,8 @@ fn read_header(r: &mut impl Read) -> Result<Header> {
+     let version = read_u32(r)?;
+-    let tensors = read_u32(r)? as u64;
+-    let kv = read_u32(r)? as u64;
++    // GGUF v2+ stores the counts as u64.
++    let tensors = read_u64(r)?;
++    let kv = read_u64(r)?;
+     Ok(Header { version, tensors, kv })
+ }
+diff --git a/crates/aiw-models/tests/header.rs b/crates/aiw-models/tests/header.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/aiw-models/tests/header.rs
+@@ -0,0 +1,6 @@
++#[test]
++fn reads_v3_header() {
++    let h = aiw_models::gguf::read_header(&mut &V3[..]).unwrap();
++    assert_eq!(h.version, 3);
++}
+`;
+
+const appliedWorktrees = new Set<string>();
 
 const sessionMessages: Record<string, ChatMessage[]> = {
   ses_pdf: [
@@ -342,10 +371,39 @@ export class MockTransport implements Transport {
   }
 
   async sessions() { return structuredClone(sessions); }
-  async createSession(input: { agent_id: string; title?: string }) {
-    const s: Session = { id: nid("ses"), title: input.title ?? "Nuova sessione", agent_id: input.agent_id, created_at: now(), updated_at: now() };
+  async createSession(input: { agent_id: string; title?: string; isolation?: "none" | "worktree" }) {
+    const id = nid("ses");
+    const short = Math.random().toString(16).slice(2, 10);
+    const s: Session = {
+      id, title: input.title ?? "Nuova sessione", agent_id: input.agent_id, created_at: now(), updated_at: now(),
+      worktree: input.isolation === "worktree"
+        ? { path: `~/.aiw/worktrees/progetto-${short}`, root: `~/.aiw/worktrees/progetto-${short}`, branch: `aiw/${short}`, base: "9c39159", repo: "~/progetto" }
+        : undefined,
+    };
     sessions.unshift(s);
     return s;
+  }
+  async worktreeStatus(sessionId: string): Promise<WorktreeStatus> {
+    const s = sessions.find((x) => x.id === sessionId);
+    if (!s?.worktree) throw new Error("Questa sessione non usa un worktree.");
+    const changed = sessionId === "ses_bug" && !appliedWorktrees.has(sessionId);
+    return {
+      ...s.worktree,
+      files: changed ? [{ status: "M", path: "crates/aiw-models/src/gguf.rs" }, { status: "A", path: "crates/aiw-models/tests/header.rs" }] : [],
+      diff_stat: changed ? " crates/aiw-models/src/gguf.rs   | 5 +++--\n crates/aiw-models/tests/header.rs | 6 ++++++\n 2 files changed, 9 insertions(+), 2 deletions(-)\n" : "",
+      diff: changed ? MOCK_DIFF : "",
+      truncated: false,
+    };
+  }
+  async worktreeApply(sessionId: string) {
+    const st = await this.worktreeStatus(sessionId);
+    if (st.files.length === 0) throw new Error("Nessuna modifica da applicare.");
+    appliedWorktrees.add(sessionId);
+    return this.worktreeStatus(sessionId);
+  }
+  async worktreeDiscard(sessionId: string) {
+    const s = sessions.find((x) => x.id === sessionId);
+    if (s) s.worktree = undefined;
   }
   async deleteSession(id: string) {
     const i = sessions.findIndex((s) => s.id === id);

@@ -1,7 +1,7 @@
 import type {
   AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
-  WorkflowDef, WorkflowRun, ApprovalRequest,
+  WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus,
 } from "./types";
 
 /**
@@ -32,8 +32,11 @@ export interface Transport {
   saveAgent(a: AgentProfile): Promise<AgentProfile>;
 
   sessions(): Promise<Session[]>;
-  createSession(input: { agent_id: string; title?: string }): Promise<Session>;
+  createSession(input: { agent_id: string; title?: string; isolation?: "none" | "worktree" }): Promise<Session>;
   deleteSession(id: string): Promise<void>;
+  worktreeStatus(sessionId: string): Promise<WorktreeStatus>;
+  worktreeApply(sessionId: string): Promise<WorktreeStatus>;
+  worktreeDiscard(sessionId: string): Promise<void>;
   messages(sessionId: string): Promise<ChatMessage[]>;
   startRun(sessionId: string, input: string): Promise<{ run_id: string }>;
   cancelRun(runId: string): Promise<void>;

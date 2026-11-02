@@ -244,6 +244,42 @@ pub struct Session {
     pub updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_status: Option<String>,
+    /// Set when the session works in its own git worktree instead of the shared workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeInfo>,
+}
+
+/// A session isolated in a git worktree on branch `aiw/<id>`: parallel tasks never touch the
+/// user's checkout until the changes are reviewed and applied.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorktreeInfo {
+    /// Worktree checkout.
+    pub path: String,
+    /// Directory the session works in (the workspace's sub-folder inside the worktree).
+    pub root: String,
+    pub branch: String,
+    /// Commit the session diff is measured against; it moves forward after each apply.
+    pub base: String,
+    /// Top level of the user's checkout.
+    pub repo: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChangedFile {
+    /// git status letter: A, M, D, R…
+    pub status: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorktreeStatus {
+    #[serde(flatten)]
+    pub info: WorktreeInfo,
+    pub files: Vec<ChangedFile>,
+    pub diff_stat: String,
+    pub diff: String,
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

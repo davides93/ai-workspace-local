@@ -207,6 +207,27 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(e, AgEvent::ReasoningMessageContent { delta, .. } if delta.contains("uso un tool"))));
         assert!(out.new_messages.iter().any(|m| m.role == "tool" && m.name.as_deref() == Some("list_dir")), "text tool call executed");
     }
+
+    #[tokio::test]
+    async fn self_check_hands_back_unretried_errors() {
+        let turns = vec![
+            ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "note.md", "content": "- nuova"})),
+            ScriptedBackend::text_turn("Fatto, ho aggiunto la riga."),
+            ScriptedBackend::tool_turn("c2", "write_file", json!({"path": "note.md", "content": "- nuova", "append": true})),
+            ScriptedBackend::text_turn("Ora la riga è in fondo al file."),
+        ];
+        let (host, dir) = setup(turns, true);
+        std::fs::write(dir.path().join("note.md"), "Note:\n").unwrap();
+        let mut inp = input(dir.path(), "auto");
+        inp.tool_ctx.require_read_before_overwrite = true;
+        let out = AgentRunner::run(inp, host.clone()).await.unwrap();
+        assert_eq!(out.final_text, "Ora la riga è in fondo al file.");
+        assert_eq!(std::fs::read_to_string(dir.path().join("note.md")).unwrap(), "Note:\n- nuova");
+        let note = out.new_messages.iter().find(|m| m.name.as_deref() == Some(runner::SELF_CHECK_NAME)).expect("self-check note");
+        assert_eq!(note.role, "user");
+        assert!(note.content.contains("write_file"));
+        assert!(host.events.lock().unwrap().iter().any(|e| matches!(e, AgEvent::Custom { name, .. } if name == "aiw.self_check")));
+    }
 }
 
 #[cfg(test)]

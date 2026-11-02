@@ -385,3 +385,25 @@ textarea.input { resize: vertical; min-height: 84px; font-family: var(--font-mon
 .only-narrow, .only-phone { display: none !important; }
 @media (max-width: 1180px) { .inspector .only-narrow { display: inline-grid !important; } }
 @media (max-width: 760px) { .convo-head .only-narrow { display: inline-grid !important; } .only-phone { display: flex !important; } }
+
+/* Worktree of an isolated session */
+.check-row { display: flex; align-items: center; gap: 6px; padding: 0 12px 12px; font-size: var(--fs-xs); color: var(--fg-muted); cursor: pointer; }
+.check-row input { accent-color: var(--accent); }
+.pill-btn { cursor: pointer; border-color: var(--line); }
+.pill-btn:hover { border-color: var(--accent); }
+.worktree .wt-path { font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); }
+.changed li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.changed li .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs { flex: none; width: 18px; text-align: center; border-radius: 4px; font-family: var(--font-mono); font-weight: 700; background: var(--surface-2); color: var(--fg-muted); }
+.fs-A { background: var(--ok-soft); color: var(--ok); }
+.fs-M { background: var(--warn-soft); color: var(--warn); }
+.fs-D { background: var(--crit-soft); color: var(--crit); }
+pre.diff { margin: 0; padding: 8px 10px; background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--r-sm); font-size: 0.72rem; line-height: 1.45; max-height: 50vh; overflow: auto; }
+pre.diff code { display: inline-block; min-width: 100%; font-size: inherit; }
+pre.diff code > span { display: block; }
+pre.diff .add { color: var(--ok); background: color-mix(in srgb, var(--ok-soft) 60%, transparent); }
+pre.diff .del { color: var(--crit); background: color-mix(in srgb, var(--crit-soft) 60%, transparent); }
+pre.diff .hunk { color: var(--accent-ink); }
+pre.diff .meta { color: var(--fg-faint); }
+.loop-note { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-xs); color: var(--warn); background: var(--warn-soft); border-radius: var(--r-sm); padding: 6px 10px; }
