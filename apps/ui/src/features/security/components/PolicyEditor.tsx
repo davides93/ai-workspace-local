@@ -1,76 +1,101 @@
-import { useEffect, useState } from "react";
-import { Button, EmptyState, Field, IconButton, Input, Pill, QueryState, Select, type PillTone } from "../../../shared/ui";
-import type { PolicyAction, PolicyRule } from "../../../shared/api/types";
-import { usePolicy, useSetPolicy } from "../api";
+import { useMemo, useState } from "react";
+import { Button, EmptyState, Icon, QueryState } from "../../../shared/ui";
+import { SaveBar } from "../../../shared/ui/SaveBar";
+import { UnsavedChangesDialog } from "../../../shared/ui/UnsavedChangesDialog";
+import { keyed, keyedOne, moveRow, unkeyed, type Keyed } from "../../../shared/lib/keyedList";
+import { useDraft } from "../../../shared/lib/useDraft";
+import { useUnsavedGuard } from "../../../shared/lib/useUnsavedGuard";
+import type { PolicyRule } from "../../../shared/api/types";
+import { usePolicy, useSetPolicy, useToolList } from "../api";
+import { globProblem } from "../model/glob";
+import { checkRules, normalizeRules, runProbe, type Probe } from "../model/policy";
+import { RuleList, type RuleMark } from "./RuleList";
+import { RuleTester } from "./RuleTester";
 
-const ACTIONS: { id: PolicyAction; label: string; tone: PillTone }[] = [
-  { id: "allow", label: "Consenti", tone: "ok" },
-  { id: "ask", label: "Chiedi", tone: "warn" },
-  { id: "deny", label: "Nega", tone: "crit" },
-];
+const NO_MARKS = new Map<number, RuleMark>();
+const FIRST_PROBE: Probe = { tool: "", subject: "", mode: "ask", risk: "exec", sessionAllowed: false, sandboxAvailable: true };
 
-const sameRules = (a: PolicyRule[], b: PolicyRule[]) => JSON.stringify(a) === JSON.stringify(b);
-
-/** Rules `tool(pattern) → allow | ask | deny`, evaluated on top of the approval mode of the agent. */
+/** Rules `tool(pattern) → allow | ask | deny`, evaluated on top of the approval mode of every agent. */
 export function PolicyEditor() {
   const policy = usePolicy();
+  const tools = useToolList();
   const save = useSetPolicy();
-  const [rules, setRules] = useState<PolicyRule[]>([]);
-  const [draft, setDraft] = useState<PolicyRule>({ tool: "", pattern: "", action: "ask" });
-  const saved = policy.data?.rules;
+  const [focusUid, setFocusUid] = useState<number | null>(null);
+  const [probe, setProbe] = useState<Probe>(FIRST_PROBE);
+  const { draft, setDraft, dirty, reset } = useDraft<PolicyRule[], Keyed<PolicyRule>[]>({
+    saved: policy.data?.rules, fromSaved: keyed, toSaved: unkeyed, normalize: normalizeRules,
+  });
+  const rows = useMemo(() => draft ?? [], [draft]);
 
-  useEffect(() => {
-    if (saved) setRules(structuredClone(saved));
-  }, [saved]);
+  const guard = useUnsavedGuard(dirty, { onDiscard: reset });
+  const issues = useMemo(() => checkRules(unkeyed(rows), globProblem), [rows]);
+  const hasError = issues.some((i) => i.level === "error");
+  const result = useMemo(() => runProbe(unkeyed(rows), probe), [rows, probe]);
+  const marks = useMemo(() => {
+    if (!result) return NO_MARKS;
+    const m = new Map<number, RuleMark>();
+    for (const i of result.matches) m.set(i, "match");
+    if (result.decision.by === "rule" && result.decision.ruleIndex !== undefined) m.set(result.decision.ruleIndex, "winner");
+    return m;
+  }, [result]);
 
-  const dirty = !!saved && !sameRules(saved, rules);
   const add = () => {
-    if (!draft.tool.trim()) return;
-    setRules([...rules, { tool: draft.tool.trim(), pattern: draft.pattern?.trim() || null, action: draft.action }]);
-    setDraft({ tool: "", pattern: "", action: draft.action });
+    const row = keyedOne<PolicyRule>({ tool: "", pattern: "", action: "ask" });
+    setDraft((r) => [...r, row]);
+    setFocusUid(row.uid);
+  };
+  const change = (uid: number, patch: Partial<PolicyRule>) => setDraft((r) => r.map((x) => (x.uid === uid ? { ...x, value: { ...x.value, ...patch } } : x)));
+  const submit = async (): Promise<boolean> => {
+    try {
+      await save.mutateAsync(normalizeRules(unkeyed(rows)));
+      return true;
+    } catch {
+      return false; // the central error toast already told why
+    }
   };
 
   return (
     <QueryState query={policy}>
       {() => (
         <div className="stack stack-lg">
-          <div className="table-wrap">
-            <table className="data" aria-label="Regole di policy">
-              <thead><tr><th>Tool</th><th>Pattern</th><th>Azione</th><th><span className="sr-only">Rimuovi</span></th></tr></thead>
-              <tbody>
-                {rules.map((r, i) => (
-                  <tr key={`${r.tool}-${r.pattern}-${i}`}>
-                    <td className="mono">{r.tool}</td>
-                    <td className="mono">{r.pattern || <span className="faint">qualsiasi</span>}</td>
-                    <td><Pill tone={ACTIONS.find((a) => a.id === r.action)?.tone}>{ACTIONS.find((a) => a.id === r.action)?.label ?? r.action}</Pill></td>
-                    <td><IconButton aria-label={`Rimuovi la regola ${r.tool}`} icon="trash" size={16} onClick={() => setRules(rules.filter((_, j) => j !== i))} /></td>
-                  </tr>
-                ))}
-                {rules.length === 0 && <tr><td colSpan={4}><EmptyState icon="shield" title="Nessuna regola" description="Senza regole decide solo la modalità di approvazione dell'agente." /></td></tr>}
-              </tbody>
-            </table>
-          </div>
+          <details className="explainer">
+            <summary><Icon name="info" size={16} /> <b>Come si decide</b> <span className="muted">Nega prevale su Consenti, che prevale su Chiedi; senza regole decide la modalità.</span></summary>
+            <ol className="how-list">
+              <li>Una regola <b>Nega</b> che combacia vince sempre, anche sulle approvazioni già date nella sessione.</li>
+              <li>Altrimenti vince una regola <b>Consenti</b>, poi una <b>Chiedi</b>.</li>
+              <li>Senza regole che combaciano decide la modalità di approvazione dell'agente.</li>
+            </ol>
+            <p className="text-sm muted">La precedenza dipende dall'azione, non dalla posizione: l'ordine serve a leggere l'elenco e, a parità di azione, a indicare quale regola viene citata.</p>
+          </details>
 
-          <form className="row form-inline" onSubmit={(e) => { e.preventDefault(); add(); }}>
-            <Field label="Tool (glob)" htmlFor="pol-tool" className="grow">
-              <Input id="pol-tool" mono placeholder="shell, mcp__github__*" value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} />
-            </Field>
-            <Field label="Pattern (opzionale)" htmlFor="pol-pattern" className="grow">
-              <Input id="pol-pattern" mono placeholder="git status*, ~/Workspace/**" value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} />
-            </Field>
-            <Field label="Azione" htmlFor="pol-action">
-              <Select id="pol-action" value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value as PolicyAction })}>
-                {ACTIONS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-              </Select>
-            </Field>
-            <Button type="submit" icon="plus" disabled={!draft.tool.trim()}>Aggiungi</Button>
-          </form>
+          {rows.length === 0 ? (
+            <EmptyState
+              icon="shield" title="Nessuna regola"
+              description="Senza regole decide solo la modalità di approvazione dell'agente. Aggiungi una regola per consentire, chiedere o negare un tool in modo esplicito."
+              action={<Button variant="primary" icon="plus" onClick={add}>Aggiungi una regola</Button>}
+            />
+          ) : (
+            <div className="stack">
+              <div className="rule-head" aria-hidden="true"><span /><span>Tool (glob)</span><span>Pattern (glob, facoltativo)</span><span>Azione</span><span /></div>
+              <RuleList rows={rows} issues={issues} marks={marks} focusUid={focusUid}
+                onChange={change}
+                onMove={(uid, d) => setDraft((r) => moveRow(r, uid, d))}
+                onRemove={(uid) => setDraft((r) => r.filter((x) => x.uid !== uid))} />
+              <div><Button icon="plus" onClick={add}>Aggiungi regola</Button></div>
+            </div>
+          )}
 
-          <div className="row">
-            <Button variant="primary" onClick={() => save.mutate(rules)} disabled={!dirty || save.isPending}>Salva regole</Button>
-            {dirty && <Button variant="ghost" onClick={() => saved && setRules(structuredClone(saved))}>Annulla modifiche</Button>}
-            {dirty && <span className="faint text-sm">Modifiche non salvate</span>}
-          </div>
+          <RuleTester probe={probe} onProbe={setProbe} result={result} tools={tools.data ?? []} />
+
+          <p className="faint text-sm row"><Icon name="info" size={14} /> Il pattern confronta il comando, il percorso o l'URL della chiamata; un pattern che finisce con <code>*</code> vale anche come prefisso.</p>
+
+          <SaveBar
+            dirty={dirty} saving={save.isPending} canSave={!hasError} blocker="Correggi le regole evidenziate"
+            saveLabel="Salva regole"
+            onSave={() => void submit()}
+            onDiscard={reset}
+          />
+          <UnsavedChangesDialog guard={guard} subject="le regole di policy" onSave={submit} saving={save.isPending} canSave={!hasError} />
         </div>
       )}
     </QueryState>

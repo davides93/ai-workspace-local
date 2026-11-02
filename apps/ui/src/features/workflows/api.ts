@@ -23,37 +23,65 @@ export function useWorkflowRuns() {
   });
 }
 
+/** Agents, inference profiles and tools the steps can point at (shared keys: other pages read the same entries). */
+export function useAgentChoices() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.agents(), queryFn: () => api.agents() });
+}
+
+export function useProfileChoices() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.profiles(), queryFn: () => api.profiles() });
+}
+
+export function useToolChoices() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.tools(), queryFn: () => api.tools() });
+}
+
+/** Puts the saved workflow in the cached list at once, so the screen does not wait for the refetch. */
+function upsert(list: WorkflowDef[] | undefined, w: WorkflowDef): WorkflowDef[] {
+  const all = list ?? [];
+  return all.some((x) => x.id === w.id) ? all.map((x) => (x.id === w.id ? w : x)) : [...all, w];
+}
+
 export function useSaveWorkflow(opts: { silent?: boolean } = {}) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (w: WorkflowDef) => api.saveWorkflow(w),
-    onSuccess: () => {
+    onSuccess: (w) => {
       if (!opts.silent) toast("Workflow salvato");
+      qc.setQueryData<WorkflowDef[]>(qk.workflows.list(), (list) => upsert(list, w));
       void qc.invalidateQueries({ queryKey: qk.workflows.list() });
     },
   });
 }
 
+/** Failures are shown inside the confirm dialog. */
 export function useDeleteWorkflow() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.deleteWorkflow(id),
-    onSuccess: () => {
+    meta: { handled: true },
+    onSuccess: (_void, id) => {
       toast("Workflow eliminato");
+      qc.setQueryData<WorkflowDef[]>(qk.workflows.list(), (list) => list?.filter((w) => w.id !== id));
       void qc.invalidateQueries({ queryKey: qk.workflows.all() });
     },
   });
 }
 
+/** Starts a run of the saved workflow; the run is in the cached list right away so its detail can open. */
 export function useRunWorkflow() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (w: WorkflowDef) => api.runWorkflow(w.id, w.inputs),
-    onSuccess: (_run, w) => {
-      toast(`Workflow "${w.name}" avviato`);
+    mutationFn: (w: Pick<WorkflowDef, "id" | "inputs">) => api.runWorkflow(w.id, w.inputs),
+    onSuccess: (run) => {
+      toast("Workflow avviato");
+      qc.setQueryData<WorkflowRun[]>(qk.workflows.runs(), (list) => [run, ...(list ?? []).filter((r) => r.id !== run.id)]);
       void qc.invalidateQueries({ queryKey: qk.workflows.runs() });
     },
   });
