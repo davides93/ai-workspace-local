@@ -169,6 +169,7 @@ const agents: AgentProfile[] = [
 const sessions: Session[] = [
   { id: "ses_pdf", title: "Riordino PDF in Downloads", agent_id: "operator", created_at: now(), updated_at: now(), last_status: "succeeded" },
   { id: "ses_cv", title: "Confronto offerte fornitori", agent_id: "browser", created_at: now(), updated_at: now(), last_status: "succeeded" },
+  { id: "ses_ui", title: "Prenotazione sala riunioni", agent_id: "operator", created_at: now(), updated_at: now(), last_status: "succeeded" },
   {
     id: "ses_bug", title: "Fix test parser GGUF", agent_id: "coder", created_at: now(), updated_at: now(), last_status: "succeeded",
     worktree: { path: "~/.aiw/worktrees/ai-workspace-local-7c1e9a20", root: "~/.aiw/worktrees/ai-workspace-local-7c1e9a20", branch: "aiw/7c1e9a20", base: "9c39159", repo: "~/code/ai-workspace-local" },
@@ -201,7 +202,32 @@ new file mode 100644
 
 const appliedWorktrees = new Set<string>();
 
+const BOOKING_UI = {
+  surfaceId: "prenotazione",
+  components: [
+    { id: "root", component: "Card", child: "col" },
+    { id: "col", component: "Column", children: ["titolo", "sala", "quando", "persone", "note", "proiettore", "azioni"] },
+    { id: "titolo", component: "Text", text: "Prenota una sala", variant: "h3" },
+    { id: "sala", component: "ChoicePicker", label: "Sala", options: [{ label: "Galilei (8 posti)", value: "galilei" }, { label: "Volta (4 posti)", value: "volta" }, { label: "Fermi (12 posti)", value: "fermi" }], value: { path: "/sala" }, displayStyle: "chips" },
+    { id: "quando", component: "DateTimeInput", label: "Quando", value: { path: "/quando" }, enableDate: true, enableTime: true },
+    { id: "persone", component: "Slider", label: "Partecipanti", min: 1, max: 12, value: { path: "/persone" } },
+    { id: "note", component: "TextField", label: "Ordine del giorno", value: { path: "/note" }, variant: "longText" },
+    { id: "proiettore", component: "CheckBox", label: "Serve il proiettore", value: { path: "/proiettore" } },
+    { id: "azioni", component: "Row", justify: "end", children: ["annulla", "conferma"] },
+    { id: "annulla", component: "Button", label: "Annulla", variant: "borderless", action: { event: { name: "annulla" } } },
+    { id: "conferma", component: "Button", label: "Prenota", variant: "primary", action: { event: { name: "prenota", context: { sala: { path: "/sala" }, quando: { path: "/quando" }, persone: { path: "/persone" }, proiettore: { path: "/proiettore" } } } },
+      checks: [{ condition: { call: "required", args: { value: { path: "/quando" } } }, message: "Scegli data e ora" }] },
+  ],
+  data: { sala: ["galilei"], quando: "2026-11-05T10:00", persone: 6, note: "", proiettore: true },
+};
+
 const sessionMessages: Record<string, ChatMessage[]> = {
+  ses_ui: [
+    { id: "u1", role: "user", content: "Prenotami una sala per la riunione di giovedì con il team.", created_at: now() },
+    { id: "u2", role: "assistant", content: "", tool_calls: [{ id: "c_ui", name: "render_ui", arguments: JSON.stringify(BOOKING_UI) }], created_at: now() },
+    { id: "u3", role: "tool", tool_call_id: "c_ui", name: "render_ui", content: "Interfaccia `prenotazione` mostrata all'utente (12 componenti).", created_at: now() },
+    { id: "u4", role: "assistant", content: "Ho preparato il modulo: controlla sala, orario e partecipanti, poi premi **Prenota**.", created_at: now() },
+  ],
   ses_pdf: [
     { id: "h1", role: "user", content: "Quanti PDF ci sono in Downloads e quanto pesano in totale?", created_at: now() },
     { id: "h2", role: "assistant", content: "", reasoning: "Basta elencare i .pdf della cartella e sommare le dimensioni.", tool_calls: [{ id: "c_h1", name: "list_dir", arguments: JSON.stringify({ path: "~/Downloads", pattern: "*.pdf" }) }], created_at: now() },
@@ -445,14 +471,35 @@ export class MockTransport implements Transport {
     this.runListeners.get(runId)?.forEach((fn) => fn(ev));
   }
 
-  async startRun(sessionId: string, input: string) {
+  async startRun(sessionId: string, input: string, kind?: "a2ui.action") {
     const runId = nid("run");
     const msgs = sessionMessages[sessionId] ?? (sessionMessages[sessionId] = []);
-    msgs.push({ id: nid("m"), role: "user", content: input, created_at: now() });
+    msgs.push({ id: nid("m"), role: "user", content: input, name: kind, created_at: now() });
     const s = sessions.find((x) => x.id === sessionId);
-    if (s && s.title === "Nuova sessione") s.title = input.slice(0, 48);
-    void this.scriptedRun(runId, sessionId, input);
+    if (s && s.title === "Nuova sessione" && !kind) s.title = input.slice(0, 48);
+    if (kind === "a2ui.action") void this.actionReply(runId, sessionId, input);
+    else void this.scriptedRun(runId, sessionId, input);
     return { run_id: runId };
+  }
+
+  private async actionReply(runId: string, threadId: string, input: string) {
+    await sleep(150);
+    this.emit(runId, { type: "RUN_STARTED", threadId, runId });
+    let ctx: Record<string, unknown> = {};
+    let name = "";
+    try {
+      const v = JSON.parse(input.replace(/^\[Azione A2UI\]\s*/, "")) as { action: { name: string; context: Record<string, unknown> } };
+      ctx = v.action.context ?? {};
+      name = v.action.name;
+    } catch { /* demo */ }
+    const m = nid("m");
+    this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m, role: "assistant" });
+    const sala = Array.isArray(ctx.sala) ? String(ctx.sala[0] ?? "") : String(ctx.sala ?? "");
+    await this.streamText(runId, m, name === "prenota"
+      ? `Fatto: sala **${sala.charAt(0).toUpperCase() + sala.slice(1)}** prenotata per ${String(ctx.quando ?? "").replace("T", " alle ")}, ${String(ctx.persone ?? "")} persone${ctx.proiettore ? ", con proiettore" : ""}. Ho aggiunto l'evento al calendario locale.`
+      : "Va bene, non prenoto nulla.", "text");
+    this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m });
+    this.emit(runId, { type: "RUN_FINISHED", threadId, runId });
   }
 
   private async streamText(runId: string, messageId: string, text: string, kind: "text" | "reasoning") {

@@ -114,6 +114,9 @@ fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
             json!({"type":"object","properties":{"agent":{"type":"string","enum":names},"task":{"type":"string","description":"Istruzioni complete e autosufficienti"}},"required":["agent","task"]}),
         ));
     }
+    if allowed(crate::a2ui::TOOL) {
+        v.push(crate::a2ui::spec());
+    }
     if allowed("skill") && !skills.is_empty() {
         let names: Vec<Value> = skills.iter().map(|s| Value::String(s.name.clone())).collect();
         v.push(ToolSpec::function(
@@ -140,6 +143,10 @@ fn system_prompt(input: &RunInput, skills: &[Skill]) -> String {
             s.push_str(extra.trim());
             s.push('\n');
         }
+    }
+    if input.agent.tools.iter().any(|t| t == "*" || t == crate::a2ui::TOOL) {
+        s.push('\n');
+        s.push_str(crate::a2ui::prompt_hint());
     }
     if !skills.is_empty() {
         s.push_str("\n# Skill disponibili (caricale con il tool `skill` quando servono)\n");
@@ -617,6 +624,26 @@ impl AgentRunner {
                     serde_json::from_value(args.get("todos").cloned().unwrap_or(Value::Array(vec![]))).unwrap_or_default();
                 let summary = todos.iter().map(|t| format!("[{}] {}", t.status, t.content)).collect::<Vec<_>>().join("\n");
                 return (ToolOutput::text(format!("Piano aggiornato:\n{summary}")), Some(todos));
+            }
+            crate::a2ui::TOOL => {
+                return match crate::a2ui::build(&args) {
+                    Ok((surface, messages)) => {
+                        let n = messages.iter().find_map(|m| m["updateComponents"]["components"].as_array().map(|c| c.len())).unwrap_or(0);
+                        host.emit(
+                            &input.run_id,
+                            AgEvent::Custom { name: crate::a2ui::EVENT.into(), value: json!({"surfaceId": surface, "messages": messages}) },
+                        );
+                        audit("allow", format!("interfaccia A2UI `{surface}` ({n} componenti)"));
+                        (
+                            ToolOutput::text(format!(
+                                "Interfaccia `{surface}` mostrata all'utente ({n} componenti). Quando l'utente interagisce ricevi un messaggio che inizia con {}: aspettalo invece di inventare i valori.",
+                                crate::a2ui::ACTION_PREFIX
+                            )),
+                            None,
+                        )
+                    }
+                    Err(e) => (ToolOutput::error(e), None),
+                };
             }
             "skill" => {
                 let name = args["name"].as_str().unwrap_or_default();

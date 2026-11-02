@@ -270,9 +270,11 @@ async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiRes
 #[derive(Deserialize)]
 struct RunBody {
     input: String,
+    /// a2ui.action when a surface sends a user action
+    kind: Option<String>,
 }
 async fn start_run(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<RunBody>) -> ApiResult<Value> {
-    ok(json!({"run_id": s.engine.start_run(&id, b.input).await?}))
+    ok(json!({"run_id": s.engine.start_run_with(&id, b.input, b.kind.as_deref()).await?}))
 }
 async fn cancel_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.cancel_run(&id)?;

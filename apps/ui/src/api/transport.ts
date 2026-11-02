@@ -38,7 +38,8 @@ export interface Transport {
   worktreeApply(sessionId: string): Promise<WorktreeStatus>;
   worktreeDiscard(sessionId: string): Promise<void>;
   messages(sessionId: string): Promise<ChatMessage[]>;
-  startRun(sessionId: string, input: string): Promise<{ run_id: string }>;
+  /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
+  startRun(sessionId: string, input: string, kind?: "a2ui.action"): Promise<{ run_id: string }>;
   cancelRun(runId: string): Promise<void>;
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void): () => void;
   activeRun(sessionId: string): Promise<string | null>;

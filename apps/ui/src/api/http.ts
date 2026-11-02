@@ -66,8 +66,8 @@ export class HttpTransport implements Transport {
   worktreeApply = (sessionId: string) => this.req<WorktreeStatus>("POST", `/sessions/${encodeURIComponent(sessionId)}/worktree/apply`);
   worktreeDiscard = (sessionId: string) => this.req<void>("DELETE", `/sessions/${encodeURIComponent(sessionId)}/worktree`);
   messages = (sessionId: string) => this.req<ChatMessage[]>("GET", `/sessions/${encodeURIComponent(sessionId)}/messages`);
-  startRun = (sessionId: string, input: string) =>
-    this.req<{ run_id: string }>("POST", `/sessions/${encodeURIComponent(sessionId)}/runs`, { input });
+  startRun = (sessionId: string, input: string, kind?: "a2ui.action") =>
+    this.req<{ run_id: string }>("POST", `/sessions/${encodeURIComponent(sessionId)}/runs`, kind ? { input, kind } : { input });
   cancelRun = (runId: string) => this.req<void>("POST", `/runs/${encodeURIComponent(runId)}/cancel`);
   activeRun = async (sessionId: string) => (await this.req<{ run_id: string | null }>("GET", `/sessions/${encodeURIComponent(sessionId)}/active-run`)).run_id;
   approvals = () => this.req<ApprovalRequest[]>("GET", "/approvals");

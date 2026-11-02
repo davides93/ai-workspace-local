@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/app";
 import { Icon, Markdown, Meter, relTime, useAsync } from "../components/ui";
+import {
+  A2UI_ACTION_NAME, A2uiSurface, actionText, applyA2ui, describeAction, renderUiToMessages,
+  type A2uiAction, type A2uiMessage, type SurfaceState,
+} from "../components/A2ui";
 import type { AgEvent, AgentProfile, ApprovalRequest, ChatMessage, InferenceProfile, RunState, Session, WorktreeStatus } from "../api/types";
 
 type Item =
@@ -11,6 +15,8 @@ type Item =
   | { kind: "approval"; req: ApprovalRequest; resolved?: boolean }
   | { kind: "subagent"; id: string; name: string; result?: string }
   | { kind: "note"; id: string; text: string }
+  | { kind: "surface"; id: string; surface: SurfaceState }
+  | { kind: "action"; id: string; name: string; context: Record<string, unknown> }
   | { kind: "error"; message: string };
 
 /** Stored user messages written by the agent loop's self-check (not typed by the user). */
@@ -21,7 +27,10 @@ const selfCheckText = (failed: string[]) =>
 function historyToItems(msgs: ChatMessage[]): Item[] {
   const items: Item[] = [];
   for (const m of msgs) {
-    if (m.role === "user" && m.name === SELF_CHECK) {
+    if (m.role === "user" && m.name === A2UI_ACTION_NAME) {
+      const a = describeAction(m.content);
+      items.push(a ? { kind: "action", id: m.id, ...a } : { kind: "user", id: m.id, text: m.content });
+    } else if (m.role === "user" && m.name === SELF_CHECK) {
       const failed = [...m.content.matchAll(/^- ([\w.-]+):/gm)].map((x) => x[1]);
       items.push({ kind: "note", id: m.id, text: selfCheckText(failed) });
     } else if (m.role === "user") items.push({ kind: "user", id: m.id, text: m.content });
@@ -30,10 +39,29 @@ function historyToItems(msgs: ChatMessage[]): Item[] {
       if (m.content) items.push({ kind: "text", id: m.id, text: m.content, streaming: false });
       for (const tc of m.tool_calls ?? []) items.push({ kind: "tool", id: tc.id, name: tc.name, args: tc.arguments, status: "running" });
     } else if (m.role === "tool") {
-      const card = items.find((i) => i.kind === "tool" && i.id === m.tool_call_id) as Extract<Item, { kind: "tool" }> | undefined;
+      const idx = items.findIndex((i) => i.kind === "tool" && i.id === m.tool_call_id);
+      const card = items[idx] as Extract<Item, { kind: "tool" }> | undefined;
       if (card) {
         card.result = m.content;
         card.status = "done";
+        // A successful render_ui call is shown as the interface it produced.
+        if (card.name === "render_ui" && !m.content.startsWith("ERRORE")) {
+          try {
+            const msgs = renderUiToMessages(JSON.parse(card.args) as Record<string, unknown>);
+            const sid = msgs[0].createSurface!.surfaceId;
+            const prev = items.findIndex((i) => i.kind === "surface" && i.id === sid);
+            if (prev >= 0) {
+              const it = items[prev] as Extract<Item, { kind: "surface" }>;
+              it.surface = applyA2ui(it.surface, msgs) ?? it.surface;
+              items.splice(idx, 1);
+            } else {
+              const surface = applyA2ui(null, msgs);
+              if (surface) items[idx] = { kind: "surface", id: sid, surface };
+            }
+          } catch {
+            /* malformed arguments: keep the tool card */
+          }
+        }
       }
     }
   }
@@ -95,6 +123,18 @@ function reduce(items: Item[], e: AgEvent): Item[] {
       break;
     }
     case "CUSTOM":
+      if (e.name === "a2ui") {
+        const v = e.value as { surfaceId: string; messages: A2uiMessage[] };
+        const i = next.findIndex((x) => x.kind === "surface" && x.id === v.surfaceId);
+        if (i >= 0) {
+          const it = next[i] as Extract<Item, { kind: "surface" }>;
+          const surface = applyA2ui(it.surface, v.messages);
+          if (surface) next[i] = { ...it, surface };
+        } else {
+          const surface = applyA2ui(null, v.messages);
+          if (surface) next.push({ kind: "surface", id: v.surfaceId, surface });
+        }
+      }
       if (e.name === SELF_CHECK) next.push({ kind: "note", id: `sc-${next.length}`, text: selfCheckText((e.value as { failed: string[] }).failed ?? []) });
       if (e.name === "aiw.approval_request") next.push({ kind: "approval", req: e.value as ApprovalRequest });
       if (e.name === "aiw.approval_resolved") {
@@ -196,6 +236,19 @@ export function ChatView() {
     }
   };
 
+  const sendAction = async (a: A2uiAction) => {
+    if (!activeId || runId) return;
+    setItems((prev) => [...prev, { kind: "action", id: `a-${Date.now()}`, name: a.name, context: a.context }]);
+    try {
+      const { run_id } = await api.startRun(activeId, actionText(a), "a2ui.action");
+      setRunId(run_id);
+      unsub.current?.();
+      unsub.current = api.subscribeRun(run_id, onEvent);
+    } catch (e) {
+      toast(`Impossibile inviare l'azione: ${String((e as Error).message ?? e)}`, "crit");
+    }
+  };
+
   const newSession = async () => {
     try {
       const s = await api.createSession({ agent_id: newAgent, isolation: isolated ? "worktree" : "none" });
@@ -265,7 +318,9 @@ export function ChatView() {
               </div>
             </div>
           )}
-          {items.map((it, idx) => <ItemView key={`${it.kind}-${"id" in it ? it.id : idx}-${idx}`} it={it} onRespond={respond} />)}
+          {items.map((it, idx) => (
+            <ItemView key={`${it.kind}-${"id" in it ? it.id : idx}-${idx}`} it={it} onRespond={respond} onAction={sendAction} busy={!!runId} />
+          ))}
         </div>
         <div className="composer">
           <div className="composer-box">
@@ -333,9 +388,24 @@ const RISK_LABEL: Record<ApprovalRequest["risk"], string> = { low: "basso", medi
 const toolIcon = (name: string) =>
   name.startsWith("browser") || name === "web_fetch" ? "globe" : name === "shell" ? "terminal" : name.startsWith("computer") ? "mouse" : name.startsWith("mcp__") ? "link" : "file";
 
-function ItemView({ it, onRespond }: { it: Item; onRespond: (r: ApprovalRequest, d: "allow" | "deny", remember?: boolean) => void }) {
+function ItemView({ it, onRespond, onAction, busy }: {
+  it: Item; onRespond: (r: ApprovalRequest, d: "allow" | "deny", remember?: boolean) => void; onAction: (a: A2uiAction) => void; busy: boolean;
+}) {
   const [open, setOpen] = useState(false);
   switch (it.kind) {
+    case "surface":
+      return <div className="msg assistant"><A2uiSurface surface={it.surface} onAction={onAction} disabled={busy} /></div>;
+    case "action":
+      return (
+        <div className="msg user">
+          <div className="action-chip" title="Azione inviata dall'interfaccia">
+            <Icon name="play" size={13} /> <b>{it.name}</b>
+            {Object.keys(it.context).length > 0 && (
+              <span className="mono">{Object.entries(it.context).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("  ")}</span>
+            )}
+          </div>
+        </div>
+      );
     case "user":
       return <div className="msg user"><div className="bubble">{it.text}</div></div>;
     case "text":
@@ -354,6 +424,8 @@ function ItemView({ it, onRespond }: { it: Item; onRespond: (r: ApprovalRequest,
         </div>
       );
     case "tool":
+      // The surface itself is shown; keep the card only when the call failed.
+      if (it.name === "render_ui" && !(it.result ?? "").startsWith("ERRORE")) return null;
       return (
         <div className="msg assistant">
           <div className="toolcard">

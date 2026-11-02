@@ -758,9 +758,24 @@ impl Engine {
 
     /// Starts an agent run in a session; events stream on the bus and via [`Engine::run_events`].
     pub async fn start_run(&self, session_id: &str, input: String) -> Result<String> {
+        self.start_run_with(session_id, input, None).await
+    }
+
+    /// `kind: Some("a2ui.action")` marks the user turn as an A2UI action sent by a surface.
+    pub async fn start_run_with(&self, session_id: &str, input: String, kind: Option<&str>) -> Result<String> {
         if input.trim().is_empty() {
             return Err(Error::Invalid("messaggio vuoto".into()));
         }
+        let name = match kind {
+            None | Some("") => None,
+            Some(aiw_agent::a2ui::ACTION_NAME) => {
+                if !input.starts_with(aiw_agent::a2ui::ACTION_PREFIX) {
+                    return Err(Error::Invalid(format!("un'azione A2UI deve iniziare con {}", aiw_agent::a2ui::ACTION_PREFIX)));
+                }
+                Some(aiw_agent::a2ui::ACTION_NAME.to_string())
+            }
+            Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
+        };
         let mut session = self.0.store.session(session_id)?;
         let agent = self.agent(&session.agent_id)?;
         let profile = self.profile(&agent.inference_profile)?;
@@ -787,11 +802,11 @@ impl Engine {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            name: None,
+            name,
             created_at: now_rfc3339(),
         };
         self.0.store.append_messages(session_id, std::slice::from_ref(&user_msg))?;
-        if session.title == "Nuova sessione" {
+        if session.title == "Nuova sessione" && user_msg.name.is_none() {
             session.title = input.chars().take(60).collect::<String>().lines().next().unwrap_or("Sessione").to_string();
         }
         session.updated_at = now_rfc3339();

@@ -1,5 +1,6 @@
 //! Agentic layer (architecture §5): the agent loop and its policy, hooks, skills and helpers.
 
+pub mod a2ui;
 pub mod fallback;
 pub mod hooks;
 pub mod policy;
@@ -20,7 +21,7 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aiw_core::api::{AgentProfile, ApprovalRequest, AuditEntry, InferenceParams, InferenceProfile};
+    use aiw_core::api::{AgentProfile, ApprovalRequest, AuditEntry, ChatMessage, InferenceParams, InferenceProfile};
     use aiw_core::events::AgEvent;
     use aiw_core::Result;
     use aiw_runtimes::{ChatBackend, ChatDelta, ScriptedBackend};
@@ -206,6 +207,38 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(e, AgEvent::SubagentFinished { result: Some(r), .. } if r.contains("planner ha svolto"))));
         assert!(evs.iter().any(|e| matches!(e, AgEvent::ReasoningMessageContent { delta, .. } if delta.contains("uso un tool"))));
         assert!(out.new_messages.iter().any(|m| m.role == "tool" && m.name.as_deref() == Some("list_dir")), "text tool call executed");
+    }
+
+    #[tokio::test]
+    async fn render_ui_emits_a2ui_messages() {
+        let ui = json!({"surfaceId": "scelta", "components": [
+            {"id": "root", "component": "Column", "children": ["q", "ok"]},
+            {"id": "q", "component": "ChoicePicker", "label": "Formato", "options": [{"label": "PDF", "value": "pdf"}], "value": {"path": "/fmt"}},
+            {"id": "ok", "component": "Button", "label": "Avanti", "action": {"event": {"name": "scegli", "context": {"fmt": {"path": "/fmt"}}}}}
+        ], "data": {"fmt": ["pdf"]}});
+        let turns = vec![
+            ScriptedBackend::tool_turn("c1", "render_ui", json!({"components": [{"id": "x", "component": "Text", "text": "no root"}]})),
+            ScriptedBackend::tool_turn("c2", "render_ui", ui),
+            ScriptedBackend::text_turn("Scegli il formato."),
+        ];
+        let (host, dir) = setup(turns, true);
+        let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        assert_eq!(out.final_text, "Scegli il formato.");
+        let tools: Vec<&ChatMessage> = out.new_messages.iter().filter(|m| m.role == "tool").collect();
+        assert!(tools[0].content.starts_with("ERRORE") && tools[0].content.contains("root"), "{}", tools[0].content);
+        assert!(tools[1].content.contains("mostrata all'utente"));
+        let evs = host.events.lock().unwrap();
+        let surface = evs.iter().find_map(|e| match e {
+            AgEvent::Custom { name, value } if name == a2ui::EVENT => Some(value.clone()),
+            _ => None,
+        });
+        let surface = surface.expect("a2ui event");
+        assert_eq!(surface["surfaceId"], "scelta");
+        assert_eq!(surface["messages"].as_array().unwrap().len(), 3);
+        // the tool is offered and documented in the system prompt
+        let reqs = host.backend.requests.lock().unwrap();
+        assert!(reqs[0].tools.iter().any(|t| t.function.name == "render_ui"));
+        assert!(reqs[0].messages[0].text().contains("A2UI"));
     }
 
     #[tokio::test]

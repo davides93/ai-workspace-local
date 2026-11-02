@@ -132,7 +132,7 @@ impl Tool for EditFile {
         "edit_file"
     }
     fn description(&self) -> &str {
-        "Sostituisce un testo esatto in un file. old_string deve comparire una sola volta, salvo replace_all=true."
+        "Sostituisce un testo esatto in un file. old_string deve comparire una sola volta, salvo replace_all=true. Con old_string vuoto aggiunge new_string in fondo al file (o lo crea)."
     }
     fn parameters(&self) -> Value {
         json!({"type":"object","properties":{
@@ -150,7 +150,29 @@ impl Tool for EditFile {
         let old = arg_str(&args, "old_string")?;
         let new = arg_str(&args, "new_string")?;
         if old.is_empty() {
-            return Err(Error::Invalid("old_string non può essere vuoto (per creare un file usa write_file)".into()));
+            // Small models use an empty old_string to append: do exactly that.
+            let existed = p.exists();
+            ctx.checkpoint(&p);
+            let mut text = if existed {
+                tokio::fs::read_to_string(&p).await.map_err(|e| Error::Invalid(format!("{}: {e}", p.display())))?
+            } else {
+                if let Some(parent) = p.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                String::new()
+            };
+            if !text.is_empty() && !text.ends_with('\n') && !new.starts_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(new);
+            tokio::fs::write(&p, &text).await?;
+            ctx.mark_seen(&p);
+            return Ok(ToolOutput::text(format!(
+                "{} {} ({} righe aggiunte)",
+                if existed { "Aggiunto in fondo a" } else { "Creato" },
+                rel(ctx, &p),
+                new.lines().count()
+            )));
         }
         let all = args.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
         let text = tokio::fs::read_to_string(&p).await.map_err(|e| Error::Invalid(format!("{}: {e}", p.display())))?;
@@ -442,9 +464,11 @@ mod tests {
         t("read_file").call(json!({"path":"./note.md"}), &ctx).await.unwrap();
         let out = t("write_file").call(json!({"path":"note.md","content":"riga 1\nriga 2\n"}), &ctx).await.unwrap();
         assert!(!out.is_error, "{}", out.content);
+        let out = t("edit_file").call(json!({"path":"note.md","old_string":"","new_string":"riga 2.5\n"}), &ctx).await.unwrap();
+        assert!(out.content.starts_with("Aggiunto in fondo"), "{}", out.content);
         let out = t("write_file").call(json!({"path":"note.md","content":"riga 3","append":true}), &ctx).await.unwrap();
         assert!(out.content.starts_with("Aggiunto in fondo"), "{}", out.content);
-        assert_eq!(std::fs::read_to_string(dir.path().join("note.md")).unwrap(), "riga 1\nriga 2\nriga 3");
+        assert_eq!(std::fs::read_to_string(dir.path().join("note.md")).unwrap(), "riga 1\nriga 2\nriga 2.5\nriga 3");
         // New files, and files this run already wrote, need no read.
         for content in ["a", "b"] {
             let out = t("write_file").call(json!({"path":"nuovo.md","content":content}), &ctx).await.unwrap();
