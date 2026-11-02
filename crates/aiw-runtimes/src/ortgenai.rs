@@ -249,7 +249,7 @@ impl Inner {
     /// Makes sure the requested model folder is resident (one at a time).
     fn ensure_model(&self, api: &Api, model_id: &str, provider: &str) -> Result<()> {
         let path = (self.resolver)(model_id)
-            .ok_or_else(|| Error::NotFound(format!("modello ONNX `{model_id}`: indica la cartella con genai_config.json")))?;
+            .ok_or_else(|| Error::NotFound(format!("modello ONNX `{model_id}` non trovato: indica la cartella con genai_config.json")))?;
         let dir = if path.is_file() { path.parent().map(Path::to_path_buf).unwrap_or(path) } else { path };
         if !dir.join("genai_config.json").exists() {
             return Err(Error::Invalid(format!("{} non contiene genai_config.json (modello ONNX GenAI)", dir.display())));

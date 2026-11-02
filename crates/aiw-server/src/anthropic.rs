@@ -3,13 +3,13 @@
 //! the workspace's local runtimes. Requests are translated to the OpenAI-style [`ChatRequest`]
 //! used by every adapter; streamed deltas are re-encoded as Anthropic SSE events.
 
+use crate::extract::Json;
 use crate::{ApiError, AppState};
 use aiw_core::Error;
 use aiw_runtimes::{ChatDelta, ChatRequest, ContentPart, ImageUrl, Msg, MsgContent, OaiFunctionCall, OaiToolCall, ToolSpec};
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;

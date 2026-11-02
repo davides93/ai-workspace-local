@@ -23,6 +23,34 @@ fn default_timeout() -> u64 {
     30
 }
 
+/// The lifecycle events a hook can listen to.
+pub const EVENTS: [&str; 5] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"];
+/// Longest timeout a hook can ask for, in seconds.
+pub const MAX_TIMEOUT_S: u64 = 600;
+
+impl HookConfig {
+    /// Checks a hook that comes from outside (the API) and returns it trimmed: a known event, a
+    /// command, a timeout of 1 to [`MAX_TIMEOUT_S`] seconds and a matcher that compiles as a glob
+    /// (an empty matcher means "every tool" and is stored as `None`).
+    pub fn validated(mut self) -> Result<Self, String> {
+        if !EVENTS.contains(&self.event.as_str()) {
+            return Err(format!("evento `{}` non valido: usa {}", self.event, EVENTS.join(", ")));
+        }
+        self.command = self.command.trim().to_string();
+        if self.command.is_empty() {
+            return Err("manca il comando".into());
+        }
+        if !(1..=MAX_TIMEOUT_S).contains(&self.timeout_s) {
+            return Err(format!("timeout_s deve essere tra 1 e {MAX_TIMEOUT_S} secondi (trovato {})", self.timeout_s));
+        }
+        self.matcher = self.matcher.take().map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+        if let Some(m) = self.matcher.as_deref().filter(|m| Glob::new(m).is_err()) {
+            return Err(format!("il filtro `{m}` non è un glob valido"));
+        }
+        Ok(self)
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct HookOutcome {
     pub block: Option<String>,
@@ -89,6 +117,38 @@ async fn run_one(h: &HookConfig, payload: &Value) -> std::io::Result<(i32, Strin
         .await
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "hook timeout"))??;
     Ok((out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into(), String::from_utf8_lossy(&out.stderr).into()))
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    fn hook(event: &str, command: &str, timeout_s: u64) -> HookConfig {
+        HookConfig { event: event.into(), matcher: None, command: command.into(), timeout_s }
+    }
+
+    #[test]
+    fn external_hooks_are_validated_and_trimmed() {
+        for event in EVENTS {
+            assert!(hook(event, "echo ok", 30).validated().is_ok(), "{event}");
+        }
+        let h = HookConfig { matcher: Some(" shell ".into()), ..hook("PreToolUse", "  ./check.sh  ", 600) }.validated().unwrap();
+        assert_eq!((h.matcher.as_deref(), h.command.as_str(), h.timeout_s), (Some("shell"), "./check.sh", 600));
+        assert_eq!(HookConfig { matcher: Some("  ".into()), ..hook("Stop", "x", 1) }.validated().unwrap().matcher, None);
+        for bad in [
+            hook("Nope", "echo", 30),
+            hook("pretooluse", "echo", 30),
+            hook("", "echo", 30),
+            hook("Stop", "", 30),
+            hook("Stop", "   ", 30),
+            hook("Stop", "echo", 0),
+            hook("Stop", "echo", 601),
+            HookConfig { matcher: Some("sh[ell".into()), ..hook("PreToolUse", "echo", 30) },
+        ] {
+            assert!(bad.clone().validated().is_err(), "{bad:?}");
+        }
+        assert!(hook("Nope", "echo", 30).validated().unwrap_err().contains("PreToolUse"));
+    }
 }
 
 #[cfg(all(test, unix))]

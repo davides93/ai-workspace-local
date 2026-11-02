@@ -1,12 +1,12 @@
 //! OpenAI-compatible gateway: lets any app (editors, Claude Code via a proxy, Codex `--oss`,
 //! OpenCode, CopilotKit…) use the local runtimes through `http://<device>:7777/v1`.
 
+use crate::extract::Json;
 use crate::{ApiError, AppState};
 use aiw_runtimes::{ChatDelta, ChatRequest, Msg, ToolSpec};
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};

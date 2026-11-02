@@ -88,7 +88,8 @@ fn effective_settings(base: &EmbeddedSettings, ctx_override: Option<u32>) -> Emb
 
 impl Inner {
     fn load(&self, model_id: &str) -> Result<Arc<LlamaModel>> {
-        let path = (self.resolver)(model_id).ok_or_else(|| Error::NotFound(format!("modello `{model_id}`: scaricalo da Modelli")))?;
+        let path =
+            (self.resolver)(model_id).ok_or_else(|| Error::NotFound(format!("modello `{model_id}` non trovato: scaricalo da Modelli")))?;
         if let Some(m) = self.models.lock().unwrap().get(&path) {
             return Ok(m.clone());
         }

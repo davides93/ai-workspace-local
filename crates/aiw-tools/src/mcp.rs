@@ -165,7 +165,7 @@ impl McpClient {
                 tx.send(msg.to_string()).map_err(|_| Error::Runtime(format!("server MCP {} terminato", self.name)))?;
                 tokio::time::timeout(Duration::from_secs(120), r)
                     .await
-                    .map_err(|_| Error::Runtime(format!("MCP {method}: timeout")))?
+                    .map_err(|_| Error::Runtime(format!("MCP {method}: tempo scaduto")))?
                     .map_err(|_| Error::Runtime("server MCP terminato".into()))?
             }
             Transport::Http { url, http, session } => {

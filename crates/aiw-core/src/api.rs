@@ -473,10 +473,16 @@ pub struct ToolCall {
     pub arguments: String,
 }
 
+/// `name` of the stored `system` message that records how a run ended in error (`content` is the
+/// message the UI showed as RUN_ERROR). It is part of the chat history, never of the model's
+/// context, and clients that do not know it ignore a `system` message.
+pub const RUN_ERROR_MESSAGE: &str = "aiw.run_error";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
     pub id: String,
-    /// user | assistant | tool | system
+    /// user | assistant | tool | system. A `system` message named [`RUN_ERROR_MESSAGE`] is the
+    /// error that ended a run.
     pub role: String,
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -642,7 +648,9 @@ pub struct WorkflowRun {
 pub struct ToolInfo {
     pub name: String,
     pub description: String,
-    /// builtin | mcp
+    /// builtin | mcp | internal. `internal` tools (todo, agent, skill, render_ui, code) are
+    /// implemented by the agent loop itself: an agent profile can list them, but they have no
+    /// on/off switch (`PUT /api/tools/{name}` answers 400) and the MCP server does not expose them.
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
@@ -654,6 +662,10 @@ pub struct ToolInfo {
     pub unavailable_reason: Option<String>,
     pub parameters: Value,
 }
+
+/// What the API shows instead of a secret (runtime settings, MCP headers and environment). A
+/// client that sends it back means "keep the stored value".
+pub const SECRET_MASK: &str = "••••••";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct McpServerConfig {
@@ -668,9 +680,11 @@ pub struct McpServerConfig {
     pub args: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Environment of the `stdio` process. Reads show [`SECRET_MASK`] for the values that look like secrets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<Map<String, Value>>,
     /// Extra HTTP headers for the `http` transport (e.g. `Authorization` for a paired device).
+    /// Reads show [`SECRET_MASK`] for the values that look like secrets (see the engine).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<Map<String, Value>>,
     #[serde(default = "yes")]

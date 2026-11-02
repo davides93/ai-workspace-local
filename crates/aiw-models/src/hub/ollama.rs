@@ -275,7 +275,7 @@ impl ModelProvider for OllamaProvider {
             }
         }
         if variants.is_empty() || (explicit && first_err.is_some()) {
-            return Err(first_err.unwrap_or_else(|| Error::NotFound(format!("il modello {model} sul registro Ollama"))));
+            return Err(first_err.unwrap_or_else(|| Error::NotFound(format!("il modello {model} non è stato trovato sul registro Ollama"))));
         }
         // `latest` is an alias of one of the sized tags: do not offer the same blob twice.
         if let Some(latest) = variants.iter().position(|v| v.id == "latest") {
@@ -299,7 +299,7 @@ impl ModelProvider for OllamaProvider {
             .variants
             .iter()
             .find(|v| v.id == variant)
-            .ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {}", detail.model.id)))?;
+            .ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {} non trovata", detail.model.id)))?;
         let ep = self.settings.endpoint();
         let dir = self.folder(detail, variant);
         v.files

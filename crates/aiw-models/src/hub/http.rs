@@ -52,15 +52,23 @@ pub(crate) async fn send(provider: &str, what: &str, rb: reqwest::RequestBuilder
     }
 }
 
-pub(crate) fn net_error(provider: &str, e: &reqwest::Error) -> Error {
-    let why = if e.is_timeout() {
+/// Why a request to a remote host failed, in Italian and without the technical text of the
+/// HTTP library (which is English and repeats the URL).
+pub(crate) fn net_why(e: &reqwest::Error) -> String {
+    tracing::debug!("network error: {e:?}");
+    if e.is_timeout() {
         "tempo scaduto".to_string()
     } else if e.is_connect() {
         "connessione rifiutata o rete assente".to_string()
+    } else if e.is_body() || e.is_decode() {
+        "risposta interrotta o non leggibile".to_string()
     } else {
-        e.to_string()
-    };
-    Error::Upstream(format!("impossibile contattare {provider}: {why}"))
+        "errore di rete".to_string()
+    }
+}
+
+pub(crate) fn net_error(provider: &str, e: &reqwest::Error) -> Error {
+    Error::Upstream(format!("impossibile contattare {provider}: {}", net_why(e)))
 }
 
 /// HTTP status → error with a message the user can act on.
@@ -72,7 +80,7 @@ pub(crate) fn status_error(provider: &str, what: &str, s: StatusCode) -> Error {
         403 => {
             Error::Denied(format!("{provider}: accesso vietato (403), il modello è gated o privato: serve un token con accesso accettato"))
         }
-        404 => Error::NotFound(format!("{what} non trovato su {provider}")),
+        404 => Error::NotFound(format!("{what} non è stato trovato su {provider}")),
         429 => Error::Upstream(format!("{provider}: troppe richieste (429), riprova tra poco")),
         500..=599 => Error::Upstream(format!("{provider} non risponde (HTTP {s})")),
         _ => Error::Upstream(format!("{provider}: risposta inattesa (HTTP {s}) per {what}")),
@@ -131,7 +139,7 @@ mod tests {
         assert!(matches!(status_error("Hugging Face", "x", StatusCode::UNAUTHORIZED), Error::Unauthorized(m) if m.contains("token")));
         assert!(matches!(status_error("Hugging Face", "x", StatusCode::FORBIDDEN), Error::Denied(m) if m.contains("gated")));
         assert!(
-            matches!(status_error("Hugging Face", "il modello", StatusCode::NOT_FOUND), Error::NotFound(m) if m.contains("non trovato"))
+            matches!(status_error("Hugging Face", "il modello", StatusCode::NOT_FOUND), Error::NotFound(m) if m.contains("non è stato trovato"))
         );
         assert!(matches!(status_error("Hugging Face", "x", StatusCode::BAD_GATEWAY), Error::Upstream(_)));
     }

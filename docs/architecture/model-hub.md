@@ -227,7 +227,15 @@ Dettagli che il contratto sopra lascia aperti e su cui UI e integrazione possono
 - **Sidecar `.aiw-model.json`**: la radice del documento è sempre l'ultima installazione (forma del
   contratto); in più `installs[]` elenca tutte le installazioni della cartella, perché lo stesso
   repository può ospitare più varianti (Q4_K_M e Q8_0). I file condivisi (l'`mmproj`) non vengono
-  cancellati finché un'altra variante li usa.
+  cancellati finché un'altra variante li usa. Un'installazione è identificata dalla terna
+  `(provider, model, variant)`: lo stesso nome di variante di un altro modello (due URL diretti hanno
+  entrambi la variante `file`) è un'altra installazione, e l'eliminazione di una non tocca i file né il
+  record dell'altra.
+- **URL diretto** (sostituisce il layout del §5): ogni URL ha una cartella propria,
+  `models.dir/url/<host>[_<porta>]/<nome file senza estensione>-<8 esadecimali dello sha256 dell'URL>/<file>`,
+  con il proprio `.aiw-model.json`. Due file dello stesso host sono quindi due modelli distinti, con
+  `source = "url:<URL>@url#file"`; la cartella cambia solo se cambia l'URL (o il nome del file indicato).
+  Le installazioni scritte col layout precedente (`url/<host>/<file>`) restano valide ed eliminabili.
 - **Id e provenienza dei modelli locali**: i file della v0.3 e quelli copiati a mano hanno `origin:
   "manual"` (rimovibili, senza `source`); le installazioni con sidecar hanno `origin: "aiw"` e
   `source = "provider:model@revisione#variante"`. L'id è il nome file senza estensione né shard (per

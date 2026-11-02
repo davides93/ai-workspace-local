@@ -88,7 +88,7 @@ impl Cdp {
         self.tx.send(Message::Text(msg.into())).map_err(|_| Error::Runtime("connessione al browser chiusa".into()))?;
         let v = tokio::time::timeout(Duration::from_secs(30), r)
             .await
-            .map_err(|_| Error::Runtime(format!("CDP {method}: timeout")))?
+            .map_err(|_| Error::Runtime(format!("CDP {method}: tempo scaduto")))?
             .map_err(|_| Error::Runtime("browser chiuso".into()))?;
         if let Some(e) = v.get("error") {
             return Err(Error::Runtime(format!("CDP {method}: {e}")));

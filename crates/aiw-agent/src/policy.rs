@@ -22,7 +22,33 @@ pub struct PolicyRule {
     pub action: String,
 }
 
+/// The actions a rule can have.
+pub const ACTIONS: [&str; 3] = ["allow", "ask", "deny"];
+
 impl PolicyRule {
+    /// Checks a rule that comes from outside (the API) and returns it trimmed: the action must be
+    /// `allow`, `ask` or `deny`, the tool must not be empty and the globs must compile. An empty
+    /// pattern means "any subject" and is stored as `None`.
+    ///
+    /// An unusable rule would not fail loudly later: `evaluate` skips an unknown action and
+    /// compares a broken glob literally, so a `deny` the user typed could silently do nothing.
+    pub fn validated(mut self) -> Result<Self, String> {
+        self.tool = self.tool.trim().to_string();
+        if self.tool.is_empty() {
+            return Err("manca il nome del tool".into());
+        }
+        if !ACTIONS.contains(&self.action.as_str()) {
+            return Err(format!("azione `{}` non valida: usa allow, ask o deny", self.action));
+        }
+        self.pattern = self.pattern.take().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        for (what, glob) in [("tool", Some(&self.tool)), ("pattern", self.pattern.as_ref())] {
+            if let Some(g) = glob.filter(|g| Glob::new(g).is_err()) {
+                return Err(format!("{what} `{g}` non è un glob valido"));
+            }
+        }
+        Ok(self)
+    }
+
     /// Parses `shell(git status*)` / `write_file` style rules.
     pub fn parse(spec: &str, action: &str) -> Option<Self> {
         let spec = spec.trim();
@@ -133,6 +159,32 @@ mod tests {
         assert!(matches!(no_sb.evaluate("shell", Risk::Exec, None, false), Decision::Ask(_)));
         assert_eq!(p("yolo", vec![]).evaluate("computer_click", Risk::Computer, None, false), Decision::Allow);
         assert_eq!(p("ask", vec![]).evaluate("write_file", Risk::Write, None, true), Decision::Allow);
+    }
+
+    #[test]
+    fn external_rules_are_validated_and_trimmed() {
+        let rule = |tool: &str, pattern: Option<&str>, action: &str| PolicyRule {
+            tool: tool.into(),
+            pattern: pattern.map(String::from),
+            action: action.into(),
+        };
+        let ok = rule("  shell ", Some(" git status* "), "ask").validated().unwrap();
+        assert_eq!((ok.tool.as_str(), ok.pattern.as_deref()), ("shell", Some("git status*")));
+        // An empty pattern is "any subject".
+        assert_eq!(rule("shell", Some("  "), "deny").validated().unwrap().pattern, None);
+        assert!(rule("mcp__github__*", None, "allow").validated().is_ok());
+        for bad in [
+            rule("", None, "allow"),
+            rule("   ", None, "allow"),
+            rule("shell", None, "block"),
+            rule("shell", None, "Allow"),
+            rule("shell", None, ""),
+            rule("sh[ell", None, "deny"),
+            rule("shell", Some("{a,b"), "deny"),
+        ] {
+            assert!(bad.clone().validated().is_err(), "{bad:?}");
+        }
+        assert!(rule("shell", None, "block").validated().unwrap_err().contains("allow, ask o deny"));
     }
 
     #[test]

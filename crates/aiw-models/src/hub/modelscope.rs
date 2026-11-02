@@ -219,7 +219,11 @@ impl ModelProvider for ModelScopeProvider {
         if !valid_ref(id) {
             return Err(Error::Invalid(format!("riferimento ModelScope non valido: `{id}`")));
         }
-        let v = detail.variants.iter().find(|v| v.id == variant).ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {id}")))?;
+        let v = detail
+            .variants
+            .iter()
+            .find(|v| v.id == variant)
+            .ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {id} non trovata")))?;
         let folder = native_join("modelscope", id);
         v.files
             .iter()

@@ -8,6 +8,7 @@ use aiw_core::api::{ModelProviderInfo, ModelVariant, RemoteFile, RemoteModel, Re
 use aiw_core::{Error, Result};
 use async_trait::async_trait;
 use reqwest::Url;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -154,6 +155,25 @@ fn host_dir(url: &str) -> String {
         .replace([':', '/', '\\'], "_")
 }
 
+/// Longest part of the file name kept in the folder name (the rest is the hash).
+const STEM_CHARS: usize = 48;
+
+/// Folder of one direct URL, relative to the models directory: `url/<host>/<file stem>-<hash>`.
+///
+/// Every URL gets a folder of its own, because an install is recorded by the sidecar of its
+/// folder and deleted with it: two files of the same host must never share one (they would
+/// overwrite each other's record and deleting one would delete the other). The hash of the whole
+/// URL tells apart `/a/model.gguf` and `/b/model.gguf`; the stem only keeps the folder readable.
+fn url_folder(url: &str, file: &str) -> PathBuf {
+    let stem = file.rsplit_once('.').map(|x| x.0).unwrap_or(file);
+    let stem: String = stem.chars().take(STEM_CHARS).map(|c| if c.is_control() || "<>\"|?*".contains(c) { '_' } else { c }).collect();
+    // Windows drops trailing dots and spaces from a folder name: keep the name as written.
+    let stem = stem.trim_end_matches(['.', ' ']);
+    let stem = if stem.is_empty() { "file" } else { stem };
+    let hash: String = Sha256::digest(url.as_bytes()).iter().take(4).map(|b| format!("{b:02x}")).collect();
+    PathBuf::from("url").join(host_dir(url)).join(format!("{stem}-{hash}"))
+}
+
 #[async_trait]
 impl ModelProvider for UrlProvider {
     fn info(&self) -> ModelProviderInfo {
@@ -181,7 +201,8 @@ impl ModelProvider for UrlProvider {
     }
 
     fn plan(&self, detail: &RemoteModelDetail, variant: &str) -> Result<Vec<FileJob>> {
-        let v = detail.variants.iter().find(|v| v.id == variant).ok_or_else(|| Error::NotFound(format!("variante `{variant}`")))?;
+        let v =
+            detail.variants.iter().find(|v| v.id == variant).ok_or_else(|| Error::NotFound(format!("variante `{variant}` non trovata")))?;
         let folder = self.folder(detail, variant);
         v.files
             .iter()
@@ -197,8 +218,10 @@ impl ModelProvider for UrlProvider {
             .collect()
     }
 
-    fn folder(&self, detail: &RemoteModelDetail, _variant: &str) -> PathBuf {
-        PathBuf::from("url").join(host_dir(&detail.model.id))
+    fn folder(&self, detail: &RemoteModelDetail, variant: &str) -> PathBuf {
+        let file =
+            detail.variants.iter().find(|v| v.id == variant).and_then(|v| v.files.first()).map(|f| f.path.as_str()).unwrap_or("file");
+        url_folder(&detail.model.id, file)
     }
 }
 
@@ -244,6 +267,33 @@ mod tests {
         assert_eq!(format_of_file("a.zip"), None);
     }
 
+    #[test]
+    fn every_url_has_a_folder_of_its_own() {
+        let folder = |url: &str, file: &str| url_folder(url, file);
+        let a = folder("http://example.com/m/a.gguf", "a.gguf");
+        let b = folder("http://example.com/m/b.gguf", "b.gguf");
+        assert_ne!(a, b, "two files of one host are two models");
+        assert_eq!(a.parent(), b.parent());
+        // Same file name at different paths of the same host.
+        assert_ne!(folder("http://example.com/x/model.gguf", "model.gguf"), folder("http://example.com/y/model.gguf", "model.gguf"));
+        // Same query string, same folder (the same URL is the same model); another query is another one.
+        assert_eq!(folder("http://example.com/dl?id=1", "m.gguf"), folder("http://example.com/dl?id=1", "m.gguf"));
+        assert_ne!(folder("http://example.com/dl?id=1", "m.gguf"), folder("http://example.com/dl?id=2", "m.gguf"));
+        // Another host, another port: another parent.
+        assert_ne!(a.parent(), folder("http://example.com:8080/m/a.gguf", "a.gguf").parent());
+        // Every component is a plain name, whatever the file is called.
+        for (url, file) in [
+            ("http://h/x", "Qwen3 (v2) <x>.gguf"),
+            ("http://h/x", &format!("{}.gguf", "é".repeat(300))),
+            ("http://h/x", "a. .gguf"),
+            ("http://[::1]:8080/x", "m.gguf"),
+        ] {
+            let f = folder(url, file);
+            assert!(f.components().all(|c| crate::relpath::is_plain_component(&c.as_os_str().to_string_lossy())), "{f:?}");
+            assert!(f.file_name().unwrap().to_string_lossy().chars().count() <= STEM_CHARS + 9, "{f:?}");
+        }
+    }
+
     #[tokio::test]
     async fn heads_for_size_and_names_the_file() {
         let base = server().await;
@@ -255,7 +305,13 @@ mod tests {
         assert_eq!(d.variants[0].files[0].sha256.as_deref(), Some("a".repeat(64).as_str()));
         let jobs = p.plan(&d, "file").unwrap();
         let host = base.trim_start_matches("http://").replace(':', "_");
-        assert_eq!(jobs[0].dest, PathBuf::from(format!("url/{host}/tiny-Q4_K_M.gguf")));
+        // `url/<host>/<stem>-<hash of the URL>/<file>`: a folder per URL.
+        let folder = jobs[0].dest.parent().unwrap().to_path_buf();
+        assert_eq!(folder, p.folder(&d, "file"));
+        assert_eq!(folder.parent().unwrap(), PathBuf::from(format!("url/{host}")));
+        let name = folder.file_name().unwrap().to_string_lossy().to_string();
+        assert!(name.starts_with("tiny-Q4_K_M-") && name.len() == "tiny-Q4_K_M-".len() + 8, "{name}");
+        assert_eq!(jobs[0].dest.file_name().unwrap(), "tiny-Q4_K_M.gguf");
         assert!(jobs[0].headers.is_empty());
         assert_eq!(jobs[0].url, format!("{base}/m/tiny-Q4_K_M.gguf"));
 
@@ -264,7 +320,10 @@ mod tests {
         assert_eq!(p.detail_with(&format!("{base}/dl"), Some("mine.gguf"), None).await.unwrap().variants[0].files[0].path, "mine.gguf");
         // HEAD refused: size unknown, still fine.
         assert_eq!(p.detail_with(&format!("{base}/nohead/x.gguf"), None, None).await.unwrap().variants[0].size_bytes, 0);
-        assert!(matches!(p.detail_with(&format!("{base}/gone/x.gguf"), None, None).await, Err(Error::NotFound(_))));
+        match p.detail_with(&format!("{base}/gone/x.gguf"), None, None).await {
+            Err(Error::NotFound(m)) => assert!(m.starts_with("il file non è stato trovato su 127.0.0.1"), "{m}"),
+            other => panic!("{other:?}"),
+        }
         // Wrong scheme, wrong type, bad sha.
         assert!(p.detail_with("file:///etc/passwd", None, None).await.is_err());
         assert!(p.detail_with(&format!("{base}/doc.txt"), None, None).await.is_err());

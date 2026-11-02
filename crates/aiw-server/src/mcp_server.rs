@@ -2,12 +2,12 @@
 //! agents, other AIW devices — can use this workspace's tools and delegate tasks to its local
 //! agents. Every call goes through the workspace policy, the approval inbox and the audit trail.
 
+use crate::extract::Json;
 use crate::AppState;
 use aiw_core::Error;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde_json::{json, Value};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -95,7 +95,7 @@ pub async fn handle(State(s): State<AppState>, headers: HeaderMap, Json(body): J
                 Err(e @ (Error::Denied(_) | Error::Runtime(_) | Error::Unsupported(_) | Error::Invalid(_))) => {
                     rpc_result(&id, json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true}))
                 }
-                Err(Error::NotFound(what)) => rpc_error(&id, -32602, format!("tool sconosciuto: {what}")),
+                Err(e @ Error::NotFound(_)) => rpc_error(&id, -32602, e.to_string()),
                 Err(e) => rpc_error(&id, -32603, e.to_string()),
             },
             "resources/list" => rpc_result(&id, json!({"resources": []})),

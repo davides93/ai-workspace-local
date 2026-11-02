@@ -123,7 +123,7 @@ impl Engine {
     /// Forgets a paired device: its token, MCP server and, if it was the active one, the
     /// `aiw-peer` runtime settings.
     pub async fn remove_peer(&self, id: &str) -> Result<()> {
-        let peer: PeerDevice = self.0.store.get_doc("peer", id)?.ok_or_else(|| Error::NotFound(format!("dispositivo {id}")))?;
+        let peer: PeerDevice = self.0.store.get_doc("peer", id)?.ok_or_else(|| Error::NotFound(format!("dispositivo {id} non trovato")))?;
         self.0.store.delete_doc("peer", id)?;
         self.0.store.delete_doc("peer_token", id)?;
         let _ = self.remove_mcp_server(&format!("peer-{id}")).await;

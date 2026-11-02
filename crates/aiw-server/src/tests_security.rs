@@ -345,7 +345,7 @@ async fn pairing_from_a_web_page_is_refused_and_does_not_cost_an_attempt() {
     let h = [host, ("origin", "http://192.168.1.5:7777"), ("sec-fetch-site", "same-origin")];
     let (st, _, body) = send(&app, req("POST", "/api/pair", Some(LAN), &h, Some(json!({"code": "abcdef"})))).await;
     assert_eq!(st, StatusCode::FORBIDDEN);
-    assert_eq!(body["error"], "denied by policy: codice di pairing non valido");
+    assert_eq!(body["error"], "codice di pairing non valido");
     let (st, _, body) = send(&app, req("POST", "/api/pair", Some(LAN), &h, Some(json!({"code": code})))).await;
     assert_eq!(st, StatusCode::OK, "{body}");
     assert_eq!(body["token"], e.token());

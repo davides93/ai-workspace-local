@@ -86,8 +86,9 @@ async fn rest_run_and_gateway_roundtrip() {
     let (st, _) =
         dispatch(app.clone(), "PUT", "/api/config", Some(json!({"layer": "global", "key": "policy.mode", "value": "nope"}))).await;
     assert_eq!(st, 400);
+    // An unknown session has no messages to show: 404, like every other route of a session.
     let (st, _) = dispatch(app, "GET", "/api/sessions/none/messages", None).await;
-    assert_eq!(st, 200);
+    assert_eq!(st, 404);
 }
 
 #[tokio::test]

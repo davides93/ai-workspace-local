@@ -88,23 +88,23 @@ impl FieldSchema {
             _ => true,
         };
         if !ok {
-            return Err(format!("`{key}` must be of type {}", self.kind));
+            return Err(format!("`{key}` deve essere di tipo {}", self.kind));
         }
         if let Some(n) = v.as_f64() {
             if let Some(min) = self.minimum {
                 if n < min {
-                    return Err(format!("`{key}` must be ≥ {min}"));
+                    return Err(format!("`{key}` deve essere almeno {min}"));
                 }
             }
             if let Some(max) = self.maximum {
                 if n > max {
-                    return Err(format!("`{key}` must be ≤ {max}"));
+                    return Err(format!("`{key}` deve essere al massimo {max}"));
                 }
             }
         }
         if let Some(e) = &self.enum_values {
             if !e.contains(v) {
-                return Err(format!("`{key}` must be one of {}", Value::Array(e.clone())));
+                return Err(format!("`{key}` deve essere uno tra {}", Value::Array(e.clone())));
             }
         }
         Ok(())

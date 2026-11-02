@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 pub use http::same_origin;
+pub(crate) use http::{net_error, net_why};
 
 /// Where each provider talks to. Overridable so tests (and mirrors) can point elsewhere.
 #[derive(Debug, Clone)]
@@ -206,7 +207,11 @@ impl Hub {
     }
 
     pub fn get(&self, id: &str) -> Result<Arc<dyn ModelProvider>> {
-        self.providers.iter().find(|p| p.info().id == id).cloned().ok_or_else(|| Error::NotFound(format!("provider di modelli `{id}`")))
+        self.providers
+            .iter()
+            .find(|p| p.info().id == id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("provider di modelli `{id}` non trovato")))
     }
 
     pub fn hf(&self) -> &Arc<hf::HfProvider> {
@@ -266,7 +271,7 @@ impl Hub {
             .variants
             .iter()
             .find(|v| v.id == variant)
-            .ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {}", detail.model.id)))?;
+            .ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {} non trovata", detail.model.id)))?;
         let files = p.plan(detail, variant)?;
         if files.is_empty() {
             return Err(Error::Invalid(format!("la variante `{variant}` non ha file da scaricare")));

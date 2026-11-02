@@ -364,7 +364,7 @@ impl Engine {
     /// touched.
     pub fn delete_model(&self, id: &str) -> Result<()> {
         let models = self.rescan_models();
-        let m = models.iter().find(|m| m.id == id).ok_or_else(|| Error::NotFound(format!("modello `{id}`")))?;
+        let m = models.iter().find(|m| m.id == id).ok_or_else(|| Error::NotFound(format!("modello `{id}` non trovato")))?;
         if !m.removable {
             return Err(Error::Invalid(format!(
                 "«{}» appartiene a {} e AIW lo usa in sola lettura: eliminalo da lì",
@@ -414,7 +414,7 @@ fn pick_variant(d: &RemoteModelDetail, wanted: &str) -> Result<String> {
                 })
             })
             .map(|v| v.id.clone())
-            .ok_or_else(|| Error::NotFound(format!("variante `{wanted}` di {}: disponibili {}", d.model.id, ids())));
+            .ok_or_else(|| Error::NotFound(format!("variante `{wanted}` non trovata per {}: disponibili {}", d.model.id, ids())));
     }
     if d.variants.len() == 1 {
         return Ok(d.variants[0].id.clone());
@@ -455,11 +455,8 @@ fn remove_model(root: &Path, path: &Path) -> Result<()> {
             match inst {
                 Some(inst) => {
                     // Variants share files (the multimodal projector): keep what another install uses.
-                    let shared: HashSet<&str> = installs
-                        .iter()
-                        .filter(|i| i.variant != inst.variant)
-                        .flat_map(|i| i.files.iter().map(|f| f.path.as_str()))
-                        .collect();
+                    let shared: HashSet<&str> =
+                        installs.iter().filter(|i| !i.same_as(inst)).flat_map(|i| i.files.iter().map(|f| f.path.as_str())).collect();
                     for f in inst.files.iter().filter(|f| !shared.contains(f.path.as_str())) {
                         // A record entry that is not a plain relative path never reaches outside `dir`.
                         let Some(p) = f.native(&dir) else { continue };
@@ -467,7 +464,7 @@ fn remove_model(root: &Path, path: &Path) -> Result<()> {
                         let _ = std::fs::remove_file(format!("{}.part", p.display()));
                         prune_empty(&dir, p.parent());
                     }
-                    let left = sidecar::remove_variant(&dir, &inst.variant)?;
+                    let left = sidecar::remove_install(&dir, inst)?;
                     if left.is_empty() {
                         std::fs::remove_dir_all(&dir)?;
                     }
@@ -844,6 +841,76 @@ mod tests {
         assert!(models.exists(), "the models directory itself stays");
         assert!(e.models().is_empty());
         assert_eq!(e.audit().iter().filter(|a| a.action == "model.delete").count(), 4);
+    }
+
+    fn record_url(dir: &Path, url: &str, file: &str) {
+        sidecar::upsert(
+            dir,
+            sidecar::Install {
+                provider: "url".into(),
+                model: url.into(),
+                variant: "file".into(),
+                revision: "url".into(),
+                format: "gguf".into(),
+                quant: None,
+                files: vec![sidecar::SidecarFile { path: file.into(), size_bytes: 1, sha256: None }],
+                installed_at: "2026-01-01T00:00:00.000Z".into(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn two_direct_urls_of_one_host_are_two_models_deleted_independently() {
+        let d = tempfile::tempdir().unwrap();
+        let e = engine_in(d.path()).await;
+        let models = e.0.models_dir.clone();
+        let g = tiny_gguf();
+        // The layout the URL provider writes now: a folder per URL.
+        let (a, b) = (models.join("url/example.com/alpha-1111aaaa"), models.join("url/example.com/beta-2222bbbb"));
+        put(&a.join("alpha.gguf"), &g);
+        put(&b.join("beta.gguf"), &g);
+        record_url(&a, "http://example.com/alpha.gguf", "alpha.gguf");
+        record_url(&b, "http://example.com/beta.gguf", "beta.gguf");
+        let found = e.models();
+        let sources: Vec<&str> = found.iter().filter_map(|m| m.source.as_deref()).collect();
+        assert_eq!(found.len(), 2, "{sources:?}");
+        assert!(sources.iter().any(|s| s.starts_with("url:http://example.com/alpha.gguf")), "{sources:?}");
+        assert!(sources.iter().any(|s| s.starts_with("url:http://example.com/beta.gguf")), "{sources:?}");
+        let alpha = found.iter().find(|m| m.source.as_deref().is_some_and(|s| s.contains("alpha"))).unwrap();
+        e.delete_model(&alpha.id).unwrap();
+        assert!(!a.exists(), "the folder of the deleted URL goes away");
+        assert!(b.join("beta.gguf").is_file() && sidecar::read(&b).len() == 1, "the other URL is untouched");
+        assert_eq!(e.models().len(), 1);
+        let beta = e.models().remove(0);
+        e.delete_model(&beta.id).unwrap();
+        assert!(!models.join("url").exists(), "empty parents are pruned");
+    }
+
+    /// Records written before the folder-per-URL layout can share one folder (and the variant
+    /// `file`): deleting one must still leave the other, files and record.
+    #[tokio::test]
+    async fn installs_that_share_a_folder_and_a_variant_name_do_not_delete_each_other() {
+        let d = tempfile::tempdir().unwrap();
+        let e = engine_in(d.path()).await;
+        let models = e.0.models_dir.clone();
+        let g = tiny_gguf();
+        let dir = models.join("url/example.com");
+        put(&dir.join("alpha.gguf"), &g);
+        put(&dir.join("beta.gguf"), &g);
+        record_url(&dir, "http://example.com/alpha.gguf", "alpha.gguf");
+        record_url(&dir, "http://example.com/beta.gguf", "beta.gguf");
+        assert_eq!(sidecar::read(&dir).len(), 2, "same variant, different model: two installs");
+        let found = e.models();
+        assert_eq!(found.len(), 2, "{found:#?}");
+        let alpha = found.iter().find(|m| m.source.as_deref().is_some_and(|s| s.contains("alpha"))).unwrap();
+        e.delete_model(&alpha.id).unwrap();
+        assert!(!dir.join("alpha.gguf").exists());
+        assert!(dir.join("beta.gguf").is_file(), "the other install's file is still there");
+        let left = sidecar::read(&dir);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].model, "http://example.com/beta.gguf");
+        assert_eq!(e.models().len(), 1);
     }
 
     /// The Windows failure in miniature: the models directory is spelled one way (a link, or an 8.3

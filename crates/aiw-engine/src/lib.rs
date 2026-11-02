@@ -5,6 +5,7 @@ mod host;
 mod models;
 pub mod pairing;
 pub mod peers;
+mod secrets;
 pub mod store;
 pub mod webhook;
 pub mod worktree;
@@ -67,15 +68,16 @@ pub(crate) struct PendingApproval {
     session_id: Option<String>,
 }
 
+/// Body and stored form of the policy. `rules` is required: a body without it must not be read
+/// as "no rules" and wipe the existing ones.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PolicyDoc {
-    #[serde(default)]
     pub rules: Vec<PolicyRule>,
 }
 
+/// Body and stored form of the hooks. `hooks` is required, for the same reason as [`PolicyDoc::rules`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HooksDoc {
-    #[serde(default)]
     pub hooks: Vec<HookConfig>,
 }
 
@@ -475,7 +477,7 @@ impl Engine {
         // A redacted secret coming back from the UI keeps the stored value.
         let settings: Map<String, Value> = settings
             .into_iter()
-            .filter(|(k, v)| !(m.settings.properties.get(k).map(|f| f.secret).unwrap_or(false) && v.as_str() == Some("••••••")))
+            .filter(|(k, v)| !(m.settings.properties.get(k).map(|f| f.secret).unwrap_or(false) && v.as_str() == Some(SECRET_MASK)))
             .collect();
         let saved = self.0.runtimes.update_settings(id, settings)?;
         self.0.store.put_doc("runtime_settings", id, &json!({"id": id, "settings": saved}))?;
@@ -489,7 +491,7 @@ impl Engine {
         self.0.store.list_docs("profile")
     }
     pub fn profile(&self, id: &str) -> Result<InferenceProfile> {
-        self.0.store.get_doc("profile", id)?.ok_or_else(|| Error::NotFound(format!("profilo {id}")))
+        self.0.store.get_doc("profile", id)?.ok_or_else(|| Error::NotFound(format!("profilo {id} non trovato")))
     }
     pub fn save_profile(&self, p: InferenceProfile) -> Result<InferenceProfile> {
         if p.id.trim().is_empty() || p.runtime_id.trim().is_empty() {
@@ -503,7 +505,7 @@ impl Engine {
         self.0.store.list_docs("agent")
     }
     pub fn agent(&self, id: &str) -> Result<AgentProfile> {
-        self.0.store.get_doc("agent", id)?.ok_or_else(|| Error::NotFound(format!("agente {id}")))
+        self.0.store.get_doc("agent", id)?.ok_or_else(|| Error::NotFound(format!("agente {id} non trovato")))
     }
     pub fn save_agent(&self, a: AgentProfile) -> Result<AgentProfile> {
         if !["plan", "ask", "auto-edit", "auto", "yolo"].contains(&a.mode.as_str()) {
@@ -512,8 +514,26 @@ impl Engine {
         if !["read-only", "workspace-write", "off"].contains(&a.sandbox.as_str()) {
             return Err(Error::Invalid(format!("sandbox non valida: {}", a.sandbox)));
         }
+        if a.max_turns < 1 {
+            return Err(Error::Invalid("max_turns deve essere almeno 1".into()));
+        }
+        if self.0.store.get_doc::<InferenceProfile>("profile", &a.inference_profile)?.is_none() {
+            return Err(Error::Invalid(format!("il profilo di inferenza `{}` non esiste", a.inference_profile)));
+        }
+        let unknown: Vec<&str> = a.tools.iter().map(String::as_str).filter(|t| !self.is_known_tool(t)).collect();
+        if !unknown.is_empty() {
+            return Err(Error::Invalid(format!(
+                "strumenti sconosciuti: {} (usa \"*\" oppure i nomi elencati in Strumenti)",
+                unknown.join(", ")
+            )));
+        }
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
+    }
+    /// A name an agent profile may list: `*` (every enabled tool), a registry tool, an internal
+    /// tool of the agent loop, or an MCP tool (`mcp__server__tool`; the server may be offline).
+    fn is_known_tool(&self, name: &str) -> bool {
+        name == "*" || name.starts_with("mcp__") || aiw_agent::internal::is_internal(name) || self.0.tools.get(name).is_some()
     }
     /// Deletes a custom agent. The agents seeded by [`defaults::agents`] and the ones a workflow
     /// still delegates to are refused with a conflict.
@@ -566,13 +586,25 @@ impl Engine {
     pub fn policy_rules(&self) -> Vec<PolicyRule> {
         self.0.store.get_doc::<PolicyDoc>("policy", "default").ok().flatten().unwrap_or_default().rules
     }
+    /// Replaces the policy rules after validating each one (see [`PolicyRule::validated`]).
     pub fn set_policy_rules(&self, rules: Vec<PolicyRule>) -> Result<()> {
+        let rules = rules
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| r.validated().map_err(|e| Error::Invalid(format!("regola {}: {e}", i + 1))))
+            .collect::<Result<Vec<_>>>()?;
         self.0.store.put_doc("policy", "default", &PolicyDoc { rules })
     }
     pub fn hooks(&self) -> Vec<HookConfig> {
         self.0.store.get_doc::<HooksDoc>("hooks", "default").ok().flatten().unwrap_or_default().hooks
     }
+    /// Replaces the hooks after validating each one (see [`HookConfig::validated`]).
     pub fn set_hooks(&self, hooks: Vec<HookConfig>) -> Result<()> {
+        let hooks = hooks
+            .into_iter()
+            .enumerate()
+            .map(|(i, h)| h.validated().map_err(|e| Error::Invalid(format!("hook {}: {e}", i + 1))))
+            .collect::<Result<Vec<_>>>()?;
         self.0.store.put_doc("hooks", "default", &HooksDoc { hooks })
     }
 
@@ -630,6 +662,7 @@ impl Engine {
         self.session(id)
     }
     pub fn delete_session(&self, id: &str) -> Result<()> {
+        self.0.store.session(id)?; // not found: 404, like every other route of a session
         if let Some(wt) = self.worktree_info(id) {
             if let Err(e) = worktree::remove(&wt) {
                 tracing::warn!("worktree {}: {e}", wt.path);
@@ -694,6 +727,7 @@ impl Engine {
         });
     }
     pub fn messages(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
+        self.0.store.session(session_id)?; // an unknown session is not an empty conversation
         self.0.store.messages(session_id)
     }
 
@@ -729,6 +763,13 @@ impl Engine {
             return h.events.clone();
         }
         self.0.store.events(run_id).unwrap_or_default()
+    }
+    /// Message of the RUN_ERROR that closed the run, when it ended in error.
+    fn run_error_text(&self, run_id: &str) -> Option<String> {
+        match self.run_events(run_id).last().map(|e| &e.event.event) {
+            Some(AgEvent::RunError { message, .. }) => Some(message.clone()),
+            _ => None,
+        }
     }
     /// The run currently in progress for a session, if any (lets clients re-attach).
     pub fn active_run(&self, session_id: &str) -> Option<String> {
@@ -882,7 +923,6 @@ impl Engine {
             // its files were still written and its commands run, and the next turn must know.
             // (`new_messages[0]` is the user message, stored above.)
             let (out, res) = AgentRunner::run_partial(run_input, host).await;
-            let _ = engine.0.store.append_messages(&session.id, out.new_messages.get(1..).unwrap_or(&[]));
             let status = match &res {
                 Ok(()) => "succeeded",
                 Err(Error::Cancelled) => "cancelled",
@@ -893,6 +933,20 @@ impl Engine {
                     engine.emit(&rid, AgEvent::RunError { message: e.to_string(), code: None });
                 }
             }
+            let mut stored: Vec<ChatMessage> = out.new_messages.get(1..).unwrap_or(&[]).to_vec();
+            // A run that ended in error leaves it in the history, so that the chat shows the same
+            // thing after a reload as it showed live (RUN_ERROR).
+            stored.extend(engine.run_error_text(&rid).map(|text| ChatMessage {
+                id: new_id("msg"),
+                role: "system".into(),
+                content: text,
+                reasoning: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: Some(RUN_ERROR_MESSAGE.into()),
+                created_at: now_rfc3339(),
+            }));
+            let _ = engine.0.store.append_messages(&session.id, &stored);
             let _ = engine.0.store.finish_run(&rid, status);
             if let Ok(mut s) = engine.0.store.session(&session.id) {
                 s.last_status = Some(status.into());
@@ -905,7 +959,7 @@ impl Engine {
 
     pub fn cancel_run(&self, run_id: &str) -> Result<()> {
         let runs = self.0.runs.lock().unwrap();
-        let h = runs.get(run_id).ok_or_else(|| Error::NotFound(format!("run {run_id}")))?;
+        let h = runs.get(run_id).ok_or_else(|| Error::NotFound(format!("run {run_id} non trovato")))?;
         h.cancel.cancel();
         Ok(())
     }
@@ -920,8 +974,13 @@ impl Engine {
         rx.await.unwrap_or(false)
     }
     pub fn respond_approval(&self, id: &str, allow: bool, remember: bool) -> Result<()> {
-        let p =
-            self.0.approvals.lock().unwrap().remove(id).ok_or_else(|| Error::NotFound(format!("richiesta {id} (forse già gestita)")))?;
+        let p = self
+            .0
+            .approvals
+            .lock()
+            .unwrap()
+            .remove(id)
+            .ok_or_else(|| Error::NotFound(format!("richiesta {id} non trovata (forse già gestita)")))?;
         if allow && remember {
             if let Some(s) = &p.session_id {
                 self.session_allow(s).lock().unwrap().insert(p.req.tool.clone());
@@ -960,7 +1019,7 @@ impl Engine {
     /// the body, GitHub style). A JSON object body is merged into the inputs; any body is also
     /// available as `{{inputs.payload}}`.
     pub async fn trigger_webhook(&self, id: &str, secret: Option<&str>, signature: Option<&str>, body: &[u8]) -> Result<WorkflowRun> {
-        let wf: WorkflowDef = self.0.store.get_doc("workflow", id)?.ok_or_else(|| Error::NotFound(format!("workflow {id}")))?;
+        let wf: WorkflowDef = self.0.store.get_doc("workflow", id)?.ok_or_else(|| Error::NotFound(format!("workflow {id} non trovato")))?;
         let WorkflowTrigger::Webhook { secret: expected } = &wf.trigger else {
             return Err(Error::NotFound(format!("workflow {id} senza trigger webhook")));
         };
@@ -1005,7 +1064,7 @@ impl Engine {
     }
     /// Starts a workflow in the background and returns its first state.
     pub async fn run_workflow(&self, id: &str, inputs: Map<String, Value>, actor: &str) -> Result<WorkflowRun> {
-        let wf: WorkflowDef = self.0.store.get_doc("workflow", id)?.ok_or_else(|| Error::NotFound(format!("workflow {id}")))?;
+        let wf: WorkflowDef = self.0.store.get_doc("workflow", id)?.ok_or_else(|| Error::NotFound(format!("workflow {id} non trovato")))?;
         let (tx, rx) = oneshot::channel();
         let host = EngineHost::for_workflow(self.clone(), wf.clone(), tx);
         let _ = self.0.store.add_audit(&AuditEntry {
@@ -1025,11 +1084,29 @@ impl Engine {
     }
 
     // ------------------------------------------------------------------ tools & MCP
+    /// The registry tools (built-in and MCP) followed by the internal tools of the agent loop
+    /// (`source: "internal"`: always on, listed so that an agent profile can name them).
     pub fn tools(&self) -> Vec<ToolInfo> {
-        self.0.tools.info()
+        let mut all = self.0.tools.info();
+        all.extend(aiw_agent::internal_tools().into_iter().map(|t| ToolInfo {
+            name: t.name.into(),
+            description: t.description.into(),
+            source: "internal".into(),
+            server: None,
+            // They act on nothing by themselves: whatever they trigger goes through the policy as a tool call of its own.
+            risk: "read".into(),
+            enabled: true,
+            available: true,
+            unavailable_reason: None,
+            parameters: t.parameters,
+        }));
+        all
     }
     pub fn set_tool_enabled(&self, name: &str, enabled: bool) -> Result<()> {
-        self.0.tools.get(name).ok_or_else(|| Error::NotFound(format!("tool {name}")))?;
+        if aiw_agent::internal::is_internal(name) {
+            return Err(Error::Invalid(format!("«{name}» è uno strumento interno dell'agente: non si può attivare o disattivare")));
+        }
+        self.0.tools.get(name).ok_or_else(|| Error::NotFound(format!("tool {name} non trovato")))?;
         self.0.tools.set_enabled(name, enabled);
         self.0.store.put_doc("tool_settings", "disabled", &self.0.tools.disabled())
     }
@@ -1044,7 +1121,7 @@ impl Engine {
             .map(|c| {
                 let (st, err) = status.get(&c.id).cloned().unwrap_or_else(|| ("disconnected".into(), None));
                 let t = tools.iter().filter(|t| t.server.as_deref() == Some(c.name.as_str())).map(|t| t.name.clone()).collect();
-                McpServerInfo { config: c, status: st, tools: t, error: err }
+                McpServerInfo { config: secrets::masked(c), status: st, tools: t, error: err }
             })
             .collect()
     }
@@ -1070,24 +1147,33 @@ impl Engine {
             }
         }
     }
+    /// Saves (and connects, when enabled) an MCP server. The configuration is checked before
+    /// anything is stored; a header or variable that comes back as [`SECRET_MASK`] keeps the
+    /// secret already stored for it.
     pub async fn save_mcp_server(&self, mut cfg: McpServerConfig) -> Result<McpServerInfo> {
-        if cfg.name.trim().is_empty() {
-            return Err(Error::Invalid("serve un nome".into()));
-        }
+        validate_mcp(&cfg)?;
         cfg.name = cfg.name.trim().replace(' ', "_");
+        cfg.url = cfg.url.map(|u| u.trim().to_string());
+        cfg.command = cfg.command.map(|c| c.trim().to_string());
         if cfg.id.is_empty() {
             cfg.id = new_id("mcp");
         }
+        let stored = self.0.store.get_doc::<McpServerConfig>("mcp", &cfg.id)?;
+        let cfg = secrets::unmasked(cfg, stored.as_ref());
         self.0.store.put_doc("mcp", &cfg.id, &cfg)?;
         if cfg.enabled {
             let _ = self.connect_mcp(cfg.clone()).await;
         }
-        self.mcp_servers().into_iter().find(|s| s.config.id == cfg.id).ok_or(Error::NotFound(cfg.id))
+        self.mcp_servers()
+            .into_iter()
+            .find(|s| s.config.id == cfg.id)
+            .ok_or_else(|| Error::NotFound(format!("server MCP {} non trovato", cfg.id)))
     }
     pub async fn remove_mcp_server(&self, id: &str) -> Result<()> {
-        if let Some(cfg) = self.0.store.get_doc::<McpServerConfig>("mcp", id)? {
-            self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", cfg.name)));
-        }
+        let Some(cfg) = self.0.store.get_doc::<McpServerConfig>("mcp", id)? else {
+            return Err(Error::NotFound(format!("server MCP {id} non trovato")));
+        };
+        self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", cfg.name)));
         if let Some(c) = self.0.mcp.lock().await.remove(id) {
             c.shutdown().await;
         }
@@ -1156,7 +1242,7 @@ impl Engine {
         args: Value,
     ) -> Result<aiw_tools::ToolOutput> {
         let reg = self.tool_registry();
-        let t = reg.get(tool).ok_or_else(|| Error::NotFound(format!("tool {tool}")))?;
+        let t = reg.get(tool).ok_or_else(|| Error::NotFound(format!("tool {tool} non trovato")))?;
         if !reg.is_enabled(tool) {
             return Err(Error::Denied(format!("il tool {tool} è disattivato")));
         }
@@ -1182,7 +1268,7 @@ impl Engine {
             aiw_agent::Decision::Allow => audit("allow"),
             aiw_agent::Decision::Deny(r) => {
                 audit("deny");
-                return Err(Error::Denied(r));
+                return Err(Error::Denied(format!("negato dalla policy: {r}")));
             }
             aiw_agent::Decision::Ask(reason) => {
                 let req = ApprovalRequest {
@@ -1257,6 +1343,33 @@ impl Engine {
     }
 }
 
+/// Checks an MCP server configuration before it is stored: a name, a known transport, the
+/// command of a `stdio` server, a valid `http(s)` address for an `http` one.
+fn validate_mcp(cfg: &McpServerConfig) -> Result<()> {
+    if cfg.name.trim().is_empty() {
+        return Err(Error::Invalid("serve un nome".into()));
+    }
+    match cfg.transport.as_str() {
+        "stdio" => {
+            if cfg.command.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                return Err(Error::Invalid("un server MCP stdio richiede il comando da avviare".into()));
+            }
+        }
+        "http" => {
+            let url = cfg.url.as_deref().map(str::trim).filter(|u| !u.is_empty());
+            let Some(url) = url else {
+                return Err(Error::Invalid("un server MCP http richiede l'indirizzo (url)".into()));
+            };
+            match reqwest::Url::parse(url) {
+                Ok(u) if matches!(u.scheme(), "http" | "https") && u.host_str().is_some() => {}
+                _ => return Err(Error::Invalid(format!("indirizzo MCP non valido: {url} (serve un URL http o https)"))),
+            }
+        }
+        other => return Err(Error::Invalid(format!("trasporto MCP `{other}` non valido: usa stdio o http"))),
+    }
+    Ok(())
+}
+
 /// Registers in-process llama.cpp as the `llama-embedded` runtime with its current settings.
 #[cfg(feature = "llama-embedded")]
 fn register_embedded(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelResolver) {
@@ -1288,3 +1401,5 @@ mod tests;
 mod tests_hardening;
 #[cfg(test)]
 mod tests_inference;
+#[cfg(test)]
+mod tests_validation;

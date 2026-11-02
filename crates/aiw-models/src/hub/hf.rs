@@ -248,8 +248,11 @@ impl ModelProvider for HfProvider {
         if !valid_repo(repo) {
             return Err(Error::Invalid(format!("riferimento Hugging Face non valido: `{repo}`")));
         }
-        let v =
-            detail.variants.iter().find(|v| v.id == variant).ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {repo}")))?;
+        let v = detail
+            .variants
+            .iter()
+            .find(|v| v.id == variant)
+            .ok_or_else(|| Error::NotFound(format!("variante `{variant}` di {repo} non trovata")))?;
         let folder = native_join("hf", repo);
         v.files
             .iter()

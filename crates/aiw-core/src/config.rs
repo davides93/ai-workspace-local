@@ -21,7 +21,7 @@ impl Layer {
             "global" => Ok(Layer::Global),
             "device" => Ok(Layer::Device),
             "workspace" => Ok(Layer::Workspace),
-            other => Err(Error::Invalid(format!("unknown config layer `{other}`"))),
+            other => Err(Error::Invalid(format!("livello di configurazione sconosciuto: `{other}` (usa global, device o workspace)"))),
         }
     }
     pub fn name(&self) -> &'static str {
@@ -167,7 +167,7 @@ impl LayeredConfig {
             Layer::Device => (&self.device, Some(self.device_path.clone())),
             Layer::Workspace => (&self.workspace, self.workspace_path.read().unwrap().clone()),
         };
-        let path = path.ok_or_else(|| Error::Invalid("no workspace folder is open".into()))?;
+        let path = path.ok_or_else(|| Error::Invalid("nessuna cartella di lavoro aperta".into()))?;
         let mut m = lock.write().unwrap();
         if value.is_null() {
             m.remove(key);

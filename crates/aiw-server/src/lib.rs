@@ -3,6 +3,7 @@
 
 mod a2a;
 mod anthropic;
+mod extract;
 mod gateway;
 mod mcp_server;
 pub mod mesh;
@@ -12,13 +13,14 @@ use aiw_core::api::*;
 use aiw_core::Error;
 use aiw_engine::{Engine, PairOutcome};
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
-use axum::{Json, Router};
+use axum::Router;
+use extract::{Json, Path, Query};
 use futures::stream::{self, Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -154,13 +156,44 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/v1/messages", post(anthropic::messages))
         .route("/v1/messages/count_tokens", post(anthropic::count_tokens))
         .route("/mcp", post(mcp_server::handle).get(mcp_server::get_stream).delete(|| async { StatusCode::OK }));
-    let mut app = api.with_state(st.clone());
-    if let Some(dir) = ui_dir.filter(|d| d.join("index.html").exists()) {
-        let index = dir.join("index.html");
-        app = app.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)));
-    }
+    let mut app = api.method_not_allowed_fallback(method_not_allowed).with_state(st.clone());
+    app = match ui_dir.filter(|d| d.join("index.html").exists()) {
+        // The single-page UI answers every path that is not the server's own.
+        Some(dir) => {
+            let index = dir.join("index.html");
+            let spa = ServeDir::new(dir).fallback(ServeFile::new(index));
+            app.fallback(move |req: Request| {
+                let spa = spa.clone();
+                async move {
+                    if is_backend_path(req.uri().path()) {
+                        return unknown_route();
+                    }
+                    match tower::ServiceExt::oneshot(spa, req).await {
+                        Ok(res) => res.into_response(),
+                        Err(never) => match never {},
+                    }
+                }
+            })
+        }
+        None => app.fallback(|| async { unknown_route() }),
+    };
     // Outermost: CORS answers preflights (which carry no credentials) before `auth` sees them.
     app.layer(middleware::from_fn_with_state(st.clone(), auth)).layer(middleware::from_fn_with_state(st, security::cors))
+}
+
+/// Paths that belong to the server (REST API, gateways, MCP, A2A, webhooks): one that no route
+/// matches is an error for the caller, not a page of the UI.
+fn is_backend_path(path: &str) -> bool {
+    let under = |prefix: &str| path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'));
+    ["/api", "/v1", "/hooks", "/.well-known"].iter().any(|p| under(p)) || path.starts_with("/mcp") || path.starts_with("/a2a")
+}
+
+fn unknown_route() -> Response {
+    ApiError(Error::NotFound("percorso non trovato".into())).into_response()
+}
+
+async fn method_not_allowed() -> Response {
+    (StatusCode::METHOD_NOT_ALLOWED, Json(json!({"error": "metodo non consentito per questo percorso"}))).into_response()
 }
 
 // ------------------------------------------------------------------ handlers
@@ -392,6 +425,7 @@ async fn messages(State(s): State<AppState>, Path(id): Path<String>) -> ApiResul
     ok(s.engine.messages(&id)?)
 }
 async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.session(&id)?; // an unknown session is a 404, not "no run"
     ok(json!({"run_id": s.engine.active_run(&id)}))
 }
 #[derive(Deserialize)]
@@ -643,6 +677,8 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_errors;
 #[cfg(test)]
 mod tests_models;
 #[cfg(test)]

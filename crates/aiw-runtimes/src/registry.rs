@@ -95,7 +95,13 @@ impl RuntimeRegistry {
     }
 
     pub fn manifest(&self, id: &str) -> Result<RuntimeManifest> {
-        self.manifests.read().unwrap().iter().find(|m| m.id == id).cloned().ok_or_else(|| Error::NotFound(format!("runtime `{id}`")))
+        self.manifests
+            .read()
+            .unwrap()
+            .iter()
+            .find(|m| m.id == id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("runtime `{id}` non trovato")))
     }
 
     pub fn manifests(&self) -> Vec<RuntimeManifest> {
@@ -479,7 +485,7 @@ fn redact(m: &RuntimeManifest, mut s: Map<String, Value>) -> Map<String, Value> 
         if f.secret {
             if let Some(v) = s.get_mut(k) {
                 if v.as_str().map(|x| !x.is_empty()).unwrap_or(false) {
-                    *v = Value::String("••••••".into());
+                    *v = Value::String(aiw_core::api::SECRET_MASK.into());
                 }
             }
         }

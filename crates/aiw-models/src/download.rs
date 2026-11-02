@@ -3,7 +3,7 @@
 //! space check, retries with backoff, immediate cancellation, credentials that never leave the
 //! provider's host.
 
-use crate::hub::{same_origin, FileJob};
+use crate::hub::{net_error, net_why, same_origin, FileJob};
 use crate::relpath::{is_plain_component, to_logical};
 use crate::sidecar::{self, Install, SidecarFile};
 use aiw_core::api::DownloadProgress;
@@ -308,7 +308,7 @@ impl DownloadManager {
     /// Stops a queued or running job at once; the `.part` files stay for a later resume.
     pub fn cancel(&self, id: &str) -> Result<DownloadProgress> {
         let mut items = self.inner.items.lock().unwrap();
-        let i = items.iter_mut().find(|i| i.p.id == id).ok_or_else(|| Error::NotFound(format!("download {id}")))?;
+        let i = items.iter_mut().find(|i| i.p.id == id).ok_or_else(|| Error::NotFound(format!("download {id} non trovato")))?;
         if active(&i.p.status) {
             i.cancel.cancel();
             i.p.status = "cancelled".into();
@@ -320,7 +320,7 @@ impl DownloadManager {
     /// Removes a finished job from the list.
     pub fn clear(&self, id: &str) -> Result<()> {
         let mut items = self.inner.items.lock().unwrap();
-        let pos = items.iter().position(|i| i.p.id == id).ok_or_else(|| Error::NotFound(format!("download {id}")))?;
+        let pos = items.iter().position(|i| i.p.id == id).ok_or_else(|| Error::NotFound(format!("download {id} non trovato")))?;
         if active(&items[pos].p.status) {
             return Err(Error::Conflict("il download è ancora in corso: annullalo prima di toglierlo dalla lista".into()));
         }
@@ -609,7 +609,10 @@ impl DownloadManager {
                 }
                 Some(Err(e)) => {
                     let _ = w.flush().await;
-                    return Err(FileErr::Retry(Error::Upstream(format!("connessione interrotta durante il download di {name}: {e}"))));
+                    return Err(FileErr::Retry(Error::Upstream(format!(
+                        "connessione interrotta durante il download di {name}: {}",
+                        net_why(&e)
+                    ))));
                 }
                 None => break,
             }
@@ -689,7 +692,7 @@ impl DownloadManager {
                 rb = rb.header(RANGE, format!("bytes={from}-"));
             }
             let resp = tokio::select! {
-                r = rb.send() => r.map_err(|e| FileErr::Retry(Error::Upstream(format!("impossibile contattare {}: {e}", url.host_str().unwrap_or("il server")))))?,
+                r = rb.send() => r.map_err(|e| FileErr::Retry(net_error(url.host_str().unwrap_or("il server"), &e)))?,
                 _ = cancel.cancelled() => return Err(FileErr::Fatal(Error::Cancelled)),
             };
             let st = resp.status();
@@ -1059,6 +1062,19 @@ mod tests {
         let p = wait_end(&m, &p.id).await;
         assert_eq!(p.status, "error");
         assert!(p.error.unwrap().contains("2500"));
+    }
+
+    #[tokio::test]
+    async fn network_errors_are_clean_italian_without_the_library_text() {
+        // Nothing listens on port 1: the connection is refused on every attempt.
+        let d = tempfile::tempdir().unwrap();
+        let m = manager(d.path());
+        let j =
+            FileJob { url: "http://127.0.0.1:1/a.gguf".into(), dest: PathBuf::from("m/a.gguf"), size: 10, sha256: None, headers: vec![] };
+        let p = m.enqueue(request("url", "m", vec![j])).unwrap();
+        let p = wait_end(&m, &p.id).await;
+        assert_eq!(p.status, "error");
+        assert_eq!(p.error.as_deref(), Some("impossibile contattare 127.0.0.1: connessione rifiutata o rete assente"));
     }
 
     #[tokio::test]

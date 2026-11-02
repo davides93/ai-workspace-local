@@ -420,6 +420,67 @@ async fn v03_pull_shapes_keep_working_and_bad_ones_are_rejected() {
 }
 
 #[tokio::test]
+async fn two_direct_urls_of_the_same_host_are_two_models_deleted_independently() {
+    let (app, e, data) = app().await;
+    let (base, _fake, q4, q8) = fake_hf().await;
+    // Both files are served by the same host and port: the layout used to be one folder per host
+    // and one record per variant name (`file`), so the second download replaced the first and
+    // deleting either deleted both.
+    let url_a = format!("{base}/acme/tiny-GGUF/resolve/main/tiny-Q4_K_M.gguf");
+    let url_b = format!("{base}/acme/tiny-GGUF/resolve/main/tiny-Q8_0.gguf");
+    for url in [&url_a, &url_b] {
+        let (st, p) = dispatch(app.clone(), "POST", "/api/models/pull", Some(json!({ "url": url }))).await;
+        assert_eq!(st, 200, "{p}");
+        wait_download(&app, p["id"].as_str().unwrap(), "done").await;
+    }
+    let (_, models) = dispatch(app.clone(), "GET", "/api/models", None).await;
+    let models = models.as_array().unwrap();
+    assert_eq!(models.len(), 2, "{models:#?}");
+    let by_source = |url: &str| {
+        models
+            .iter()
+            .find(|m| m["source"].as_str().is_some_and(|s| s.starts_with(&format!("url:{url}"))))
+            .unwrap_or_else(|| panic!("{url} is not listed: {models:#?}"))
+            .clone()
+    };
+    let (a, b) = (by_source(&url_a), by_source(&url_b));
+    assert_eq!((a["size_bytes"].as_u64(), b["size_bytes"].as_u64()), (Some(q4.len() as u64), Some(q8.len() as u64)));
+    let (path_a, path_b) = (std::path::PathBuf::from(a["path"].as_str().unwrap()), std::path::PathBuf::from(b["path"].as_str().unwrap()));
+    assert_ne!(path_a.parent(), path_b.parent(), "one folder per URL");
+    assert_eq!(path_a.parent().unwrap().parent(), path_b.parent().unwrap().parent(), "below the same host");
+    assert_eq!(std::fs::read(&path_a).unwrap(), q4);
+    assert_eq!(std::fs::read(&path_b).unwrap(), q8);
+
+    // Deleting one leaves the other, files and record.
+    assert_eq!(dispatch(app.clone(), "DELETE", &format!("/api/models/{}", a["id"].as_str().unwrap()), None).await.0, 204);
+    assert!(!path_a.exists() && path_b.is_file());
+    let (_, left) = dispatch(app.clone(), "GET", "/api/models", None).await;
+    assert_eq!(left.as_array().unwrap().len(), 1);
+    assert_eq!(left[0]["id"], b["id"]);
+    assert!(data.path().join("models/url").exists());
+    // The remote model still says which of the two is installed.
+    let (_, d) = dispatch(
+        app.clone(),
+        "GET",
+        &format!("/api/models/remote?provider=url&model={}", url_b.replace(':', "%3A").replace('/', "%2F")),
+        None,
+    )
+    .await;
+    assert_eq!(d["variants"][0]["installed"], true, "{d}");
+    let (_, d) = dispatch(
+        app.clone(),
+        "GET",
+        &format!("/api/models/remote?provider=url&model={}", url_a.replace(':', "%3A").replace('/', "%2F")),
+        None,
+    )
+    .await;
+    assert_eq!(d["variants"][0]["installed"], false, "{d}");
+    assert_eq!(dispatch(app.clone(), "DELETE", &format!("/api/models/{}", b["id"].as_str().unwrap()), None).await.0, 204);
+    assert!(!data.path().join("models/url").exists(), "the last one takes the empty folders with it");
+    assert!(e.models().is_empty());
+}
+
+#[tokio::test]
 async fn gated_repositories_answer_401_until_a_token_is_set_and_it_only_goes_to_the_hub() {
     let (app, _e, data) = app().await;
     let (base, fake, _, _) = fake_hf().await;

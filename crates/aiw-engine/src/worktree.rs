@@ -90,7 +90,7 @@ fn parse_name_status(out: &str) -> Vec<ChangedFile> {
 pub fn status(wt: &WorktreeInfo) -> Result<WorktreeStatus> {
     let dir = Path::new(&wt.path);
     if !dir.is_dir() {
-        return Err(Error::NotFound(format!("worktree {}", wt.path)));
+        return Err(Error::NotFound(format!("worktree {} non trovato", wt.path)));
     }
     // Intent-to-add makes new files visible to `git diff` without staging their content.
     git(dir, &["add", "--intent-to-add", "--all"])?;

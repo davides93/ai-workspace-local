@@ -48,6 +48,15 @@ pub struct Install {
     pub installed_at: String,
 }
 
+impl Install {
+    /// Whether `other` is the same install: provider, model and variant together identify it.
+    /// (The variant alone does not: two direct URLs both have the variant `file`, and two
+    /// repositories can both have a `Q4_K_M`.)
+    pub fn same_as(&self, other: &Install) -> bool {
+        self.provider == other.provider && self.model == other.model && self.variant == other.variant
+    }
+}
+
 /// File paths spelled with `/`, whoever wrote the record.
 fn normalized(mut install: Install) -> Install {
     for f in &mut install.files {
@@ -82,18 +91,20 @@ pub fn write(dir: &Path, installs: &[Install]) -> std::io::Result<()> {
     std::fs::rename(&tmp, dir.join(SIDECAR))
 }
 
-/// Records `install` (replacing an earlier install of the same variant) as the newest one.
+/// Records `install` (replacing an earlier install of the same provider, model and variant) as
+/// the newest one.
 pub fn upsert(dir: &Path, install: Install) -> std::io::Result<()> {
     let mut all = read(dir);
-    all.retain(|i| i.variant != install.variant);
+    all.retain(|i| !i.same_as(&install));
     all.push(install);
     write(dir, &all)
 }
 
-/// Forgets one variant; returns what is left (the sidecar is deleted when nothing is).
-pub fn remove_variant(dir: &Path, variant: &str) -> std::io::Result<Vec<Install>> {
+/// Forgets one install (see [`Install::same_as`]); returns what is left (the sidecar is deleted
+/// when nothing is).
+pub fn remove_install(dir: &Path, target: &Install) -> std::io::Result<Vec<Install>> {
     let mut all = read(dir);
-    all.retain(|i| i.variant != variant);
+    all.retain(|i| !i.same_as(target));
     write(dir, &all)?;
     Ok(all)
 }
@@ -134,11 +145,31 @@ mod tests {
         }
         assert_eq!(raw["variant"], "Q4_K_M");
         assert_eq!(raw["files"][0]["size_bytes"], 10);
-        let left = remove_variant(d.path(), "Q4_K_M").unwrap();
+        let left = remove_install(d.path(), &install("Q4_K_M", "")).unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(read(d.path())[0].variant, "Q8_0");
-        assert!(remove_variant(d.path(), "Q8_0").unwrap().is_empty());
+        assert!(remove_install(d.path(), &install("Q8_0", "")).unwrap().is_empty());
         assert!(!d.path().join(SIDECAR).exists());
+    }
+
+    #[test]
+    fn an_install_is_identified_by_provider_model_and_variant() {
+        let d = tempfile::tempdir().unwrap();
+        // Two direct URLs of the same host: same provider, same variant `file`, different model.
+        let url = |model: &str, file: &str| Install { provider: "url".into(), model: model.into(), ..install("file", file) };
+        upsert(d.path(), url("http://h/a.gguf", "a.gguf")).unwrap();
+        upsert(d.path(), url("http://h/b.gguf", "b.gguf")).unwrap();
+        let all = read(d.path());
+        assert_eq!(all.iter().map(|i| i.files[0].path.as_str()).collect::<Vec<_>>(), ["a.gguf", "b.gguf"]);
+        // The same URL again replaces its own record only.
+        upsert(d.path(), url("http://h/a.gguf", "a2.gguf")).unwrap();
+        assert_eq!(read(d.path()).iter().map(|i| i.files[0].path.as_str()).collect::<Vec<_>>(), ["b.gguf", "a2.gguf"]);
+        // Same variant of another provider is another install too.
+        upsert(d.path(), Install { provider: "hf".into(), ..url("http://h/a.gguf", "hf.gguf") }).unwrap();
+        assert_eq!(read(d.path()).len(), 3);
+        // Forgetting one leaves the others alone.
+        let left = remove_install(d.path(), &url("http://h/b.gguf", "")).unwrap();
+        assert_eq!(left.iter().map(|i| i.files[0].path.as_str()).collect::<Vec<_>>(), ["a2.gguf", "hf.gguf"]);
     }
 
     #[test]

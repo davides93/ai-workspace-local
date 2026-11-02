@@ -140,12 +140,74 @@ async fn a_failed_run_keeps_the_messages_it_produced() {
 
     let msgs = e.messages(&s.id).unwrap();
     let roles: Vec<&str> = msgs.iter().map(|m| m.role.as_str()).collect();
-    assert_eq!(roles, vec!["user", "assistant", "tool", "assistant"], "{msgs:?}");
+    // The error that ended the run closes the history as a `system` message.
+    assert_eq!(roles, vec!["user", "assistant", "tool", "assistant", "system"], "{msgs:?}");
     assert!(msgs[2].content.contains("a.txt"), "the tool result is there");
     assert_eq!(msgs[3].content, "Ho visto la cartella e");
+    assert_eq!(
+        (msgs[4].name.as_deref(), msgs[4].content.as_str()),
+        (Some(RUN_ERROR_MESSAGE), "Errore del runtime: il runtime si è chiuso")
+    );
     assert_eq!(e.session(&s.id).unwrap().last_status.as_deref(), Some("failed"));
     let evs = e.run_events(&run);
     assert!(matches!(&evs.last().unwrap().event.event, AgEvent::RunError { code: Some(c), .. } if c == "runtime"));
+    // It is shown, not told to the model: the next turn starts from the four real messages.
+    assert_eq!(aiw_agent::to_msgs(&msgs).len(), 4);
+}
+
+/// A backend that cannot even start a turn.
+struct Refusing;
+
+#[async_trait::async_trait]
+impl ChatBackend for Refusing {
+    async fn list_models(&self) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
+    async fn chat(&self, _req: aiw_runtimes::ChatRequest, _cancel: CancellationToken) -> Result<aiw_runtimes::DeltaStream> {
+        Err(Error::Unsupported("serve il plugin nativo dell'app".into()))
+    }
+}
+
+#[tokio::test]
+async fn a_run_that_fails_at_once_leaves_its_error_in_the_history() {
+    let (e, _d, _w) = engine(Arc::new(Refusing)).await;
+    let s = e.create_session("operator", None).unwrap();
+    let run = e.start_run(&s.id, "Ciao".into()).await.unwrap();
+    wait_finished(&e, &run).await;
+
+    // What the chat showed live as RUN_ERROR is still there after a reload (it used to be lost:
+    // only the user message was stored).
+    let live = match &e.run_events(&run).last().unwrap().event.event {
+        AgEvent::RunError { message, .. } => message.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(live, "Errore del runtime: serve il plugin nativo dell'app", "no English prefix in the banner");
+    let msgs = e.messages(&s.id).unwrap();
+    assert_eq!(
+        msgs.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect::<Vec<_>>(),
+        [("user", "Ciao"), ("system", live.as_str())]
+    );
+    assert_eq!(msgs[1].name.as_deref(), Some(RUN_ERROR_MESSAGE));
+    assert!(msgs[1].tool_calls.is_none() && msgs[1].tool_call_id.is_none() && msgs[1].reasoning.is_none());
+    assert_eq!(e.session(&s.id).unwrap().last_status.as_deref(), Some("failed"));
+
+    // A second failure adds a second marker after its own user message; the model never sees them.
+    let run2 = e.start_run(&s.id, "Riprova".into()).await.unwrap();
+    wait_finished(&e, &run2).await;
+    let msgs = e.messages(&s.id).unwrap();
+    assert_eq!(msgs.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), ["user", "system", "user", "system"]);
+    assert_eq!(aiw_agent::to_msgs(&msgs).len(), 2);
+}
+
+#[tokio::test]
+async fn a_run_that_succeeds_stores_no_error_marker() {
+    let (e, _d, _w) = scripted(vec![ScriptedBackend::text_turn("Ciao!")]).await;
+    let s = e.create_session("operator", None).unwrap();
+    let run = e.start_run(&s.id, "Ciao".into()).await.unwrap();
+    wait_finished(&e, &run).await;
+    let msgs = e.messages(&s.id).unwrap();
+    assert_eq!(msgs.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), ["user", "assistant"]);
+    assert!(msgs.iter().all(|m| m.name.as_deref() != Some(RUN_ERROR_MESSAGE)));
 }
 
 #[tokio::test]
@@ -172,10 +234,12 @@ async fn a_cancelled_run_keeps_its_messages_and_the_next_turn_sees_them() {
     assert_eq!(e.session(&s.id).unwrap().last_status.as_deref(), Some("cancelled"));
     let msgs = e.messages(&s.id).unwrap();
     let roles: Vec<&str> = msgs.iter().map(|m| m.role.as_str()).collect();
-    assert_eq!(roles, vec!["user", "assistant", "tool"], "{msgs:?}");
+    assert_eq!(roles, vec!["user", "assistant", "tool", "system"], "{msgs:?}");
     assert_eq!(msgs[1].tool_calls.as_ref().unwrap()[0].name, "write_file");
     assert!(msgs[2].content.contains("Negato"), "{}", msgs[2].content);
     assert_eq!(msgs[2].tool_call_id.as_deref(), Some("c1"));
+    // The stop is recorded like the error row the chat showed.
+    assert_eq!((msgs[3].name.as_deref(), msgs[3].content.as_str()), (Some(RUN_ERROR_MESSAGE), "Run annullato"));
 
     // The follow-up turn starts from that history.
     let run2 = e.start_run(&s.id, "Va bene, lascia stare".into()).await.unwrap();

@@ -22,7 +22,7 @@ impl CatalogProvider {
     }
 
     fn entry(&self, id: &str) -> Result<&CatalogModel> {
-        self.entries.iter().find(|c| c.id == id).ok_or_else(|| Error::NotFound(format!("modello `{id}` nel catalogo")))
+        self.entries.iter().find(|c| c.id == id).ok_or_else(|| Error::NotFound(format!("modello `{id}` non trovato nel catalogo")))
     }
 
     /// `(repo, file)` of a downloadable entry; `file` is empty for whole-repository entries (MLX).

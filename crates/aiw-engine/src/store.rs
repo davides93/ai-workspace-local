@@ -14,7 +14,7 @@ pub struct Store {
 }
 
 fn db<E: std::fmt::Display>(e: E) -> Error {
-    Error::Other(format!("database: {e}"))
+    Error::Other(format!("errore del database: {e}"))
 }
 
 impl Store {
@@ -95,7 +95,7 @@ impl Store {
     pub fn rename_session(&self, id: &str, title: &str) -> Result<()> {
         let n = self.conn.lock().unwrap().execute("UPDATE sessions SET title=?2 WHERE id=?1", params![id, title]).map_err(db)?;
         if n == 0 {
-            return Err(Error::NotFound(format!("sessione {id}")));
+            return Err(Error::NotFound(format!("sessione {id} non trovata")));
         }
         Ok(())
     }
@@ -116,7 +116,7 @@ impl Store {
             })
             .optional()
             .map_err(db)?
-            .ok_or_else(|| Error::NotFound(format!("sessione {id}")))
+            .ok_or_else(|| Error::NotFound(format!("sessione {id} non trovata")))
     }
     pub fn sessions(&self) -> Result<Vec<Session>> {
         let c = self.conn.lock().unwrap();
