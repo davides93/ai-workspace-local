@@ -6,11 +6,11 @@ mod anthropic;
 mod gateway;
 mod mcp_server;
 pub mod mesh;
+mod security;
 
 use aiw_core::api::*;
-use aiw_core::events::AgEvent;
 use aiw_core::Error;
-use aiw_engine::Engine;
+use aiw_engine::{Engine, PairOutcome};
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::StatusCode;
@@ -26,7 +26,6 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
-use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 /// Re-exported so shells can keep a router without depending on axum directly.
@@ -61,30 +60,31 @@ pub struct AppState {
 /// Is this request coming from this machine (or from the in-process Tauri dispatcher)?
 fn is_local(req: &Request) -> bool {
     match req.extensions().get::<ConnectInfo<SocketAddr>>() {
-        Some(ConnectInfo(addr)) => addr.ip().is_loopback(),
+        Some(ConnectInfo(addr)) => addr.ip().to_canonical().is_loopback(),
         None => true,
     }
 }
 
+/// Authentication and CSRF/DNS-rebinding defence (see [`security`]). A request with the API token
+/// always passes; one without it passes only when it comes from this machine and is not a web
+/// page acting on its own (loopback `Host`, allowed `Origin`), or when it is a pairing attempt.
 async fn auth(State(st): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    let needs_auth = path.starts_with("/api/") || path.starts_with("/v1/") || path == "/mcp" || path == "/a2a";
-    if !needs_auth || path == "/api/pair" || is_local(&req) {
+    if !security::is_guarded(&path) || security::has_valid_token(&req, st.engine.token()) {
         return next.run(req).await;
     }
-    let bearer = req
-        .headers()
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .map(str::to_string)
-        // Anthropic SDKs send the key as `x-api-key`.
-        .or_else(|| req.headers().get("x-api-key").and_then(|h| h.to_str().ok()).map(str::to_string));
-    let query_token = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=").map(str::to_string)));
-    if bearer.or(query_token).as_deref() == Some(st.engine.token()) {
-        next.run(req).await
-    } else {
-        (StatusCode::UNAUTHORIZED, Json(json!({"error": "serve il token di pairing per l'accesso dalla rete"}))).into_response()
+    let refusal = match security::peer(&req) {
+        security::Peer::InProcess => None,
+        security::Peer::Loopback => security::check_loopback(&req, &st),
+        // Pairing is how a LAN device gets its token; a web page must still not be able to try codes.
+        security::Peer::Remote if path == "/api/pair" => security::check_origin(&req, &st),
+        security::Peer::Remote => {
+            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "serve il token di pairing per l'accesso dalla rete"}))).into_response()
+        }
+    };
+    match refusal {
+        None => next.run(req).await,
+        Some(refusal) => refusal,
     }
 }
 
@@ -113,13 +113,13 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         // Model ids can contain `/` (`hf-cache:org/repo/file`): a catch-all keeps them whole.
         .route("/api/models/{*id}", delete(delete_model))
         .route("/api/profiles", get(profiles))
-        .route("/api/profiles/{id}", put(save_profile))
+        .route("/api/profiles/{id}", put(save_profile).delete(delete_profile))
         .route("/api/agents", get(agents))
-        .route("/api/agents/{id}", put(save_agent))
+        .route("/api/agents/{id}", put(save_agent).delete(delete_agent))
         .route("/api/policy", get(get_policy).put(put_policy))
         .route("/api/hooks", get(get_hooks).put(put_hooks))
         .route("/api/sessions", get(sessions).post(create_session))
-        .route("/api/sessions/{id}", get(get_session).delete(delete_session))
+        .route("/api/sessions/{id}", get(get_session).patch(patch_session).delete(delete_session))
         .route("/api/sessions/{id}/worktree", get(worktree_status).delete(worktree_discard))
         .route("/api/sessions/{id}/worktree/apply", post(worktree_apply))
         .route("/api/sessions/{id}/messages", get(messages))
@@ -159,7 +159,8 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         let index = dir.join("index.html");
         app = app.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)));
     }
-    app.layer(middleware::from_fn_with_state(st, auth)).layer(CorsLayer::permissive())
+    // Outermost: CORS answers preflights (which carry no credentials) before `auth` sees them.
+    app.layer(middleware::from_fn_with_state(st.clone(), auth)).layer(middleware::from_fn_with_state(st, security::cors))
 }
 
 // ------------------------------------------------------------------ handlers
@@ -175,11 +176,44 @@ async fn kill(State(s): State<AppState>) -> ApiResult<Value> {
 struct PairBody {
     code: String,
 }
-async fn pair(State(s): State<AppState>, Json(b): Json<PairBody>) -> Result<Json<Value>, ApiError> {
-    tokio::time::sleep(Duration::from_millis(400)).await; // slows brute force
-    match s.engine.pair(&b.code) {
-        Some(token) => ok(json!({"token": token})),
-        None => Err(ApiError(Error::Denied("codice di pairing non valido".into()))),
+/// Address of the TCP peer; `None` for the in-process dispatcher.
+struct ClientIp(Option<String>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ClientIp {
+    type Rejection = Infallible;
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(ClientIp(parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_canonical().to_string())))
+    }
+}
+
+/// Pause after a wrong code, on top of the rate limit: every guess costs the guesser time.
+const PAIR_FAIL_DELAY: Duration = Duration::from_millis(if cfg!(test) { 0 } else { 400 });
+
+fn human_wait(secs: u64) -> String {
+    match secs {
+        0..=119 => format!("{secs} secondi"),
+        120..=7199 => format!("{} minuti", secs.div_ceil(60)),
+        _ => format!("{} ore", secs.div_ceil(3600)),
+    }
+}
+
+async fn pair(State(s): State<AppState>, ClientIp(client): ClientIp, Json(b): Json<PairBody>) -> Response {
+    match s.engine.pair_attempt(&b.code, client.as_deref()) {
+        PairOutcome::Paired(token) => Json(json!({"token": token})).into_response(),
+        PairOutcome::Invalid => {
+            tokio::time::sleep(PAIR_FAIL_DELAY).await;
+            ApiError(Error::Denied("codice di pairing non valido".into())).into_response()
+        }
+        PairOutcome::Locked { retry_after } => {
+            let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+            let body = json!({
+                "error": format!("troppi tentativi di pairing falliti: riprova tra {}", human_wait(secs)),
+                "retry_after_s": secs,
+            });
+            let mut res = (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response();
+            res.headers_mut().insert(axum::http::header::RETRY_AFTER, secs.into());
+            res
+        }
     }
 }
 async fn runtimes(State(s): State<AppState>) -> ApiResult<Vec<RuntimeInfo>> {
@@ -288,8 +322,16 @@ async fn save_profile(
     p.id = id;
     ok(s.engine.save_profile(p)?)
 }
+async fn delete_profile(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_profile(&id)?;
+    ok(json!({}))
+}
 async fn agents(State(s): State<AppState>) -> ApiResult<Vec<AgentProfile>> {
     ok(s.engine.agents()?)
+}
+async fn delete_agent(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_agent(&id)?;
+    ok(json!({}))
 }
 async fn save_agent(State(s): State<AppState>, Path(id): Path<String>, Json(mut a): Json<AgentProfile>) -> ApiResult<AgentProfile> {
     a.id = id;
@@ -324,6 +366,13 @@ async fn create_session(State(s): State<AppState>, Json(b): Json<NewSession>) ->
 }
 async fn get_session(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Session> {
     ok(s.engine.session(&id)?)
+}
+#[derive(Deserialize)]
+struct SessionPatch {
+    title: String,
+}
+async fn patch_session(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<SessionPatch>) -> ApiResult<Session> {
+    ok(s.engine.rename_session(&id, &b.title)?)
 }
 async fn worktree_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::WorktreeStatus> {
     ok(s.engine.worktree_status(&id)?)
@@ -362,21 +411,32 @@ async fn run_events_json(State(s): State<AppState>, Path(id): Path<String>) -> A
     ok(serde_json::to_value(s.engine.run_events(&id)).unwrap_or(Value::Null))
 }
 
+#[derive(Deserialize)]
+struct EventsQuery {
+    /// Resume after this event (same as the `Last-Event-ID` header).
+    after: Option<u64>,
+}
+
 /// AG-UI event stream: replays what already happened, then follows the live bus until the run ends.
+/// A client that already has events up to `seq` N (`Last-Event-ID: N`, which `EventSource` sends by
+/// itself when it reconnects, or `?after=N`) gets only the ones after it.
 async fn run_events_sse(
     State(s): State<AppState>,
     Path(id): Path<String>,
-    _q: Query<Map<String, Value>>,
+    Query(q): Query<EventsQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let after = q.after.or_else(|| headers.get("last-event-id").and_then(|h| h.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok()));
     let rx = s.engine.subscribe();
-    let replay = s.engine.run_events(&id);
-    let last_seq = replay.last().map(|e| e.seq as i64).unwrap_or(-1);
-    let finished = replay.iter().any(|e| e.event.event.is_terminal())
-        || (replay.is_empty() && s.engine.run_done(&id) && !s.engine.run_events(&id).is_empty());
+    let full = s.engine.run_events(&id);
+    let last_seq = full.last().map(|e| e.seq as i64).unwrap_or(-1);
+    // An unknown run has nothing to wait for: close the stream instead of keeping it open forever.
+    let finished = full.iter().any(|e| e.event.event.is_terminal()) || (full.is_empty() && s.engine.run_done(&id));
     let to_event = |ev: &aiw_core::events::TimedEvent, seq: u64| {
         Event::default().id(seq.to_string()).data(serde_json::to_string(ev).unwrap_or_default())
     };
-    let replay_stream = stream::iter(replay.iter().map(|e| Ok(to_event(&e.event, e.seq))).collect::<Vec<_>>());
+    let replay_stream =
+        stream::iter(full.iter().filter(|e| after.is_none_or(|a| e.seq > a)).map(|e| Ok(to_event(&e.event, e.seq))).collect::<Vec<_>>());
     let run_id = id.clone();
     let live = tokio_stream::wrappers::BroadcastStream::new(rx)
         .filter_map(move |m| {
@@ -388,16 +448,14 @@ async fn run_events_sse(
                 }
             }
         })
-        .take_while({
-            let mut ended = finished;
-            move |m| {
-                let go = !ended;
-                if matches!(m.event.event, AgEvent::RunFinished { .. } | AgEvent::RunError { .. }) {
-                    ended = true;
-                }
-                futures::future::ready(go)
-            }
+        // The terminal event is delivered and the stream ends right behind it (the `None` marker),
+        // instead of waiting for one more event of the run that never comes.
+        .flat_map(|m| {
+            let last = m.event.event.is_terminal();
+            stream::iter(if last { vec![Some(m), None] } else { vec![Some(m)] })
         })
+        .take_while(|m| futures::future::ready(m.is_some()))
+        .filter_map(futures::future::ready)
         .map(move |m| Ok(to_event(&m.event, m.seq)));
     let stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
         if finished { Box::pin(replay_stream) } else { Box::pin(replay_stream.chain(live)) };
@@ -587,3 +645,5 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
 mod tests;
 #[cfg(test)]
 mod tests_models;
+#[cfg(test)]
+mod tests_security;

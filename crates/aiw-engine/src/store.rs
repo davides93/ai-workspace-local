@@ -91,6 +91,14 @@ impl Store {
             .map_err(db)?;
         Ok(())
     }
+    /// Changes only the title: renaming is not activity, so `updated_at` (the sort key) stays.
+    pub fn rename_session(&self, id: &str, title: &str) -> Result<()> {
+        let n = self.conn.lock().unwrap().execute("UPDATE sessions SET title=?2 WHERE id=?1", params![id, title]).map_err(db)?;
+        if n == 0 {
+            return Err(Error::NotFound(format!("sessione {id}")));
+        }
+        Ok(())
+    }
     pub fn session(&self, id: &str) -> Result<Session> {
         self.conn
             .lock()

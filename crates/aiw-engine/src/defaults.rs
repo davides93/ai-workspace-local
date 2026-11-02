@@ -69,6 +69,11 @@ pub fn agents() -> Vec<AgentProfile> {
     ]
 }
 
+/// Agents seeded on first run can be edited but not deleted.
+pub fn is_builtin_agent(id: &str) -> bool {
+    agents().iter().any(|a| a.id == id)
+}
+
 /// What this device can run right now, as seen by the first-run seeding (derived from the
 /// runtime registry, so the profile always points at something that is really registered).
 #[derive(Debug, Clone, Default, PartialEq)]

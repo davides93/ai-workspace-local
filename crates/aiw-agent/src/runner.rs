@@ -189,10 +189,72 @@ struct PendingCall {
     started: bool,
 }
 
+/// Name of the AG-UI CUSTOM event that carries a tool's image (screenshot) to the UI.
+pub const IMAGE_EVENT: &str = "aiw.image";
+
+/// `data:image/png;base64,AAAA` → `("image/png", "AAAA")`.
+fn split_data_url(url: &str) -> Option<(&str, &str)> {
+    let (head, data) = url.strip_prefix("data:")?.split_once(',')?;
+    let mime = head.strip_suffix(";base64")?.split(';').next().filter(|m| !m.is_empty())?;
+    Some((mime, data))
+}
+
+/// One `aiw.image` event per image a tool returned, to emit right after its `TOOL_CALL_RESULT`.
+/// The model gets the same images as a message (see the loop); the UI shows them in the tool card.
+fn image_events(tool_call_id: &str, images: &[String]) -> Vec<AgEvent> {
+    images
+        .iter()
+        .filter_map(|url| split_data_url(url))
+        .map(|(mime, data)| AgEvent::Custom {
+            name: IMAGE_EVENT.into(),
+            value: json!({"toolCallId": tool_call_id, "mime": mime, "data": data}),
+        })
+        .collect()
+}
+
+/// A run cut short can end between an assistant message with tool calls and the results of some of
+/// them. Chat templates reject such a history, so the missing results are filled in.
+fn seal_dangling_tool_calls(msgs: &mut Vec<ChatMessage>) {
+    let answered: HashSet<String> = msgs.iter().filter_map(|m| m.tool_call_id.clone()).collect();
+    let missing: Vec<ChatMessage> = msgs
+        .iter()
+        .flat_map(|m| m.tool_calls.iter().flatten())
+        .filter(|c| !answered.contains(&c.id))
+        .map(|c| ChatMessage {
+            id: new_id("msg"),
+            role: "tool".into(),
+            content: "ERRORE: strumento non eseguito, il run è stato interrotto prima.".into(),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: Some(c.id.clone()),
+            name: Some(c.name.clone()),
+            created_at: now_rfc3339(),
+        })
+        .collect();
+    msgs.extend(missing);
+}
+
 pub struct AgentRunner;
 
 impl AgentRunner {
     pub async fn run(input: RunInput, host: Arc<dyn RunHost>) -> Result<RunOutcome> {
+        let (outcome, res) = Self::run_partial(input, host).await;
+        res.map(|()| outcome)
+    }
+
+    /// Like [`AgentRunner::run`], but what the run produced comes back even when it was cancelled
+    /// or failed: the messages, with every tool call answered, so that they can be stored and the
+    /// next turn knows what already happened (files were written, commands ran).
+    pub async fn run_partial(input: RunInput, host: Arc<dyn RunHost>) -> (RunOutcome, Result<()>) {
+        let mut outcome = RunOutcome::default();
+        let res = Self::drive(&input, host, &mut outcome).await;
+        if res.is_err() {
+            seal_dangling_tool_calls(&mut outcome.new_messages);
+        }
+        (outcome, res)
+    }
+
+    async fn drive(input: &RunInput, host: Arc<dyn RunHost>, outcome: &mut RunOutcome) -> Result<()> {
         let ev = Emitter { host: host.as_ref(), run_id: input.run_id.clone() };
         let skills = host.skills();
         let registry = host.tools();
@@ -203,9 +265,8 @@ impl AgentRunner {
             .filter(|t| registry.is_enabled(t.name()) && t.available().is_ok() && allowed(t.name()))
             .map(|t| ToolSpec::function(t.name(), t.description(), t.parameters()))
             .collect();
-        specs.extend(internal_specs(&input, &skills));
+        specs.extend(internal_specs(input, &skills));
 
-        let mut outcome = RunOutcome::default();
         let mut state = RunState {
             runtime: Some(input.profile.runtime_id.clone()),
             model: Some(input.profile.model.clone()),
@@ -221,7 +282,7 @@ impl AgentRunner {
             ev.emit(AgEvent::RunError { message: format!("Prompt bloccato da un hook: {reason}"), code: Some("hook_blocked".into()) });
             return Err(Error::Denied(reason));
         }
-        let mut messages = vec![Msg::system(system_prompt(&input, &skills))];
+        let mut messages = vec![Msg::system(system_prompt(input, &skills))];
         messages.extend(input.history.iter().cloned());
         let mut user_text = input.user_input.clone();
         for c in hook.context {
@@ -259,7 +320,7 @@ impl AgentRunner {
             }
             // Context compaction (P10).
             if estimate_tokens(&messages) as f64 > input.compact_at * ctx_max as f64 && messages.len() > 6 {
-                if let Some(n) = compact(&mut messages, backend.as_ref(), &input).await {
+                if let Some(n) = compact(&mut messages, backend.as_ref(), input).await {
                     ev.emit(AgEvent::Custom { name: "aiw.compacted".into(), value: json!({"removed_messages": n}) });
                 }
             }
@@ -289,7 +350,29 @@ impl AgentRunner {
                     return Err(e);
                 }
             };
-            let (text, reasoning, mut calls, usage) = Self::consume(stream, &ev, turn).await?;
+            let (text, reasoning, mut calls, usage, stream_error) = Self::consume(stream, &ev, turn).await;
+            if let Some(e) = stream_error {
+                // Keep what the model had said before the stream broke (cancellation included);
+                // tool calls that were still being written are dropped.
+                if !text.trim().is_empty() {
+                    outcome.new_messages.push(ChatMessage {
+                        id: new_id("msg"),
+                        role: "assistant".into(),
+                        content: text,
+                        reasoning: (!reasoning.is_empty()).then_some(reasoning),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                        created_at: now_rfc3339(),
+                    });
+                }
+                let (message, code) = match &e {
+                    Error::Cancelled => ("Run annullato".to_string(), "cancelled"),
+                    e => (format!("Errore del runtime: {e}"), "runtime"),
+                };
+                ev.emit(AgEvent::RunError { message, code: Some(code.into()) });
+                return Err(e);
+            }
             if let Some(u) = usage {
                 let mut acc = outcome.usage.clone();
                 acc.prompt_tokens = u.prompt_tokens.max(acc.prompt_tokens);
@@ -399,7 +482,6 @@ impl AgentRunner {
             'batches: for batch in batches {
                 let futs = batch.into_iter().map(|(i, tc)| {
                     let host = host.clone();
-                    let input = &input;
                     let skills = &skills;
                     let state = &state;
                     async move {
@@ -438,6 +520,9 @@ impl AgentRunner {
                     name: Some(tc.name.clone()),
                     created_at: now_rfc3339(),
                 });
+                for e in image_events(&tc.id, &out.images) {
+                    ev.emit(e);
+                }
                 for img in out.images {
                     images.push((tc.name.clone(), img));
                 }
@@ -467,15 +552,16 @@ impl AgentRunner {
             run_id: input.run_id.clone(),
             result: Some(json!({"text": outcome.final_text})),
         });
-        Ok(outcome)
+        Ok(())
     }
 
-    /// Streams one model turn, emitting text/reasoning/tool-call events.
+    /// Streams one model turn, emitting text/reasoning/tool-call events. When the stream breaks
+    /// (error or cancellation) what arrived so far is returned together with the error.
     async fn consume(
         mut stream: aiw_runtimes::DeltaStream,
         ev: &Emitter<'_>,
         turn: u32,
-    ) -> Result<(String, String, Vec<PendingCall>, Option<aiw_runtimes::TokenUsage>)> {
+    ) -> (String, String, Vec<PendingCall>, Option<aiw_runtimes::TokenUsage>, Option<Error>) {
         let msg_id = new_id("msg");
         let reason_id = format!("{msg_id}_r");
         let (mut text, mut reasoning) = (String::new(), String::new());
@@ -515,8 +601,16 @@ impl AgentRunner {
                 ev.emit(AgEvent::ReasoningMessageContent { message_id: reason_id.clone(), delta: r });
             }
         };
+        let mut stream_error = None;
         while let Some(d) = stream.next().await {
-            match d? {
+            let d = match d {
+                Ok(d) => d,
+                Err(e) => {
+                    stream_error = Some(e);
+                    break;
+                }
+            };
+            match d {
                 ChatDelta::Text(t) => {
                     for p in splitter.push(&t) {
                         match p {
@@ -597,8 +691,8 @@ impl AgentRunner {
             ev.emit(AgEvent::ToolCallEnd { tool_call_id: c.id.clone() });
         }
         // When the model wrote tool calls as text, hand the raw text to the caller for parsing.
-        let text_out = if calls.is_empty() && raw.contains("<tool_call>") { raw } else { text };
-        Ok((text_out.trim_end().to_string(), reasoning, calls, usage))
+        let text_out = if stream_error.is_none() && calls.is_empty() && raw.contains("<tool_call>") { raw } else { text };
+        (text_out.trim_end().to_string(), reasoning, calls, usage, stream_error)
     }
 
     /// Policy → hooks → approval → execution for one call. Returns the output and, for the
@@ -677,6 +771,9 @@ impl AgentRunner {
                             content: aiw_tools::truncate_middle(&shown, MAX_TOOL_OUTPUT),
                         },
                     );
+                    for e in image_events(&nested.id, &out.images) {
+                        host.emit(&input.run_id, e);
+                    }
                     let _ = req.reply.send(if out.is_error { Err(out.content) } else { Ok(out.content) });
                 }
                 let joined = tokio::task::spawn_blocking(move || worker.join()).await;

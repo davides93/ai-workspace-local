@@ -38,6 +38,8 @@ mod tests {
         events: Mutex<Vec<AgEvent>>,
         approve: bool,
         audits: Mutex<Vec<AuditEntry>>,
+        /// Tests that need a backend which can fail put it here instead of the scripted one.
+        replacement: Mutex<Option<Arc<dyn ChatBackend>>>,
     }
 
     #[async_trait]
@@ -52,6 +54,9 @@ mod tests {
             self.audits.lock().unwrap().push(e);
         }
         async fn backend(&self, _p: &InferenceProfile) -> Result<Arc<dyn ChatBackend>> {
+            if let Some(b) = self.replacement.lock().unwrap().clone() {
+                return Ok(b);
+            }
             Ok(Arc::new(self.backend.clone()))
         }
         fn tools(&self) -> Arc<ToolRegistry> {
@@ -77,6 +82,7 @@ mod tests {
             events: Mutex::new(vec![]),
             approve,
             audits: Mutex::new(vec![]),
+            replacement: Mutex::new(None),
         });
         (host, tempfile::tempdir().unwrap())
     }
@@ -291,6 +297,190 @@ mod tests {
         assert_eq!(note.role, "user");
         assert!(note.content.contains("write_file"));
         assert!(host.events.lock().unwrap().iter().any(|e| matches!(e, AgEvent::Custom { name, .. } if name == "aiw.self_check")));
+    }
+
+    /// Returns images like `browser_screenshot` and the `computer_*` tools do.
+    struct FakeShot;
+    #[async_trait]
+    impl aiw_tools::Tool for FakeShot {
+        fn name(&self) -> &str {
+            "fake_screenshot"
+        }
+        fn description(&self) -> &str {
+            "screenshot finto"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            json!({"type": "object", "properties": {}})
+        }
+        fn risk(&self) -> aiw_tools::Risk {
+            aiw_tools::Risk::Read
+        }
+        async fn call(&self, _args: serde_json::Value, _ctx: &ToolContext) -> Result<aiw_tools::ToolOutput> {
+            Ok(aiw_tools::ToolOutput {
+                content: "Screenshot allegato.".into(),
+                images: vec![
+                    "data:image/png;base64,iVBORw0KGgo=".into(),
+                    "data:image/jpeg;base64,/9j/4AAQ".into(),
+                    "https://example.org/not-a-data-url.png".into(),
+                ],
+                is_error: false,
+            })
+        }
+    }
+
+    /// Cancels the run, as the kill switch or the stop button would, while it executes.
+    struct Canceller;
+    #[async_trait]
+    impl aiw_tools::Tool for Canceller {
+        fn name(&self) -> &str {
+            "stopper"
+        }
+        fn description(&self) -> &str {
+            "annulla il run"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            json!({"type": "object", "properties": {}})
+        }
+        fn risk(&self) -> aiw_tools::Risk {
+            aiw_tools::Risk::Write
+        }
+        async fn call(&self, _args: serde_json::Value, ctx: &ToolContext) -> Result<aiw_tools::ToolOutput> {
+            ctx.cancel.cancel();
+            Ok(aiw_tools::ToolOutput::text("fatto"))
+        }
+    }
+
+    /// A backend whose turns may break half way.
+    struct Flaky(Mutex<std::collections::VecDeque<Vec<Result<ChatDelta>>>>);
+    #[async_trait]
+    impl ChatBackend for Flaky {
+        async fn list_models(&self) -> Result<Vec<String>> {
+            Ok(vec!["flaky".into()])
+        }
+        async fn chat(
+            &self,
+            _req: aiw_runtimes::ChatRequest,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<aiw_runtimes::DeltaStream> {
+            use futures::StreamExt;
+            let turn = self.0.lock().unwrap().pop_front().unwrap_or_default();
+            Ok(futures::stream::iter(turn).boxed())
+        }
+    }
+
+    fn image_values(h: &TestHost) -> Vec<(usize, serde_json::Value)> {
+        h.events
+            .lock()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match e {
+                AgEvent::Custom { name, value } if name == "aiw.image" => Some((i, value.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn tool_images_reach_the_ui_as_aiw_image_events() {
+        let (host, dir) = setup(
+            vec![ScriptedBackend::tool_turn("c1", "fake_screenshot", json!({})), ScriptedBackend::text_turn("Vedo la pagina.")],
+            true,
+        );
+        host.tools.register(Arc::new(FakeShot));
+        AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+
+        let imgs = image_values(&host);
+        assert_eq!(imgs.len(), 2, "one event per data URL image, the plain URL is skipped: {imgs:?}");
+        assert_eq!(imgs[0].1, json!({"toolCallId": "c1", "mime": "image/png", "data": "iVBORw0KGgo="}));
+        assert_eq!(imgs[1].1, json!({"toolCallId": "c1", "mime": "image/jpeg", "data": "/9j/4AAQ"}));
+        // Right after the TOOL_CALL_RESULT of that call.
+        let evs = host.events.lock().unwrap();
+        let result_at = evs.iter().position(|e| matches!(e, AgEvent::ToolCallResult { tool_call_id, .. } if tool_call_id == "c1")).unwrap();
+        assert_eq!((imgs[0].0, imgs[1].0), (result_at + 1, result_at + 2));
+        // The model still gets the images as a message of its own.
+        let reqs = host.backend.requests.lock().unwrap();
+        let last = reqs[1].messages.last().unwrap();
+        assert!(matches!(&last.content, Some(aiw_runtimes::MsgContent::Parts(p)) if p.len() >= 3), "{:?}", last.content);
+    }
+
+    #[tokio::test]
+    async fn images_from_code_mode_calls_are_emitted_for_the_nested_call() {
+        let script = r#"let r = tool("fake_screenshot", #{}); r"#;
+        let (host, dir) =
+            setup(vec![ScriptedBackend::tool_turn("c1", "code", json!({"script": script})), ScriptedBackend::text_turn("Ok")], true);
+        host.tools.register(Arc::new(FakeShot));
+        AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        let nested_id = host
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|e| match e {
+                AgEvent::ToolCallStart { tool_call_id, tool_call_name, .. } if tool_call_name == "fake_screenshot" => {
+                    Some(tool_call_id.clone())
+                }
+                _ => None,
+            })
+            .expect("nested call");
+        let imgs = image_values(&host);
+        assert_eq!(imgs.len(), 2, "{imgs:?}");
+        assert!(imgs.iter().all(|(_, v)| v["toolCallId"] == nested_id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_failed_run_hands_back_what_it_did() {
+        let (host, dir) = setup(vec![], true);
+        std::fs::write(dir.path().join("a.txt"), "x").unwrap();
+        *host.replacement.lock().unwrap() = Some(Arc::new(Flaky(Mutex::new(
+            vec![
+                ScriptedBackend::tool_turn("c1", "list_dir", json!({"path": "."})).into_iter().map(Ok).collect(),
+                // The second turn dies after a few words.
+                vec![
+                    Ok(ChatDelta::Text("Ho letto la cartella e sto per".into())),
+                    Err(aiw_core::Error::Runtime("connessione persa".into())),
+                ],
+            ]
+            .into(),
+        ))));
+        let (out, res) = AgentRunner::run_partial(input(dir.path(), "ask"), host.clone()).await;
+        assert!(matches!(res, Err(aiw_core::Error::Runtime(_))), "{res:?}");
+        let roles: Vec<&str> = out.new_messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "tool", "assistant"], "{:?}", out.new_messages);
+        assert!(out.new_messages[2].content.contains("a.txt"));
+        assert_eq!(out.new_messages[3].content, "Ho letto la cartella e sto per");
+        assert!(out.new_messages[3].tool_calls.is_none());
+        {
+            let evs = host.events.lock().unwrap();
+            assert!(matches!(evs.last(), Some(AgEvent::RunError { code: Some(c), .. }) if c == "runtime"), "{:?}", evs.last());
+        }
+        // `run` keeps its contract: just the error.
+        *host.replacement.lock().unwrap() = Some(Arc::new(Flaky(Mutex::new(vec![vec![Err(aiw_core::Error::Runtime("x".into()))]].into()))));
+        assert!(AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_run_answers_every_tool_call_it_left_open() {
+        let (host, dir) = setup(vec![], true);
+        host.tools.register(Arc::new(Canceller));
+        let both = vec![
+            ChatDelta::ToolCall { index: 0, id: Some("s".into()), name: Some("stopper".into()), arguments: "{}".into() },
+            ChatDelta::ToolCall { index: 1, id: Some("l".into()), name: Some("list_dir".into()), arguments: "{}".into() },
+            ChatDelta::Done { finish_reason: Some("tool_calls".into()) },
+        ];
+        *host.replacement.lock().unwrap() = Some(Arc::new(Flaky(Mutex::new(vec![both.into_iter().map(Ok).collect()].into()))));
+        let (out, res) = AgentRunner::run_partial(input(dir.path(), "auto"), host.clone()).await;
+        assert!(matches!(res, Err(aiw_core::Error::Cancelled)), "{res:?}");
+        // The assistant asked for two calls: the first ran (and cancelled), the second never did.
+        let asked: Vec<String> = out.new_messages[1].tool_calls.as_ref().unwrap().iter().map(|c| c.id.clone()).collect();
+        assert_eq!(asked, vec!["s", "l"]);
+        let answers: Vec<(String, String)> =
+            out.new_messages.iter().filter(|m| m.role == "tool").map(|m| (m.tool_call_id.clone().unwrap(), m.content.clone())).collect();
+        assert_eq!(answers.len(), 2, "{answers:?}");
+        assert!(answers.iter().any(|(id, c)| id == "s" && c == "fatto"));
+        assert!(answers.iter().any(|(id, c)| id == "l" && c.starts_with("ERRORE") && c.contains("interrotto")), "{answers:?}");
+        let evs = host.events.lock().unwrap();
+        assert!(matches!(evs.last(), Some(AgEvent::RunError { code: Some(c), .. }) if c == "cancelled"));
     }
 }
 
