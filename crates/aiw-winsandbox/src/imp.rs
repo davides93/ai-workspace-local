@@ -17,14 +17,15 @@ use windows_sys::Win32::Foundation::{
     INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, GetNamedSecurityInfoW, SetNamedSecurityInfoW,
-    SetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT, SE_WINDOW_OBJECT,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, GetNamedSecurityInfoW,
+    SetNamedSecurityInfoW, SetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT, SE_WINDOW_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    CreateRestrictedToken, EqualSid, GetAce, GetLengthSid, GetSecurityDescriptorSacl, SetTokenInformation, TokenIntegrityLevel, ACE_HEADER,
-    ACL, CONTAINER_INHERIT_ACE, DISABLE_MAX_PRIVILEGE, LABEL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, PSECURITY_DESCRIPTOR, PSID,
-    SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES, SYSTEM_MANDATORY_LABEL_ACE, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
-    TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    CreateRestrictedToken, EqualSid, GetAce, GetLengthSid, GetSecurityDescriptorDacl, GetSecurityDescriptorSacl, GetTokenInformation,
+    SetTokenInformation, TokenIntegrityLevel, TokenUser, ACE_HEADER, ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
+    DISABLE_MAX_PRIVILEGE, LABEL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+    SID_AND_ATTRIBUTES, SYSTEM_MANDATORY_LABEL_ACE, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL,
+    TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -103,7 +104,7 @@ fn sid(s: &str) -> io::Result<LocalSid> {
 }
 
 /// Privilege-less copy of this process token at Low integrity, with Administrators deny-only.
-fn low_token() -> io::Result<Owned> {
+fn low_token(h: Hardening) -> io::Result<Owned> {
     unsafe {
         let mut process_token: HANDLE = null_mut();
         check(
@@ -117,12 +118,26 @@ fn low_token() -> io::Result<Owned> {
         let process_token = Owned(process_token);
         let admins = sid(ADMINS_SID)?;
         let disable = [SID_AND_ATTRIBUTES { Sid: admins.0, Attributes: 0 }];
+        let n_disable = u32::from(h.deny_admins);
         let mut restricted: HANDLE = null_mut();
         check(
-            CreateRestrictedToken(process_token.0, DISABLE_MAX_PRIVILEGE, 1, disable.as_ptr(), 0, null(), 0, null(), &mut restricted),
+            CreateRestrictedToken(
+                process_token.0,
+                DISABLE_MAX_PRIVILEGE,
+                n_disable,
+                disable.as_ptr(),
+                0,
+                null(),
+                0,
+                null(),
+                &mut restricted,
+            ),
             "CreateRestrictedToken",
         )?;
         let restricted = Owned(restricted);
+        if !h.low_integrity {
+            return Ok(restricted);
+        }
         let low = sid(LOW_SID)?;
         let label = TOKEN_MANDATORY_LABEL { Label: SID_AND_ATTRIBUTES { Sid: low.0, Attributes: SE_GROUP_INTEGRITY as u32 } };
         let size = size_of::<TOKEN_MANDATORY_LABEL>() as u32 + GetLengthSid(low.0);
@@ -200,27 +215,67 @@ pub fn label_low(dir: &Path) -> io::Result<()> {
     }
 }
 
-/// SACL with a Low integrity label for window stations and desktops (no inheritance there).
-const LOW_WINDOW_LABEL_SDDL: &str = "S:(ML;;NW;;;LW)";
-
-fn label_window_object(handle: HANDLE, what: &str) -> std::result::Result<(), String> {
+/// SID of the user running the app, as a string (for SDDL).
+fn current_user_sid() -> std::result::Result<String, String> {
     unsafe {
+        let mut token: HANDLE = null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return Err(format!("OpenProcessToken: {}", io::Error::last_os_error()));
+        }
+        let token = Owned(token);
+        let mut len = 0u32;
+        GetTokenInformation(token.0, TokenUser, null_mut(), 0, &mut len);
+        let mut buf = vec![0u8; len.max(64) as usize];
+        if GetTokenInformation(token.0, TokenUser, buf.as_mut_ptr() as *mut c_void, buf.len() as u32, &mut len) == 0 {
+            return Err(format!("GetTokenInformation: {}", io::Error::last_os_error()));
+        }
+        let user = &*(buf.as_ptr() as *const TOKEN_USER);
+        let mut text: *mut u16 = null_mut();
+        if ConvertSidToStringSidW(user.User.Sid, &mut text) == 0 {
+            return Err(format!("ConvertSidToStringSid: {}", io::Error::last_os_error()));
+        }
+        let mut n = 0;
+        while *text.add(n) != 0 {
+            n += 1;
+        }
+        let sid = String::from_utf16_lossy(std::slice::from_raw_parts(text, n));
+        LocalFree(text as _);
+        Ok(sid)
+    }
+}
+
+/// Security of the sandbox window station and desktop: full access for the user (whose token,
+/// even restricted, keeps the user SID) and SYSTEM, Low integrity label. An explicit DACL is
+/// needed because an elevated creator's default DACL only names Administrators, which are
+/// deny-only in the sandbox token.
+fn secure_window_object(handle: HANDLE, user_sid: &str, what: &str) -> std::result::Result<(), String> {
+    unsafe {
+        let sddl = format!("D:(A;;GA;;;{user_sid})(A;;GA;;;SY)S:(ML;;NW;;;LW)");
         let mut sd: PSECURITY_DESCRIPTOR = null_mut();
-        if ConvertStringSecurityDescriptorToSecurityDescriptorW(wide(LOW_WINDOW_LABEL_SDDL).as_ptr(), SDDL_REVISION_1, &mut sd, null_mut())
-            == 0
-        {
-            return Err(format!("etichetta {what}: {}", io::Error::last_os_error()));
+        if ConvertStringSecurityDescriptorToSecurityDescriptorW(wide(&sddl).as_ptr(), SDDL_REVISION_1, &mut sd, null_mut()) == 0 {
+            return Err(format!("sicurezza {what}: {}", io::Error::last_os_error()));
         }
         let (mut present, mut defaulted) = (0, 0);
+        let mut dacl: *mut ACL = null_mut();
         let mut sacl: *mut ACL = null_mut();
-        let err = if GetSecurityDescriptorSacl(sd, &mut present, &mut sacl, &mut defaulted) == 0 {
+        let err = if GetSecurityDescriptorDacl(sd, &mut present, &mut dacl, &mut defaulted) == 0
+            || GetSecurityDescriptorSacl(sd, &mut present, &mut sacl, &mut defaulted) == 0
+        {
             GetLastError()
         } else {
-            SetSecurityInfo(handle, SE_WINDOW_OBJECT, LABEL_SECURITY_INFORMATION, null_mut(), null_mut(), null(), sacl)
+            SetSecurityInfo(
+                handle,
+                SE_WINDOW_OBJECT,
+                DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                dacl,
+                sacl,
+            )
         };
         LocalFree(sd as _);
         if err != ERROR_SUCCESS {
-            return Err(format!("etichetta {what}: errore {err}"));
+            return Err(format!("sicurezza {what}: errore {err}"));
         }
         Ok(())
     }
@@ -262,8 +317,9 @@ fn sandbox_desktop() -> io::Result<&'static [u16]> {
         if desktop.is_null() {
             return Err(format!("CreateDesktop: {desktop_error}"));
         }
-        label_window_object(winsta, "window station")?;
-        label_window_object(desktop, "desktop")?;
+        let user = current_user_sid()?;
+        secure_window_object(winsta, &user, "window station")?;
+        secure_window_object(desktop, &user, "desktop")?;
         Ok(wide(format!("{name}\\aiw-sandbox")))
     });
     created.as_deref().map_err(|e| io::Error::other(e.clone()))
@@ -367,6 +423,36 @@ pub fn run(
     cancel: &AtomicBool,
     max_output: usize,
 ) -> io::Result<Outcome> {
+    run_with(command_line, cwd, workspace, access, extra_env, timeout, cancel, max_output, Hardening::default())
+}
+
+/// The individual protections, all on by default (switchable only for diagnostics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hardening {
+    pub low_integrity: bool,
+    pub deny_admins: bool,
+    pub own_desktop: bool,
+}
+
+impl Default for Hardening {
+    fn default() -> Self {
+        Self { low_integrity: true, deny_admins: true, own_desktop: true }
+    }
+}
+
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn run_with(
+    command_line: &str,
+    cwd: &Path,
+    workspace: &Path,
+    access: Access,
+    extra_env: &[(String, String)],
+    timeout: Duration,
+    cancel: &AtomicBool,
+    max_output: usize,
+    hardening: Hardening,
+) -> io::Result<Outcome> {
     if access == Access::WorkspaceWrite {
         ensure_low_label(workspace)?;
     }
@@ -377,9 +463,9 @@ pub fn run(
         ("PSModuleAnalysisCachePath".to_string(), format!("{temp}\\ps-module-cache")),
     ];
     env.extend_from_slice(extra_env);
-    let token = low_token()?;
+    let token = low_token(hardening)?;
     let job = new_job()?;
-    let desktop = sandbox_desktop()?;
+    let desktop = if hardening.own_desktop { Some(sandbox_desktop()?) } else { None };
 
     unsafe {
         // One pipe for stdout and stderr, so the output keeps its order.
@@ -428,7 +514,9 @@ pub fn run(
         let mut si: STARTUPINFOEXW = zeroed();
         si.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        si.StartupInfo.lpDesktop = desktop.as_ptr() as *mut u16;
+        if let Some(d) = desktop {
+            si.StartupInfo.lpDesktop = d.as_ptr() as *mut u16;
+        }
         si.StartupInfo.hStdInput = nul.0;
         si.StartupInfo.hStdOutput = write.0;
         si.StartupInfo.hStdError = write.0;
