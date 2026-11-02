@@ -4,12 +4,13 @@ import { useApi } from "../../shared/api/context";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { DownloadProgress, ModelSearchParams, PullRequest } from "../../shared/api/types";
+import { isActiveJob, type RetryPlan } from "./model/downloads";
+import { shouldRetryHub } from "./model/errors";
 
 /** Downloads are polled once a second, but only while a job is waiting, transferring or verifying. */
 export const DOWNLOADS_POLL_MS = 1_000;
 
-export const isActiveDownload = (d: Pick<DownloadProgress, "status">): boolean =>
-  d.status === "queued" || d.status === "running" || d.status === "verifying";
+export const isActiveDownload = (d: Pick<DownloadProgress, "status">): boolean => isActiveJob(d);
 
 /** `refetchInterval` rule of the downloads query: poll only while there is an active job. */
 export const downloadsInterval = (data: DownloadProgress[] | undefined): number | false =>
@@ -60,12 +61,53 @@ export function useDownloadsWatcher() {
   }, [data, qc]);
 }
 
-export function usePullModel() {
+/**
+ * Starts a download. By default a failure becomes the central error toast; with `handled` the caller
+ * shows `mutation.error` itself (inline, with the "Imposta token" shortcut for 401/403).
+ */
+export function usePullModel(opts: { handled?: boolean } = {}) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (req: string | PullRequest) => api.pullModel(req),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.models.downloads() }),
+    meta: opts.handled ? { handled: true } : undefined,
+  });
+}
+
+/**
+ * "Riprova" of a failed or cancelled job whose request can be rebuilt: pulls it again and, once the
+ * new job exists, drops the old one so the list does not show the same download twice.
+ */
+export function useRetryDownload() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { job: DownloadProgress; plan: Extract<RetryPlan, { kind: "pull" }> }) => {
+      const created = await api.pullModel(v.plan.request);
+      if (created.id !== v.job.id) await api.clearDownload(v.job.id).catch(() => undefined);
+      return created;
+    },
+    onSuccess: () => {
+      toast("Download riavviato");
+      void qc.invalidateQueries({ queryKey: qk.models.downloads() });
+    },
+  });
+}
+
+/** Removes every finished (done or cancelled) job from the list in one go. */
+export function useClearFinishedDownloads() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      await Promise.all(ids.map((id) => api.clearDownload(id)));
+      return ids.length;
+    },
+    onSuccess: (n) => {
+      toast(n === 1 ? "Download rimosso dalla lista" : `${n} download rimossi dalla lista`);
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: qk.models.downloads() }),
   });
 }
 
@@ -104,12 +146,21 @@ export function useModelProviders() {
   return useQuery({ queryKey: qk.models.providers(), queryFn: () => api.modelProviders(), staleTime: 60_000 });
 }
 
+/**
+ * `token` undefined leaves the stored token alone, `null` removes it; `endpoint` undefined leaves it,
+ * `""` restores the default. The dialog shows the error (e.g. a token the provider refuses) itself.
+ */
 export function useSetProviderAuth() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { id: string; token: string | null; endpoint?: string }) => api.setProviderAuth(v.id, v.token, v.endpoint),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.models.providers() }),
+    mutationFn: (v: { id: string; token?: string | null; endpoint?: string }) => api.setProviderAuth(v.id, v.token, v.endpoint),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.models.providers() });
+      // A gated repository that failed without a token can work now.
+      void qc.invalidateQueries({ queryKey: qk.models.remoteAll() });
+    },
+    meta: { handled: true },
   });
 }
 
@@ -123,6 +174,7 @@ export function useModelSearch(params: Omit<ModelSearchParams, "cursor">, enable
     getNextPageParam: (last) => last.next_cursor,
     enabled,
     staleTime: 60_000,
+    retry: shouldRetryHub,
   });
 }
 
@@ -134,5 +186,6 @@ export function useRemoteModel(provider: string, model: string | null, revision?
     queryFn: () => api.remoteModel(provider, model as string, revision),
     enabled: !!model,
     staleTime: 60_000,
+    retry: shouldRetryHub,
   });
 }
