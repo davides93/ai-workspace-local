@@ -1,76 +1,89 @@
-import type { ReactNode } from "react";
+import { createElement, Fragment, memo, useMemo, type ReactNode } from "react";
+import { cx } from "../lib/cx";
+import { CodeBlock } from "./CodeBlock";
+import { parseMarkdown, type Block, type Inline, type ListItem } from "./markdownParse";
+import "./markdown.css";
 
-/** Minimal, safe Markdown (no HTML passthrough). */
-export function Markdown({ text }: { text: string }) {
-  const blocks: ReactNode[] = [];
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  let i = 0;
-  let key = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.startsWith("```")) {
-      const buf: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) buf.push(lines[i++]);
-      i++;
-      blocks.push(<pre key={key++}><code>{buf.join("\n")}</code></pre>);
-      continue;
+function renderInline(nodes: Inline[]): ReactNode[] {
+  return nodes.map((n, i) => {
+    switch (n.t) {
+      case "text":
+        return <Fragment key={i}>{n.v}</Fragment>;
+      case "code":
+        return <code key={i}>{n.v}</code>;
+      case "strong":
+        return <strong key={i}>{renderInline(n.c)}</strong>;
+      case "em":
+        return <em key={i}>{renderInline(n.c)}</em>;
+      case "del":
+        return <del key={i}>{renderInline(n.c)}</del>;
+      case "br":
+        return <br key={i} />;
+      case "link":
+        return <a key={i} href={n.href} target="_blank" rel="noopener noreferrer">{renderInline(n.c)}</a>;
     }
-    if (/^\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
-      const rows: string[][] = [];
-      const cells = (l: string) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
-      const head = cells(line);
-      i += 2;
-      while (i < lines.length && /^\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
-      blocks.push(
-        <table key={key++}>
-          <thead><tr>{head.map((h, j) => <th key={j}>{inline(h)}</th>)}</tr></thead>
-          <tbody>{rows.map((r, ri) => <tr key={ri}>{r.map((c, j) => <td key={j}>{inline(c)}</td>)}</tr>)}</tbody>
-        </table>,
+  });
+}
+
+function ListItemView({ item, tight }: { item: ListItem; tight: boolean }) {
+  const content = item.blocks.map((b, i) =>
+    tight && b.t === "p" ? <Fragment key={i}>{renderInline(b.c)}</Fragment> : <BlockView key={i} block={b} />,
+  );
+  if (item.checked === undefined) return <li>{content}</li>;
+  return (
+    <li className="md-task">
+      <input type="checkbox" checked={item.checked} disabled aria-label={item.checked ? "Completato" : "Da fare"} />
+      <div>{content}</div>
+    </li>
+  );
+}
+
+/** One top-level block. Memoized on the block object, which the parse cache keeps stable while a message streams. */
+const BlockView = memo(function BlockView({ block }: { block: Block }) {
+  switch (block.t) {
+    case "p":
+      return <p>{renderInline(block.c)}</p>;
+    case "h":
+      // Messages sit under the page's h1/h2: their headings start at h3.
+      return createElement(`h${block.level + 2}`, { className: `md-h md-h${block.level}` }, renderInline(block.c));
+    case "code":
+      return <CodeBlock code={block.v} title={block.lang || undefined} />;
+    case "list": {
+      const items = block.items.map((it, i) => <ListItemView key={i} item={it} tight={block.tight} />);
+      return block.ordered ? <ol start={block.start}>{items}</ol> : <ul>{items}</ul>;
+    }
+    case "quote":
+      return <blockquote>{block.c.map((b, i) => <BlockView key={i} block={b} />)}</blockquote>;
+    case "hr":
+      return <hr />;
+    case "table":
+      return (
+        <div className="md-table">
+          <table>
+            <thead>
+              <tr>{block.head.map((h, i) => <th key={i} scope="col" className={block.align[i] ? `md-al-${block.align[i]}` : undefined}>{renderInline(h)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {block.rows.map((r, ri) => (
+                <tr key={ri}>{r.map((c, i) => <td key={i} className={block.align[i] ? `md-al-${block.align[i]}` : undefined}>{renderInline(c)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       );
-      continue;
-    }
-    if (/^\s*([-*]|\d+\.)\s+/.test(line)) {
-      const ordered = /^\s*\d+\./.test(line);
-      const items: string[] = [];
-      while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*([-*]|\d+\.)\s+/, ""));
-      const children = items.map((it, j) => <li key={j}>{inline(it)}</li>);
-      blocks.push(ordered ? <ol key={key++}>{children}</ol> : <ul key={key++}>{children}</ul>);
-      continue;
-    }
-    if (/^#{1,3}\s/.test(line)) {
-      blocks.push(<h3 key={key++}>{inline(line.replace(/^#{1,3}\s/, ""))}</h3>);
-      i++;
-      continue;
-    }
-    if (line.trim() === "") {
-      i++;
-      continue;
-    }
-    const para: string[] = [];
-    while (i < lines.length && lines[i].trim() !== "" && !lines[i].startsWith("```") && !/^\|.*\|\s*$/.test(lines[i]) && !/^\s*([-*]|\d+\.)\s+/.test(lines[i])) para.push(lines[i++]);
-    blocks.push(<p key={key++}>{inline(para.join(" "))}</p>);
   }
-  return <div className="md">{blocks}</div>;
-}
+});
 
-function inline(s: string): ReactNode[] {
-  const out: ReactNode[] = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let k = 0;
-  while ((m = re.exec(s))) {
-    if (m.index > last) out.push(s.slice(last, m.index));
-    const t = m[0];
-    if (t.startsWith("`")) out.push(<code key={k++}>{t.slice(1, -1)}</code>);
-    else if (t.startsWith("**")) out.push(<strong key={k++}>{t.slice(2, -2)}</strong>);
-    else {
-      const mm = /^\[([^\]]+)\]\((.+)\)$/.exec(t)!;
-      out.push(<a key={k++} href={mm[2]} target="_blank" rel="noreferrer">{mm[1]}</a>);
-    }
-    last = m.index + t.length;
-  }
-  if (last < s.length) out.push(s.slice(last));
-  return out;
-}
+/**
+ * Safe Markdown (no HTML passthrough, see `markdownParse.ts`). Parsing is cached per text and
+ * incremental, so a message that streams re-parses only its last block and the older messages
+ * of the conversation cost nothing.
+ */
+export const Markdown = memo(function Markdown({ text, streaming = false, className }: { text: string; streaming?: boolean; className?: string }) {
+  const blocks = useMemo(() => parseMarkdown(text), [text]);
+  return (
+    <div className={cx("md", streaming && "is-streaming", className)}>
+      {blocks.map((b, i) => <BlockView key={i} block={b} />)}
+    </div>
+  );
+});

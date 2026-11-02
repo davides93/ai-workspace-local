@@ -26,7 +26,11 @@ export function useRenameSession() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; title: string }) => api.renameSession(v.id, v.title),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.sessions.all() }),
+    onSuccess: (s) => {
+      // The list shows the new title at once; the refetch confirms it.
+      qc.setQueryData<Session[]>(qk.sessions.list(), (list) => list?.map((x) => (x.id === s.id ? { ...x, ...s } : x)));
+      void qc.invalidateQueries({ queryKey: qk.sessions.all() });
+    },
   });
 }
 
@@ -35,8 +39,10 @@ export function useDeleteSession() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.deleteSession(id),
-    onSuccess: () => {
+    onSuccess: (_r, id) => {
       toast("Sessione eliminata");
+      // Out of the list at once, so the view never navigates back to a session that is gone.
+      qc.setQueryData<Session[]>(qk.sessions.list(), (list) => list?.filter((x) => x.id !== id));
       void qc.invalidateQueries({ queryKey: qk.sessions.all() });
     },
   });

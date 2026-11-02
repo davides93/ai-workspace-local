@@ -21,7 +21,8 @@ export function useRespondApproval(opts: { silent?: boolean } = {}) {
     onSuccess: (_r, v) => {
       if (!opts.silent) toast(v.decision === "allow" ? "Consentito" : "Negato");
       qc.setQueryData<ApprovalRequest[]>(qk.approvals(), (list) => list?.filter((a) => a.id !== v.request.id));
-      void qc.invalidateQueries({ queryKey: qk.approvals() });
     },
+    // Also after a failure (the request may have been handled elsewhere): the list is the truth.
+    onSettled: () => void qc.invalidateQueries({ queryKey: qk.approvals() }),
   });
 }

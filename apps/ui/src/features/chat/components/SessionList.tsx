@@ -1,59 +1,132 @@
-import { Icon, IconButton, Button, Led, type LedTone } from "../../../shared/ui";
-import { relTime } from "../../../shared/lib/format";
+import { useEffect, useMemo, useState } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import { Button, EmptyState, Icon, IconButton, QueryState, Select } from "../../../shared/ui";
 import type { AgentProfile, Session } from "../../../shared/api/types";
+import { filterSessions, groupSessions } from "../model/sessions";
+import { DeleteSessionDialog } from "./DeleteSessionDialog";
+import { SessionItem } from "./SessionItem";
 
-const ledTone = (s: Session): LedTone => (s.last_status === "failed" ? "crit" : s.last_status === "running" ? "run" : s.last_status ? "ok" : "off");
-
-function SessionItem({ s, agents, active, onClick }: { s: Session; agents: AgentProfile[]; active: boolean; onClick: () => void }) {
-  const a = agents.find((x) => x.id === s.agent_id);
-  return (
-    <button type="button" className="session-item" aria-current={active} onClick={onClick}>
-      <span className="t">{s.title}</span>
-      <span className="m">
-        <Led tone={ledTone(s)} small />
-        {a?.name ?? s.agent_id} · {relTime(s.updated_at)}
-        {s.worktree && <span title={s.worktree.branch} className="inline-flex"><Icon name="branch" size={12} /></span>}
-      </span>
-    </button>
-  );
+export interface NewSessionInput {
+  agent_id: string;
+  isolation: "none" | "worktree";
 }
 
-/** Left column of the chat: new session form and the list of sessions. */
-export function SessionList({ sessions, agents, activeId, newAgent, onNewAgent, isolated, onIsolated, onCreate, onSelect, onClose, showClose }: {
-  sessions: Session[];
+/**
+ * The sessions column: new session (agent, optional git worktree), search, and the sessions grouped
+ * by day with rename and delete. The search box filters by title and agent name.
+ */
+export function SessionList({ sessions, agents, defaultAgent, activeId, creating, onCreate, onSelect, onDeleted, onClose }: {
+  sessions: UseQueryResult<Session[]>;
   agents: AgentProfile[];
+  defaultAgent: string;
   activeId: string | null;
-  newAgent: string;
-  onNewAgent: (id: string) => void;
-  isolated: boolean;
-  onIsolated: (v: boolean) => void;
-  onCreate: () => void;
+  creating: boolean;
+  onCreate: (input: NewSessionInput) => void;
   onSelect: (id: string) => void;
-  onClose: () => void;
-  showClose: boolean;
+  onDeleted: (id: string) => void;
+  /** Present when the list is shown off-canvas. */
+  onClose?: () => void;
 }) {
+  const [agent, setAgent] = useState(defaultAgent);
+  const [isolated, setIsolated] = useState(false);
+  const [query, setQuery] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<Session | null>(null);
+
+  // The agents arrive after the first render: preselect the default once they are known.
+  useEffect(() => {
+    if (!agents.some((a) => a.id === agent)) setAgent(defaultAgent);
+  }, [agents, agent, defaultAgent]);
+
+  const agentName = (id: string) => agents.find((a) => a.id === id)?.name;
+  const list = sessions.data;
+  const shown = useMemo(() => (list ? filterSessions(list, query, (id) => agents.find((a) => a.id === id)?.name) : []), [list, query, agents]);
+  const groups = useMemo(() => groupSessions(shown), [shown]);
+
   return (
-    <aside className="sessions" aria-label="Sessioni">
-      <div className="sessions-head">
+    <div className="ws-sessions-in">
+      <div className="ws-sessions-head">
         <h2 className="grow">Sessioni</h2>
-        {showClose && <IconButton aria-label="Chiudi" icon="close" onClick={onClose} />}
+        {list && list.length > 0 && <span className="faint text-xs num" aria-label={`${list.length} sessioni`}>{list.length}</span>}
+        {onClose && <IconButton aria-label="Chiudi l'elenco delle sessioni" icon="close" onClick={onClose} />}
       </div>
-      <div className="sessions-new">
-        <select className="input" aria-label="Agente per la nuova sessione" value={newAgent} onChange={(e) => onNewAgent(e.target.value)}>
-          {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
-        <Button variant="primary" onClick={onCreate} title="Nuova sessione" aria-label="Nuova sessione" icon="plus" />
+
+      <div className="ws-new">
+        <div className="ws-new-row">
+          <Select aria-label="Agente della nuova sessione" value={agent} onChange={(e) => setAgent(e.target.value)} disabled={agents.length === 0}>
+            {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </Select>
+          <Button variant="primary" icon="plus" disabled={!agent || creating} onClick={() => onCreate({ agent_id: agent, isolation: isolated ? "worktree" : "none" })}>
+            Nuova
+          </Button>
+        </div>
+        <label className="ws-check" title="L'agente lavora su un branch aiw/… in una copia separata del repository: rivedi le differenze e applicale quando vuoi.">
+          <input type="checkbox" checked={isolated} onChange={(e) => setIsolated(e.target.checked)} />
+          <Icon name="branch" size={14} /> Isola in un worktree git
+        </label>
       </div>
-      <label className="check-row" title="L'agente lavora su un branch aiw/… in una copia separata del repository: rivedi le differenze e applicale quando vuoi.">
-        <input type="checkbox" checked={isolated} onChange={(e) => onIsolated(e.target.checked)} />
-        <Icon name="branch" size={14} /> Isola in un worktree git
-      </label>
-      <div className="sessions-list">
-        {sessions.map((s) => (
-          <SessionItem key={s.id} s={s} agents={agents} active={s.id === activeId} onClick={() => onSelect(s.id)} />
-        ))}
-        {sessions.length === 0 && <div className="empty">Nessuna sessione. Scegli un agente e premi +.</div>}
+
+      <div className="ws-search">
+        <Icon name="search" size={15} />
+        <input
+          type="search"
+          className="ws-search-input"
+          aria-label="Cerca nelle sessioni"
+          placeholder="Cerca per titolo o agente"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && query) {
+              e.stopPropagation();
+              setQuery("");
+            }
+          }}
+        />
       </div>
-    </aside>
+
+      <div className="ws-sessions-scroll">
+        <QueryState
+          query={sessions}
+          isEmpty={(l) => l.length === 0}
+          empty={<EmptyState className="ws-sessions-empty" icon="chat" title="Nessuna sessione" description="Scegli un agente qui sopra e premi Nuova per iniziare." />}
+        >
+          {() =>
+            groups.length === 0 ? (
+              <EmptyState
+                className="ws-sessions-empty"
+                icon="search"
+                title="Nessun risultato"
+                description={<>Nessuna sessione contiene «{query}».</>}
+                action={<Button size="sm" onClick={() => setQuery("")}>Azzera la ricerca</Button>}
+              />
+            ) : (
+              <nav aria-label="Elenco delle sessioni">
+                {groups.map((g) => (
+                  <section key={g.id} aria-labelledby={`ws-group-${g.id}`}>
+                    <h3 id={`ws-group-${g.id}`} className="ws-group">{g.label}</h3>
+                    <ul className="ws-sessionlist">
+                      {g.sessions.map((s) => (
+                        <SessionItem
+                          key={s.id}
+                          session={s}
+                          agentName={agentName(s.agent_id) ?? s.agent_id}
+                          active={s.id === activeId}
+                          renaming={renamingId === s.id}
+                          onSelect={() => onSelect(s.id)}
+                          onRename={() => setRenamingId(s.id)}
+                          onRenamed={() => setRenamingId(null)}
+                          onDelete={() => setDeleting(s)}
+                        />
+                      ))}
+                    </ul>
+                  </section>
+                ))}
+              </nav>
+            )
+          }
+        </QueryState>
+      </div>
+      {deleting && <DeleteSessionDialog session={deleting} onClose={() => setDeleting(null)} onDeleted={onDeleted} />}
+    </div>
   );
 }

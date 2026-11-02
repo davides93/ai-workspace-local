@@ -1,220 +1,175 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import { navigate, useParams } from "../../app/router";
-import { useApi } from "../../shared/api/context";
-import { errorMessage } from "../../shared/lib/errors";
 import { lastChatSession, rememberChatSession } from "../../shared/lib/navMemory";
-import { toast } from "../../shared/lib/toast";
-import { qk } from "../../shared/query/keys";
-import { Icon, IconButton, Led, Pill } from "../../shared/ui";
+import { defaultAgentId } from "../../shared/lib/agents";
+import { forgetSessionRuns } from "../../shared/lib/runIndex";
+import { Button, Drawer, EmptyState, ModalShell, Sheet } from "../../shared/ui";
+import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
-import { useRespondApproval } from "../approvals/api";
-import { actionText, type A2uiAction } from "./a2ui";
-import { useCancelRun, useCreateSession, useSessions, useStartRun } from "./api";
+import { useConfig } from "../settings/api";
+import { useCreateSession, useSessions } from "./api";
+import { ChatEmpty } from "./components/ChatEmpty";
+import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
-import { Inspector } from "./components/Inspector";
-import { ItemView } from "./components/ItemView";
-import { SessionList } from "./components/SessionList";
-import { getDraft, setDraft } from "./model/drafts";
-import { historyToItems } from "./model/history";
-import type { ApprovalItem, Item } from "./model/items";
-import { reduce } from "./model/reduce";
-import type { AgEvent, ApprovalRequest, RunState } from "../../shared/api/types";
+import { ConversationLog, type ConversationLogHandle } from "./components/ConversationLog";
+import { InspectorBody } from "./components/Inspector";
+import { SessionList, type NewSessionInput } from "./components/SessionList";
+import { setDraft } from "./model/drafts";
+import { forgetSessionImages } from "./model/imageCache";
+import { describeRunError, lastRunNotice } from "./model/runNotice";
+import { useConversation } from "./useConversation";
+import { COMPACT_SESSIONS_QUERY, useDraft, useInspectorMode, useInspectorOpen } from "./useLayout";
+import "./chat.css";
 
-const SUGGESTIONS = ["Riordina i PDF in Downloads per anno e crea un indice", "Confronta i preventivi nella cartella Fornitori", "Apri il sito del comune e trova gli orari dell'anagrafe"];
+const chatPath = (id: string) => `/chat/${encodeURIComponent(id)}`;
 
+/** Workspace: sessions on the left, the conversation in the middle, the run panel on the right. */
 export function ChatView() {
-  const api = useApi();
-  const qc = useQueryClient();
   const sessions = useSessions();
   const agents = useAgents();
   const profiles = useProfiles();
+  const config = useConfig();
   const createSession = useCreateSession();
-  const startRun = useStartRun();
-  const cancelRun = useCancelRun();
-  const respondApproval = useRespondApproval({ silent: true });
 
-  // The active session lives in the URL (#/chat/:sessionId): back/forward, links and view switches keep it.
-  const activeId = useParams().sessionId ?? null;
-  const [items, setItems] = useState<Item[]>([]);
-  const [runId, setRunId] = useState<string | null>(null);
-  const [runState, setRunState] = useState<RunState>({});
-  const [input, setInputState] = useState(() => getDraft(activeId));
-  const [showInspector, setShowInspector] = useState(false);
-  const [showSessions, setShowSessions] = useState(false);
-  const [newAgent, setNewAgent] = useState<string>("operator");
-  const [isolated, setIsolated] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const unsub = useRef<(() => void) | null>(null);
-
+  // The open session lives in the URL (#/chat/:sessionId): back/forward, links and view switches keep it.
+  const urlId = useParams().sessionId ?? null;
   const list = sessions.data;
-  const active = list?.find((s) => s.id === activeId) ?? null;
+  const active = list?.find((s) => s.id === urlId) ?? null;
+  const openId = active?.id ?? null;
   const agent = agents.data?.find((a) => a.id === active?.agent_id) ?? null;
   const profile = profiles.data?.find((p) => p.id === agent?.inference_profile) ?? null;
+  const defaultAgent = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
 
   // No session in the URL (or a stale one): open the last used one, else the most recent.
   useEffect(() => {
     if (!list || list.length === 0) return;
-    if (activeId && list.some((s) => s.id === activeId)) return;
-    const last = lastChatSession();
-    const target = list.find((s) => s.id === last) ?? list[0];
-    navigate(`/chat/${encodeURIComponent(target.id)}`, { replace: true });
-  }, [list, activeId]);
-
+    if (urlId && list.some((s) => s.id === urlId)) return;
+    const target = list.find((s) => s.id === lastChatSession()) ?? list[0];
+    navigate(chatPath(target.id), { replace: true });
+  }, [list, urlId]);
   useEffect(() => {
-    if (active) rememberChatSession(active.id);
-  }, [active]);
+    if (openId) rememberChatSession(openId);
+  }, [openId]);
 
-  // Each session keeps its own unsent draft.
+  const conv = useConversation(openId);
+  const [input, setInput] = useDraft(openId);
+  const [focusTick, setFocusTick] = useState(0);
+  const [showSessions, setShowSessions] = useState(false);
+  const compactSessions = useMediaQuery(COMPACT_SESSIONS_QUERY);
+  const mode = useInspectorMode();
+  const panel = useInspectorOpen(mode);
+  const log = useRef<ConversationLogHandle>(null);
+
+  // Say in a polite live region when a reply starts and ends; the log itself stays silent while it streams.
+  const [announce, setAnnounce] = useState("");
+  const wasRunning = useRef(false);
+  // Leaving a conversation is not the end of its run.
   useEffect(() => {
-    setInputState(getDraft(activeId));
-  }, [activeId]);
-  const setInput = (v: string) => {
-    setInputState(v);
-    setDraft(activeId, v);
-  };
-
-  const refreshSessions = useCallback(() => void qc.invalidateQueries({ queryKey: qk.sessions.list() }), [qc]);
-
-  const onEventRef = useRef<(e: AgEvent) => void>(() => {});
-  const onEvent = useCallback((e: AgEvent) => {
-    if (e.type === "STATE_SNAPSHOT") setRunState(e.snapshot);
-    if (e.type === "RUN_FINISHED" || e.type === "RUN_ERROR") {
-      setRunId(null);
-      refreshSessions();
+    wasRunning.current = false;
+    setAnnounce("");
+  }, [openId]);
+  useEffect(() => {
+    if (conv.running && !wasRunning.current) setAnnounce("Risposta in corso");
+    if (!conv.running && wasRunning.current) {
+      const last = conv.items[conv.items.length - 1];
+      setAnnounce(last?.kind === "error" ? describeRunError(last.code).title : "Risposta completata");
     }
-    setItems((prev) => reduce(prev, e));
-  }, [refreshSessions]);
-  onEventRef.current = onEvent;
-
-  useEffect(() => {
-    if (!activeId) {
-      setItems([]);
-      return;
-    }
-    unsub.current?.();
-    setRunId(null);
-    setRunState({});
-    let alive = true;
-    qc.fetchQuery({ queryKey: qk.sessions.messages(activeId), queryFn: () => api.messages(activeId), staleTime: 0 })
-      .then(async (m) => {
-        if (!alive) return;
-        // A run may still be going on (started elsewhere, or before switching session): re-attach.
-        const running = await api.activeRun(activeId).catch(() => null);
-        if (!alive) return;
-        // History already contains the user prompt of the running turn; events rebuild the rest.
-        setItems(historyToItems(m));
-        if (running) {
-          setRunId(running);
-          unsub.current = api.subscribeRun(running, (e) => onEventRef.current(e));
-        }
-      })
-      .catch((e) => toast(errorMessage(e), "crit"));
-    return () => {
-      alive = false;
-    };
-  }, [activeId, api, qc]);
-
-  // Follow the conversation, but jump (not animate) so streaming does not queue smooth scrolls.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [items]);
-
-  useEffect(() => () => unsub.current?.(), []);
-
-  const attach = useCallback((run_id: string) => {
-    setRunId(run_id);
-    unsub.current?.();
-    unsub.current = api.subscribeRun(run_id, (e) => onEventRef.current(e));
-  }, [api]);
+    wasRunning.current = conv.running;
+  }, [conv.running, conv.items]);
 
   const send = () => {
     const text = input.trim();
-    if (!text || !activeId || runId) return;
+    if (!text || !openId || conv.running) return;
     setInput("");
-    setItems((prev) => [...prev, { kind: "user", id: `u-${Date.now()}`, text }]);
-    startRun.mutate({ sessionId: activeId, input: text }, {
-      onSuccess: ({ run_id }) => attach(run_id),
-      onError: (e) => toast(`Impossibile avviare il run: ${errorMessage(e)}`, "crit"),
-    });
+    log.current?.scrollToBottom();
+    conv.send(text, () => setInput(text));
   };
 
-  const actionRef = useRef<(a: A2uiAction) => void>(() => {});
-  actionRef.current = (a) => {
-    if (!activeId || runId) return;
-    setItems((prev) => [...prev, { kind: "action", id: `a-${Date.now()}`, name: a.name, context: a.context }]);
-    startRun.mutate({ sessionId: activeId, input: actionText(a), kind: "a2ui.action" }, {
-      onSuccess: ({ run_id }) => attach(run_id),
-      onError: (e) => toast(`Impossibile inviare l'azione: ${errorMessage(e)}`, "crit"),
-    });
-  };
-  const onAction = useCallback((a: A2uiAction) => actionRef.current(a), []);
-
-  const newSession = () => {
-    createSession.mutate({ agent_id: newAgent, isolation: isolated ? "worktree" : "none" }, {
+  const create = (input: NewSessionInput) =>
+    createSession.mutate(input, {
       onSuccess: (s) => {
-        navigate(`/chat/${encodeURIComponent(s.id)}`);
+        navigate(chatPath(s.id));
         setShowSessions(false);
       },
     });
+  const onDeleted = (id: string) => {
+    forgetSessionImages(id);
+    forgetSessionRuns(id);
+    setDraft(id, "");
+    if (id === openId) {
+      rememberChatSession(null);
+      navigate("/chat", { replace: true });
+    }
   };
+  const sessionList = (onClose?: () => void) => (
+    <SessionList
+      sessions={sessions} agents={agents.data ?? []} defaultAgent={defaultAgent} activeId={openId}
+      creating={createSession.isPending} onCreate={create} onDeleted={onDeleted} onClose={onClose}
+      onSelect={(id) => {
+        navigate(chatPath(id));
+        setShowSessions(false);
+      }}
+    />
+  );
 
-  const respondRef = useRef<(r: ApprovalRequest, d: "allow" | "deny", remember?: boolean) => void>(() => {});
-  respondRef.current = (req, decision, remember = false) => {
-    respondApproval.mutate({ request: req, decision, remember }, {
-      onSuccess: () => setItems((prev) => prev.map((i) => (i.kind === "approval" && i.req.id === req.id ? { ...i, resolved: decision === "allow" } : i))),
-    });
-  };
-  const respond = useCallback((r: ApprovalRequest, d: "allow" | "deny", remember?: boolean) => respondRef.current(r, d, remember), []);
-
-  const pendingApprovals = items.filter((i) => i.kind === "approval" && i.resolved === undefined) as ApprovalItem[];
+  const noSessions = !!list && list.length === 0;
+  // Until there is a session to show: loading while the list loads (or the redirect to one runs), the list's own error if it failed.
+  const listFailed = sessions.isError && !list;
+  const logState = listFailed
+    ? { status: "error" as const, error: sessions.error, title: "Impossibile caricare le sessioni" }
+    : sessions.isPending || (!!list?.length && !openId) ? { status: "loading" as const } : conv.history;
+  const notice = lastRunNotice(active?.last_status, conv.items, conv.running);
+  const compactAt = Number(config.data?.effective["context.compact_at"]) || 0.8;
+  const inspector = (
+    <InspectorBody
+      runState={conv.runState} agent={agent} profile={profile} session={active} pending={conv.pending} running={conv.running}
+      respondingId={conv.respondingId} compactAt={compactAt} onRespond={conv.respond}
+    />
+  );
 
   return (
-    <div className={`chat ${showInspector ? "show-inspector" : ""} ${showSessions ? "show-sessions" : ""}`}>
-      <SessionList
-        sessions={list ?? []} agents={agents.data ?? []} activeId={activeId} newAgent={newAgent} onNewAgent={setNewAgent}
-        isolated={isolated} onIsolated={setIsolated} onCreate={newSession}
-        onSelect={(id) => { navigate(`/chat/${encodeURIComponent(id)}`); setShowSessions(false); }}
-        onClose={() => setShowSessions(false)} showClose={showSessions}
-      />
+    <div className="ws">
+      <h1 className="sr-only">Workspace</h1>
+      {!compactSessions && <aside className="ws-sessions" aria-label="Sessioni">{sessionList()}</aside>}
 
-      <section className="convo" aria-label="Conversazione">
-        <div className="convo-head">
-          <IconButton className="only-narrow" aria-label="Sessioni" icon="list" onClick={() => setShowSessions(true)} />
-          <h2 className="grow">{active?.title ?? "Workspace"}</h2>
-          {agent && <Pill><Icon name="agent" size={13} /> {agent.name}</Pill>}
-          {agent && <Pill tone="info" title="Modalità di approvazione"><Icon name="shield" size={13} /> {agent.mode}</Pill>}
-          {active?.worktree && (
-            <button type="button" className="pill neutral mono pill-btn" onClick={() => setShowInspector(true)} title={`Worktree isolato: ${active.worktree.path}`}>
-              <Icon name="branch" size={13} /> {active.worktree.branch}
-            </button>
-          )}
-          {runId ? <Pill tone="run"><Led tone="run" small />In esecuzione</Pill> : null}
-          <IconButton aria-label="Pannello run" icon="panel" onClick={() => setShowInspector((v) => !v)} />
-        </div>
-        <div className="convo-scroll" ref={scrollRef}>
-          {items.length === 0 && (
-            <div className="empty chat-empty">
-              <h2>Cosa facciamo, in locale?</h2>
-              <p>L'agente lavora con i modelli di questo dispositivo e chiede conferma prima di modificare file o eseguire comandi.</p>
-              <div className="row">
-                {SUGGESTIONS.map((s) => <button key={s} type="button" className="btn sm" onClick={() => setInput(s)}>{s}</button>)}
-              </div>
-            </div>
-          )}
-          {items.map((it, idx) => (
-            <ItemView key={`${it.kind}-${"id" in it ? it.id : idx}-${idx}`} it={it} onRespond={respond} onAction={onAction} busy={!!runId} />
-          ))}
-        </div>
-        <Composer
-          value={input} onChange={setInput} onSend={send} onStop={() => runId && cancelRun.mutate(runId)}
-          running={!!runId} disabled={!active} profile={profile}
-          placeholder={active ? `Scrivi a ${agent?.name ?? "l'agente"}…` : "Crea una sessione per iniziare"}
+      <section className="ws-main" aria-label="Workspace">
+        <ChatHeader
+          session={active} agent={agent} profile={profile} running={conv.running}
+          sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
+          inspectorOpen={panel.open} onToggleInspector={panel.toggle} onOpenWorktree={panel.show}
         />
+        {noSessions ? (
+          <div className="ws-nosession">
+            <EmptyState
+              icon="chat" title="Nessuna sessione"
+              description="Crea la prima sessione per far lavorare un agente su questo dispositivo."
+              action={<Button variant="primary" icon="plus" disabled={!defaultAgent || createSession.isPending} onClick={() => create({ agent_id: defaultAgent, isolation: "none" })}>Nuova sessione</Button>}
+            />
+          </div>
+        ) : (
+          <ConversationLog
+            ref={log} items={conv.items} state={logState} onRetry={listFailed ? () => void sessions.refetch() : conv.reload} busy={conv.running} respondingId={conv.respondingId}
+            onRespond={conv.respond} onAction={conv.sendAction} notice={notice} sessionKey={openId}
+            empty={<ChatEmpty onPick={(text) => { setInput(text); setFocusTick((n) => n + 1); }} />}
+          />
+        )}
+        <Composer
+          value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}
+          focusKey={`${openId}:${focusTick}`}
+          modelLabel={profile ? `${profile.runtime_id} · ${profile.model || "nessun modello"}` : undefined}
+          placeholder={!openId ? "Crea una sessione per iniziare" : logState.status === "loading" ? "Carico la conversazione…" : `Scrivi a ${agent?.name ?? "l'agente"}…`}
+        />
+        <p className="sr-only" role="status" aria-live="polite">{announce}</p>
       </section>
 
-      <Inspector runState={runState} agent={agent} profile={profile} pending={pendingApprovals} onRespond={respond} onClose={() => setShowInspector(false)} running={!!runId} session={active} />
+      {mode === "inline" && panel.open && <aside className="ws-inspector" aria-label="Pannello del run">{inspector}</aside>}
+      {mode === "drawer" && panel.open && <Drawer title="Pannello del run" onClose={panel.close}>{inspector}</Drawer>}
+      {mode === "sheet" && panel.open && <Sheet title="Pannello del run" onClose={panel.close}>{inspector}</Sheet>}
+      {compactSessions && showSessions && (
+        <ModalShell variant="drawer" title="Sessioni" className="ws-drawer-left" onClose={() => setShowSessions(false)}>
+          {sessionList(() => setShowSessions(false))}
+        </ModalShell>
+      )}
     </div>
   );
 }

@@ -1,127 +1,94 @@
-import { memo, useState } from "react";
-import { Button, Icon, Led, Markdown, Pill } from "../../../shared/ui";
-import { RISK_LABEL, RISK_TONE } from "../../../shared/lib/risk";
+import { memo } from "react";
+import { Icon, Led, Markdown } from "../../../shared/ui";
+import { ApprovalCard } from "../../approvals/components/ApprovalCard";
 import { A2uiSurface, type A2uiAction } from "../a2ui";
 import type { ApprovalRequest } from "../../../shared/api/types";
 import type { Item } from "../model/items";
-
-function prettyArgs(args: string): string {
-  try {
-    return JSON.stringify(JSON.parse(args), null, 2);
-  } catch {
-    return args;
-  }
-}
-
-function argSummary(args: string): string {
-  try {
-    const o = JSON.parse(args) as Record<string, unknown>;
-    return Object.entries(o).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("  ");
-  } catch {
-    return args;
-  }
-}
-
-const toolIcon = (name: string) =>
-  name.startsWith("browser") || name === "web_fetch" ? "globe" : name === "shell" ? "terminal" : name.startsWith("computer") ? "mouse" : name.startsWith("mcp__") ? "link" : "file";
+import { describeRunError, isStandardErrorMessage } from "../model/runNotice";
+import { CopyMessage } from "./CopyMessage";
+import { RunNote } from "./RunNote";
+import { ToolCard } from "./ToolCard";
 
 interface Props {
   it: Item;
   onRespond: (r: ApprovalRequest, d: "allow" | "deny", remember?: boolean) => void;
   onAction: (a: A2uiAction) => void;
+  /** A run is going on: surfaces are read-only until it ends. */
   busy: boolean;
+  /** Id of the confirmation whose answer is on its way. */
+  respondingId?: string | null;
 }
 
-/** One row of the conversation. Memoized: rows that did not change are not re-rendered while another one streams. */
-export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy }: Props) {
-  const [open, setOpen] = useState(false);
+const contextText = (ctx: Record<string, unknown>) => Object.entries(ctx).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("  ");
+
+/**
+ * One row of the conversation. Memoized: the reducer keeps the identity of rows that did not
+ * change, so while one message streams every other row is skipped.
+ */
+export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, respondingId }: Props) {
   switch (it.kind) {
     case "surface":
-      return <div className="msg assistant"><A2uiSurface surface={it.surface} onAction={onAction} disabled={busy} /></div>;
+      return <div className="ws-msg ws-assistant"><A2uiSurface surface={it.surface} onAction={onAction} disabled={busy} /></div>;
     case "action":
       return (
-        <div className="msg user">
-          <div className="action-chip" title="Azione inviata dall'interfaccia">
+        <div className="ws-msg ws-user">
+          <div className="ws-action" title="Azione inviata dall'interfaccia">
             <Icon name="play" size={13} /> <b>{it.name}</b>
-            {Object.keys(it.context).length > 0 && (
-              <span className="mono">{Object.entries(it.context).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("  ")}</span>
-            )}
+            {Object.keys(it.context).length > 0 && <span className="mono">{contextText(it.context)}</span>}
           </div>
         </div>
       );
     case "user":
-      return <div className="msg user"><div className="bubble">{it.text}</div></div>;
+      return <div className="ws-msg ws-user"><div className="ws-bubble-user">{it.text}</div></div>;
     case "text":
       return (
-        <div className="msg assistant">
-          <div className="bubble"><Markdown text={it.text + (it.streaming ? " ▍" : "")} /></div>
+        <div className="ws-msg ws-assistant">
+          <div className="ws-bubble"><Markdown text={it.text} streaming={it.streaming} /></div>
+          {!it.streaming && it.text && <div className="ws-msg-tools"><CopyMessage text={it.text} /></div>}
         </div>
       );
     case "reasoning":
       return (
-        <div className="msg assistant">
-          <details className="reasoning" open={it.streaming}>
-            <summary>{it.streaming ? "Sta ragionando…" : "Ragionamento"}</summary>
-            {it.text}
+        <div className="ws-msg ws-assistant">
+          <details className="ws-reasoning" open={it.streaming || undefined}>
+            <summary>{it.streaming && <Led tone="run" small />}{it.streaming ? "Sta ragionando…" : "Ragionamento"}</summary>
+            <div className="ws-reasoning-text">{it.text}</div>
           </details>
         </div>
       );
     case "tool":
-      // The surface itself is shown; keep the card only when the call failed.
-      if (it.name === "render_ui" && !(it.result ?? "").startsWith("ERRORE")) return null;
-      return (
-        <div className="msg assistant">
-          <div className="toolcard">
-            <button type="button" className="toolcard-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-              <Icon name={toolIcon(it.name)} size={15} />
-              <span className="name">{it.name}</span>
-              <span className="args">{argSummary(it.args)}</span>
-              {it.status === "running" ? <Led tone="run" /> : it.status === "denied" ? <Pill tone="crit">negato</Pill> : <Icon name="check" size={15} />}
-            </button>
-            {open && <pre>{prettyArgs(it.args)}</pre>}
-            {it.result !== undefined && <pre>{it.result}</pre>}
-            {it.images?.map((img, i) => (
-              <img key={i} className="toolcard-image" src={`data:${img.mime};base64,${img.data}`} alt={`Schermata prodotta da ${it.name}`} />
-            ))}
-          </div>
-        </div>
-      );
+      // The surface itself is shown; keep the card only when the call did not produce one.
+      if (it.name === "render_ui" && it.status === "done") return null;
+      return <div className="ws-msg ws-assistant"><ToolCard tool={it} /></div>;
     case "approval":
       return (
-        <div className="msg assistant">
-          <div className="approval" role="alert">
-            <div className="row">
-              <Icon name="shield" />
-              <b>Serve la tua conferma</b>
-              <Pill tone={RISK_TONE[it.req.risk]}>rischio {RISK_LABEL[it.req.risk]}</Pill>
-            </div>
-            <span>{it.req.reason}</span>
-            <pre>{it.req.tool} {JSON.stringify(it.req.args, null, 2)}</pre>
-            {it.resolved === undefined ? (
-              <div className="row">
-                <Button variant="primary" icon="check" onClick={() => onRespond(it.req, "allow")}>Consenti</Button>
-                <Button onClick={() => onRespond(it.req, "allow", true)}>Consenti sempre per questa sessione</Button>
-                <Button variant="danger" onClick={() => onRespond(it.req, "deny")}>Nega</Button>
-              </div>
-            ) : (
-              <Pill tone={it.resolved ? "ok" : "crit"}>{it.resolved ? "Consentito" : "Negato"}</Pill>
-            )}
-          </div>
+        <div className="ws-msg ws-assistant">
+          <ApprovalCard
+            request={it.req}
+            resolved={it.resolved}
+            allowRemember
+            pending={respondingId === it.req.id}
+            onRespond={(decision, remember) => onRespond(it.req, decision, remember)}
+          />
         </div>
       );
     case "subagent":
       return (
-        <div className="msg assistant">
-          <div className="subagent">
+        <div className="ws-msg ws-assistant">
+          <div className="ws-subagent">
             <Icon name="agent" size={15} />
             <span>Subagente <b>{it.name}</b></span>
-            {it.result ? <span className="muted">→ {it.result}</span> : <Led tone="run" />}
+            {it.result !== undefined ? <span className="muted">→ {it.result}</span> : it.interrupted ? <span className="muted">interrotto</span> : <Led tone="run" />}
           </div>
         </div>
       );
     case "note":
-      return <div className="msg assistant"><div className="loop-note"><Icon name="refresh" size={14} /> {it.text}</div></div>;
+      return <div className="ws-msg ws-assistant"><div className="ws-loopnote"><Icon name="refresh" size={14} /> {it.text}</div></div>;
     case "error":
-      return <div className="msg assistant"><Pill tone="crit">{it.message}</Pill></div>;
+      return (
+        <div className="ws-msg ws-assistant">
+          <RunNote live info={describeRunError(it.code)} message={isStandardErrorMessage(it.code, it.message) ? undefined : it.message} />
+        </div>
+      );
   }
 });

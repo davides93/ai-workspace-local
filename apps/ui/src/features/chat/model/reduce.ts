@@ -1,95 +1,137 @@
 import type { AgEvent, AiwImage, ApprovalRequest } from "../../../shared/api/types";
 import { applyA2ui, type A2uiMessage } from "../a2ui";
-import { SELF_CHECK, selfCheckText, type Item } from "./items";
+import { SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
+import { resultStatus } from "./tools";
+
+type Of<K extends Item["kind"]> = Extract<Item, { kind: K }>;
+
+/** Index of the row of `kind` with this id, searching from the end (the live rows are the last ones). */
+function indexOf(items: Item[], kind: Item["kind"], id: string): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === kind && "id" in it && it.id === id) return i;
+  }
+  return -1;
+}
+
+function update<K extends "text" | "reasoning" | "tool" | "subagent">(items: Item[], kind: K, id: string, fn: (it: Of<K>) => Of<K>): Item[] {
+  const i = indexOf(items, kind, id);
+  if (i < 0) return items;
+  const next = items.slice();
+  next[i] = fn(items[i] as Of<K>);
+  return next;
+}
+
+/** A well-formed `aiw.image` custom event: `{ toolCallId, mime, data }` with `data` as base64 (no `data:` prefix). */
+export function parseImageEvent(value: unknown): { toolCallId: string; image: ToolImage } | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Partial<AiwImage>;
+  if (typeof v.toolCallId !== "string" || typeof v.mime !== "string" || typeof v.data !== "string") return null;
+  if (!/^image\/[a-z0-9.+-]+$/i.test(v.mime)) return null;
+  // Tolerate a full data URL: keep only the payload.
+  const data = v.data.startsWith("data:") ? v.data.slice(v.data.indexOf(",") + 1) : v.data;
+  if (!data || !/^[A-Za-z0-9+/_=-]+$/.test(data.slice(0, 256))) return null;
+  return { toolCallId: v.toolCallId, image: { mime: v.mime, data } };
+}
+
+/**
+ * The run is over (finished, failed or stopped): nothing is streaming, running or waiting any more.
+ * Returns the same array when there is nothing to settle.
+ */
+export function settle(items: Item[]): Item[] {
+  let changed = false;
+  const next = items.map((it): Item => {
+    if ((it.kind === "text" || it.kind === "reasoning") && it.streaming) {
+      changed = true;
+      return { ...it, streaming: false };
+    }
+    if (it.kind === "tool" && it.status === "running") {
+      changed = true;
+      return { ...it, status: "interrupted" };
+    }
+    if (it.kind === "subagent" && it.result === undefined && !it.interrupted) {
+      changed = true;
+      return { ...it, interrupted: true };
+    }
+    if (it.kind === "approval" && it.resolved === undefined) {
+      changed = true;
+      return { ...it, resolved: false };
+    }
+    return it;
+  });
+  return changed ? next : items;
+}
 
 /** Folds one AG-UI event into the conversation rows (pure: returns a new array). */
 export function reduce(items: Item[], e: AgEvent): Item[] {
-  const next = [...items];
-  const find = <K extends Item["kind"]>(kind: K, id: string) =>
-    next.findIndex((i) => i.kind === kind && "id" in i && i.id === id);
   switch (e.type) {
     case "TEXT_MESSAGE_START":
-      next.push({ kind: "text", id: e.messageId, text: "", streaming: true });
-      break;
-    case "TEXT_MESSAGE_CONTENT": {
-      const i = find("text", e.messageId);
-      if (i >= 0) next[i] = { ...(next[i] as Extract<Item, { kind: "text" }>), text: (next[i] as Extract<Item, { kind: "text" }>).text + e.delta };
-      else next.push({ kind: "text", id: e.messageId, text: e.delta, streaming: true });
-      break;
-    }
-    case "TEXT_MESSAGE_END": {
-      const i = find("text", e.messageId);
-      if (i >= 0) next[i] = { ...(next[i] as Extract<Item, { kind: "text" }>), streaming: false };
-      break;
-    }
+      return [...items, { kind: "text", id: e.messageId, text: "", streaming: true }];
+    case "TEXT_MESSAGE_CONTENT":
+      if (indexOf(items, "text", e.messageId) < 0) return [...items, { kind: "text", id: e.messageId, text: e.delta, streaming: true }];
+      return update(items, "text", e.messageId, (it) => ({ ...it, text: it.text + e.delta }));
+    case "TEXT_MESSAGE_END":
+      return update(items, "text", e.messageId, (it) => ({ ...it, streaming: false }));
     case "REASONING_START":
-      next.push({ kind: "reasoning", id: e.messageId, text: "", streaming: true });
-      break;
-    case "REASONING_MESSAGE_CONTENT": {
-      const i = find("reasoning", e.messageId);
-      if (i >= 0) next[i] = { ...(next[i] as Extract<Item, { kind: "reasoning" }>), text: (next[i] as Extract<Item, { kind: "reasoning" }>).text + e.delta };
-      break;
-    }
-    case "REASONING_END": {
-      const i = find("reasoning", e.messageId);
-      if (i >= 0) next[i] = { ...(next[i] as Extract<Item, { kind: "reasoning" }>), streaming: false };
-      break;
-    }
+      return [...items, { kind: "reasoning", id: e.messageId, text: "", streaming: true }];
+    case "REASONING_MESSAGE_CONTENT":
+      return update(items, "reasoning", e.messageId, (it) => ({ ...it, text: it.text + e.delta }));
+    case "REASONING_END":
+      return update(items, "reasoning", e.messageId, (it) => ({ ...it, streaming: false }));
     case "TOOL_CALL_START":
-      next.push({ kind: "tool", id: e.toolCallId, name: e.toolCallName, args: "", status: "running" });
-      break;
-    case "TOOL_CALL_ARGS": {
-      const i = find("tool", e.toolCallId);
-      if (i >= 0) next[i] = { ...(next[i] as Extract<Item, { kind: "tool" }>), args: (next[i] as Extract<Item, { kind: "tool" }>).args + e.delta };
-      break;
-    }
-    case "TOOL_CALL_RESULT": {
-      const i = find("tool", e.toolCallId);
-      const denied = /^Negato|^Denied/i.test(e.content);
-      if (i >= 0) next[i] = { ...(next[i] as Extract<Item, { kind: "tool" }>), result: e.content, status: denied ? "denied" : "done" };
-      break;
-    }
+      return [...items, { kind: "tool", id: e.toolCallId, name: e.toolCallName, args: "", status: "running", startedAt: e.timestamp }];
+    case "TOOL_CALL_ARGS":
+      return update(items, "tool", e.toolCallId, (it) => ({ ...it, args: it.args + e.delta }));
+    case "TOOL_CALL_RESULT":
+      return update(items, "tool", e.toolCallId, (it) => ({ ...it, result: e.content, status: resultStatus(e.content), endedAt: e.timestamp }));
     case "SUBAGENT_STARTED":
-      next.push({ kind: "subagent", id: e.subagentId, name: e.name });
-      break;
-    case "SUBAGENT_FINISHED": {
-      const i = find("subagent", e.subagentId);
-      if (i >= 0) next[i] = { ...(next[i] as Extract<Item, { kind: "subagent" }>), result: e.result ?? "completato" };
-      break;
-    }
+      return [...items, { kind: "subagent", id: e.subagentId, name: e.name }];
+    case "SUBAGENT_FINISHED":
+      return update(items, "subagent", e.subagentId, (it) => ({ ...it, result: e.result ?? "completato" }));
     case "CUSTOM":
-      if (e.name === "a2ui") {
-        const v = e.value as { surfaceId: string; messages: A2uiMessage[] };
-        const i = next.findIndex((x) => x.kind === "surface" && x.id === v.surfaceId);
-        if (i >= 0) {
-          const it = next[i] as Extract<Item, { kind: "surface" }>;
-          const surface = applyA2ui(it.surface, v.messages);
-          if (surface) next[i] = { ...it, surface };
-        } else {
-          const surface = applyA2ui(null, v.messages);
-          if (surface) next.push({ kind: "surface", id: v.surfaceId, surface });
-        }
-      }
-      if (e.name === SELF_CHECK) next.push({ kind: "note", id: `sc-${next.length}`, text: selfCheckText((e.value as { failed: string[] }).failed ?? []) });
-      if (e.name === "aiw.approval_request") next.push({ kind: "approval", req: e.value as ApprovalRequest });
-      if (e.name === "aiw.approval_resolved") {
-        const v = e.value as { id: string; allowed: boolean };
-        const i = next.findIndex((x) => x.kind === "approval" && x.req.id === v.id);
-        if (i >= 0) next[i] = { ...(next[i] as Extract<Item, { kind: "approval" }>), resolved: v.allowed };
-      }
-      if (e.name === "aiw.image") {
-        // Screenshot of a browser or computer-use tool: shown inside the card of that tool call.
-        const v = e.value as AiwImage;
-        const i = find("tool", v.toolCallId);
-        if (i >= 0) {
-          const it = next[i] as Extract<Item, { kind: "tool" }>;
-          next[i] = { ...it, images: [...(it.images ?? []), { mime: v.mime, data: v.data }] };
-        }
-      }
-      break;
+      return reduceCustom(items, e.name, e.value);
+    case "RUN_FINISHED":
+      return settle(items);
     case "RUN_ERROR":
-      next.push({ kind: "error", message: e.message });
-      break;
+      return [...settle(items), { kind: "error", id: `err-${items.length}`, message: e.message, code: e.code }];
+    default:
+      return items;
   }
-  return next;
+}
+
+function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
+  switch (name) {
+    case "a2ui": {
+      const v = value as { surfaceId: string; messages: A2uiMessage[] };
+      const i = items.findIndex((x) => x.kind === "surface" && x.id === v.surfaceId);
+      if (i >= 0) {
+        const it = items[i] as Of<"surface">;
+        const surface = applyA2ui(it.surface, v.messages);
+        if (!surface) return items;
+        const next = items.slice();
+        next[i] = { ...it, surface };
+        return next;
+      }
+      const surface = applyA2ui(null, v.messages);
+      return surface ? [...items, { kind: "surface", id: v.surfaceId, surface }] : items;
+    }
+    case SELF_CHECK:
+      return [...items, { kind: "note", id: `sc-${items.length}`, text: selfCheckText((value as { failed?: string[] }).failed ?? []) }];
+    case "aiw.approval_request":
+      return [...items, { kind: "approval", req: value as ApprovalRequest }];
+    case "aiw.approval_resolved": {
+      const v = value as { id: string; allowed: boolean };
+      return items.map((x) => (x.kind === "approval" && x.req.id === v.id ? { ...x, resolved: v.allowed } : x));
+    }
+    case "aiw.image": {
+      // Screenshot of a browser or computer-use tool: shown inside the card of that tool call.
+      const ev = parseImageEvent(value);
+      if (!ev) return items;
+      return update(items, "tool", ev.toolCallId, (it) =>
+        it.images?.some((x) => x.data === ev.image.data) ? it : { ...it, images: [...(it.images ?? []), ev.image] },
+      );
+    }
+    default:
+      return items;
+  }
 }
