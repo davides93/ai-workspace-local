@@ -1418,6 +1418,125 @@
   "api": "openai"
  },
  {
+  "id": "llama-rpc-worker",
+  "name": "llama.cpp RPC worker",
+  "vendor": "ggml-org",
+  "kind": "sidecar",
+  "description": "Mette la GPU o la CPU di questo dispositivo a disposizione del llama-server di un altro dispositivo (impostazione \"Worker RPC\"): i layer del modello si distribuiscono sui worker.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu",
+   "cuda",
+   "metal",
+   "vulkan",
+   "sycl"
+  ],
+  "formats": [
+   "gguf"
+  ],
+  "capabilities": [
+   "distributed"
+  ],
+  "detect": {
+   "binaries": [
+    "rpc-server"
+   ]
+  },
+  "launch": {
+   "command": "rpc-server",
+   "args": [
+    "-H",
+    "{bind}",
+    "-p",
+    "{port}"
+   ],
+   "settings_args": {
+    "threads": [
+     "-t",
+     "{value}"
+    ],
+    "cache": [
+     "-c"
+    ],
+    "device": [
+     "-d",
+     "{value}"
+    ],
+    "extra_args": []
+   },
+   "health": "tcp",
+   "ready_timeout_s": 30,
+   "requires_model": false
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "bind": {
+     "type": "string",
+     "title": "Indirizzo di ascolto",
+     "description": "127.0.0.1 = solo questo dispositivo; 0.0.0.0 = anche la LAN (il protocollo RPC non ha autenticazione: usalo solo in reti fidate)",
+     "default": "127.0.0.1",
+     "enum": [
+      "127.0.0.1",
+      "0.0.0.0"
+     ]
+    },
+    "port": {
+     "type": "integer",
+     "title": "Porta",
+     "default": 50052,
+     "minimum": 1,
+     "maximum": 65535
+    },
+    "threads": {
+     "type": "integer",
+     "title": "Thread CPU",
+     "description": "vuoto = automatico",
+     "minimum": 1,
+     "maximum": 256,
+     "advanced": true
+    },
+    "device": {
+     "type": "string",
+     "title": "Dispositivo ggml (es. CUDA0, Vulkan0)",
+     "default": "",
+     "advanced": true
+    },
+    "cache": {
+     "type": "boolean",
+     "title": "Cache locale dei tensori",
+     "description": "Evita di ritrasmettere i pesi a ogni avvio del llama-server remoto",
+     "default": true
+    },
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH",
+     "default": "",
+     "advanced": true
+    },
+    "extra_args": {
+     "type": "array",
+     "title": "Argomenti extra",
+     "items": {
+      "type": "string"
+     },
+     "default": [],
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "Compila llama.cpp con -DGGML_RPC=ON (o usa una release che include rpc-server)"
+  },
+  "homepage": "https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc",
+  "api": "none"
+ },
+ {
   "id": "exo",
   "name": "exo (cluster)",
   "vendor": "exo labs",

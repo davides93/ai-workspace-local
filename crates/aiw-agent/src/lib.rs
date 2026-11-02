@@ -1,6 +1,7 @@
 //! Agentic layer (architecture §5): the agent loop and its policy, hooks, skills and helpers.
 
 pub mod a2ui;
+pub mod code;
 pub mod fallback;
 pub mod hooks;
 pub mod policy;
@@ -239,6 +240,36 @@ mod tests {
         let reqs = host.backend.requests.lock().unwrap();
         assert!(reqs[0].tools.iter().any(|t| t.function.name == "render_ui"));
         assert!(reqs[0].messages[0].text().contains("A2UI"));
+    }
+
+    #[tokio::test]
+    async fn code_mode_runs_tools_through_policy() {
+        let script = r#"
+            let listing = tool("list_dir", #{path: "."});
+            let n = listing.split("\n").filter(|l| l.contains(".txt")).len();
+            let w = "ok";
+            try { tool("write_file", #{path: "x.txt", content: "no"}); } catch (e) { w = `${e}`; }
+            `txt: ${n}; scrittura: ${w}`
+        "#;
+        let turns = vec![ScriptedBackend::tool_turn("c1", "code", json!({"script": script})), ScriptedBackend::text_turn("Fatto")];
+        let (host, dir) = setup(turns, true);
+        std::fs::write(dir.path().join("a.txt"), "1").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "2").unwrap();
+        // Plan mode: reads are allowed, the write inside the script is denied by policy.
+        let out = AgentRunner::run(input(dir.path(), "plan"), host.clone()).await.unwrap();
+        let result = out.new_messages.iter().find(|m| m.role == "tool").unwrap();
+        assert!(result.content.contains("txt: 2"), "{}", result.content);
+        assert!(result.content.contains("Negato dalla policy"), "{}", result.content);
+        assert!(!dir.path().join("x.txt").exists());
+        let evs = host.events.lock().unwrap();
+        let nested: Vec<String> = evs
+            .iter()
+            .filter_map(|e| match e {
+                AgEvent::ToolCallStart { tool_call_name, .. } => Some(tool_call_name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(nested, vec!["code", "list_dir", "write_file"]);
     }
 
     #[tokio::test]

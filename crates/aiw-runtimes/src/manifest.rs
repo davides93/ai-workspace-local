@@ -65,7 +65,8 @@ pub struct Launch {
     pub settings_args: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// Path appended to `http://127.0.0.1:{port}` for readiness checks.
+    /// Path appended to `http://127.0.0.1:{port}` for readiness checks, or `tcp` to only check
+    /// that the port accepts connections.
     #[serde(default = "health")]
     pub health: String,
     /// Path of the OpenAI base (default `/v1`).
@@ -174,5 +175,16 @@ mod tests {
         assert!(joined.contains("-c 4096"), "{joined}");
         assert!(joined.contains("--flash-attn on"), "{joined}");
         assert!(joined.ends_with("--mlock") || joined.contains("--mlock"), "{joined}");
+    }
+
+    #[test]
+    fn rpc_worker_binds_where_asked_and_checks_tcp() {
+        let m = builtin().into_iter().find(|m| m.id == "llama-rpc-worker").unwrap();
+        let launch = m.launch.as_ref().unwrap();
+        assert_eq!(launch.health, "tcp");
+        let settings = json!({"bind": "0.0.0.0", "cache": true, "device": ""}).as_object().unwrap().clone();
+        let vars: BTreeMap<String, String> =
+            [("bind".to_string(), "0.0.0.0".to_string()), ("port".to_string(), "50052".to_string())].into();
+        assert_eq!(expand_args(launch, &settings, &vars), vec!["-H", "0.0.0.0", "-p", "50052", "-c"]);
     }
 }

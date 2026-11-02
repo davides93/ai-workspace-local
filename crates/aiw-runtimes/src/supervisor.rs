@@ -164,7 +164,15 @@ impl Supervisor {
                     return Err(Error::Runtime(format!("{} si è chiuso ({status}).\n{}", spec.manifest.name, tail.join("\n"))));
                 }
             }
-            if let Ok(r) = http.get(&health).timeout(Duration::from_secs(2)).send().await {
+            // `health: "tcp"` = the port accepts connections (servers without HTTP, e.g. rpc-server).
+            if launch.health == "tcp" {
+                if tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(("127.0.0.1", port)))
+                    .await
+                    .is_ok_and(|r| r.is_ok())
+                {
+                    break;
+                }
+            } else if let Ok(r) = http.get(&health).timeout(Duration::from_secs(2)).send().await {
                 if r.status().is_success() {
                     break;
                 }

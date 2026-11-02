@@ -117,6 +117,9 @@ fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
     if allowed(crate::a2ui::TOOL) {
         v.push(crate::a2ui::spec());
     }
+    if allowed(crate::code::TOOL) {
+        v.push(crate::code::spec());
+    }
     if allowed("skill") && !skills.is_empty() {
         let names: Vec<Value> = skills.iter().map(|s| Value::String(s.name.clone())).collect();
         v.push(ToolSpec::function(
@@ -631,6 +634,57 @@ impl AgentRunner {
                     serde_json::from_value(args.get("todos").cloned().unwrap_or(Value::Array(vec![]))).unwrap_or_default();
                 let summary = todos.iter().map(|t| format!("[{}] {}", t.status, t.content)).collect::<Vec<_>>().join("\n");
                 return (ToolOutput::text(format!("Piano aggiornato:\n{summary}")), Some(todos));
+            }
+            crate::code::TOOL => {
+                let Some(script) = args.get("script").and_then(|v| v.as_str()).map(String::from) else {
+                    return (ToolOutput::error("`script` mancante"), None);
+                };
+                audit("allow", format!("code mode ({} caratteri)", script.len()));
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::code::Request>();
+                let cancel = input.tool_ctx.cancel.clone();
+                let worker = std::thread::Builder::new()
+                    .name("aiw-code".into())
+                    .spawn(move || crate::code::run(&script, tx, cancel, std::time::Duration::from_secs(120)));
+                let worker = match worker {
+                    Ok(w) => w,
+                    Err(e) => return (ToolOutput::error(e.to_string()), None),
+                };
+                // Every call the script makes is a normal tool call: policy, approvals, hooks,
+                // audit, and its own card in the UI.
+                while let Some(req) = rx.recv().await {
+                    if req.name == crate::code::TOOL {
+                        let _ = req.reply.send(Err("uno script non può avviare altri script".into()));
+                        continue;
+                    }
+                    let nested = ToolCall { id: new_id("call"), name: req.name.clone(), arguments: req.args.to_string() };
+                    host.emit(
+                        &input.run_id,
+                        AgEvent::ToolCallStart {
+                            tool_call_id: nested.id.clone(),
+                            tool_call_name: nested.name.clone(),
+                            parent_message_id: None,
+                        },
+                    );
+                    host.emit(&input.run_id, AgEvent::ToolCallArgs { tool_call_id: nested.id.clone(), delta: nested.arguments.clone() });
+                    host.emit(&input.run_id, AgEvent::ToolCallEnd { tool_call_id: nested.id.clone() });
+                    let (out, _) = Box::pin(Self::exec_tool(&nested, input, host.clone(), skills, state)).await;
+                    let shown = if out.is_error { format!("ERRORE: {}", out.content) } else { out.content.clone() };
+                    host.emit(
+                        &input.run_id,
+                        AgEvent::ToolCallResult {
+                            message_id: new_id("msg"),
+                            tool_call_id: nested.id.clone(),
+                            content: aiw_tools::truncate_middle(&shown, MAX_TOOL_OUTPUT),
+                        },
+                    );
+                    let _ = req.reply.send(if out.is_error { Err(out.content) } else { Ok(out.content) });
+                }
+                let joined = tokio::task::spawn_blocking(move || worker.join()).await;
+                return match joined {
+                    Ok(Ok(Ok(text))) => (ToolOutput::text(text), None),
+                    Ok(Ok(Err(e))) => (ToolOutput::error(format!("script fallito: {e}")), None),
+                    _ => (ToolOutput::error("script interrotto in modo anomalo"), None),
+                };
             }
             crate::a2ui::TOOL => {
                 return match crate::a2ui::build(&args) {
