@@ -83,12 +83,18 @@ export class MockTransport implements Transport {
   async modelProviders(): Promise<ModelProviderInfo[]> {
     return providers.map((p) => ({ ...p, auth_configured: this.providerAuth.get(p.id)?.configured ?? p.auth_configured, endpoint: this.providerAuth.get(p.id)?.endpoint ?? p.endpoint }));
   }
-  async setProviderAuth(id: string, token: string | null, endpoint?: string): Promise<ModelProviderInfo> {
+  /** Same semantics as the server: token absent = unchanged, null = removed; endpoint absent = unchanged, "" = default. */
+  async setProviderAuth(id: string, token: string | null | undefined, endpoint?: string): Promise<ModelProviderInfo> {
     const p = providers.find((x) => x.id === id);
     if (!p) throw new Error(`Provider ${id} non trovato`);
-    if (!p.capabilities.includes("auth")) throw new Error(`${p.name} non usa un token`);
+    if (typeof token === "string" && !p.capabilities.includes("auth")) throw new Error(`${p.name} non usa un token`);
+    if (p.endpoint === "" && endpoint) throw new Error(`${p.name} non ha impostazioni di accesso`);
     await sleep(250);
-    this.providerAuth.set(id, { configured: !!token, endpoint: endpoint || undefined });
+    const cur = this.providerAuth.get(id);
+    this.providerAuth.set(id, {
+      configured: token === undefined ? (cur?.configured ?? false) : token !== null,
+      endpoint: endpoint === undefined ? cur?.endpoint : endpoint || undefined,
+    });
     return (await this.modelProviders()).find((x) => x.id === id)!;
   }
 
@@ -123,6 +129,11 @@ export class MockTransport implements Transport {
         files: c.source.kind === "hf" ? [{ path: c.source.file, size_bytes: c.size_bytes, role: "weights" }] : [], runtimes: c.runtime_compat, installed: c.installed,
       };
       return { model: this.catalogAsRemote().find((m) => m.id === c.id)!, revision: "catalogo", variants: [variant] };
+    }
+    // A gated repository lists no files without a token (HTTP 401), as the real Hub does.
+    const hit = corpus.find((x) => x.provider === provider && x.id === model);
+    if (hit?.gated && !this.providerAuth.get(provider)?.configured) {
+      throw Object.assign(new Error("repository gated: serve un token Hugging Face con accesso a questo modello"), { status: 401 });
     }
     return buildDetail(corpus, provider, model, this.installedVariants, revision);
   }

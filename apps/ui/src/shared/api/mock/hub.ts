@@ -8,9 +8,9 @@ import { GB, compat, fitFor } from "./fixtures";
 
 export const providers: ModelProviderInfo[] = [
   { id: "catalog", name: "Consigliati", description: "Catalogo curato: modelli provati su questo tipo di device, con la compatibilità già calcolata.", homepage: "", capabilities: ["search"], formats: ["gguf", "litertlm", "onnx", "mlx", "system"], auth: "none", auth_configured: false, endpoint: "" },
-  { id: "hf", name: "Hugging Face", description: "Il più grande hub di modelli aperti: GGUF, MLX, ONNX e safetensors. Il token serve solo per i repository gated.", homepage: "https://huggingface.co", capabilities: ["search", "files", "auth", "multi_file"], formats: ["gguf", "mlx", "onnx", "safetensors"], auth: "optional", auth_configured: false, endpoint: "https://huggingface.co" },
-  { id: "modelscope", name: "ModelScope", description: "Hub di Alibaba, utile dove Hugging Face è lento o non raggiungibile. Ricerca best effort: se non trova nulla si accetta il nome esatto owner/nome.", homepage: "https://www.modelscope.cn", capabilities: ["search", "files", "auth", "multi_file"], formats: ["gguf", "safetensors"], auth: "optional", auth_configured: false, endpoint: "https://www.modelscope.cn" },
-  { id: "ollama", name: "Registry Ollama", description: "I modelli della libreria Ollama, scaricati come GGUF con l'eventuale proiettore per la vision. Nessuna ricerca pubblica: indice locale più nome esatto.", homepage: "https://ollama.com/library", capabilities: ["search", "files", "multi_file"], formats: ["gguf"], auth: "none", auth_configured: false, endpoint: "https://registry.ollama.ai" },
+  { id: "hf", name: "Hugging Face", description: "Milioni di modelli: GGUF, MLX, ONNX e safetensors. Il token serve solo per i repository gated.", homepage: "https://huggingface.co", capabilities: ["search", "files", "auth", "multi_file"], formats: ["gguf", "mlx", "onnx", "safetensors"], auth: "optional", auth_configured: false, endpoint: "https://huggingface.co" },
+  { id: "modelscope", name: "ModelScope", description: "Hub cinese di modelli, utile come mirror dove Hugging Face è lento o non raggiungibile.", homepage: "https://www.modelscope.cn", capabilities: ["search", "files", "auth", "multi_file"], formats: ["gguf", "safetensors"], auth: "optional", auth_configured: false, endpoint: "https://www.modelscope.cn" },
+  { id: "ollama", name: "Registry Ollama", description: "I modelli della libreria Ollama scaricati direttamente dal registro, senza bisogno del demone Ollama.", homepage: "https://ollama.com/library", capabilities: ["search", "files", "multi_file"], formats: ["gguf"], auth: "none", auth_configured: false, endpoint: "https://registry.ollama.ai" },
   { id: "url", name: "URL diretto", description: "Un file qualsiasi raggiungibile via HTTP(S), con ripresa del download e verifica sha256 opzionale.", homepage: "", capabilities: ["files"], formats: ["gguf", "onnx", "safetensors"], auth: "none", auth_configured: false, endpoint: "" },
 ];
 
@@ -43,6 +43,9 @@ const seeds: Seed[] = [
   { provider: "hf", id: "mlx-community/gemma-4-27b-it-4bit", publisher: "mlx-community", description: "Gemma 4 27B per MLX, con encoder visivo. Solo Apple Silicon.", formats: ["mlx"], tags: ["mlx", "vision"], capabilities: ["chat", "vision"], downloads: 41_200, likes: 120, days: 9, license: "gemma", params_b: 27 },
   { provider: "hf", id: "microsoft/Phi-4-mini-instruct-onnx", publisher: "microsoft", description: "Phi-4 mini ottimizzato per ONNX Runtime GenAI (CPU, DirectML, NPU).", formats: ["onnx"], tags: ["onnx", "directml"], capabilities: ["chat", "tools"], downloads: 129_000, likes: 330, days: 85, license: "mit", params_b: 3.8 },
   { provider: "hf", id: "meta-llama/Llama-3.2-3B-Instruct", publisher: "meta-llama", description: "Llama 3.2 3B Instruct, pesi originali. Repository gated: serve un token Hugging Face.", formats: ["safetensors"], tags: ["llama", "gated"], capabilities: ["chat", "tools"], downloads: 3_100_000, likes: 1_900, days: 140, license: "llama3.2", gated: true, params_b: 3 },
+  { provider: "hf", id: "ggml-org/gpt-oss-20b-GGUF", publisher: "ggml-org", description: "gpt-oss 20B (MoE) in MXFP4: ragionamento e tool calling con licenza permissiva.", formats: ["gguf"], tags: ["agent", "reasoning"], capabilities: ["chat", "tools", "reasoning"], downloads: 690_400, likes: 1_100, days: 18, license: "apache-2.0", params_b: 20 },
+  { provider: "hf", id: "unsloth/gemma-3n-E4B-it-GGUF", publisher: "unsloth", description: "Gemma 3n E4B a basso consumo, con proiettore mmproj per le immagini.", formats: ["gguf"], tags: ["gemma3n", "vision", "small"], capabilities: ["chat", "vision"], downloads: 330_200, likes: 460, days: 75, license: "gemma", params_b: 8 },
+  { provider: "hf", id: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF", publisher: "bartowski", description: "Qwen2.5 Coder 7B Instruct: completamento e revisione di codice.", formats: ["gguf"], tags: ["coding"], capabilities: ["chat", "tools"], downloads: 262_100, likes: 540, days: 210, license: "apache-2.0", params_b: 7 },
   { provider: "modelscope", id: "Qwen/Qwen3-8B-GGUF", publisher: "Qwen", description: "Qwen3 8B GGUF dal mirror ModelScope.", formats: ["gguf"], tags: ["qwen3"], capabilities: ["chat", "tools", "reasoning"], downloads: 220_100, likes: 410, days: 45, license: "apache-2.0", params_b: 8 },
   { provider: "modelscope", id: "unsloth/gemma-4-E4B-it-GGUF", publisher: "unsloth", description: "Gemma 4 E4B (testo, immagini, audio) quantizzato.", formats: ["gguf"], tags: ["gemma4", "small"], capabilities: ["chat", "vision", "tools"], downloads: 98_600, likes: 205, days: 14, license: "gemma", params_b: 8 },
   { provider: "modelscope", id: "LLM-Research/Meta-Llama-3.1-8B-Instruct-GGUF", publisher: "LLM-Research", description: "Llama 3.1 8B Instruct in formato GGUF.", formats: ["gguf"], tags: ["llama"], capabilities: ["chat", "tools"], downloads: 172_000, likes: 300, days: 110, license: "llama3.1", params_b: 8 },
@@ -73,6 +76,10 @@ const norm = (s: string) => s.toLowerCase();
 
 /** Search over the demo corpus: text, format filter, sort and cursor pagination (`cursor` = offset). */
 export function searchCorpus(items: RemoteModel[], p: ModelSearchParams): SearchPage {
+  // Demo of an unreachable provider (HTTP 502): search for "offline".
+  if (norm(p.q).trim() === "offline") {
+    throw Object.assign(new Error("Provider irraggiungibile: impossibile contattare il servizio (timeout di connessione)"), { status: 502 });
+  }
   const words = norm(p.q).split(/\s+/).filter(Boolean);
   let list = items.filter((m) => {
     if (p.format && !m.formats.includes(p.format)) return false;
@@ -194,7 +201,7 @@ function safetensorsVariant(m: RemoteModel, installed: Set<string>): ModelVarian
   const f = fitFor(total);
   return {
     id: "repo", label: "Repository completo (bf16)", format: "safetensors", quant: "bf16", files, size_bytes: total, fit: f.fit,
-    fit_detail: m.gated ? `${f.detail} Repository gated: serve un token Hugging Face.` : f.detail, recommended: false, runtimes: compat(["vllm", "sglang"]),
+    fit_detail: m.gated ? `${f.detail}. Repository gated: serve un token Hugging Face.` : f.detail, recommended: false, runtimes: compat(["vllm", "sglang"]),
     installed: installed.has(`${m.provider}/${m.id}/repo`),
   };
 }

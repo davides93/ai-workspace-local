@@ -43,8 +43,11 @@ export interface Transport {
   models(): Promise<LocalModel[]>;
   catalog(): Promise<CatalogModel[]>;
   modelProviders(): Promise<ModelProviderInfo[]>;
-  /** `token: null` removes the stored token; the token never comes back from the server. */
-  setProviderAuth(id: string, token: string | null, endpoint?: string): Promise<ModelProviderInfo>;
+  /**
+   * `token: null` removes the stored token, `undefined` leaves it as it is; the token never comes back
+   * from the server. `endpoint` omitted leaves it as it is, `""` restores the provider's default.
+   */
+  setProviderAuth(id: string, token: string | null | undefined, endpoint?: string): Promise<ModelProviderInfo>;
   searchModels(p: ModelSearchParams): Promise<SearchPage>;
   remoteModel(provider: string, model: string, revision?: string): Promise<RemoteModelDetail>;
   /** A string is the id of a curated catalog entry. */

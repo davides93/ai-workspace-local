@@ -265,9 +265,12 @@ export interface RemoteModelDetail {
   variants: ModelVariant[];
 }
 
-/** Body of POST /api/models/pull: the first shape that matches wins on the server. */
+/**
+ * Body of POST /api/models/pull: the first shape that matches wins on the server. In the hub form
+ * `variant` may be left out or empty: the server then picks the only or the recommended variant.
+ */
 export type PullRequest =
-  | { provider: string; model: string; variant: string; revision?: string }
+  | { provider: string; model: string; variant?: string; revision?: string }
   | { id: string }
   | { repo: string; file: string }
   | { url: string; file_name?: string; sha256?: string };

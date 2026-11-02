@@ -30,6 +30,14 @@ export function pullBody(req: string | PullRequest): PullRequest {
   return typeof req === "string" ? { id: req } : req;
 }
 
+/** Body of PUT /api/models/providers/{id}/auth: an absent field is left unchanged, `token: null` removes the token. */
+export function authBody(token: string | null | undefined, endpoint?: string): { token?: string | null; endpoint?: string } {
+  const body: { token?: string | null; endpoint?: string } = {};
+  if (token !== undefined) body.token = token;
+  if (endpoint !== undefined) body.endpoint = endpoint;
+  return body;
+}
+
 /** REST + SSE carrier for `aiw serve` (same routes the Tauri shell dispatches in-process). */
 export class HttpTransport implements Transport {
   readonly kind: "http" | "tauri" = "http";
@@ -73,8 +81,8 @@ export class HttpTransport implements Transport {
   models = () => this.req<LocalModel[]>("GET", "/models");
   catalog = () => this.req<CatalogModel[]>("GET", "/models/catalog");
   modelProviders = () => this.req<ModelProviderInfo[]>("GET", "/models/providers");
-  setProviderAuth = (id: string, token: string | null, endpoint?: string) =>
-    this.req<ModelProviderInfo>("PUT", `/models/providers/${enc(id)}/auth`, endpoint === undefined ? { token } : { token, endpoint });
+  setProviderAuth = (id: string, token: string | null | undefined, endpoint?: string) =>
+    this.req<ModelProviderInfo>("PUT", `/models/providers/${enc(id)}/auth`, authBody(token, endpoint));
   searchModels = (p: ModelSearchParams) =>
     this.req<SearchPage>("GET", `/models/search${queryString({ provider: p.provider, q: p.q, format: p.format, sort: p.sort, limit: p.limit, cursor: p.cursor })}`);
   remoteModel = (provider: string, model: string, revision?: string) =>
