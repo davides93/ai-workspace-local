@@ -35,18 +35,19 @@ export function WorktreePanel({ session, running }: { session: Session; running:
 
   const files = st?.files ?? [];
   return (
-    <div className="stack worktree">
-      <div className="row row-between">
+    <section className="ws-insp-section ws-wt">
+      <div className="ws-insp-head">
         <h3>Worktree</h3>
         <Pill className="mono"><Icon name="branch" size={13} /> {wt.branch}</Pill>
       </div>
-      <span className="faint mono wt-path" title={wt.path}>{wt.path}</span>
+      <span className="faint mono ws-wt-path" title={wt.path}>{wt.path}</span>
       {st && files.length === 0 && <span className="faint text-sm">Nessuna modifica da applicare.</span>}
       {files.length > 0 && (
-        <ul className="changed" aria-label="File modificati">
+        <ul className="ws-changed" aria-label="File modificati">
           {files.map((f) => (
             <li key={f.path}>
-              <span className={`fs fs-${f.status}`} title={FILE_STATUS[f.status] ?? f.status}>{f.status}</span>
+              <span className={`ws-fs ws-fs-${f.status}`} title={FILE_STATUS[f.status] ?? f.status}>{f.status}</span>
+              <span className="sr-only">{FILE_STATUS[f.status] ?? f.status}: </span>
               <span className="mono">{f.path}</span>
             </li>
           ))}
@@ -65,7 +66,7 @@ export function WorktreePanel({ session, running }: { session: Session; running:
       </div>
       {running && <span className="faint text-xs">Applica e scarta tornano disponibili alla fine del run.</span>}
       {showDiff && st && <Diff text={st.diff} truncated={st.truncated} />}
-    </div>
+    </section>
   );
 }
 
@@ -76,7 +77,7 @@ function Diff({ text, truncated }: { text: string; truncated: boolean }) {
       ? "meta"
       : l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : l.startsWith("@@") ? "hunk" : undefined;
   return (
-    <pre className="diff" aria-label="Differenze">
+    <pre className="ws-diff" aria-label="Differenze" tabIndex={0}>
       <code>
         {lines.map((l, i) => <span key={i} className={cls(l)}>{l || " "}</span>)}
         {truncated && <span className="meta">… differenze troncate</span>}

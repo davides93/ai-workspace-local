@@ -1,44 +1,42 @@
-import { useState } from "react";
-import { Button, Drawer, Icon, Pill } from "../../shared/ui";
-import { useApprovals, useRespondApproval } from "./api";
-import { RISK_LABEL, RISK_TONE } from "../../shared/lib/risk";
+import { useEffect, useState } from "react";
+import { Icon, Pill } from "../../shared/ui";
+import { useApprovals } from "./api";
+import { ApprovalDrawer } from "./components/ApprovalDrawer";
+import { pendingLabel } from "./model/shortcuts";
+import "./approvals.css";
 
-/** Global inbox of pending confirmations (agents, sub-agents and unattended workflows). */
+/**
+ * Global inbox of pending confirmations (agents, sub-agents and unattended workflows): a banner
+ * under the shell header with the count, and the drawer to decide. The banner's live region is
+ * always mounted so a new request is announced to screen readers when it appears.
+ */
 export function ApprovalsCenter() {
   const { data } = useApprovals();
-  const respond = useRespondApproval();
-  const [open, setOpen] = useState(false);
   const items = data ?? [];
+  const [open, setOpen] = useState(false);
+  const high = items.filter((a) => a.risk === "high").length;
 
-  if (items.length === 0) return null;
+  // The drawer closes with its last request and does not pop up again for the next one.
+  useEffect(() => {
+    if (items.length === 0) setOpen(false);
+  }, [items.length]);
+
   return (
     <>
-      <div role="status" aria-live="polite">
-        <button type="button" className="banner banner-action" onClick={() => setOpen(true)}>
-          <Icon name="shield" size={16} />
-          <span><b>{items.length === 1 ? "1 conferma in attesa" : `${items.length} conferme in attesa`}</b> · {items[0].reason}</span>
-          <span className="btn sm primary banner-cta">Rivedi</span>
-        </button>
+      <div role="status" aria-live="polite" aria-atomic="true">
+        {items.length > 0 && (
+          <button type="button" className="banner banner-action apv-banner" onClick={() => setOpen(true)} aria-haspopup="dialog">
+            <Icon name="shield" size={16} />
+            <span className="apv-banner-text">
+              <b>{pendingLabel(items.length)}</b>
+              <span className="apv-banner-reason"> · {items[0].reason}</span>
+            </span>
+            {high > 0 && <Pill tone="crit">{high === 1 ? "1 ad alto rischio" : `${high} ad alto rischio`}</Pill>}
+            <span className="btn sm primary banner-cta" aria-hidden="true">Rivedi</span>
+          </button>
+        )}
       </div>
-      {open && (
-        <Drawer title="Conferme in attesa" subtitle="Gli agenti e i workflow sono in pausa finché non decidi" onClose={() => setOpen(false)}>
-          {items.map((a) => (
-            <div key={a.id} className="approval">
-              <div className="row">
-                <span className="mono">{a.tool}</span>
-                <Pill tone={RISK_TONE[a.risk]}>rischio {RISK_LABEL[a.risk]}</Pill>
-                <span className="faint mono text-xs ml-auto">{a.run_id}</span>
-              </div>
-              <span>{a.reason}</span>
-              <pre>{JSON.stringify(a.args, null, 2)}</pre>
-              <div className="row">
-                <Button variant="primary" icon="check" disabled={respond.isPending} onClick={() => respond.mutate({ request: a, decision: "allow" })}>Consenti</Button>
-                <Button variant="danger" disabled={respond.isPending} onClick={() => respond.mutate({ request: a, decision: "deny" })}>Nega</Button>
-              </div>
-            </div>
-          ))}
-        </Drawer>
-      )}
+      {open && items.length > 0 && <ApprovalDrawer items={items} onClose={() => setOpen(false)} />}
     </>
   );
 }
