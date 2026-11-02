@@ -184,8 +184,62 @@ pub fn build(args: &Value) -> Result<(String, Vec<Value>), String> {
     Ok((surface, messages))
 }
 
+/// Models often nest child components instead of referencing them by id: lift them into the
+/// flat list (depth-first) and leave their ids in place.
+fn flatten(components: Vec<Map<String, Value>>) -> Vec<Map<String, Value>> {
+    fn lift(mut c: Map<String, Value>, out: &mut Vec<Map<String, Value>>, n: &mut usize) {
+        let mut nested = Vec::new();
+        let take = |v: &mut Value, nested: &mut Vec<Map<String, Value>>, n: &mut usize| {
+            if let Value::Object(o) = v {
+                if o.contains_key("component") || o.contains_key("type") {
+                    let mut o = std::mem::take(o);
+                    let id = match o.get("id").and_then(|x| x.as_str()) {
+                        Some(id) if !id.is_empty() => id.to_string(),
+                        _ => {
+                            *n += 1;
+                            let id = format!("c{n}");
+                            o.insert("id".into(), Value::String(id.clone()));
+                            id
+                        }
+                    };
+                    nested.push(o);
+                    *v = Value::String(id);
+                }
+            }
+        };
+        for key in ["child", "trigger", "content"] {
+            if let Some(v) = c.get_mut(key) {
+                take(v, &mut nested, n);
+            }
+        }
+        if let Some(Value::Array(items)) = c.get_mut("children") {
+            for v in items.iter_mut() {
+                take(v, &mut nested, n);
+            }
+        }
+        if let Some(Value::Array(tabs)) = c.get_mut("tabs") {
+            for t in tabs.iter_mut() {
+                if let Some(v) = t.get_mut("child") {
+                    take(v, &mut nested, n);
+                }
+            }
+        }
+        out.push(c);
+        for o in nested {
+            lift(o, out, n);
+        }
+    }
+    let mut out = Vec::new();
+    let mut n = 0;
+    for c in components {
+        lift(c, &mut out, &mut n);
+    }
+    out
+}
+
 /// Shortcuts accepted from models and rewritten into catalog form.
 fn normalise(components: &mut Vec<Map<String, Value>>) {
+    *components = flatten(std::mem::take(components));
     let mut extra = Vec::new();
     for c in components.iter_mut() {
         // Component type given as `type`.
@@ -260,6 +314,25 @@ mod tests {
         assert!(comps.iter().any(|c| c["id"] == "t" && c["component"] == "Text" && c["text"] == "Ciao"));
         assert_eq!(msgs[2]["updateDataModel"]["value"]["nome"], "Ada");
         assert!(msgs.iter().all(|m| m["version"] == VERSION));
+    }
+
+    #[test]
+    fn nested_children_are_lifted_into_the_flat_list() {
+        let (_, msgs) = build(&json!({"components": [
+            {"id": "root", "component": "Column", "children": [
+                {"id": "titolo", "component": "Text", "text": "Ciao"},
+                {"component": "Card", "child": {"component": "Text", "text": "Dentro"}},
+                {"id": "ok", "component": "Button", "label": "OK"}
+            ]}
+        ]}))
+        .unwrap();
+        let comps = msgs[1]["updateComponents"]["components"].as_array().unwrap();
+        let root = comps.iter().find(|c| c["id"] == "root").unwrap();
+        assert_eq!(root["children"], json!(["titolo", "c1", "ok"]));
+        let card = comps.iter().find(|c| c["id"] == "c1").unwrap();
+        assert_eq!(card["child"], "c2");
+        assert!(comps.iter().any(|c| c["id"] == "c2" && c["text"] == "Dentro"));
+        assert!(comps.iter().any(|c| c["id"] == "ok__label"));
     }
 
     #[test]

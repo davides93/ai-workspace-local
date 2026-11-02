@@ -77,10 +77,36 @@ export function setPath(data: Obj, ptr: string, value: unknown): Obj {
 }
 
 // ------------------------------------------------------------------ messages
+/** Nested child components (a common model habit) lifted into the flat list, as the server does. */
+function flatten(list: unknown[]): Obj[] {
+  const out: Obj[] = [];
+  let n = 0;
+  const lift = (c: Obj) => {
+    const nested: Obj[] = [];
+    const take = (v: unknown): unknown => {
+      if (v && typeof v === "object" && !Array.isArray(v) && ("component" in (v as Obj) || "type" in (v as Obj))) {
+        const o = { ...(v as Obj) };
+        if (typeof o.id !== "string" || !o.id) o.id = `c${++n}`;
+        nested.push(o);
+        return o.id;
+      }
+      return v;
+    };
+    const c2: Obj = { ...c };
+    for (const k of ["child", "trigger", "content"]) if (k in c2) c2[k] = take(c2[k]);
+    if (Array.isArray(c2.children)) c2.children = c2.children.map(take);
+    if (Array.isArray(c2.tabs)) c2.tabs = (c2.tabs as Obj[]).map((t) => (t && typeof t === "object" ? { ...t, child: take(t.child) } : t));
+    out.push(c2);
+    nested.forEach(lift);
+  };
+  for (const c of list) if (c && typeof c === "object") lift(c as Obj);
+  return out;
+}
+
 /** Same shortcuts the server normalises (render_ui arguments rebuilt from history). */
 export function normaliseComponents(list: unknown[]): A2uiComponent[] {
   const out: A2uiComponent[] = [];
-  for (const raw of list) {
+  for (const raw of flatten(list)) {
     if (!raw || typeof raw !== "object") continue;
     const c = { ...(raw as Obj) } as A2uiComponent;
     if (!c.component && typeof c.type === "string") c.component = c.type as string;

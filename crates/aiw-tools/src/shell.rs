@@ -1,7 +1,7 @@
 //! Shell tool with OS-level sandboxing (ADR 0005):
 //! Linux → bubblewrap (read-only root, writable workspace, private /tmp, optional no-network);
-//! macOS → sandbox-exec profile denying writes outside the workspace; Windows → no sandbox yet
-//! (the policy engine keeps asking for confirmation there).
+//! macOS → sandbox-exec profile denying writes outside the workspace; Windows → Low integrity
+//! token + job object (crate `aiw-winsandbox`): writes only in the workspace, network not isolated.
 
 use crate::{arg_str, truncate_middle, Risk, SandboxMode, Tool, ToolContext, ToolOutput};
 use aiw_core::{Error, Result};
@@ -23,10 +23,15 @@ pub fn sandbox_backend() -> Option<&'static str> {
         Some("bwrap")
     } else if cfg!(target_os = "macos") && Path::new("/usr/bin/sandbox-exec").exists() {
         Some("sandbox-exec")
+    } else if cfg!(windows) {
+        Some("windows-low-integrity")
     } else {
         None
     }
 }
+
+/// PowerShell writes to pipes in the OEM code page unless told otherwise.
+const PS_UTF8: &str = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;$OutputEncoding=[Text.Encoding]::UTF8;";
 
 fn shell_program() -> (String, Vec<String>) {
     if cfg!(windows) {
@@ -36,10 +41,23 @@ fn shell_program() -> (String, Vec<String>) {
     }
 }
 
+/// Full PowerShell command line for `CreateProcess`, with the script base64-encoded (UTF-16LE)
+/// so that no quoting rule can split or reinterpret it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn powershell_command_line(command: &str) -> String {
+    use base64::Engine;
+    let script = format!("{PS_UTF8}{command}");
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    format!(
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {}",
+        base64::engine::general_purpose::STANDARD.encode(utf16)
+    )
+}
+
 /// Builds the argv that runs `command` in `cwd` under the requested sandbox.
 pub fn build_command(command: &str, cwd: &Path, workspace: &Path, mode: SandboxMode, allow_network: bool) -> (String, Vec<String>, bool) {
     let (sh, mut sh_args) = shell_program();
-    sh_args.push(command.to_string());
+    sh_args.push(if cfg!(windows) { format!("{PS_UTF8}{command}") } else { command.to_string() });
     if mode == SandboxMode::Off {
         return (sh, sh_args, false);
     }
@@ -110,6 +128,12 @@ impl Tool for ShellTool {
         }
         let timeout = Duration::from_secs(args.get("timeout_s").and_then(|v| v.as_u64()).unwrap_or(120).clamp(1, 1800));
         let network = args.get("network").and_then(|v| v.as_bool()).unwrap_or(true);
+        #[cfg(windows)]
+        {
+            if ctx.sandbox != SandboxMode::Off {
+                return run_windows_sandboxed(command, &cwd, ctx, timeout, network).await;
+            }
+        }
         let (prog, argv, sandboxed) = build_command(command, &cwd, &ctx.workspace_root, ctx.sandbox, network);
         let mut child = tokio::process::Command::new(&prog)
             .args(&argv)
@@ -172,6 +196,66 @@ impl Tool for ShellTool {
             }
             None => ToolOutput::error(format!("$ {command}\n{out}\n[timeout dopo {} s{note}]", timeout.as_secs())),
         })
+    }
+}
+
+#[cfg(windows)]
+async fn run_windows_sandboxed(command: &str, cwd: &Path, ctx: &ToolContext, timeout: Duration, network: bool) -> Result<ToolOutput> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let access =
+        if ctx.sandbox == SandboxMode::WorkspaceWrite { aiw_winsandbox::Access::WorkspaceWrite } else { aiw_winsandbox::Access::ReadOnly };
+    let cancel = Arc::new(AtomicBool::new(false));
+    let line = powershell_command_line(command);
+    let (cwd, ws, flag) = (cwd.to_path_buf(), ctx.workspace_root.clone(), cancel.clone());
+    let job = tokio::task::spawn_blocking(move || aiw_winsandbox::run(&line, &cwd, &ws, access, &[], timeout, &flag, 4 * MAX_OUT));
+    let watch = {
+        let token = ctx.cancel.clone();
+        let flag = cancel.clone();
+        tokio::spawn(async move {
+            token.cancelled().await;
+            flag.store(true, Ordering::Relaxed);
+        })
+    };
+    let res = job.await.map_err(|e| Error::Runtime(e.to_string()))?;
+    watch.abort();
+    let o = res.map_err(|e| Error::Runtime(format!("sandbox Windows: {e}")))?;
+    if o.cancelled {
+        return Err(Error::Cancelled);
+    }
+    let out = String::from_utf8_lossy(&o.output).to_string();
+    let out = truncate_middle(out.trim_end(), MAX_OUT);
+    let note = if network { "" } else { " · rete non isolata su Windows" };
+    Ok(match o.exit_code {
+        Some(code) => {
+            let t = ToolOutput::text(format!("$ {command}\n{out}\n[exit {code}{note}]"));
+            if code == 0 {
+                t
+            } else {
+                ToolOutput { is_error: true, ..t }
+            }
+        }
+        None => ToolOutput::error(format!("$ {command}\n{out}\n[timeout dopo {} s{note}]", timeout.as_secs())),
+    })
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn powershell_runs_in_the_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new("r", dir.path().to_path_buf());
+        let out =
+            ShellTool.call(json!({"command": "Set-Content -Path nota.txt -Value 'perché sì'; Get-Content nota.txt"}), &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert!(out.content.contains("perché sì"), "{}", out.content);
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("x.txt");
+        let cmd = format!("Set-Content -Path '{}' -Value no", target.display());
+        let out = ShellTool.call(json!({"command": cmd}), &ctx).await.unwrap();
+        assert!(out.is_error, "{}", out.content);
+        assert!(!target.exists());
     }
 }
 

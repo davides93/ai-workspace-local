@@ -345,6 +345,13 @@ impl AgentRunner {
                 created_at: now_rfc3339(),
             });
             if tool_calls.is_empty() {
+                // A `<tool_call>` block that could not be parsed is a failed call, not an answer.
+                if text.contains("<tool_call>") {
+                    unresolved.push((
+                        "tool_call".into(),
+                        "il blocco <tool_call> non è JSON valido (controlla parentesi e virgolette) o non indica \"name\" e \"arguments\": riscrivilo".into(),
+                    ));
+                }
                 // Small local models often report success right after a failed tool call. Before
                 // accepting the final answer, hand the errors back once (at most twice per run).
                 if !unresolved.is_empty() && self_checks < MAX_SELF_CHECKS && turn + 1 < input.agent.max_turns {

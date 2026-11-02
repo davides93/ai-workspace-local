@@ -11,6 +11,7 @@ members = [
   "crates/aiw-engine",
   "crates/aiw-server",
   "crates/aiw-cli",
+  "crates/aiw-winsandbox",
   "apps/desktop/src-tauri",
 ]
 # The Tauri shell needs WebKitGTK/WebView2/WKWebView system libraries; keep it out of the
@@ -26,6 +27,7 @@ default-members = [
   "crates/aiw-engine",
   "crates/aiw-server",
   "crates/aiw-cli",
+  "crates/aiw-winsandbox",
 ]
 
 [workspace.package]
@@ -38,6 +40,7 @@ repository = "https://github.com/davides93/ai-workspace-local"
 aiw-core = { path = "crates/aiw-core" }
 aiw-hw = { path = "crates/aiw-hw" }
 aiw-runtimes = { path = "crates/aiw-runtimes" }
+aiw-winsandbox = { path = "crates/aiw-winsandbox" }
 aiw-models = { path = "crates/aiw-models" }
 aiw-tools = { path = "crates/aiw-tools", default-features = false }
 aiw-agent = { path = "crates/aiw-agent" }
