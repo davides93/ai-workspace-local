@@ -12,6 +12,10 @@ path = "src/main.rs"
 [features]
 default = []
 computer-use = ["aiw-engine/computer-use"]
+llama-embedded = ["aiw-engine/llama-embedded"]
+llama-metal = ["aiw-engine/llama-metal"]
+llama-cuda = ["aiw-engine/llama-cuda"]
+llama-vulkan = ["aiw-engine/llama-vulkan"]
 
 [dependencies]
 aiw-core.workspace = true

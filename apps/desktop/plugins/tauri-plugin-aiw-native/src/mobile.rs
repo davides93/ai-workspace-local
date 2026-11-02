@@ -10,10 +10,12 @@ use tauri::{AppHandle, Runtime};
 tauri::ios_plugin_binding!(init_plugin_aiw_native);
 
 pub fn init<R: Runtime, C: DeserializeOwned>(_app: &AppHandle<R>, api: PluginApi<R, C>) -> tauri::Result<NativeLlm<R>> {
+    // `tauri::Error: From<PluginInvokeError>` exists only on Android, so convert explicitly.
     #[cfg(target_os = "android")]
-    let handle = api.register_android_plugin("dev.aiworkspace.nativellm", "NativeLlmPlugin")?;
+    let handle = api.register_android_plugin("dev.aiworkspace.nativellm", "NativeLlmPlugin");
     #[cfg(target_os = "ios")]
-    let handle = api.register_ios_plugin(init_plugin_aiw_native)?;
+    let handle = api.register_ios_plugin(init_plugin_aiw_native);
+    let handle = handle.map_err(|e| std::io::Error::other(format!("plugin nativo: {e}")))?;
     Ok(NativeLlm(handle))
 }
 

@@ -143,13 +143,18 @@ impl Engine {
         }
         let models = Arc::new(RwLock::new(aiw_models::scan_models(&models_dir)));
         let m2 = models.clone();
-        runtimes.set_model_resolver(Arc::new(move |id: &str| {
+        let resolver: aiw_runtimes::ModelResolver = Arc::new(move |id: &str| {
             let list = m2.read().unwrap();
             list.iter().find(|m| m.id == id || m.name == id).and_then(|m| m.path.clone()).map(PathBuf::from).or_else(|| {
                 let p = PathBuf::from(id);
                 p.exists().then_some(p)
             })
-        }));
+        });
+        runtimes.set_model_resolver(resolver.clone());
+        #[cfg(feature = "llama-embedded")]
+        register_embedded(&runtimes, resolver.clone());
+        #[cfg(not(feature = "llama-embedded"))]
+        let _ = &resolver;
         let token = {
             let p = dirs.root.join("token");
             match std::fs::read_to_string(&p) {
@@ -212,7 +217,9 @@ impl Engine {
         if s.get_doc::<InferenceProfile>("profile", "default")?.is_none() {
             let running_ollama =
                 self.0.runtimes.info("ollama").ok().filter(|r| r.status == "running").and_then(|r| r.loaded_models.first().cloned());
-            let p = defaults::default_profile(&self.0.models.read().unwrap(), running_ollama.as_deref());
+            // Phones cannot run sidecars: the in-process engine is the default there.
+            let prefer_embedded = matches!(self.device().os.as_str(), "android" | "ios");
+            let p = defaults::default_profile(&self.0.models.read().unwrap(), running_ollama.as_deref(), prefer_embedded);
             s.put_doc("profile", &p.id, &p)?;
         }
         if s.list_docs::<WorkflowDef>("workflow")?.is_empty() {
@@ -392,6 +399,21 @@ impl Engine {
         self.0.runtimes.logs(id).await
     }
     pub fn update_runtime_settings(&self, id: &str, settings: Map<String, Value>) -> Result<RuntimeInfo> {
+        let info = self.update_runtime_settings_inner(id, settings)?;
+        #[cfg(feature = "llama-embedded")]
+        if id == "llama-embedded" {
+            let m = self.0.models.clone();
+            register_embedded(
+                &self.0.runtimes,
+                Arc::new(move |mid: &str| {
+                    m.read().unwrap().iter().find(|x| x.id == mid || x.name == mid).and_then(|x| x.path.clone()).map(PathBuf::from)
+                }),
+            );
+        }
+        Ok(info)
+    }
+
+    fn update_runtime_settings_inner(&self, id: &str, settings: Map<String, Value>) -> Result<RuntimeInfo> {
         let m = self.0.runtimes.manifest(id)?;
         // A redacted secret coming back from the UI keeps the stored value.
         let settings: Map<String, Value> = settings
@@ -1026,6 +1048,18 @@ impl Engine {
     pub(crate) fn tool_registry(&self) -> Arc<ToolRegistry> {
         self.0.tools.clone()
     }
+}
+
+/// Registers in-process llama.cpp as the `llama-embedded` runtime with its current settings.
+#[cfg(feature = "llama-embedded")]
+fn register_embedded(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelResolver) {
+    let s = runtimes.settings("llama-embedded").unwrap_or_default();
+    let settings = aiw_runtimes::embedded::EmbeddedSettings {
+        ctx_size: s.get("ctx_size").and_then(|v| v.as_u64()).unwrap_or(8192) as u32,
+        gpu_layers: s.get("gpu_layers").and_then(|v| v.as_u64()).unwrap_or(999) as u32,
+        threads: None,
+    };
+    runtimes.register_bridge("llama-embedded", Arc::new(aiw_runtimes::embedded::EmbeddedLlama::new(resolver, settings)));
 }
 
 #[cfg(test)]

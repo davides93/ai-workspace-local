@@ -20,6 +20,8 @@ tauri-build = { version = "2", features = [] }
 default = []
 # Screen capture + synthetic input for the desktop computer-use agent.
 computer-use = ["aiw-engine/computer-use"]
+cuda = ["aiw-engine/llama-cuda"]
+vulkan = ["aiw-engine/llama-vulkan"]
 
 [dependencies]
 aiw-core.workspace = true
@@ -33,3 +35,10 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+# In-process llama.cpp everywhere; Metal on Apple platforms.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+aiw-engine = { workspace = true, features = ["llama-metal"] }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "ios")))'.dependencies]
+aiw-engine = { workspace = true, features = ["llama-embedded"] }

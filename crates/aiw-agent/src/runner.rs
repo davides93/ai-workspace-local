@@ -424,6 +424,9 @@ impl AgentRunner {
         let mut calls: BTreeMap<usize, PendingCall> = BTreeMap::new();
         let mut usage = None;
         let mut splitter = ThinkSplitter::default();
+        // Text tool calls are parsed from `raw` at the end but never streamed as visible text.
+        let mut tool_filter = crate::think::TagSplitter::new("<tool_call>", "</tool_call>");
+        let mut raw = String::new();
         let pieces = |p: Piece, text: &mut String, reasoning: &mut String, text_open: &mut bool, reason_open: &mut bool| match p {
             Piece::Text(t) => {
                 if t.is_empty() || (!*text_open && t.trim().is_empty()) {
@@ -457,7 +460,17 @@ impl AgentRunner {
             match d? {
                 ChatDelta::Text(t) => {
                     for p in splitter.push(&t) {
-                        pieces(p, &mut text, &mut reasoning, &mut text_open, &mut reason_open);
+                        match p {
+                            Piece::Text(visible) => {
+                                raw.push_str(&visible);
+                                for (inside, s) in tool_filter.push(&visible) {
+                                    if !inside {
+                                        pieces(Piece::Text(s), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
+                                    }
+                                }
+                            }
+                            other => pieces(other, &mut text, &mut reasoning, &mut text_open, &mut reason_open),
+                        }
                     }
                 }
                 ChatDelta::Reasoning(r) => pieces(Piece::Reasoning(r), &mut text, &mut reasoning, &mut text_open, &mut reason_open),
@@ -497,7 +510,22 @@ impl AgentRunner {
             }
         }
         for p in splitter.finish() {
-            pieces(p, &mut text, &mut reasoning, &mut text_open, &mut reason_open);
+            match p {
+                Piece::Text(visible) => {
+                    raw.push_str(&visible);
+                    for (inside, s) in tool_filter.push(&visible) {
+                        if !inside {
+                            pieces(Piece::Text(s), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
+                        }
+                    }
+                }
+                other => pieces(other, &mut text, &mut reasoning, &mut text_open, &mut reason_open),
+            }
+        }
+        for (inside, s) in tool_filter.finish() {
+            if !inside {
+                pieces(Piece::Text(s), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
+            }
         }
         if reason_open {
             ev.emit(AgEvent::ReasoningEnd { message_id: reason_id.clone() });
@@ -509,7 +537,9 @@ impl AgentRunner {
         for c in &calls {
             ev.emit(AgEvent::ToolCallEnd { tool_call_id: c.id.clone() });
         }
-        Ok((text.trim_end().to_string(), reasoning, calls, usage))
+        // When the model wrote tool calls as text, hand the raw text to the caller for parsing.
+        let text_out = if calls.is_empty() && raw.contains("<tool_call>") { raw } else { text };
+        Ok((text_out.trim_end().to_string(), reasoning, calls, usage))
     }
 
     /// Policy → hooks → approval → execution for one call. Returns the output and, for the

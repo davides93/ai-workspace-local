@@ -122,6 +122,7 @@ impl Supervisor {
             cmd.env(k, val);
         }
         // Make shared libraries next to the binary discoverable (llama.cpp builds ship libggml*.so).
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(dir) = spec.binary.parent() {
             #[cfg(target_os = "linux")]
             {

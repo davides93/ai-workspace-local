@@ -1,5 +1,57 @@
 //! Splits inline `<think>…</think>` blocks (Qwen3, DeepSeek-R1 style) out of the text stream.
 
+/// Generic streaming splitter for `<open>…</close>` regions (thinking blocks, text tool calls).
+pub struct TagSplitter {
+    open: &'static str,
+    close: &'static str,
+    inside: bool,
+    buf: String,
+}
+
+impl TagSplitter {
+    pub fn new(open: &'static str, close: &'static str) -> Self {
+        Self { open, close, inside: false, buf: String::new() }
+    }
+
+    /// Returns `(outside_text, inside_text)` pieces in order.
+    pub fn push(&mut self, chunk: &str) -> Vec<(bool, String)> {
+        self.buf.push_str(chunk);
+        let mut out = Vec::new();
+        loop {
+            let tag = if self.inside { self.close } else { self.open };
+            if let Some(i) = self.buf.find(tag) {
+                let before: String = self.buf.drain(..i).collect();
+                self.buf.drain(..tag.len());
+                if !before.is_empty() {
+                    out.push((self.inside, before));
+                }
+                self.inside = !self.inside;
+                continue;
+            }
+            let keep = (1..tag.len()).rev().find(|n| self.buf.ends_with(&tag[..*n])).unwrap_or(0);
+            let mut cut = self.buf.len() - keep;
+            while !self.buf.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            if cut > 0 {
+                let s: String = self.buf.drain(..cut).collect();
+                out.push((self.inside, s));
+            }
+            break;
+        }
+        out
+    }
+
+    pub fn finish(&mut self) -> Vec<(bool, String)> {
+        let s: String = self.buf.drain(..).collect();
+        if s.is_empty() {
+            vec![]
+        } else {
+            vec![(self.inside, s)]
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ThinkSplitter {
     in_think: bool,
@@ -60,6 +112,31 @@ impl ThinkSplitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hides_text_tool_calls_while_streaming() {
+        let mut t = TagSplitter::new("<tool_call>", "</tool_call>");
+        let mut shown = String::new();
+        let mut hidden = String::new();
+        for c in ["Controllo. <tool", "_call>{\"name\": \"x\"}</tool_", "call> fatto"] {
+            for (inside, s) in t.push(c) {
+                if inside {
+                    hidden.push_str(&s)
+                } else {
+                    shown.push_str(&s)
+                }
+            }
+        }
+        for (inside, s) in t.finish() {
+            if inside {
+                hidden.push_str(&s)
+            } else {
+                shown.push_str(&s)
+            }
+        }
+        assert_eq!(shown, "Controllo.  fatto");
+        assert_eq!(hidden, "{\"name\": \"x\"}");
+    }
 
     #[test]
     fn splits_across_chunks() {

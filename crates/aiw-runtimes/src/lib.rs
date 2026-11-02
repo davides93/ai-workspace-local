@@ -1,5 +1,7 @@
 //! Inference layer (architecture §4): manifests, detection, adapters, sidecar supervisor.
 
+#[cfg(feature = "llama-embedded")]
+pub mod embedded;
 pub mod manifest;
 pub mod openai;
 pub mod registry;

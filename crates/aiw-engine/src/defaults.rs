@@ -70,7 +70,7 @@ pub fn agents() -> Vec<AgentProfile> {
 }
 
 /// Picks a sensible default profile from what is installed or running.
-pub fn default_profile(models: &[LocalModel], running_ollama: Option<&str>) -> InferenceProfile {
+pub fn default_profile(models: &[LocalModel], running_ollama: Option<&str>, prefer_embedded: bool) -> InferenceProfile {
     let chat_models: Vec<&LocalModel> =
         models.iter().filter(|m| m.format == "gguf" && m.capabilities.iter().any(|c| c == "chat")).collect();
     // Prefer models that support tools, then the largest that is not huge.
@@ -83,8 +83,8 @@ pub fn default_profile(models: &[LocalModel], running_ollama: Option<&str>) -> I
         return InferenceProfile {
             id: "default".into(),
             name: "Predefinito".into(),
-            description: Some(format!("{} su llama.cpp", m.name)),
-            runtime_id: "llama-server".into(),
+            description: Some(format!("{} su llama.cpp{}", m.name, if prefer_embedded { " (in-process)" } else { "" })),
+            runtime_id: if prefer_embedded { "llama-embedded".into() } else { "llama-server".into() },
             model: m.id.clone(),
             params: InferenceParams {
                 temperature: Some(0.6),

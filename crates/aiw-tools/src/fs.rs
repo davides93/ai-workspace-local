@@ -11,12 +11,18 @@ pub fn tools() -> Vec<Arc<dyn Tool>> {
 
 const MAX_READ: usize = 120_000;
 
+/// Workspace-relative path shown to the model, always with `/` so that prompts, tool results and
+/// tests read the same on Windows.
 fn rel(ctx: &ToolContext, p: &Path) -> String {
     match p.strip_prefix(&ctx.workspace_root) {
         Ok(r) if r.as_os_str().is_empty() => ".".into(),
-        Ok(r) => r.display().to_string(),
+        Ok(r) => slash_path(r),
         Err(_) => p.display().to_string(),
     }
+}
+
+fn slash_path(p: &Path) -> String {
+    p.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
 struct ReadFile;
@@ -248,7 +254,7 @@ impl Tool for Glob {
                 }
                 let r = e.path().strip_prefix(&root).unwrap_or(e.path());
                 if m.is_match(r) || m.is_match(e.file_name()) {
-                    hits.push(e.path().strip_prefix(&ws).unwrap_or(e.path()).display().to_string());
+                    hits.push(slash_path(e.path().strip_prefix(&ws).unwrap_or(e.path())));
                     if hits.len() >= 500 {
                         break;
                     }
@@ -312,7 +318,7 @@ impl Tool for Grep {
                     continue;
                 }
                 let text = String::from_utf8_lossy(&bytes);
-                let shown = e.path().strip_prefix(&ws).unwrap_or(e.path()).display().to_string();
+                let shown = slash_path(e.path().strip_prefix(&ws).unwrap_or(e.path()));
                 for (i, line) in text.lines().enumerate() {
                     if re.is_match(line) {
                         let l: String = line.chars().take(240).collect();

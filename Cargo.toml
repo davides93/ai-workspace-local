@@ -77,6 +77,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "v7"] }
 which = "7"
 
+# llama.cpp is C++ built by CMake: keep it optimised even in dev builds.
+[profile.dev.package.llama-cpp-sys-2]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

@@ -68,13 +68,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest, macos-14]
+        include:
+          # The daemon ships with llama.cpp linked in-process (Metal on macOS, CPU elsewhere).
+          - { os: ubuntu-22.04, features: llama-embedded }
+          - { os: windows-latest, features: llama-embedded }
+          - { os: macos-14, features: llama-metal }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p aiw-cli
+      - run: cargo build --release -p aiw-cli --features ${{ matrix.features }}
       - uses: actions/upload-artifact@v4
         with:
           name: aiw-${{ matrix.os }}
@@ -105,7 +109,10 @@ jobs:
       - name: Init and build
         working-directory: apps/desktop
         run: |
+          # One NDK for everything: Tauri's linker (NDK_HOME) and llama.cpp's CMake build (ANDROID_NDK*).
           export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          export ANDROID_NDK="$ANDROID_NDK_LATEST_HOME" ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
+          export ANDROID_API_LEVEL=26
           npx tauri android init --ci
           npx tauri android build --apk --target aarch64 --ci
       - uses: actions/upload-artifact@v4

@@ -5,7 +5,17 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# llama.cpp linked in-process (FFI). Default on mobile; compiles llama.cpp with CMake.
+llama-embedded = ["dep:llama-cpp-2"]
+# GPU backends for the embedded engine (pick the one matching the target).
+llama-cuda = ["llama-embedded", "llama-cpp-2/cuda"]
+llama-metal = ["llama-embedded", "llama-cpp-2/metal"]
+llama-vulkan = ["llama-embedded", "llama-cpp-2/vulkan"]
+
 [dependencies]
+llama-cpp-2 = { version = "0.1.160", optional = true, default-features = false }
 aiw-core.workspace = true
 async-trait.workspace = true
 futures.workspace = true
@@ -17,6 +27,10 @@ tokio-util.workspace = true
 tracing.workspace = true
 which.workspace = true
 bytes.workspace = true
+
+# Android: link the NDK C++ runtime statically, so the APK does not need libc++_shared.so.
+[target.'cfg(target_os = "android")'.dependencies]
+llama-cpp-2 = { version = "0.1.160", optional = true, default-features = false, features = ["android-static-stdcxx"] }
 
 [dev-dependencies]
 axum.workspace = true

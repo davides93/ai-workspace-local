@@ -8,6 +8,11 @@ rust-version.workspace = true
 [features]
 default = []
 computer-use = ["aiw-tools/computer-use"]
+# In-process llama.cpp (registered as the `llama-embedded` runtime).
+llama-embedded = ["aiw-runtimes/llama-embedded"]
+llama-metal = ["aiw-runtimes/llama-metal"]
+llama-cuda = ["aiw-runtimes/llama-cuda"]
+llama-vulkan = ["aiw-runtimes/llama-vulkan"]
 
 [dependencies]
 aiw-core.workspace = true
