@@ -1285,6 +1285,6 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod tests_inference;
-#[cfg(test)]
 mod tests_hardening;
+#[cfg(test)]
+mod tests_inference;
