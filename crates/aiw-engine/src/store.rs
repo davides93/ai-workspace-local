@@ -159,6 +159,13 @@ impl Store {
         }
         tx.commit().map_err(db)
     }
+    /// Rewrites a stored message in place (same id and position).
+    pub fn replace_message(&self, session_id: &str, m: &ChatMessage) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("UPDATE messages SET json=?3 WHERE id=?1 AND session_id=?2", params![m.id, session_id, serde_json::to_string(m)?])
+            .map_err(db)?;
+        Ok(())
+    }
     pub fn messages(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
         let c = self.conn.lock().unwrap();
         let mut st = c.prepare("SELECT json FROM messages WHERE session_id=?1 ORDER BY seq").map_err(db)?;
@@ -189,6 +196,15 @@ impl Store {
             .execute("UPDATE runs SET status=?2, finished_at=?3 WHERE id=?1", params![id, status, aiw_core::now_rfc3339()])
             .map_err(db)?;
         Ok(())
+    }
+    /// Runs still marked `running` when the process starts were interrupted by a crash or a kill:
+    /// mark them failed (and the sessions that were running them), so nothing waits forever.
+    pub fn fail_interrupted_runs(&self) -> Result<usize> {
+        let c = self.conn.lock().unwrap();
+        let n = c
+            .execute("UPDATE runs SET status='failed', finished_at=?1 WHERE status='running'", params![aiw_core::now_rfc3339()])
+            .map_err(db)?;
+        Ok(n)
     }
     pub fn save_events(&self, run_id: &str, evs: &[SeqEvent]) -> Result<()> {
         let mut c = self.conn.lock().unwrap();

@@ -76,7 +76,7 @@ fn self_check_note(failed: &[(String, String)]) -> String {
 pub fn to_msgs(history: &[ChatMessage]) -> Vec<Msg> {
     history
         .iter()
-        .filter(|m| m.role != "system")
+        .filter(|m| m.role != "system" && m.name.as_deref() != Some(aiw_core::api::BLOCKED_PROMPT_MESSAGE))
         .map(|m| Msg {
             role: m.role.clone(),
             content: if m.content.is_empty() && m.tool_calls.is_some() { None } else { Some(MsgContent::Text(m.content.clone())) },
@@ -878,6 +878,11 @@ impl AgentRunner {
                     _ = input.tool_ctx.cancel.cancelled() => false,
                 };
                 host.emit(&input.run_id, AgEvent::approval_resolved(&req.id, ok));
+                if !ok && input.tool_ctx.cancel.is_cancelled() {
+                    // Stopped while waiting: nobody refused, the run is over.
+                    audit("cancelled", subject.unwrap_or_default());
+                    return (ToolOutput::error("Annullato: il run è stato fermato prima della conferma."), None);
+                }
                 if !ok {
                     audit("rejected", subject.unwrap_or_default());
                     return (

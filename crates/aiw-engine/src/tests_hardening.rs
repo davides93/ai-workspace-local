@@ -236,7 +236,8 @@ async fn a_cancelled_run_keeps_its_messages_and_the_next_turn_sees_them() {
     let roles: Vec<&str> = msgs.iter().map(|m| m.role.as_str()).collect();
     assert_eq!(roles, vec!["user", "assistant", "tool", "system"], "{msgs:?}");
     assert_eq!(msgs[1].tool_calls.as_ref().unwrap()[0].name, "write_file");
-    assert!(msgs[2].content.contains("Negato"), "{}", msgs[2].content);
+    // Stopped while waiting: recorded as a stop, not as a refusal by the user.
+    assert!(msgs[2].content.contains("Annullato"), "{}", msgs[2].content);
     assert_eq!(msgs[2].tool_call_id.as_deref(), Some("c1"));
     // The stop is recorded like the error row the chat showed.
     assert_eq!((msgs[3].name.as_deref(), msgs[3].content.as_str()), (Some(RUN_ERROR_MESSAGE), "Run annullato"));
@@ -382,6 +383,8 @@ async fn a_profile_in_use_is_not_deleted() {
         e.save_agent(a).unwrap();
     }
     e.delete_profile("default").unwrap();
+    // Without `default` the gateway falls back on the default agent's profile.
+    assert_eq!(e.fallback_profile().unwrap().id, "altro");
 }
 
 #[tokio::test]
@@ -419,4 +422,93 @@ fn workspace_workflows_start_disabled_and_stay_enabled_only_while_unchanged() {
     assert!(!super::workspace_workflow(changed, Some(&enabled)).enabled);
     // Disabled by the user stays disabled.
     assert!(!super::workspace_workflow(file, Some(&imported)).enabled);
+}
+
+#[test]
+fn session_titles_skip_blank_lines() {
+    assert_eq!(super::session_title("\n\n  Riordina i PDF  \nin Downloads"), "Riordina i PDF");
+    assert_eq!(super::session_title("   \n"), "Sessione");
+    assert_eq!(super::session_title(&"x".repeat(100)).chars().count(), 60);
+}
+
+#[tokio::test]
+async fn missing_agents_of_a_session_are_conflicts_not_404() {
+    let (e, _d, _w) = engine(Arc::new(ScriptedBackend::new(vec![]))).await;
+    // A session whose agent disappeared: 409, not 404 (404 means "the session is gone").
+    let mut agent = e.agents().unwrap().into_iter().next().unwrap();
+    agent.id = "temporaneo".into();
+    e.save_agent(agent).unwrap();
+    let s = e.create_session("temporaneo", None).unwrap();
+    e.delete_agent("temporaneo").unwrap();
+    match e.start_run(&s.id, "ciao".into()).await {
+        Err(Error::Conflict(m)) => assert!(m.contains("non esiste più"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_prompt_blocked_by_a_hook_never_reaches_the_model() {
+    let (e, _d, _w) = engine(Arc::new(ScriptedBackend::new(vec![vec![ChatDelta::Text("ok".into())]]))).await;
+    e.set_hooks(vec![HookConfig {
+        event: "UserPromptSubmit".into(),
+        matcher: None,
+        command: "grep -q segreto && { echo 'niente segreti' >&2; exit 2; } || exit 0".into(),
+        timeout_s: 10,
+    }])
+    .unwrap();
+    let s = e.create_session("operator", None).unwrap();
+    let run = e.start_run(&s.id, "ecco il segreto: 1234".into()).await.unwrap();
+    wait_finished(&e, &run).await;
+    let msgs = e.messages(&s.id).unwrap();
+    // Still shown in the chat, followed by the error…
+    assert_eq!(msgs[0].content, "ecco il segreto: 1234");
+    assert_eq!(msgs[0].name.as_deref(), Some(BLOCKED_PROMPT_MESSAGE));
+    assert_eq!(msgs.last().unwrap().name.as_deref(), Some(RUN_ERROR_MESSAGE));
+    // …but not part of what the next turn sends to the model.
+    assert!(aiw_agent::to_msgs(&msgs).is_empty(), "{msgs:?}");
+}
+
+#[tokio::test]
+async fn a_second_run_on_a_busy_session_is_refused() {
+    let (e, _d, _w) = engine(Arc::new(ScriptedBackend::new(vec![vec![ChatDelta::Text("ok".into())]]))).await;
+    let s = e.create_session("operator", None).unwrap();
+    // Simulate a run in progress for the session.
+    e.0.runs.lock().unwrap().insert(
+        "run_busy".into(),
+        RunHandle { session_id: Some(s.id.clone()), cancel: CancellationToken::new(), events: vec![], done: false },
+    );
+    assert!(matches!(e.start_run(&s.id, "di nuovo".into()).await, Err(Error::Conflict(_))));
+    // Deleting the session stops that run.
+    e.delete_session(&s.id).unwrap();
+    assert!(e.0.runs.lock().unwrap()["run_busy"].cancel.is_cancelled());
+}
+
+#[tokio::test]
+async fn a_request_nobody_waits_for_leaves_the_inbox() {
+    let (e, _d, _w) = engine(Arc::new(ScriptedBackend::new(vec![]))).await;
+    let req = ApprovalRequest {
+        id: "apr_x".into(),
+        run_id: "run_x".into(),
+        tool: "shell".into(),
+        args: json!({"command": "ls"}),
+        reason: "comando".into(),
+        risk: "high".into(),
+    };
+    let waiting = {
+        let e = e.clone();
+        tokio::spawn(async move { e.wait_approval(req, None).await })
+    };
+    for _ in 0..100 {
+        if !e.approvals().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(e.approvals().len(), 1);
+    // The run is stopped: its waiting future is dropped.
+    waiting.abort();
+    let _ = waiting.await;
+    assert!(e.approvals().is_empty());
+    assert!(matches!(e.respond_approval("apr_x", true, false), Err(Error::NotFound(_))));
 }

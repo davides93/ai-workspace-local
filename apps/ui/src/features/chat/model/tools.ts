@@ -62,7 +62,7 @@ export function toolTitle(name: string): { title: string; sub?: string } {
 /** How a tool answer reads: refused, failed, interrupted before running, or fine. */
 export function resultStatus(content: string): Exclude<ToolStatus, "running"> {
   if (/^\s*(Negato|Denied)/i.test(content)) return "denied";
-  if (/^\s*ERRORE: strumento non eseguito/.test(content)) return "interrupted";
+  if (/^\s*ERRORE: (strumento non eseguito|Annullato)/.test(content)) return "interrupted";
   if (/^\s*ERRORE/.test(content)) return "failed";
   return "done";
 }

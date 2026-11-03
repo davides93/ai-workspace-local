@@ -477,6 +477,9 @@ pub struct ToolCall {
 /// message the UI showed as RUN_ERROR). It is part of the chat history, never of the model's
 /// context, and clients that do not know it ignore a `system` message.
 pub const RUN_ERROR_MESSAGE: &str = "aiw.run_error";
+/// `name` of a user message that a `UserPromptSubmit` hook blocked: kept for the chat history,
+/// never sent to the model.
+pub const BLOCKED_PROMPT_MESSAGE: &str = "aiw.blocked_prompt";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {

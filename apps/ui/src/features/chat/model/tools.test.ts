@@ -39,6 +39,7 @@ describe("result reading", () => {
     expect(resultStatus("negato dalla policy")).toBe("denied");
     expect(resultStatus("ERRORE: file non trovato")).toBe("failed");
     expect(resultStatus("ERRORE: strumento non eseguito, il run è stato interrotto prima.")).toBe("interrupted");
+    expect(resultStatus("ERRORE: Annullato: il run è stato fermato prima della conferma.")).toBe("interrupted");
     expect(resultStatus("7 file")).toBe("done");
     expect(resultStatus("")).toBe("done");
   });

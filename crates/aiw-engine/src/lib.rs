@@ -240,6 +240,13 @@ impl Engine {
 
     fn seed(&self) -> Result<()> {
         let s = &self.0.store;
+        // Nothing can be running yet: whatever says so was interrupted by a crash or a kill.
+        if s.fail_interrupted_runs()? > 0 {
+            for mut session in s.sessions()?.into_iter().filter(|x| x.last_status.as_deref() == Some("running")) {
+                session.last_status = Some("failed".into());
+                s.upsert_session(&session)?;
+            }
+        }
         if s.list_docs::<AgentProfile>("agent")?.is_empty() {
             for a in defaults::agents() {
                 s.put_doc("agent", &a.id, &a)?;
@@ -671,6 +678,10 @@ impl Engine {
     }
     pub fn delete_session(&self, id: &str) -> Result<()> {
         self.0.store.session(id)?; // not found: 404, like every other route of a session
+                                   // A run still going would keep executing tools for a session that no longer exists.
+        if let Some(run) = self.active_run(id) {
+            let _ = self.cancel_run(&run);
+        }
         if let Some(wt) = self.worktree_info(id) {
             if let Err(e) = worktree::remove(&wt) {
                 tracing::warn!("worktree {}: {e}", wt.path);
@@ -773,6 +784,12 @@ impl Engine {
         self.0.store.events(run_id).unwrap_or_default()
     }
     /// Message of the RUN_ERROR that closed the run, when it ended in error.
+    fn run_error_code(&self, run_id: &str) -> Option<String> {
+        match self.run_events(run_id).last().map(|e| &e.event.event) {
+            Some(AgEvent::RunError { code, .. }) => code.clone(),
+            _ => None,
+        }
+    }
     fn run_error_text(&self, run_id: &str) -> Option<String> {
         match self.run_events(run_id).last().map(|e| &e.event.event) {
             Some(AgEvent::RunError { message, .. }) => Some(message.clone()),
@@ -887,9 +904,15 @@ impl Engine {
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
         let mut session = self.0.store.session(session_id)?;
-        let agent = self.agent(&session.agent_id)?;
-        let profile = self.profile(&agent.inference_profile)?;
-        let manifest = self.0.runtimes.manifest(&profile.runtime_id)?;
+        // 404 is reserved for the session itself: a session whose agent, profile or runtime was
+        // removed meanwhile is a conflict the user can fix (the UI must not treat it as deleted).
+        let gone = |what: &str, e: Error| match e {
+            Error::NotFound(m) => Error::Conflict(format!("{m}: {what} di questa sessione non esiste più, scegline un altro in Agenti")),
+            other => other,
+        };
+        let agent = self.agent(&session.agent_id).map_err(|e| gone("l'agente", e))?;
+        let profile = self.profile(&agent.inference_profile).map_err(|e| gone("il profilo", e))?;
+        let manifest = self.0.runtimes.manifest(&profile.runtime_id).map_err(|e| gone("il runtime", e))?;
         if profile.model.is_empty() && manifest.launch.as_ref().map(|l| l.requires_model).unwrap_or(false) {
             return Err(Error::Invalid(format!(
                 "Il profilo \"{}\" non ha un modello: scaricane uno da Modelli e selezionalo in Agenti → Profili.",
@@ -898,11 +921,18 @@ impl Engine {
         }
         let run_id = new_id("run");
         let cancel = CancellationToken::new();
-        self.0
-            .runs
-            .lock()
-            .unwrap()
-            .insert(run_id.clone(), RunHandle { session_id: Some(session_id.into()), cancel: cancel.clone(), events: vec![], done: false });
+        {
+            // Check and insert under the same lock: two runs on one session would interleave
+            // their messages without seeing each other.
+            let mut runs = self.0.runs.lock().unwrap();
+            if runs.values().any(|h| !h.done && h.session_id.as_deref() == Some(session_id)) {
+                return Err(Error::Conflict("in questa sessione c'è già un run in corso: aspetta che finisca o fermalo".into()));
+            }
+            runs.insert(
+                run_id.clone(),
+                RunHandle { session_id: Some(session_id.into()), cancel: cancel.clone(), events: vec![], done: false },
+            );
+        }
         self.0.store.start_run(&run_id, Some(session_id))?;
         let history = to_msgs(&self.0.store.messages(session_id)?);
         let user_msg = ChatMessage {
@@ -917,7 +947,7 @@ impl Engine {
         };
         self.0.store.append_messages(session_id, std::slice::from_ref(&user_msg))?;
         if session.title == "Nuova sessione" && user_msg.name.is_none() {
-            session.title = input.chars().take(60).collect::<String>().lines().next().unwrap_or("Sessione").to_string();
+            session.title = session_title(&input);
         }
         session.updated_at = now_rfc3339();
         session.last_status = Some("running".into());
@@ -942,6 +972,12 @@ impl Engine {
                 }
             }
             let mut stored: Vec<ChatMessage> = out.new_messages.get(1..).unwrap_or(&[]).to_vec();
+            // A prompt refused by a UserPromptSubmit hook stays visible in the chat but must never
+            // reach the model on a later turn.
+            if engine.run_error_code(&rid).as_deref() == Some("hook_blocked") {
+                let blocked = ChatMessage { name: Some(BLOCKED_PROMPT_MESSAGE.into()), ..user_msg.clone() };
+                let _ = engine.0.store.replace_message(&session.id, &blocked);
+            }
             // A run that ended in error leaves it in the history, so that the chat shows the same
             // thing after a reload as it showed live (RUN_ERROR).
             stored.extend(engine.run_error_text(&rid).map(|text| ChatMessage {
@@ -977,7 +1013,17 @@ impl Engine {
         self.0.approvals.lock().unwrap().values().map(|p| p.req.clone()).collect()
     }
     pub(crate) async fn wait_approval(&self, req: ApprovalRequest, session_id: Option<String>) -> bool {
+        /// Withdraws the request when the run stops waiting (answered, cancelled, dropped): a stale
+        /// request must not stay in the inbox, where a later "allow" would record a decision
+        /// that nobody was waiting for.
+        struct Withdraw<'a>(&'a Engine, String);
+        impl Drop for Withdraw<'_> {
+            fn drop(&mut self) {
+                self.0 .0.approvals.lock().unwrap().remove(&self.1);
+            }
+        }
         let (tx, rx) = oneshot::channel();
+        let _withdraw = Withdraw(self, req.id.clone());
         self.0.approvals.lock().unwrap().insert(req.id.clone(), PendingApproval { req, tx, session_id });
         rx.await.unwrap_or(false)
     }
@@ -1234,8 +1280,24 @@ impl Engine {
                 return Ok((self.0.runtimes.backend(rt, Some(m)).await?, m.to_string()));
             }
         }
-        let p = self.profile("default")?;
+        let p = self.fallback_profile()?;
         Ok((self.0.runtimes.backend_with(&p.runtime_id, Some(&p.model), p.params.context).await?, p.model))
+    }
+
+    /// Profile used when a gateway client names no known model: `default`, else the profile of the
+    /// default agent (`agent.default`), else the first profile (`default` may have been deleted).
+    fn fallback_profile(&self) -> Result<InferenceProfile> {
+        if let Ok(p) = self.profile("default") {
+            return Ok(p);
+        }
+        let agent = self.0.config.get_str("agent.default").unwrap_or_else(|| "operator".into());
+        if let Some(p) = self.agent(&agent).ok().and_then(|a| self.profile(&a.inference_profile).ok()) {
+            return Ok(p);
+        }
+        self.profiles()?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::NotFound("nessun profilo di inferenza: creane uno in Agenti → Profili".into()))
     }
 
     /// Runs one tool on behalf of an external caller (workflow, MCP client, API) with the
@@ -1379,6 +1441,11 @@ fn validate_mcp(cfg: &McpServerConfig) -> Result<()> {
 }
 
 /// Registers in-process llama.cpp as the `llama-embedded` runtime with its current settings.
+/// Title of a new session: the first non-empty line of its first message, at most 60 chars.
+fn session_title(input: &str) -> String {
+    input.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.chars().take(60).collect()).unwrap_or_else(|| "Sessione".into())
+}
+
 /// A workflow file inside the working folder is repository content: whoever wrote the repository
 /// could schedule commands with it. It is imported disabled; once the user enables it from the
 /// app the choice holds only while the file stays exactly as it was when it was enabled.
