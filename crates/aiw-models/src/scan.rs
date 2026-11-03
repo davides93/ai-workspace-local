@@ -163,7 +163,8 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Scanned>) {
         sidecar_models(root, dir, out);
         return;
     }
-    if depth > 0 {
+    // A folder with `.part` files is an install still going (or one that failed): not a model yet.
+    if depth > 0 && !has_part_files(dir, 0) {
         if let Some(m) = repo_dir_model(dir, &names, None) {
             out.push(Scanned {
                 qualified: qualified_id(root, dir),
@@ -198,8 +199,25 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Scanned>) {
             if shards.as_ref().map(|s| s.1 != 1).unwrap_or(false) {
                 continue;
             }
+            // An unfinished download leaves a `.part` next to the file it was writing.
+            if names.iter().any(|n| n.eq_ignore_ascii_case(&format!("{name}.part"))) {
+                continue;
+            }
+            // ...or next to any other shard of the same set.
+            if let Some((base, _, _)) = &shards {
+                if names
+                    .iter()
+                    .any(|n| n.to_lowercase().ends_with(".gguf.part") && n.starts_with(&format!("{base}-")) && n.contains("-of-"))
+                {
+                    continue;
+                }
+            }
+            // A set with a missing shard is an install in progress (or a broken copy).
             let size = match &shards {
-                Some((base, _, total)) => shard_total(&p, base, *total).unwrap_or(meta.len()),
+                Some((base, _, total)) => match shard_total(&p, base, *total) {
+                    Some(sum) => sum,
+                    None => continue,
+                },
                 None => meta.len(),
             };
             Some(local_gguf(&p, size))
@@ -217,6 +235,18 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Scanned>) {
             });
         }
     }
+}
+
+/// Whether `dir` holds a `.part` file (a download not finished), looking a few levels down.
+fn has_part_files(dir: &Path, depth: usize) -> bool {
+    let Ok(rd) = std::fs::read_dir(dir) else { return false };
+    rd.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        if name.ends_with(".part") {
+            return true;
+        }
+        depth < 3 && e.path().is_dir() && has_part_files(&e.path(), depth + 1)
+    })
 }
 
 /// Size of every shard of `base-0000N-of-0000M.gguf` next to `first`.
@@ -743,6 +773,38 @@ mod tests {
         assert_eq!(m.id, "qwen3-test-q4_k_m");
         // The v0.3 flat layout: removable, no provenance.
         assert_eq!((m.origin.as_str(), m.removable, m.source.as_deref()), ("manual", true, None));
+    }
+
+    #[test]
+    fn installs_in_progress_or_failed_are_not_listed_as_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = gguf::tests::synthetic();
+        // Sharded GGUF: the first shard is complete, the second is still a `.part`.
+        let big = dir.path().join("hf/acme/big");
+        write(&big.join("big-Q8_0-00001-of-00003.gguf"), &g);
+        write(&big.join("big-Q8_0-00002-of-00003.gguf.part"), &[0u8; 10]);
+        assert!(scan_models(dir.path()).is_empty(), "{:?}", scan_models(dir.path()));
+        // Two of three shards on disk and no `.part` (a failed job): still incomplete.
+        write(&big.join("big-Q8_0-00002-of-00003.gguf"), &[0u8; 10]);
+        std::fs::remove_file(big.join("big-Q8_0-00002-of-00003.gguf.part")).unwrap();
+        assert!(scan_models(dir.path()).is_empty());
+        // The whole set appears once the last shard lands.
+        write(&big.join("big-Q8_0-00003-of-00003.gguf"), &[0u8; 10]);
+        let found = scan_models(dir.path());
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].origin.as_str(), found[0].size_bytes), ("manual", g.len() as u64 + 20));
+        // A weights folder with a `.part` inside is not a model yet either.
+        let mlx = dir.path().join("hf/acme/big-4bit");
+        write(&mlx.join("config.json"), b"{}");
+        write(&mlx.join("model-00001-of-00004.safetensors"), &safetensors(None));
+        write(&mlx.join("model-00002-of-00004.safetensors.part"), &[0u8; 10]);
+        assert_eq!(scan_models(dir.path()).len(), 1);
+        std::fs::remove_file(mlx.join("model-00002-of-00004.safetensors.part")).unwrap();
+        assert_eq!(scan_models(dir.path()).len(), 2);
+        // A single file with its own `.part` (restarted download over an old copy) is skipped.
+        write(&dir.path().join("solo.gguf"), &g);
+        write(&dir.path().join("solo.gguf.part"), &[0u8; 5]);
+        assert_eq!(scan_models(dir.path()).len(), 2);
     }
 
     #[test]

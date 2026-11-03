@@ -3,6 +3,7 @@
 //! models (this device's store and the other apps' stores) and deletion.
 
 use super::*;
+use aiw_models::hub::variants::shard_info;
 use aiw_models::hub::{AuthCheck, SearchQuery};
 use aiw_models::relpath::{native_rel, to_logical};
 use aiw_models::sidecar;
@@ -381,7 +382,7 @@ impl Engine {
         if !parent.starts_with(&root) {
             return Err(Error::Denied("il modello è fuori dalla cartella dei modelli: non lo elimino".into()));
         }
-        remove_model(&root, &path)?;
+        remove_model(&root, &path, &|dir| self.0.downloads.is_busy_in(dir))?;
         self.audit_user("model.delete", &format!("{} ({})", m.name, path.display()));
         self.rescan_models();
         Ok(())
@@ -426,8 +427,18 @@ fn pick_variant(d: &RemoteModelDetail, wanted: &str) -> Result<String> {
         .ok_or_else(|| Error::Invalid(format!("indica la variante da scaricare per {}: {}", d.model.id, ids())))
 }
 
-/// Removes one model below `root`: through its install record when there is one.
-fn remove_model(root: &Path, path: &Path) -> Result<()> {
+/// Refuses with 409 when a download is writing below `folder`: deleting there would pull the
+/// files from under it.
+fn ensure_idle(folder: &Path, busy: &dyn Fn(&Path) -> bool) -> Result<()> {
+    if busy(folder) {
+        return Err(Error::Conflict("un download di questo modello è ancora in corso: annullalo prima di eliminare i file".into()));
+    }
+    Ok(())
+}
+
+/// Removes one model below `root`: through its install record when there is one. `busy` tells
+/// whether a download is writing below a folder.
+fn remove_model(root: &Path, path: &Path, busy: &dyn Fn(&Path) -> bool) -> Result<()> {
     let is_link = std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false);
     let is_dir = !is_link && path.is_dir();
     // The nearest folder with an install record (below the root).
@@ -446,6 +457,7 @@ fn remove_model(root: &Path, path: &Path) -> Result<()> {
     }
     match record {
         Some(dir) => {
+            ensure_idle(&dir, busy)?;
             // The install record speaks in logical paths (`/` on every OS): compare in that spelling.
             let target = to_logical(path.strip_prefix(&dir).unwrap_or(path));
             let installs = sidecar::read(&dir);
@@ -461,13 +473,13 @@ fn remove_model(root: &Path, path: &Path) -> Result<()> {
                         // A record entry that is not a plain relative path never reaches outside `dir`.
                         let Some(p) = f.native(&dir) else { continue };
                         let _ = std::fs::remove_file(&p);
-                        let _ = std::fs::remove_file(format!("{}.part", p.display()));
+                        remove_part_files(&p);
                         prune_empty(&dir, p.parent());
                     }
-                    let left = sidecar::remove_install(&dir, inst)?;
-                    if left.is_empty() {
-                        std::fs::remove_dir_all(&dir)?;
-                    }
+                    // Only the install's own files go; the folder follows when nothing is left
+                    // in it (never a recursive removal: another variant may be downloading there).
+                    sidecar::remove_install(&dir, inst)?;
+                    prune_empty(root, Some(&dir));
                 }
                 // A record that does not mention it: fall back to the path itself.
                 None => remove_path(path, is_link, is_dir)?,
@@ -475,6 +487,9 @@ fn remove_model(root: &Path, path: &Path) -> Result<()> {
             prune_empty(root, dir.parent());
         }
         None => {
+            if is_dir {
+                ensure_idle(path, busy)?;
+            }
             remove_path(path, is_link, is_dir)?;
             prune_empty(root, path.parent());
         }
@@ -488,8 +503,36 @@ fn remove_path(path: &Path, is_link: bool, is_dir: bool) -> Result<()> {
     } else if is_dir {
         std::fs::remove_dir_all(path)?;
     } else {
-        std::fs::remove_file(path)?;
+        remove_file_or_shard_set(path)?;
     }
+    Ok(())
+}
+
+/// A `.part` of `file` and the validators stored next to it.
+fn remove_part_files(file: &Path) {
+    let _ = std::fs::remove_file(format!("{}.part", file.display()));
+    let _ = std::fs::remove_file(format!("{}.part.meta", file.display()));
+}
+
+/// Removes a model file; a `name-00001-of-0000N.gguf` shard takes the whole set with it (and the
+/// `.part` of each), since only the first shard is listed and the others would stay orphans.
+fn remove_file_or_shard_set(path: &Path) -> Result<()> {
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let shards = name
+        .rsplit_once('.')
+        .filter(|(_, ext)| ext.eq_ignore_ascii_case("gguf"))
+        .and_then(|(stem, ext)| shard_info(stem).map(|(base, _, total)| (base, total, ext.to_string())));
+    if let (Some((base, total, ext)), Some(dir)) = (shards, path.parent()) {
+        for i in 1..=total {
+            let shard = dir.join(format!("{base}-{i:05}-of-{total:05}.{ext}"));
+            if shard != path {
+                let _ = std::fs::remove_file(&shard);
+            }
+            remove_part_files(&shard);
+        }
+    }
+    remove_part_files(path);
+    std::fs::remove_file(path)?;
     Ok(())
 }
 
@@ -612,6 +655,32 @@ mod tests {
         let mut v = vec![ModelVariant { format: "mlx".into(), ..variant("repo", None, 2_300, "great") }];
         mark_recommended(&mut v);
         assert!(v[0].recommended);
+    }
+
+    #[test]
+    fn removing_a_shard_removes_the_whole_set_with_its_part_files() {
+        let d = tempfile::tempdir().unwrap();
+        let f = |n: &str| d.path().join(n);
+        for n in [
+            "big-Q8_0-00001-of-00003.gguf",
+            "big-Q8_0-00002-of-00003.gguf",
+            "big-Q8_0-00003-of-00003.gguf.part",
+            "big-Q8_0-00003-of-00003.gguf.part.meta",
+            "big-Q8_0-00001-of-00002.gguf", // another set with the same base
+            "other-Q4_K_M.gguf",
+            "solo.gguf",
+        ] {
+            std::fs::write(f(n), b"x").unwrap();
+        }
+        remove_file_or_shard_set(&f("big-Q8_0-00001-of-00003.gguf")).unwrap();
+        let mut left: Vec<String> =
+            std::fs::read_dir(d.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        assert_eq!(left, ["big-Q8_0-00001-of-00002.gguf", "other-Q4_K_M.gguf", "solo.gguf"]);
+        // A plain file takes only itself (and its own .part).
+        std::fs::write(f("solo.gguf.part"), b"x").unwrap();
+        remove_file_or_shard_set(&f("solo.gguf")).unwrap();
+        assert!(!f("solo.gguf").exists() && !f("solo.gguf.part").exists() && f("other-Q4_K_M.gguf").exists());
     }
 
     #[test]

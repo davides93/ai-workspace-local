@@ -90,6 +90,14 @@ impl UrlProvider {
         let mut disp = None;
         match self.client.head(parsed.clone()).send().await {
             Ok(r) if r.status().is_success() => {
+                let ctype = r.headers().get("content-type").and_then(|v| v.to_str().ok()).map(|v| v.trim().to_ascii_lowercase());
+                if ctype.as_deref().is_some_and(|c| c.starts_with("text/html") || c.starts_with("application/xhtml")) {
+                    return Err(Error::Invalid(
+                        "l'indirizzo punta a una pagina web (text/html), non a un file di modello: usa il link diretto al file \
+                         (su Hugging Face `resolve/` al posto di `blob/`)"
+                            .into(),
+                    ));
+                }
                 // `Response::content_length` is always 0 for HEAD: read the header itself.
                 size = r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
                 disp = r.headers().get("content-disposition").and_then(|v| v.to_str().ok()).and_then(disposition_name);
@@ -241,6 +249,7 @@ mod tests {
                 head(|| async { ([("content-length", "99"), ("content-disposition", "attachment; filename=\"served.Q8_0.gguf\"")], "") }),
             )
             .route("/nohead/x.gguf", get(|| async { "x" }).head(|| async { StatusCode::METHOD_NOT_ALLOWED }))
+            .route("/blob/x.gguf", head(|| async { ([("content-type", "text/html; charset=utf-8"), ("content-length", "900")], "") }))
             .route("/gone/x.gguf", head(|| async { StatusCode::NOT_FOUND.into_response() }))
             .route(
                 "/doc.txt",
@@ -292,6 +301,14 @@ mod tests {
             assert!(f.components().all(|c| crate::relpath::is_plain_component(&c.as_os_str().to_string_lossy())), "{f:?}");
             assert!(f.file_name().unwrap().to_string_lossy().chars().count() <= STEM_CHARS + 9, "{f:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_web_page_is_refused_as_a_model_url() {
+        let base = server().await;
+        let e = UrlProvider::new().detail_with(&format!("{base}/blob/x.gguf"), None, None).await.unwrap_err();
+        assert!(matches!(e, Error::Invalid(_)), "{e:?}");
+        assert!(e.to_string().contains("pagina web"), "{e}");
     }
 
     #[tokio::test]
