@@ -78,7 +78,7 @@ pub fn fit_need(need_mb: u64, format: &str, device: &DeviceProfile) -> (String, 
     let need = need_mb.max(1);
     let vram = device.vram_mb();
     let budget = aiw_hw::model_budget_mb(device);
-    let offload = vram + device.memory_mb * 6 / 10;
+    let offload = aiw_hw::offload_limit_mb(device);
     let gb = |mb: u64| format!("{:.1} GB", mb as f64 / 1024.0);
     if need * 4 <= budget * 3 {
         let where_ = if vram >= need {
@@ -169,6 +169,16 @@ mod tests {
         assert_eq!(fit(big, &ws).0, "tight");
         assert_eq!(fit(apple, &ws).0, "no");
         assert_eq!(fit(apple, &device("ios", 8, None)).0, "great");
+    }
+
+    #[test]
+    fn unified_memory_does_not_count_ram_twice_for_offload() {
+        // 8 GB phone: budget 5.6 GB (70 %). 6 GB does not fit and there is no extra RAM to
+        // offload to; the same need on a 8 GB + 8 GB-VRAM discrete box is only "tight".
+        let phone = device("android", 8, Some(8));
+        assert_eq!(fit_need(6000, "gguf", &phone).0, "no");
+        assert_eq!(fit_need(5000, "gguf", &phone).0, "ok");
+        assert_eq!(fit_need(9000, "gguf", &device("linux", 8, Some(8))).0, "tight");
     }
 
     #[test]

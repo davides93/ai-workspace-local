@@ -307,7 +307,7 @@ impl AgentRunner {
                 return Err(e);
             }
         };
-        let ctx_max = input.profile.params.context.map(|c| c as u64).unwrap_or(8192);
+        let ctx_max = effective_context(input.profile.params.context, backend.served_context());
         let mut strip_images = false;
         // Tool errors of the latest batch that the model has not retried yet (self-check, below).
         let mut unresolved: Vec<(String, String)> = Vec::new();
@@ -959,6 +959,14 @@ fn looks_like_vision_error(e: &str) -> bool {
 }
 
 /// Summarises the oldest part of the conversation in place; returns how many messages were removed.
+/// Context window the compaction budget is computed on: the profile's, but never more than the
+/// server was launched with when that is known (a sidecar that was not restarted for a larger
+/// profile context would otherwise overflow before compaction kicks in).
+fn effective_context(profile: Option<u32>, served: Option<u32>) -> u64 {
+    let profile = profile.unwrap_or(8192);
+    served.map_or(profile, |s| s.min(profile)) as u64
+}
+
 async fn compact(messages: &mut Vec<Msg>, backend: &dyn ChatBackend, input: &RunInput) -> Option<usize> {
     let keep_tail = 4;
     let mut cut = messages.len().saturating_sub(keep_tail);
@@ -1009,4 +1017,18 @@ async fn compact(messages: &mut Vec<Msg>, backend: &dyn ChatBackend, input: &Run
     messages.push(Msg::assistant("Ok, riprendo dal riassunto."));
     messages.extend(tail);
     Some(removed)
+}
+
+#[cfg(test)]
+mod context_budget_tests {
+    use super::effective_context;
+
+    #[test]
+    fn compaction_budget_is_the_smaller_of_profile_and_served_context() {
+        assert_eq!(effective_context(Some(32768), Some(8192)), 8192);
+        assert_eq!(effective_context(Some(8192), Some(32768)), 8192);
+        assert_eq!(effective_context(Some(16384), None), 16384);
+        assert_eq!(effective_context(None, None), 8192);
+        assert_eq!(effective_context(None, Some(4096)), 4096);
+    }
 }

@@ -15,13 +15,22 @@ pub struct OpenAiBackend {
     base: String,
     api_key: Option<String>,
     http: reqwest::Client,
+    /// Model name the server actually serves, sent instead of the requested one (single-model
+    /// sidecars started from a local path serve the model under another name).
+    model_override: Option<String>,
 }
 
 impl OpenAiBackend {
     /// `base` is the URL that ends with `/v1` (e.g. `http://127.0.0.1:8080/v1`).
     pub fn new(base: impl Into<String>, api_key: Option<String>, timeout: Duration) -> Self {
         let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).read_timeout(timeout).build().expect("http client");
-        Self { base: base.into().trim_end_matches('/').to_string(), api_key, http }
+        Self { base: base.into().trim_end_matches('/').to_string(), api_key, http, model_override: None }
+    }
+
+    /// Sends `model` in every request instead of the one the caller asked for.
+    pub fn with_model_override(mut self, model: Option<String>) -> Self {
+        self.model_override = model;
+        self
     }
 
     pub fn base(&self) -> &str {
@@ -144,7 +153,10 @@ impl ChatBackend for OpenAiBackend {
         Ok(v["data"].as_array().map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect()).unwrap_or_default())
     }
 
-    async fn chat(&self, req: ChatRequest, cancel: CancellationToken) -> Result<DeltaStream> {
+    async fn chat(&self, mut req: ChatRequest, cancel: CancellationToken) -> Result<DeltaStream> {
+        if let Some(m) = &self.model_override {
+            req.model = m.clone();
+        }
         let res = tokio::select! {
             r = self.auth(self.http.post(format!("{}/chat/completions", self.base))).json(&Self::body(&req)).send() => r.map_err(|e| Error::Runtime(format!("runtime non raggiungibile ({}): {e}", self.base)))?,
             _ = cancel.cancelled() => return Err(Error::Cancelled),

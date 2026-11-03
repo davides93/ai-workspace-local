@@ -156,6 +156,12 @@ pub trait ChatBackend: Send + Sync {
     fn availability(&self) -> std::result::Result<(), String> {
         Ok(())
     }
+    /// Context window the server behind this backend was actually launched with, when AIW
+    /// knows it (a sidecar it started). It can be smaller than the profile's: a larger one is
+    /// not applied while requests are in flight. Callers size their prompts with the smaller.
+    fn served_context(&self) -> Option<u32> {
+        None
+    }
     /// A view of this backend that runs with the context window of an inference profile.
     /// Meant for in-process engines whose context is fixed when a generation starts; sidecars
     /// receive the profile context at launch instead, so the default is `None` (no change).

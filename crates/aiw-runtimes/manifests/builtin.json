@@ -372,6 +372,8 @@
    "args": [
     "serve",
     "{model}",
+    "--served-model-name",
+    "{model_id}",
     "--host",
     "127.0.0.1",
     "--port",
@@ -523,6 +525,8 @@
     "sglang.launch_server",
     "--model-path",
     "{model}",
+    "--served-model-name",
+    "{model_id}",
     "--host",
     "127.0.0.1",
     "--port",

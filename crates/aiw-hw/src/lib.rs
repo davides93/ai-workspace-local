@@ -155,6 +155,17 @@ pub fn model_budget_mb(p: &DeviceProfile) -> u64 {
     p.vram_mb().max(p.memory_mb / 2)
 }
 
+/// Most memory a model can occupy with partial GPU+RAM offload, in MB. On a unified-memory
+/// device CPU and GPU share one pool, so there is nothing to offload to beyond the budget
+/// (adding a share of RAM on top of it would count the same memory twice); elsewhere the
+/// dedicated VRAM plus 60 % of the RAM.
+pub fn offload_limit_mb(p: &DeviceProfile) -> u64 {
+    if p.unified_memory() {
+        return model_budget_mb(p);
+    }
+    p.vram_mb() + p.memory_mb * 6 / 10
+}
+
 /// Device class used for recommendations (DESIGN §Dispositivi).
 pub fn tier_for(p: &DeviceProfile) -> &'static str {
     match model_budget_mb(p) {
@@ -293,6 +304,18 @@ mod tests {
 
     fn gpu(kind: &str, memory_mb: Option<u64>) -> Accelerator {
         Accelerator { kind: kind.into(), name: kind.into(), vendor: None, memory_mb, driver: None, details: None }
+    }
+
+    #[test]
+    fn offload_limit_is_not_beyond_the_budget_on_unified_memory() {
+        // Discrete GPU: VRAM plus 60 % of RAM.
+        let pc = profile("linux", "x86_64", 32, vec![gpu("cuda", Some(8 * 1024))]);
+        assert_eq!(offload_limit_mb(&pc), 8 * 1024 + 32 * 1024 * 6 / 10);
+        // Apple Silicon: one pool, so the limit is the budget itself, not budget + RAM share.
+        let mac = profile("macos", "aarch64", 16, vec![gpu("metal", Some(16 * 1024))]);
+        assert_eq!(offload_limit_mb(&mac), model_budget_mb(&mac));
+        let phone = profile("android", "aarch64", 8, vec![gpu("vulkan", Some(8 * 1024))]);
+        assert_eq!(offload_limit_mb(&phone), 5734);
     }
 
     #[test]

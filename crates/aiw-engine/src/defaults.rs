@@ -133,7 +133,7 @@ enum Fit {
 fn local_fit(m: &LocalModel, device: &DeviceProfile) -> Fit {
     let need = (m.size_bytes / (1024 * 1024) * 11 / 10 + 700).max(1);
     let budget = aiw_hw::model_budget_mb(device);
-    let offload = device.vram_mb() + device.memory_mb * 6 / 10;
+    let offload = aiw_hw::offload_limit_mb(device);
     if need * 4 <= budget * 3 {
         Fit::Great
     } else if need <= budget {
@@ -356,6 +356,18 @@ mod tests {
         let p = default_profile(&models, &small, &avail(true, false, &[]));
         assert_eq!(p.model, "m-3-2");
         assert_eq!(p.params.context, Some(4096));
+    }
+
+    #[test]
+    fn unified_memory_has_no_offload_beyond_the_budget() {
+        // 8 GB Android phone: budget 5.6 GB. A 6 GB file would need ~7.3 GB: it does not fit,
+        // and "partial offload" must not add the RAM that the budget already counts.
+        let phone = device("android", 8, Some(8));
+        let models = vec![model("m-6", 6.0, TOOLS, None)];
+        assert_eq!(default_profile(&models, &phone, &avail(true, false, &[])).model, "");
+        // A 3 GB file fits.
+        let models = vec![model("m-3", 3.0, TOOLS, None)];
+        assert_eq!(default_profile(&models, &phone, &avail(true, false, &[])).model, "m-3");
     }
 
     #[test]
