@@ -128,11 +128,7 @@ impl ToolContext {
         let canon = canonical_lenient(&norm)
             .ok_or_else(|| Error::Denied(format!("{} passa da un collegamento simbolico che non si può risolvere", norm.display())))?;
         let canon_root = std::fs::canonicalize(&self.workspace_root).unwrap_or_else(|_| root.clone());
-        let readable = !write
-            && self
-                .read_roots
-                .iter()
-                .any(|r| canon.starts_with(std::fs::canonicalize(r).unwrap_or_else(|_| aiw_core::paths::normalize(r))));
+        let readable = !write && self.read_roots.iter().filter_map(|r| trusted_read_root(r)).any(|r| canon.starts_with(r));
         if !canon.starts_with(&canon_root) && !readable {
             return Err(Error::Denied(format!(
                 "{} punta fuori dal workspace tramite un collegamento simbolico ({})",
@@ -168,6 +164,19 @@ impl ToolContext {
         }
         let _ = std::fs::copy(path, &target);
     }
+}
+
+/// Canonical form of an extra read-only root, without following the root itself: a root that is
+/// a symlink is ignored. `<workspace>/.aiw` comes from the repository being worked on, and a
+/// repository shipping `.aiw -> /` must not turn "read the skills" into "read the whole disk".
+fn trusted_read_root(r: &Path) -> Option<PathBuf> {
+    let norm = aiw_core::paths::normalize(r);
+    if std::fs::symlink_metadata(&norm).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        return None;
+    }
+    let parent = norm.parent()?;
+    let base = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+    Some(base.join(norm.file_name()?))
 }
 
 /// `p` with symlinks resolved, also when its tail does not exist yet: the deepest existing
@@ -347,6 +356,31 @@ mod tests {
         assert!(ctx.resolve("a.txt", false).is_ok());
         ctx.sandbox = SandboxMode::Off;
         assert!(ctx.resolve("/etc/passwd", false).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_read_root_does_not_open_the_disk() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "x").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        // A repository shipping `.aiw` as a link to somewhere else.
+        std::os::unix::fs::symlink(outside.path(), ws.path().join(".aiw")).unwrap();
+        let mut ctx = ToolContext::new("r", ws.path().to_path_buf());
+        ctx.read_roots = vec![ws.path().join(".aiw")];
+        assert!(ctx.resolve(".aiw/secret.txt", false).is_err());
+        assert!(ctx.resolve(&outside.path().join("secret.txt").display().to_string(), false).is_err());
+
+        // A real `.aiw` folder stays readable.
+        let ws2 = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws2.path().join(".aiw/skills")).unwrap();
+        std::fs::write(ws2.path().join(".aiw/skills/SKILL.md"), "x").unwrap();
+        let skills = tempfile::tempdir().unwrap();
+        std::fs::write(skills.path().join("a.md"), "x").unwrap();
+        let mut ctx2 = ToolContext::new("r", ws2.path().to_path_buf());
+        ctx2.read_roots = vec![ws2.path().join(".aiw"), skills.path().to_path_buf()];
+        assert!(ctx2.resolve(".aiw/skills/SKILL.md", false).is_ok());
+        assert!(ctx2.resolve(&skills.path().join("a.md").display().to_string(), false).is_ok());
     }
 
     #[test]

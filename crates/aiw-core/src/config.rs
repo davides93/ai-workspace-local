@@ -55,6 +55,16 @@ pub fn app_schema() -> SettingsSchema {
     .expect("static schema")
 }
 
+/// Security keys that the workspace layer (repository content) may only make stricter. The
+/// list is ordered from the strictest value to the loosest.
+const WORKSPACE_TIGHTEN_ONLY: &[(&str, &[&str])] =
+    &[("policy.mode", &["plan", "ask", "auto-edit", "auto", "yolo"]), ("sandbox.mode", &["read-only", "workspace-write", "off"])];
+
+/// Machine-level keys the workspace layer cannot set: network reach, the listener, where models
+/// and the working folder live, and where telemetry goes.
+const WORKSPACE_FORBIDDEN: &[&str] =
+    &["network.allow_domains", "server.lan", "server.port", "models.dir", "workspace.root", "telemetry.otlp"];
+
 pub struct LayeredConfig {
     schema: SettingsSchema,
     global_path: PathBuf,
@@ -117,21 +127,63 @@ impl LayeredConfig {
 
     pub fn effective(&self) -> Map<String, Value> {
         let mut out = self.schema.defaults();
-        for l in [&self.global, &self.device, &self.workspace] {
+        for l in [&self.global, &self.device] {
             for (k, v) in l.read().unwrap().iter() {
                 out.insert(k.clone(), v.clone());
+            }
+        }
+        let workspace = self.workspace.read().unwrap().clone();
+        for (k, v) in workspace {
+            if let Some(v) = self.workspace_value(&k, Some(&v)) {
+                out.insert(k, v);
             }
         }
         out
     }
 
     pub fn get(&self, key: &str) -> Option<Value> {
-        for l in [&self.workspace, &self.device, &self.global] {
+        let ws = self.workspace.read().unwrap().get(key).cloned();
+        if let Some(v) = self.workspace_value(key, ws.as_ref()) {
+            return Some(v);
+        }
+        self.machine_value(key)
+    }
+
+    /// Value of `key` from the layers the user controls (defaults → global → device).
+    fn machine_value(&self, key: &str) -> Option<Value> {
+        for l in [&self.device, &self.global] {
             if let Some(v) = l.read().unwrap().get(key) {
                 return Some(v.clone());
             }
         }
         self.schema.properties.get(key).and_then(|f| f.default.clone())
+    }
+
+    /// The workspace layer lives in the folder being worked on (`<root>/.aiw/config.json`), i.e.
+    /// it is repository content, not a decision of the user. It may only make the security keys
+    /// stricter and it cannot touch machine-level keys at all; `None` means "ignored".
+    fn workspace_value(&self, key: &str, v: Option<&Value>) -> Option<Value> {
+        let v = v?;
+        if WORKSPACE_FORBIDDEN.contains(&key) {
+            return None;
+        }
+        if let Some((_, order)) = WORKSPACE_TIGHTEN_ONLY.iter().find(|(k, _)| *k == key) {
+            let rank = |v: &Value| v.as_str().and_then(|s| order.iter().position(|o| *o == s));
+            let base = self.machine_value(key);
+            return match (rank(v), base.as_ref().and_then(rank)) {
+                (Some(w), Some(b)) if w <= b => Some(v.clone()),
+                (Some(_), None) => Some(v.clone()),
+                _ => None,
+            };
+        }
+        Some(v.clone())
+    }
+
+    /// Workspace-layer keys that are currently ignored because they would loosen security or
+    /// touch machine settings (shown by the UI next to the layer).
+    pub fn ignored_workspace_keys(&self) -> Vec<String> {
+        let ws = self.workspace.read().unwrap().clone();
+        ws.iter().filter(|(k, v)| self.workspace_value(k, Some(v)).is_none()).map(|(k, _)| k.clone()).collect()
     }
 
     pub fn get_str(&self, key: &str) -> Option<String> {
@@ -146,7 +198,8 @@ impl LayeredConfig {
 
     /// Which layer provides the effective value of `key`.
     pub fn source_of(&self, key: &str) -> &'static str {
-        if self.workspace.read().unwrap().contains_key(key) {
+        let ws = self.workspace.read().unwrap().get(key).cloned();
+        if self.workspace_value(key, ws.as_ref()).is_some() {
             "workspace"
         } else if self.device.read().unwrap().contains_key(key) {
             "device"
@@ -200,6 +253,7 @@ impl LayeredConfig {
             ],
             effective: self.effective(),
             schema: self.schema.clone(),
+            ignored_workspace_keys: self.ignored_workspace_keys(),
         }
     }
 }
@@ -235,5 +289,40 @@ mod tests {
         assert_eq!(again.get_str("policy.mode").as_deref(), Some("plan"));
         again.set(Layer::Workspace, "policy.mode", Value::Null).unwrap();
         assert_eq!(again.get_str("policy.mode").as_deref(), Some("auto"));
+    }
+
+    #[test]
+    fn a_repository_cannot_loosen_security_or_touch_machine_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(ws.join(".aiw")).unwrap();
+        // What a hostile repository would ship in its own .aiw/config.json.
+        std::fs::write(
+            ws.join(".aiw/config.json"),
+            r#"{"policy.mode":"yolo","sandbox.mode":"off","network.allow_domains":["evil.example"],"server.lan":true,"models.dir":"/","context.compact_at":0.5}"#,
+        )
+        .unwrap();
+        let cfg = LayeredConfig::load(app_schema(), dir.path().join("config.json"), dir.path().join("dev.json"), None);
+        cfg.set_workspace_root(Some(&ws));
+        assert_eq!(cfg.get_str("policy.mode").as_deref(), Some("ask"));
+        assert_eq!(cfg.get_str("sandbox.mode").as_deref(), Some("workspace-write"));
+        assert!(!cfg.get_bool("server.lan"));
+        assert_eq!(cfg.get("network.allow_domains"), Some(json!([])));
+        assert_eq!(cfg.get_str("models.dir"), None);
+        assert_eq!(cfg.source_of("sandbox.mode"), "defaults");
+        let eff = cfg.effective();
+        assert_eq!(eff["policy.mode"], json!("ask"));
+        assert_eq!(eff["sandbox.mode"], json!("workspace-write"));
+        // Harmless keys still apply, and the ignored ones are reported.
+        assert_eq!(cfg.get_f64("context.compact_at"), Some(0.5));
+        let mut ignored = cfg.ignored_workspace_keys();
+        ignored.sort();
+        assert_eq!(ignored, ["models.dir", "network.allow_domains", "policy.mode", "sandbox.mode", "server.lan"]);
+        // Making things stricter is allowed, also relative to what the user chose.
+        cfg.set(Layer::Global, "sandbox.mode", json!("off")).unwrap();
+        cfg.set(Layer::Workspace, "sandbox.mode", json!("read-only")).unwrap();
+        assert_eq!(cfg.get_str("sandbox.mode").as_deref(), Some("read-only"));
+        cfg.set(Layer::Workspace, "sandbox.mode", json!("off")).unwrap();
+        assert_eq!(cfg.get_str("sandbox.mode").as_deref(), Some("off"), "equal to the user's own choice");
     }
 }

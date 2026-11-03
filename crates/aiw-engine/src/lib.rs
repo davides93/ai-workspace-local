@@ -257,13 +257,21 @@ impl Engine {
                 s.put_doc("workflow", &w.id, &w)?;
             }
         }
-        // Workflows dropped in ~/.aiw/workflows or <workspace>/.aiw/workflows (YAML/JSON).
-        for dir in [self.0.dirs.workflows(), self.workspace_root().join(".aiw").join("workflows")] {
-            if let Ok(rd) = std::fs::read_dir(&dir) {
-                for e in rd.flatten() {
-                    if let Ok(wf) = aiw_workflow::load_file(&e.path()) {
-                        s.put_doc("workflow", &wf.id, &wf)?;
-                    }
+        // Workflows dropped in ~/.aiw/workflows (the user's own folder) or
+        // <workspace>/.aiw/workflows (YAML/JSON).
+        if let Ok(rd) = std::fs::read_dir(self.0.dirs.workflows()) {
+            for e in rd.flatten() {
+                if let Ok(wf) = aiw_workflow::load_file(&e.path()) {
+                    s.put_doc("workflow", &wf.id, &wf)?;
+                }
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(self.workspace_root().join(".aiw").join("workflows")) {
+            for e in rd.flatten() {
+                if let Ok(wf) = aiw_workflow::load_file(&e.path()) {
+                    let stored: Option<WorkflowDef> = s.get_doc("workflow", &wf.id)?;
+                    let wf = workspace_workflow(wf, stored.as_ref());
+                    s.put_doc("workflow", &wf.id, &wf)?;
                 }
             }
         }
@@ -1371,6 +1379,15 @@ fn validate_mcp(cfg: &McpServerConfig) -> Result<()> {
 }
 
 /// Registers in-process llama.cpp as the `llama-embedded` runtime with its current settings.
+/// A workflow file inside the working folder is repository content: whoever wrote the repository
+/// could schedule commands with it. It is imported disabled; once the user enables it from the
+/// app the choice holds only while the file stays exactly as it was when it was enabled.
+fn workspace_workflow(mut wf: WorkflowDef, stored: Option<&WorkflowDef>) -> WorkflowDef {
+    let unchanged = stored.map(|st| WorkflowDef { enabled: wf.enabled, ..st.clone() } == wf).unwrap_or(false);
+    wf.enabled = unchanged && stored.map(|st| st.enabled).unwrap_or(false);
+    wf
+}
+
 #[cfg(feature = "llama-embedded")]
 fn register_embedded(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelResolver) {
     let s = runtimes.settings("llama-embedded").unwrap_or_default();

@@ -1,3 +1,4 @@
+import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
   AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
@@ -127,12 +128,15 @@ export async function createTransport(): Promise<Transport> {
   const { HttpTransport } = await import("./http");
   // The API token may arrive in the URL (…/?token=…): keep it in storage and drop it from the
   // address bar so it does not end up in the history, in screenshots or in shared links.
+  const server = params.get("server") ?? "";
+  const origin = serverOrigin(server, location.href);
   const urlToken = params.get("token");
   if (urlToken) {
-    localStorageSet("aiw.token", urlToken);
+    storeToken(safeStorage(), origin, urlToken);
     params.delete("token");
   }
-  const http = new HttpTransport(params.get("server") ?? "", urlToken ?? localStorageGet("aiw.token"));
+  // A stored token only goes back to the origin that issued it (never to a `?server=` elsewhere).
+  const http = new HttpTransport(server, urlToken ?? storedToken(safeStorage(), origin, location.origin), origin);
   // Opened from the pairing QR (…/?pair=123456): pair at once, then drop the code from the URL.
   const pairCode = params.get("pair");
   if (pairCode && /^\d{6}$/.test(pairCode)) {
@@ -156,21 +160,5 @@ export async function createTransport(): Promise<Transport> {
     // No backend reachable: fall back to the demo so the UI is still explorable.
     const { MockTransport } = await import("./mock");
     return new MockTransport("Backend non raggiungibile: modalità demo");
-  }
-}
-
-function localStorageGet(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function localStorageSet(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* storage unavailable: the token lives only in memory */
   }
 }

@@ -398,3 +398,25 @@ async fn sessions_are_renamed_without_becoming_recent() {
     assert!(e.rename_session(&s.id, &"x".repeat(MAX_TITLE_CHARS)).is_ok());
     assert!(matches!(e.rename_session("ses_assente", "Titolo"), Err(Error::NotFound(_))));
 }
+
+#[test]
+fn workspace_workflows_start_disabled_and_stay_enabled_only_while_unchanged() {
+    let file: WorkflowDef = serde_json::from_value(serde_json::json!({
+        "id": "repo-job", "name": "Job del repository", "enabled": true,
+        "trigger": {"kind": "interval", "seconds": 60},
+        "steps": [{"id": "s", "kind": "tool", "tool": "shell", "args": {"command": "echo ciao"}}]
+    }))
+    .unwrap();
+    // First import: whatever the file says, it is off.
+    let imported = super::workspace_workflow(file.clone(), None);
+    assert!(!imported.enabled);
+    // The user enables it from the app; the same file on the next start keeps it on.
+    let enabled = WorkflowDef { enabled: true, ..imported.clone() };
+    assert!(super::workspace_workflow(file.clone(), Some(&enabled)).enabled);
+    // The repository changes a step: back to off until the user looks at it again.
+    let mut changed = file.clone();
+    changed.name = "Job modificato".into();
+    assert!(!super::workspace_workflow(changed, Some(&enabled)).enabled);
+    // Disabled by the user stays disabled.
+    assert!(!super::workspace_workflow(file, Some(&imported)).enabled);
+}

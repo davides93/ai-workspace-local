@@ -229,7 +229,7 @@ impl Tool for WebFetchTool {
         };
         let status = res.status();
         let ctype = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-        let body = res.text().await.map_err(|e| Error::Runtime(e.to_string()))?;
+        let (body, cut) = read_capped(res, MAX_BODY_BYTES).await?;
         let (title, text) = if ctype.contains("html") || body.trim_start().starts_with('<') { html_to_text(&body) } else { (None, body) };
         let mut out = format!("URL: {url}\nStato: {status}\n");
         if let Some(t) = title {
@@ -241,8 +241,31 @@ impl Tool for WebFetchTool {
         if truncated {
             out.push_str("\n… [troncato]");
         }
+        if cut {
+            out.push_str(&format!("\n[risposta oltre {} MB: letta solo la parte iniziale]", MAX_BODY_BYTES >> 20));
+        }
         Ok(if status.is_success() { ToolOutput::text(out) } else { ToolOutput::error(out) })
     }
+}
+
+/// Upper bound for a fetched body: a page that streams forever (or a multi-GB file behind an
+/// innocent URL) must not exhaust the memory of the app.
+const MAX_BODY_BYTES: usize = 5 << 20;
+
+/// Reads at most `cap` bytes of the body; the flag says whether the rest was dropped.
+async fn read_capped(mut res: reqwest::Response, cap: usize) -> Result<(String, bool)> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut cut = false;
+    while let Some(chunk) = res.chunk().await.map_err(|e| Error::Runtime(e.to_string()))? {
+        let room = cap - buf.len();
+        if chunk.len() >= room {
+            buf.extend_from_slice(&chunk[..room]);
+            cut = chunk.len() > room || res.chunk().await.ok().flatten().is_some();
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok((String::from_utf8_lossy(&buf).into_owned(), cut))
 }
 
 #[cfg(test)]
@@ -250,6 +273,16 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn bodies_are_capped() {
+        let (port, _) = serve(|path| if path == "/big" { ok(&"a".repeat(3000)) } else { ok("piccolo") }).await;
+        let get = |p: &str| reqwest::get(format!("http://127.0.0.1:{port}{p}"));
+        let (body, cut) = read_capped(get("/big").await.unwrap(), 1000).await.unwrap();
+        assert_eq!((body.len(), cut), (1000, true));
+        let (body, cut) = read_capped(get("/small").await.unwrap(), 1000).await.unwrap();
+        assert_eq!((body.as_str(), cut), ("piccolo", false));
+    }
 
     #[test]
     fn converts_html_to_readable_text() {

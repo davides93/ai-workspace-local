@@ -178,7 +178,23 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         None => app.fallback(|| async { unknown_route() }),
     };
     // Outermost: CORS answers preflights (which carry no credentials) before `auth` sees them.
-    app.layer(middleware::from_fn_with_state(st.clone(), auth)).layer(middleware::from_fn_with_state(st, security::cors))
+    app.layer(middleware::from_fn_with_state(st.clone(), auth))
+        .layer(middleware::from_fn_with_state(st, security::cors))
+        .layer(middleware::from_fn(hardening_headers))
+}
+
+/// The UI asks the user to confirm agent actions: no other site may frame it (clickjacking),
+/// sniff its responses into another type, or learn its URLs (which may carry `?token=`) from a
+/// Referer.
+async fn hardening_headers(req: Request, next: middleware::Next) -> Response {
+    use axum::http::{header, HeaderValue};
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.entry(header::CONTENT_SECURITY_POLICY).or_insert(HeaderValue::from_static("frame-ancestors 'none'"));
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    res
 }
 
 /// Paths that belong to the server (REST API, gateways, MCP, A2A, webhooks): one that no route

@@ -546,3 +546,15 @@ async fn delete_and_rename_routes() {
     assert_eq!(st, StatusCode::FORBIDDEN);
     assert_eq!(e.session(sid).unwrap().title, "Bilancio 2026");
 }
+
+#[tokio::test]
+async fn responses_cannot_be_framed_or_sniffed() {
+    let (app, _e, _d, _w) = fixture(vec![]).await;
+    for path in ["/api/system", "/api/nope"] {
+        let (_, h, _) = send(&app, req("GET", path, Some([127, 0, 0, 1]), &[("host", "127.0.0.1:7777")], None)).await;
+        assert_eq!(h.get("x-frame-options").unwrap(), "DENY", "{path}");
+        assert_eq!(h.get("content-security-policy").unwrap(), "frame-ancestors 'none'", "{path}");
+        assert_eq!(h.get("x-content-type-options").unwrap(), "nosniff", "{path}");
+        assert_eq!(h.get("referrer-policy").unwrap(), "no-referrer", "{path}");
+    }
+}

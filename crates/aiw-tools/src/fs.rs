@@ -46,7 +46,14 @@ impl Tool for ReadFile {
     }
     async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let p = ctx.resolve(arg_str(&args, "path")?, false)?;
-        let bytes = tokio::fs::read(&p).await.map_err(|e| Error::Invalid(format!("{}: {e}", p.display())))?;
+        let size = tokio::fs::metadata(&p).await.map_err(|e| Error::Invalid(format!("{}: {e}", p.display())))?.len();
+        // Read at most the first MAX_READ_BYTES: a multi-GB log must not be loaded in memory.
+        let mut bytes = Vec::new();
+        {
+            use tokio::io::AsyncReadExt;
+            let f = tokio::fs::File::open(&p).await.map_err(|e| Error::Invalid(format!("{}: {e}", p.display())))?;
+            f.take(MAX_READ_BYTES).read_to_end(&mut bytes).await.map_err(|e| Error::Invalid(format!("{}: {e}", p.display())))?;
+        }
         if bytes.iter().take(8000).any(|b| *b == 0) {
             return Ok(ToolOutput::text(format!("{} è un file binario ({} byte).", rel(ctx, &p), bytes.len())));
         }
@@ -55,6 +62,7 @@ impl Tool for ReadFile {
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(400) as usize;
         let total = text.lines().count();
+        let partial = size > MAX_READ_BYTES;
         let mut out = String::new();
         for (i, line) in text.lines().enumerate().skip(offset - 1).take(limit) {
             out.push_str(&format!("{:>6}\t{}\n", i + 1, line));
@@ -62,9 +70,15 @@ impl Tool for ReadFile {
         if offset - 1 + limit < total {
             out.push_str(&format!("… ({} righe totali; continua con offset={})\n", total, offset + limit));
         }
+        if partial {
+            out.push_str(&format!("… file di {} MB: lette solo le prime {} MB\n", size >> 20, MAX_READ_BYTES >> 20));
+        }
         Ok(ToolOutput::text(truncate_middle(&out, MAX_READ)))
     }
 }
+
+/// Upper bound of what `read_file` loads from disk.
+const MAX_READ_BYTES: u64 = 16 << 20;
 
 struct WriteFile;
 #[async_trait]
@@ -362,8 +376,11 @@ impl Tool for Grep {
                         continue;
                     }
                 }
+                if e.metadata().map(|m| m.len() > 4 << 20).unwrap_or(true) {
+                    continue;
+                }
                 let Ok(bytes) = std::fs::read(e.path()) else { continue };
-                if bytes.len() > 4 << 20 || bytes.iter().take(4000).any(|b| *b == 0) {
+                if bytes.iter().take(4000).any(|b| *b == 0) {
                     continue;
                 }
                 let text = String::from_utf8_lossy(&bytes);

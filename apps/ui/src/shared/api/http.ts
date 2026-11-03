@@ -1,3 +1,4 @@
+import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
@@ -43,7 +44,8 @@ export class HttpTransport implements Transport {
   readonly kind: "http" | "tauri" = "http";
   readonly capabilities: TransportCapabilities = { demo: false, native: false, pairing: true };
 
-  constructor(protected base: string, protected token: string | null) {}
+  /** `origin` = origin of `base`, used to store the token obtained by pairing for this server only. */
+  constructor(protected base: string, protected token: string | null, protected origin: string | null = null) {}
 
   protected async req<T>(method: string, path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -203,10 +205,6 @@ export class HttpTransport implements Transport {
   async pair(code: string): Promise<void> {
     const r = await this.req<{ token: string }>("POST", "/pair", { code });
     this.token = r.token;
-    try {
-      localStorage.setItem("aiw.token", r.token);
-    } catch {
-      /* storage unavailable: token kept in memory */
-    }
+    storeToken(safeStorage(), this.origin ?? serverOrigin(this.base, location.href), r.token);
   }
 }

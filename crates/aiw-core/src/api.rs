@@ -721,6 +721,10 @@ pub struct ConfigView {
     pub layers: Vec<ConfigLayerView>,
     pub effective: Map<String, Value>,
     pub schema: SettingsSchema,
+    /// Keys of the workspace layer (repository content) that are ignored because they would
+    /// loosen security or set machine-level options.
+    #[serde(default)]
+    pub ignored_workspace_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
