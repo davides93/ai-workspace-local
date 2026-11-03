@@ -31,7 +31,7 @@ flowchart TB
     IPC["IPC Tauri"]
     HTTP["REST + SSE (eventi AG-UI)"]
     GW["Gateway compatibile OpenAI /v1"]
-    MCPS["Server MCP (roadmap)"]
+    MCPS["Server MCP e A2A"]
   end
   subgraph Agentic["L5 · Layer agentico"]
     WF["Motore workflow: trigger, step, approvazioni"]
@@ -139,7 +139,7 @@ Ogni runtime è un file JSON dichiarativo (vedi `crates/aiw-runtimes/manifests/`
   compatibile, bridge nativo registrato. Lo stato è uno di `available`, `installable`, `running`,
   `unsupported`.
 - **Adapter**: `openai` copre la maggior parte dei sidecar (llama-server, vLLM, SGLang, mlx-lm,
-  TRT-LLM, Foundry Local, Lemonade, LM Studio, LocalAI…); `ollama` è lo stesso adapter più la
+  TRT-LLM, Foundry Local, Lemonade, LM Studio, LocalAI…); `ollama` usa lo stesso adapter OpenAI e vi aggiunge solo la
   parte nativa minima (elenco dei modelli **installati** da `GET /api/tags`; `num_ctx` e
   `keep_alive` non passano da `/v1`, quindi vanno nell'ambiente di `ollama serve`:
   `OLLAMA_CONTEXT_LENGTH` e `OLLAMA_KEEP_ALIVE`); `native` instrada verso un *bridge* fornito dalla
@@ -224,10 +224,10 @@ sequenceDiagram
 - **Memoria e skill** (P11): `AGENTS.md` del workspace entra nel system prompt; le skill
   (`SKILL.md` con frontmatter `name`/`description`) sono elencate solo con la descrizione e il
   modello le carica su richiesta con il tool `skill`.
-- **Hook** (P08): `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Un
+- **Hook** (P08): `SessionStart` (dichiarato, non ancora invocato), `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Un
   hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
-- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato; dalla UI si può
-  fare rewind del run.
+- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in `checkpoints/`.
+  Il rewind (ripristino dei file di un run) non è ancora implementato, né dalla UI né dalla CLI.
 
 ### 5.2 Policy, sandbox, audit
 
@@ -235,7 +235,7 @@ sequenceDiagram
 |---|---|---|
 | Modalità | `ask` (chiede conferma per gli effetti collaterali) | `plan` (solo lettura), `auto-edit` (modifica file senza chiedere, comandi su conferma), `auto` (tutto entro la sandbox), `yolo` (tutto, sconsigliato) |
 | Regole | allow: read, list, search, web_fetch su host pubblici · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow |
-| Sandbox OS (P07) | `workspace-write`: Linux bwrap, macOS sandbox-exec, Windows job object con token ristretto (roadmap) | `read-only`, `workspace-write`, `off` |
+| Sandbox OS (P07) | `workspace-write`: Linux bwrap, macOS sandbox-exec, Windows integrità bassa + job object (`aiw-winsandbox`) | `read-only`, `workspace-write`, `off` |
 | Rete dei tool | Consentita solo per i tool web e browser | Allowlist di domini |
 | Audit (P22) | Ogni decisione di policy ed esecuzione viene registrata con l'ID del run | Esportabile in JSONL |
 | Kill switch | `POST /kill` e scorciatoia globale: ferma run, sidecar avviati per i run e browser | — |
@@ -346,7 +346,7 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
 
 ## 12. Roadmap tecnica
 
-1. v0.1 (questo repository): core, registry con circa 30 manifest, adapter OpenAI e Ollama,
+1. v0.1 (questo repository): core, registry con circa 30 manifest (oggi 33), adapter OpenAI e Ollama,
    supervisor, catalogo modelli e download, agent loop con policy, hook, subagenti e skill, tool
    (fs, shell, web, browser, computer-use, MCP), workflow con trigger manual/interval/cron, server
    e gateway, UI completa, shell Tauri, plugin nativi mobili (Foundation Models, ML Kit GenAI,

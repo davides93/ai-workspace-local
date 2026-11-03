@@ -1,8 +1,9 @@
 # Stato dell'app e come procedere
 
-> 2026-11-02 · v0.4 · Basato su un audit del codice (non della documentazione) eseguito per layer, con
-> verifica avversariale di ogni lacuna e riferimenti `file:riga`. Le voci **v0.4** indicano cosa è
-> stato chiuso in questa versione.
+> 2026-11-03 · v0.4 · Basato su un audit del codice (non della documentazione) eseguito per layer, con
+> verifica avversariale di ogni lacuna e riferimenti `file:riga`, aggiornato dopo i giri di verifica
+> end to end, la revisione di sicurezza e la revisione dell'agent loop. Le voci **v0.4** indicano cosa
+> è stato chiuso in questa versione.
 
 ## 1. Sintesi
 
@@ -20,8 +21,14 @@ e ciò che il codice faceva davvero, soprattutto in tre punti:
 3. **Sicurezza dell'API locale**: CORS permissivo e richieste da loopback senza token permettevano
    a qualunque pagina web di registrare hook o server MCP stdio, cioè di eseguire comandi.
 
-La v0.4 chiude questi tre punti e rifà la UI. Test Rust: da 82 a oltre 250. Test UI: da 0 a oltre 100
-(Vitest), più uno smoke test Playwright su tutte le rotte.
+La v0.4 chiude questi tre punti e rifà la UI. Test Rust: da 82 a 304. Test UI: da 0 a 591 (Vitest),
+più uno smoke test Playwright (29 rotte × 2 larghezze × 2 temi).
+
+Dopo la bozza sono entrati tre giri di correzioni, descritti nel §2.8: difetti emersi dal giro end to
+end di `aiw serve` con la UI reale, revisione di sicurezza e revisione dell'agent loop. È in corso
+anche la revisione di inferenza e model hub, in commit separati.
+
+<!-- TODO integratore: inferenza/model hub -->
 
 ## 2. Copertura per layer
 
@@ -34,10 +41,11 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Agenti (5 predefiniti: operator, coder, browser, desktop, planner) e loop con streaming AG-UI | ✅ | tool read-only in parallelo, max turni, self-check sugli errori dei tool |
 | Subagenti (tool `agent`, contesto isolato, profondità 2) | ✅ | nessun subagente in parallelo |
 | Skill `SKILL.md`, memoria `AGENTS.md` | ✅ | nessuna UI per le skill |
-| Hook (UserPromptSubmit, PreToolUse, PostToolUse, Stop) | 🟡 | SessionStart mai invocato; **v0.4** editor degli hook nella UI |
-| Policy (plan/ask/auto-edit/auto/yolo), regole, approvazioni, audit, kill switch | ✅ | regole solo globali; **v0.4** editor delle regole, kill switch raggiungibile da telefono |
+| Hook (UserPromptSubmit, PreToolUse, PostToolUse, Stop) | 🟡 | SessionStart mai invocato; **v0.4** editor degli hook nella UI; un prompt bloccato da `UserPromptSubmit` resta visibile in chat ma non arriva al modello |
+| Policy (plan/ask/auto-edit/auto/yolo), regole, approvazioni, audit, kill switch | ✅ | regole solo globali; **v0.4** editor delle regole, kill switch raggiungibile da telefono; una conferma in attesa viene ritirata quando il run smette di aspettarla e uno stop durante la conferma conta come annullamento, non come rifiuto; validazione di policy, hook e agenti prima del salvataggio |
 | Code mode (Rhai), A2UI `render_ui`, worktree git per sessione | ✅ | |
-| Messaggi dei run annullati o falliti | ✅ **v0.4** | prima andavano persi |
+| Messaggi dei run annullati o falliti | ✅ **v0.4** | prima andavano persi; l'errore resta nella cronologia (messaggio `aiw.run_error`, mai inviato al modello) |
+| Esecuzione dei run | ✅ **v0.4** | un solo run per sessione (il secondo risponde 409); eliminare la sessione ferma il run; agente, profilo o runtime spariti → 409; i run rimasti `running` dopo un crash sono segnati falliti all'avvio; senza il profilo `default` il gateway ripiega sul profilo dell'agente predefinito |
 | Checkpoint prima delle scritture | 🟡 | salvati, ma il rewind non esiste |
 | Workflow (tool, agent, llm, approval, condition) e trigger (manuale, cron, intervallo, file, webhook) | 🟡 | mancano foreach, sotto-workflow, retry/timeout e ripresa dopo riavvio; **v0.4** editor visuale dei passi |
 | A2A 1.0 server, server MCP, delega ai peer via MCP | 🟡 | A2A senza streaming, task in memoria |
@@ -52,15 +60,18 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 
 | Funzione | Stato | Note |
 |---|---|---|
-| File: read, write, edit, list, glob, grep, move | ✅ | **v0.4** confinamento anche rispetto ai symlink |
+| File: read, write, edit, list, glob, grep, move | ✅ | **v0.4** confinamento anche rispetto ai symlink; radici di lettura che sono symlink ignorate; `read_file` limitato a 16 MB, `grep` controlla la dimensione prima di leggere |
 | Shell in sandbox: bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) | 🟡 | rete della shell aperta di default; `~/.aiw` leggibile |
-| `web_fetch` anti-SSRF | ✅ **v0.4** | redirect rivalidati a ogni salto, DNS fissato, IPv6 e range speciali bloccati |
+| `web_fetch` anti-SSRF | ✅ **v0.4** | redirect rivalidati a ogni salto, DNS fissato, IPv6 e range speciali bloccati; lettura limitata a 5 MB |
 | Ricerca web | ❌ | nessun provider (SearXNG, Brave…) |
 | Browser via CDP: navigate, snapshot, click, type, screenshot | 🟡 | mancano scroll, attese, tab, eval, download, albero di accessibilità; **v0.4** screenshot visibili nella chat |
 | Computer-use: screenshot, mouse, tastiera | 🟡 | 5 azioni, solo build desktop Windows e macOS; **v0.4** screenshot visibili nella chat |
-| Client MCP: stdio e streamable HTTP, `tools/list` e `tools/call` | 🟡 | mancano resources, prompts, sampling, elicitation, OAuth, list_changed e riconnessione; **v0.4** env e header dalla UI |
+| Client MCP: stdio e streamable HTTP, `tools/list` e `tools/call` | 🟡 | mancano resources, prompts, sampling, elicitation, OAuth, list_changed e riconnessione; **v0.4** env e header dalla UI, validazione prima del salvataggio, segreti (header ed env) mascherati nelle risposte e conservati se la maschera viene rimandata |
 | Gateway OpenAI `/v1/chat/completions` e `/v1/models`, gateway Anthropic `/v1/messages` | ✅ | mancano `/v1/embeddings` e `/v1/responses` |
-| API locale: token, CORS, Origin/Host | ✅ **v0.4** | allowlist delle origini, protezione da DNS rebinding e CSRF; pairing con limite globale ai tentativi |
+| API locale: token, CORS, Origin/Host | ✅ **v0.4** | allowlist delle origini, protezione da DNS rebinding e CSRF; pairing con limite globale ai tentativi; header anti-framing (`X-Frame-Options`, CSP `frame-ancestors`, `nosniff`, `Referrer-Policy`); token legato all'origine che l'ha rilasciato (`?server=` non lo riceve) |
+| Errori e rotte sconosciute dell'API | ✅ **v0.4** | 404 e 405 in JSON sotto `/api`, `/v1`, `/mcp`, `/a2a`, `/hooks`, `/.well-known`; rifiuti degli extractor come 400 JSON; errori solo in italiano, senza prefissi inglesi; `GET /api/tools` elenca anche i tool interni (todo, agent, skill, render_ui, code), non attivabili |
+| Configurazione a strati del workspace | ✅ **v0.4** | lo strato nel repository può solo restringere `policy.mode` e `sandbox.mode`; non può impostare rete, server, percorsi, telemetria |
+| Workflow del workspace (`<workspace>/.aiw/workflows`) | ✅ **v0.4** | importati disattivati; restano attivi solo se il file non cambia dopo l'abilitazione |
 
 ### 2.3 Inferenza: runtime (L2–L3)
 
@@ -80,7 +91,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Acceleratore | Come viene usato | Stato |
 |---|---|---|
 | CPU (AVX2/AVX-512/NEON/dotprod/i8mm) | tutti i backend | ✅ |
-| Metal | llama.cpp embedded (automatico su macOS/iOS), llama-server, mlx-lm | ✅ **v0.4** (prima il motore embedded non veniva registrato) |
+| Metal | llama.cpp embedded (automatico su macOS/iOS), llama-server, mlx-lm | ✅ **v0.4** (prima il motore embedded non veniva registrato); non eseguito su hardware reale |
 | CUDA | sidecar con `-ngl 999`, vLLM/SGLang/TRT-LLM, embedded con feature `llama-cuda` | 🟡 le release non abilitano CUDA |
 | Vulkan | sidecar, embedded con `llama-vulkan` | 🟡 **v0.4** job di release opzionale `daemon-gpu` (Linux e Windows), non ancora eseguito |
 | ROCm | solo sidecar | 🟡 **v0.4** rilevamento con `rocm-smi`/`rocminfo` |
@@ -109,13 +120,20 @@ Gli endpoint di HF, ModelScope e Ollama non erano raggiungibili dall'ambiente di
 provider sono testati con server HTTP locali che riproducono le risposte documentate. La ricerca di
 ModelScope è quella con più incertezza.
 
+Gli id logici, i sidecar `.aiw-model.json` e i percorsi dei file remoti usano sempre `/`; le
+destinazioni di download sono costruite componente per componente e rifiutano `..`, percorsi
+assoluti e prefissi di unità (correzione per Windows). Ogni URL diretto ha una cartella propria
+(`url/<host>/<nome>-<hash>`), quindi due URL dello stesso host sono due modelli distinti.
+
 ### 2.6 UI (v0.4)
 
 Struttura per dominio (`app/`, `shared/`, `features/`), TanStack Query con polling mirato, router
 su hash con parametri (sessione, agente e workflow nell'URL), nuova architettura dell'informazione
 (Panoramica, Capacità, Integrazioni, Sicurezza), palette comandi Ctrl/Cmd+K, design system
 estratto, contrasto AA in entrambi i temi, layout corretti su telefono e tablet. Dettagli in
-[UI-ARCHITECTURE.md](design/UI-ARCHITECTURE.md).
+[UI-ARCHITECTURE.md](design/UI-ARCHITECTURE.md). La UI mostra l'errore di un run salvato come quello
+dal vivo, raggruppa i tool interni, mostra i segreti MCP mascherati e riporta a `#/chat` se la
+sessione aperta è stata eliminata altrove.
 
 ### 2.7 Piattaforme e build
 
@@ -128,6 +146,31 @@ estratto, contrasto AA in entrambi i temi, layout corretti su telefono e tablet.
 
 Non costruiti: Windows arm64, Linux arm64, Android x86_64/armv7.
 
+### 2.8 Correzioni dopo la bozza
+
+| Giro | Esito |
+|---|---|
+| Fix Windows | percorsi indipendenti dal separatore dell'OS negli id e nei sidecar dei modelli; `prune_empty` confronta le forme canoniche (`\\?\C:\...` contro i nomi 8.3) |
+| Verifica end to end di `aiw serve` | download da URL diretto con cartella propria; errori dei run nella cronologia; 404/405 JSON; errori in italiano; validazione di policy, hook, agenti e server MCP; segreti MCP mascherati; tool interni elencati |
+| Revisione di sicurezza | strato di configurazione del workspace ristretto; workflow del workspace disattivati; symlink nelle radici di lettura; limiti di 5 MB (`web_fetch`) e 16 MB (`read_file`); header anti-framing; token legato all'origine |
+| Revisione dell'agent loop | prompt bloccati da hook non inviati al modello; conferme ritirate e stop distinto dal rifiuto; un run per sessione; eliminazione della sessione che ferma il run; 409 per agente o profilo mancanti; run interrotti segnati falliti all'avvio; profilo di ripiego del gateway |
+| Revisione di inferenza e model hub | in corso, in commit separati |
+
+<!-- TODO integratore: inferenza/model hub -->
+
+### 2.9 Limiti noti
+
+- La policy di rete del browser è verificata dopo la navigazione, non per ogni richiesta: serve
+  l'intercettazione CDP `Fetch`.
+- La protezione SSRF è più debole dietro un proxy HTTP, perché la risoluzione DNS la fa il proxy.
+- La rete della shell è aperta di default e `~/.aiw` è leggibile dentro la sandbox.
+- I server MCP stdio girano fuori dalla sandbox.
+- Esiste un solo token API condiviso, senza revoca.
+- Gli endpoint dei provider (HF, ModelScope, Ollama) non sono mai stati raggiunti dall'ambiente di
+  sviluppo: i test usano server locali finti.
+- Le build GPU (CUDA, Vulkan) e i percorsi nativi Apple e Android non sono stati eseguiti su
+  hardware reale.
+
 ## 3. Come procedere
 
 Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer agentici mancanti.
@@ -136,7 +179,8 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 1. Eseguire il job `daemon-gpu` (Vulkan) e aggiungere CUDA nella matrice di release desktop
    (Windows, Linux). Verificare llama.cpp Metal su un Mac Apple Silicon e su iPhone.
 2. Provare i provider del model hub contro i servizi reali (HF, ModelScope, Ollama) e
-   rigenerare l'indice Ollama da CI.
+   rigenerare l'indice Ollama da CI. Le build GPU e i percorsi nativi Apple e Android vanno
+   provati su hardware reale (vedi §2.9).
 3. Selezionare Xcode 26 nella CI iOS, così il ramo Foundation Models viene compilato davvero.
    Collegare Foundation Models anche su macOS desktop.
 
@@ -161,7 +205,7 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 
 **P3 · Sicurezza e distribuzione**
 13. Rete della shell chiusa di default, `~/.aiw` fuori dalla sandbox, server MCP stdio in sandbox e
-    con conferma, regole di policy sulla shell che non si aggirano con comandi concatenati.
-14. Token per dispositivo con revoca e TLS per la LAN.
+    con conferma, protezione SSRF anche dietro proxy, regole di policy sulla shell che non si aggirano con comandi concatenati.
+14. Token per dispositivo con revoca (oggi un solo token condiviso) e TLS per la LAN.
 15. Firma e notarizzazione delle release, pubblicazione su GitHub Releases, target arm64.
 16. Font inclusi nell'app invece di Google Fonts, i18n it/en.
