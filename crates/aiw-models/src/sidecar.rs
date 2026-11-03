@@ -11,7 +11,10 @@
 use crate::relpath;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 pub const SIDECAR: &str = ".aiw-model.json";
 
@@ -76,6 +79,15 @@ pub fn read(dir: &Path) -> Vec<Install> {
     installs.into_iter().map(normalized).collect()
 }
 
+/// One process-wide lock per folder: the read-modify-write of the record must not interleave
+/// with another one on the same folder (two jobs ending together, a delete during an install).
+fn folder_lock(dir: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: Mutex<Option<HashMap<PathBuf, Arc<Mutex<()>>>>> = Mutex::new(None);
+    // The same folder can be spelled differently by its callers.
+    let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    LOCKS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).entry(key).or_default().clone()
+}
+
 pub fn write(dir: &Path, installs: &[Install]) -> std::io::Result<()> {
     let installs: Vec<Install> = installs.iter().cloned().map(normalized).collect();
     let Some(latest) = installs.last() else {
@@ -86,14 +98,20 @@ pub fn write(dir: &Path, installs: &[Install]) -> std::io::Result<()> {
     };
     let mut doc = serde_json::to_value(latest)?;
     doc["installs"] = json!(&installs);
-    let tmp = dir.join(format!("{SIDECAR}.tmp"));
+    // A name of its own, so that two writers never share (and rename away) one temporary file.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = dir.join(format!("{SIDECAR}.{}.{}.tmp", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
     std::fs::write(&tmp, serde_json::to_vec_pretty(&doc)?)?;
-    std::fs::rename(&tmp, dir.join(SIDECAR))
+    std::fs::rename(&tmp, dir.join(SIDECAR)).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// Records `install` (replacing an earlier install of the same provider, model and variant) as
 /// the newest one.
 pub fn upsert(dir: &Path, install: Install) -> std::io::Result<()> {
+    let lock = folder_lock(dir);
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     let mut all = read(dir);
     all.retain(|i| !i.same_as(&install));
     all.push(install);
@@ -103,6 +121,8 @@ pub fn upsert(dir: &Path, install: Install) -> std::io::Result<()> {
 /// Forgets one install (see [`Install::same_as`]); returns what is left (the sidecar is deleted
 /// when nothing is).
 pub fn remove_install(dir: &Path, target: &Install) -> std::io::Result<Vec<Install>> {
+    let lock = folder_lock(dir);
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     let mut all = read(dir);
     all.retain(|i| !i.same_as(target));
     write(dir, &all)?;
@@ -150,6 +170,30 @@ mod tests {
         assert_eq!(read(d.path())[0].variant, "Q8_0");
         assert!(remove_install(d.path(), &install("Q8_0", "")).unwrap().is_empty());
         assert!(!d.path().join(SIDECAR).exists());
+    }
+
+    #[test]
+    fn concurrent_upserts_in_one_folder_lose_no_record_and_never_fail() {
+        for round in 0..40 {
+            let d = tempfile::tempdir().unwrap();
+            let barrier = Arc::new(std::sync::Barrier::new(4));
+            let handles: Vec<_> = ["Q2_K", "Q4_K_M", "Q6_K", "Q8_0"]
+                .into_iter()
+                .map(|v| {
+                    let (dir, b) = (d.path().to_path_buf(), barrier.clone());
+                    std::thread::spawn(move || {
+                        b.wait();
+                        upsert(&dir, install(v, &format!("{v}.gguf")))
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap().unwrap_or_else(|e| panic!("round {round}: {e}"));
+            }
+            assert_eq!(read(d.path()).len(), 4, "round {round}: a record was lost");
+            let stray: Vec<_> = std::fs::read_dir(d.path()).unwrap().flatten().map(|e| e.file_name()).collect();
+            assert_eq!(stray.len(), 1, "temporary files left behind: {stray:?}");
+        }
     }
 
     #[test]

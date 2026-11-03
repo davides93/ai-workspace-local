@@ -107,6 +107,23 @@ pub fn ftype_name(t: u64) -> Option<&'static str> {
     })
 }
 
+/// A reader that can skip bytes forward. On a `BufReader` the skip stays inside the buffer when
+/// it can (`seek_relative`): a plain `seek` throws the buffer away, which costs a syscall and a
+/// 64 KiB read for every string of a tokenizer vocabulary.
+pub trait SkipSeek: Read + Seek {
+    fn skip(&mut self, n: i64) -> std::io::Result<()> {
+        self.seek(SeekFrom::Current(n)).map(|_| ())
+    }
+}
+
+impl<R: Read + Seek> SkipSeek for BufReader<R> {
+    fn skip(&mut self, n: i64) -> std::io::Result<()> {
+        self.seek_relative(n)
+    }
+}
+
+impl<T: AsRef<[u8]>> SkipSeek for std::io::Cursor<T> {}
+
 fn rd<const N: usize, R: Read>(r: &mut R) -> std::io::Result<[u8; N]> {
     let mut b = [0u8; N];
     r.read_exact(&mut b)?;
@@ -142,7 +159,7 @@ fn scalar_size(t: u32) -> Option<i64> {
     })
 }
 
-fn value<R: Read + Seek>(r: &mut R, t: u32) -> std::io::Result<GgufValue> {
+fn value<R: SkipSeek>(r: &mut R, t: u32) -> std::io::Result<GgufValue> {
     Ok(match t {
         0 => GgufValue::U64(rd::<1, _>(r)?[0] as u64),
         1 => GgufValue::I64(rd::<1, _>(r)?[0] as i8 as i64),
@@ -161,13 +178,13 @@ fn value<R: Read + Seek>(r: &mut R, t: u32) -> std::io::Result<GgufValue> {
                     // A corrupted header can carry any length: never overflow, never seek backwards.
                     let bytes =
                         (sz as u64).checked_mul(len).filter(|b| *b <= i64::MAX as u64).ok_or_else(|| invalid("array length overflows"))?;
-                    r.seek(SeekFrom::Current(bytes as i64))?;
+                    r.skip(bytes as i64)?;
                 }
                 None if et == 8 => {
                     for _ in 0..len {
                         let n = u64le(r)?;
                         let n = i64::try_from(n).map_err(|_| invalid("string length overflows"))?;
-                        r.seek(SeekFrom::Current(n))?;
+                        r.skip(n)?;
                     }
                 }
                 None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "nested arrays unsupported")),
@@ -186,7 +203,7 @@ pub fn read_gguf(path: &Path) -> std::io::Result<GgufInfo> {
     read_gguf_from(&mut r)
 }
 
-pub fn read_gguf_from<R: Read + Seek>(r: &mut R) -> std::io::Result<GgufInfo> {
+pub fn read_gguf_from<R: SkipSeek>(r: &mut R) -> std::io::Result<GgufInfo> {
     if &rd::<4, _>(r)? != b"GGUF" {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not a GGUF file"));
     }
@@ -252,6 +269,48 @@ pub(crate) mod tests {
         assert_eq!(info.context_length(), Some(40960));
         assert_eq!(info.quant(), Some("Q4_K_M"));
         assert_eq!(info.metadata["tokenizer.ggml.tokens"], GgufValue::Array { elem_type: 8, len: 3 });
+    }
+
+    /// Counts the seeks that reach the underlying reader.
+    struct CountSeeks {
+        inner: Cursor<Vec<u8>>,
+        seeks: usize,
+    }
+    impl Read for CountSeeks {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.read(buf)
+        }
+    }
+    impl Seek for CountSeeks {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.seeks += 1;
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn skipping_a_big_string_array_keeps_the_read_buffer() {
+        // 100k short strings, as in a tokenizer vocabulary.
+        let mut b = b"GGUF".to_vec();
+        b.extend(3u32.to_le_bytes());
+        b.extend(0u64.to_le_bytes());
+        b.extend(2u64.to_le_bytes());
+        s(&mut b, "tokenizer.ggml.tokens");
+        b.extend(9u32.to_le_bytes());
+        b.extend(8u32.to_le_bytes());
+        b.extend(100_000u64.to_le_bytes());
+        for i in 0..100_000 {
+            s(&mut b, &format!("tok{}", i % 1000));
+        }
+        s(&mut b, "general.architecture");
+        b.extend(8u32.to_le_bytes());
+        s(&mut b, "llama");
+        let mut r = BufReader::with_capacity(1 << 16, CountSeeks { inner: Cursor::new(b), seeks: 0 });
+        let info = read_gguf_from(&mut r).unwrap();
+        assert_eq!(info.architecture(), Some("llama"));
+        assert_eq!(info.metadata["tokenizer.ggml.tokens"], GgufValue::Array { elem_type: 8, len: 100_000 });
+        // Before the fix every string cost a seek on the file (100k); now only the buffer refills do.
+        assert!(r.get_ref().seeks < 1000, "{} seeks reached the file", r.get_ref().seeks);
     }
 
     #[test]

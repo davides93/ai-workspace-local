@@ -49,6 +49,8 @@ struct Hf {
     claimed: Arc<HashMap<(String, String), u64>>,
     /// `(url path, authorization)` of every request.
     log: Arc<Mutex<Vec<Hit>>>,
+    /// While set, the Q8_0 file of acme/tiny-GGUF stalls after its first bytes.
+    stall: Arc<std::sync::atomic::AtomicBool>,
 }
 
 const GOOD_TOKEN: &str = "hf_good_token";
@@ -115,6 +117,11 @@ async fn hf_resolve(
 ) -> axum::response::Response {
     let repo = format!("{o}/{n}");
     f.log.lock().unwrap().push((format!("resolve {repo}/{file}"), auth(&h)));
+    if repo == "acme/tiny-GGUF" && file == "tiny-Q8_0.gguf" {
+        if let Some(r) = stall_q8_body(&f).await {
+            return r;
+        }
+    }
     match f.files.get(&(repo, file)) {
         Some(b) => {
             let start = h
@@ -159,7 +166,7 @@ async fn fake_hf() -> (String, Hf, Vec<u8>, Vec<u8>) {
     }
     let mut claimed = HashMap::new();
     claimed.insert(("acme/huge-GGUF".to_string(), "huge-Q4_K_M.gguf".to_string()), 1u64 << 50);
-    let hf = Hf { files: Arc::new(files), claimed: Arc::new(claimed), log: Default::default() };
+    let hf = Hf { files: Arc::new(files), claimed: Arc::new(claimed), log: Default::default(), stall: Default::default() };
     let app = Router::new()
         .route("/api/models", ax_get(hf_search))
         .route("/api/whoami-v2", ax_get(hf_whoami))
@@ -540,4 +547,123 @@ async fn catalog_pull_installs_the_repository_and_marks_the_card() {
     e.models();
     let (_, c) = dispatch(app, "GET", "/api/models/catalog", None).await;
     assert_eq!(c.as_array().unwrap().iter().find(|m| m["id"] == "qwen3-4b").unwrap()["installed"], true);
+}
+
+/// The Q8_0 file of `acme/tiny-GGUF` sends its first 1000 bytes and then stalls.
+async fn stall_q8_body(f: &Hf) -> Option<axum::response::Response> {
+    if !f.stall.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    let b = f.files.get(&("acme/tiny-GGUF".to_string(), "tiny-Q8_0.gguf".to_string()))?.clone();
+    let first = b[..1000].to_vec();
+    let stream = futures::stream::unfold(0u8, move |i| {
+        let first = first.clone();
+        async move {
+            if i == 0 {
+                Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(first)), 1))
+            } else {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                None
+            }
+        }
+    });
+    Some(axum::response::Response::builder().header("content-length", b.len()).body(axum::body::Body::from_stream(stream)).unwrap())
+}
+
+#[tokio::test]
+async fn deleting_a_variant_never_touches_another_variant_downloading_in_the_same_folder() {
+    let (app, e, data) = app().await;
+    let (base, fake, _q4, _q8) = fake_hf().await;
+    dispatch(app.clone(), "PUT", "/api/models/providers/hf/auth", Some(json!({"endpoint": base}))).await;
+    let pull = |v: &str| json!({"provider": "hf", "model": "acme/tiny-GGUF", "variant": v});
+    let (_, p) = dispatch(app.clone(), "POST", "/api/models/pull", Some(pull("Q4_K_M"))).await;
+    wait_download(&app, p["id"].as_str().unwrap(), "done").await;
+
+    // Q8_0 starts downloading into the same folder and stalls half way.
+    fake.stall.store(true, std::sync::atomic::Ordering::SeqCst);
+    let (_, p8) = dispatch(app.clone(), "POST", "/api/models/pull", Some(pull("Q8_0"))).await;
+    let id8 = p8["id"].as_str().unwrap().to_string();
+    let folder = data.path().join("models/hf/acme/tiny-GGUF");
+    let part = folder.join("tiny-Q8_0.gguf.part");
+    for _ in 0..200 {
+        if std::fs::metadata(&part).map(|m| m.len() > 0).unwrap_or(false) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(part.is_file(), "the Q8_0 download never started");
+
+    // Deleting the installed Q4_K_M is refused: the folder is in use.
+    let (_, models) = dispatch(app.clone(), "GET", "/api/models", None).await;
+    let q4 = models.as_array().unwrap().iter().find(|m| m["origin"] == "aiw").unwrap().clone();
+    let mid = q4["id"].as_str().unwrap().to_string();
+    let (st, body) = dispatch(app.clone(), "DELETE", &format!("/api/models/{mid}"), None).await;
+    assert_eq!(st, 409, "{body}");
+    assert!(body.to_string().contains("download"), "{body}");
+    assert!(folder.join("tiny-Q4_K_M.gguf").is_file() && part.is_file() && folder.join(".aiw-model.json").is_file());
+    let (_, list) = dispatch(app.clone(), "GET", "/api/models/downloads", None).await;
+    let d8 = list.as_array().unwrap().iter().find(|d| d["id"] == id8.as_str()).unwrap().clone();
+    assert!(matches!(d8["status"].as_str(), Some("running" | "verifying")), "{d8}");
+
+    // Once the other download is cancelled the delete goes through: only Q4_K_M's own files go,
+    // the folder stays because the `.part` of the cancelled job is still in it.
+    dispatch(app.clone(), "POST", &format!("/api/models/downloads/{id8}/cancel"), None).await;
+    assert_eq!(dispatch(app.clone(), "DELETE", &format!("/api/models/{mid}"), None).await.0, 204);
+    assert!(!folder.join("tiny-Q4_K_M.gguf").exists());
+    assert!(part.is_file(), "a resumable .part is not removed by deleting another variant");
+    // Clearing the cancelled job drops its orphan `.part` (and nothing else).
+    assert_eq!(dispatch(app.clone(), "DELETE", &format!("/api/models/downloads/{id8}"), None).await.0, 204);
+    assert!(!part.exists());
+    assert!(e.models().is_empty());
+}
+
+#[tokio::test]
+async fn deleting_a_sharded_model_without_a_record_removes_every_shard() {
+    let (app, _e, data) = app().await;
+    let models = data.path().join("models");
+    std::fs::create_dir_all(&models).unwrap();
+    for i in 1..=3 {
+        std::fs::write(models.join(format!("big-Q8_0-{i:05}-of-00003.gguf")), gguf(1000)).unwrap();
+    }
+    std::fs::write(models.join("big-Q8_0-00002-of-00003.gguf.part"), b"x").unwrap();
+    std::fs::write(models.join("other-Q4_K_M.gguf"), gguf(500)).unwrap();
+    let (_, list) = dispatch(app.clone(), "GET", "/api/models", None).await;
+    // The `.part` marks the set as still in progress: it is not listed until it is gone.
+    assert!(list.as_array().unwrap().iter().all(|m| m["id"] != "big-q8_0"), "{list}");
+    std::fs::remove_file(models.join("big-Q8_0-00002-of-00003.gguf.part")).unwrap();
+    let (_, list) = dispatch(app.clone(), "GET", "/api/models", None).await;
+    let big = list.as_array().unwrap().iter().find(|m| m["id"] == "big-q8_0").unwrap_or_else(|| panic!("{list}")).clone();
+    assert!(big["size_bytes"].as_u64().unwrap() >= 3000);
+    assert_eq!(dispatch(app.clone(), "DELETE", "/api/models/big-q8_0", None).await.0, 204);
+    let mut left: Vec<String> =
+        std::fs::read_dir(&models).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    left.sort();
+    assert_eq!(left, ["other-Q4_K_M.gguf"], "no orphan shard may stay behind");
+}
+
+#[tokio::test]
+async fn an_incomplete_shard_set_is_not_listed_as_a_model() {
+    let (app, _e, data) = app().await;
+    let models = data.path().join("models");
+    std::fs::create_dir_all(&models).unwrap();
+    std::fs::write(models.join("big-Q8_0-00001-of-00003.gguf"), gguf(1000)).unwrap();
+    std::fs::write(models.join("big-Q8_0-00002-of-00003.gguf.part"), b"x").unwrap();
+    let (_, list) = dispatch(app.clone(), "GET", "/api/models", None).await;
+    assert!(list.as_array().unwrap().is_empty(), "{list}");
+}
+
+#[tokio::test]
+async fn a_url_that_serves_a_web_page_is_refused() {
+    let (app, _e, _data) = app().await;
+    let page_app = Router::new().route(
+        "/blob/Qwen3-4B-Q4_K_M.gguf",
+        ax_get(|| async { ([("content-type", "text/html")], "<!doctype html><html><body>Sign in</body></html>") }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(l, page_app).await.unwrap() });
+    let url = format!("http://{addr}/blob/Qwen3-4B-Q4_K_M.gguf");
+    let (st, body) = dispatch(app, "POST", "/api/models/pull", Some(json!({"url": url}))).await;
+    assert_eq!(st, 400, "{body}");
+    assert!(body.to_string().contains("pagina web"), "{body}");
 }

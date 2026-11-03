@@ -199,17 +199,35 @@ fn split_data_url(url: &str) -> Option<(&str, &str)> {
     Some((mime, data))
 }
 
+/// Largest image (base64 characters) sent to the UI as an `aiw.image` event: events are kept in
+/// memory and in the database for the life of the run, so a huge screenshot must not go in.
+const MAX_IMAGE_B64: usize = 1_500_000;
+/// Most `aiw.image` events one tool result can produce.
+const MAX_IMAGES_PER_RESULT: usize = 4;
+
 /// One `aiw.image` event per image a tool returned, to emit right after its `TOOL_CALL_RESULT`.
 /// The model gets the same images as a message (see the loop); the UI shows them in the tool card.
-fn image_events(tool_call_id: &str, images: &[String]) -> Vec<AgEvent> {
-    images
-        .iter()
-        .filter_map(|url| split_data_url(url))
-        .map(|(mime, data)| AgEvent::Custom {
-            name: IMAGE_EVENT.into(),
-            value: json!({"toolCallId": tool_call_id, "mime": mime, "data": data}),
-        })
-        .collect()
+///
+/// Images over [`MAX_IMAGE_B64`] are left out, and so is everything past the first
+/// [`MAX_IMAGES_PER_RESULT`]; when something is left out the second value is a short note for the
+/// tool result text.
+fn image_events(tool_call_id: &str, images: &[String]) -> (Vec<AgEvent>, Option<String>) {
+    let mut events = Vec::new();
+    let mut skipped = 0usize;
+    for (mime, data) in images.iter().filter_map(|url| split_data_url(url)) {
+        if data.len() > MAX_IMAGE_B64 || events.len() >= MAX_IMAGES_PER_RESULT {
+            tracing::warn!(tool_call_id, bytes = data.len(), "image not sent to the UI (too large or over the per-result limit)");
+            skipped += 1;
+            continue;
+        }
+        events.push(AgEvent::Custom { name: IMAGE_EVENT.into(), value: json!({"toolCallId": tool_call_id, "mime": mime, "data": data}) });
+    }
+    let note = (skipped > 0).then(|| {
+        format!(
+            "(Immagini non mostrate nell'interfaccia: {skipped}, troppo grandi o oltre il limite di {MAX_IMAGES_PER_RESULT} per risultato.)"
+        )
+    });
+    (events, note)
 }
 
 /// A run cut short can end between an assistant message with tool calls and the results of some of
@@ -508,6 +526,11 @@ impl AgentRunner {
                     unresolved.push((tc.name.clone(), content.chars().take(300).collect()));
                 }
                 let content = if out.is_error { format!("ERRORE: {content}") } else { content };
+                let (img_events, img_note) = image_events(&tc.id, &out.images);
+                let content = match img_note {
+                    Some(note) => format!("{content}\n{note}"),
+                    None => content,
+                };
                 ev.emit(AgEvent::ToolCallResult { message_id: new_id("msg"), tool_call_id: tc.id.clone(), content: content.clone() });
                 messages.push(Msg::tool(&tc.id, &tc.name, &content));
                 outcome.new_messages.push(ChatMessage {
@@ -520,7 +543,7 @@ impl AgentRunner {
                     name: Some(tc.name.clone()),
                     created_at: now_rfc3339(),
                 });
-                for e in image_events(&tc.id, &out.images) {
+                for e in img_events {
                     ev.emit(e);
                 }
                 for img in out.images {
@@ -763,6 +786,11 @@ impl AgentRunner {
                     host.emit(&input.run_id, AgEvent::ToolCallEnd { tool_call_id: nested.id.clone() });
                     let (out, _) = Box::pin(Self::exec_tool(&nested, input, host.clone(), skills, state)).await;
                     let shown = if out.is_error { format!("ERRORE: {}", out.content) } else { out.content.clone() };
+                    let (img_events, img_note) = image_events(&nested.id, &out.images);
+                    let shown = match img_note {
+                        Some(note) => format!("{shown}\n{note}"),
+                        None => shown,
+                    };
                     host.emit(
                         &input.run_id,
                         AgEvent::ToolCallResult {
@@ -771,7 +799,7 @@ impl AgentRunner {
                             content: aiw_tools::truncate_middle(&shown, MAX_TOOL_OUTPUT),
                         },
                     );
-                    for e in image_events(&nested.id, &out.images) {
+                    for e in img_events {
                         host.emit(&input.run_id, e);
                     }
                     let _ = req.reply.send(if out.is_error { Err(out.content) } else { Ok(out.content) });
@@ -1030,5 +1058,44 @@ mod context_budget_tests {
         assert_eq!(effective_context(Some(16384), None), 16384);
         assert_eq!(effective_context(None, None), 8192);
         assert_eq!(effective_context(None, Some(4096)), 4096);
+    }
+}
+
+#[cfg(test)]
+mod image_event_tests {
+    use super::*;
+
+    fn png(n: usize) -> String {
+        format!("data:image/png;base64,{}", "A".repeat(n))
+    }
+
+    #[test]
+    fn small_images_all_become_events_without_a_note() {
+        let (events, note) = image_events("c1", &[png(10), "https://example.org/x.png".into(), png(20)]);
+        assert_eq!(events.len(), 2);
+        assert!(note.is_none());
+    }
+
+    #[test]
+    fn an_oversized_image_is_skipped_and_the_result_says_so() {
+        let (events, note) = image_events("c1", &[png(MAX_IMAGE_B64 + 1), png(MAX_IMAGE_B64), png(5)]);
+        // Exactly at the limit still goes; one character over does not.
+        assert_eq!(events.len(), 2);
+        let note = note.expect("a note for the skipped image");
+        assert!(note.contains('1') && note.contains("non mostrate"), "{note}");
+    }
+
+    #[test]
+    fn at_most_four_images_per_tool_result() {
+        let images: Vec<String> = (0..7).map(|_| png(100)).collect();
+        let (events, note) = image_events("c1", &images);
+        assert_eq!(events.len(), MAX_IMAGES_PER_RESULT);
+        assert!(note.unwrap().contains('3'));
+        // The cap counts what was sent, not what was skipped for size.
+        let mut mixed = vec![png(MAX_IMAGE_B64 + 1)];
+        mixed.extend((0..4).map(|_| png(100)));
+        let (events, note) = image_events("c1", &mixed);
+        assert_eq!(events.len(), 4);
+        assert!(note.unwrap().contains('1'));
     }
 }

@@ -9,7 +9,7 @@ use crate::sidecar::{self, Install, SidecarFile};
 use aiw_core::api::DownloadProgress;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use futures::StreamExt;
-use reqwest::header::{CONTENT_RANGE, LOCATION, RANGE};
+use reqwest::header::{CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_RANGE, LAST_MODIFIED, LOCATION, RANGE};
 use reqwest::{Response, StatusCode, Url};
 use sha2::{Digest, Sha256};
 use std::path::{Component, Path, PathBuf};
@@ -133,6 +133,77 @@ fn part_path(dest: &Path) -> PathBuf {
     let mut n = dest.file_name().map(|s| s.to_os_string()).unwrap_or_default();
     n.push(".part");
     dest.with_file_name(n)
+}
+
+/// Validators of the file a `.part` was started from, stored next to it (`<file>.part.meta`).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct PartMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    etag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_modified: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
+}
+
+impl PartMeta {
+    /// Whether this record vouches that a `.part` belongs to the file the server serves now
+    /// (`size` is the size announced for it, 0 when unknown).
+    fn vouches(&self, size: u64) -> bool {
+        if size > 0 && self.size.is_some_and(|s| s != size) {
+            return false;
+        }
+        self.etag.is_some() || self.last_modified.is_some() || (size > 0 && self.size == Some(size))
+    }
+
+    /// Value of `If-Range`: a strong ETag, else the date (a weak ETag cannot be used there).
+    fn if_range(&self) -> Option<String> {
+        self.etag.clone().filter(|e| !e.starts_with("W/")).or_else(|| self.last_modified.clone())
+    }
+}
+
+fn meta_path(part: &Path) -> PathBuf {
+    let mut n = part.file_name().map(|s| s.to_os_string()).unwrap_or_default();
+    n.push(".meta");
+    part.with_file_name(n)
+}
+
+/// Removes a `.part` and the validators stored next to it.
+fn remove_part_sync(part: &Path) {
+    let _ = std::fs::remove_file(part);
+    let _ = std::fs::remove_file(meta_path(part));
+}
+
+async fn remove_part(part: &Path) {
+    let _ = tokio::fs::remove_file(part).await;
+    let _ = tokio::fs::remove_file(meta_path(part)).await;
+}
+
+async fn read_meta(part: &Path) -> Option<PartMeta> {
+    serde_json::from_slice(&tokio::fs::read(meta_path(part)).await.ok()?).ok()
+}
+
+/// Whether the first bytes of a finished file say it is a model of the kind its extension claims.
+/// Only GGUF and safetensors can be told apart this way; any other file passes.
+fn magic_ok(name: &str, head: &[u8], size: u64) -> bool {
+    let l = name.to_ascii_lowercase();
+    if l.ends_with(".gguf") {
+        head.starts_with(b"GGUF")
+    } else if l.ends_with(".safetensors") {
+        // An 8-byte little-endian header length, then the JSON header.
+        let Some(len) = head.get(..8).and_then(|b| b.try_into().ok()).map(u64::from_le_bytes) else { return false };
+        head.get(8) == Some(&b'{') && len > 0 && len.saturating_add(8) <= size
+    } else {
+        true
+    }
+}
+
+fn is_html(resp: &Response) -> bool {
+    resp.headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_ascii_lowercase())
+        .is_some_and(|v| v.starts_with("text/html") || v.starts_with("application/xhtml"))
 }
 
 fn provider_label(p: &str) -> &'static str {
@@ -324,8 +395,23 @@ impl DownloadManager {
         if active(&items[pos].p.status) {
             return Err(Error::Conflict("il download è ancora in corso: annullalo prima di toglierlo dalla lista".into()));
         }
-        items.remove(pos);
+        let gone = items.remove(pos);
+        // A cancelled or failed job leaves `.part` files nobody will resume from this list:
+        // drop them, unless another job is writing the same file now.
+        for d in &gone.dests {
+            if !items.iter().any(|i| active(&i.p.status) && i.dests.contains(d)) {
+                remove_part_sync(&part_path(&self.inner.dir.join(d)));
+            }
+        }
         Ok(())
+    }
+
+    /// Whether a queued, running or verifying job writes below `folder` (an absolute path).
+    pub fn is_busy_in(&self, folder: &Path) -> bool {
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let (base, folder) = (canon(&self.inner.dir), canon(folder));
+        let items = self.inner.items.lock().unwrap();
+        items.iter().any(|i| active(&i.p.status) && i.dests.iter().any(|d| base.join(d).starts_with(&folder)))
     }
 
     async fn run(self, id: String, req: DownloadRequest, cancel: CancellationToken) {
@@ -481,12 +567,17 @@ impl DownloadManager {
             tokio::fs::create_dir_all(parent).await?;
         }
         let part = part_path(dest);
+        // Only consecutive failures without progress use up the retry budget.
         let mut attempt = 0;
         loop {
+            let before = file_len(&part).await;
             match self.try_file(id, req, index, tally, job, dest, &part, cancel).await {
                 Ok(r) => return Ok(r),
                 Err(FileErr::Fatal(e)) => return Err(e),
                 Err(FileErr::Retry(e)) => {
+                    if file_len(&part).await > before {
+                        attempt = 0;
+                    }
                     let Some(delay) = self.inner.opts.retry_delays.get(attempt).copied() else { return Err(e) };
                     attempt += 1;
                     tracing::warn!(url = %job.url, attempt, "download interrupted ({e}); retrying in {delay:?}");
@@ -517,11 +608,22 @@ impl DownloadManager {
             let _ = tokio::fs::remove_file(part).await;
             have = 0;
         }
+        // Without a checksum nothing else tells that the `.part` still belongs to the file the
+        // server has now: it must come with matching validators, or the download starts over.
+        let mut meta = None;
+        if have > 0 && job.sha256.is_none() {
+            meta = read_meta(part).await.filter(|m| m.vouches(job.size));
+            if meta.is_none() {
+                remove_part(part).await;
+                have = 0;
+            }
+        }
         // A `.part` that already has every byte needs no request at all.
         if have > 0 && job.size > 0 && have == job.size {
             return self.finish(id, job, &name, dest, part, have, None, cancel).await;
         }
-        let resp = self.request(req, job, (have > 0).then_some(have), cancel).await?;
+        let if_range = meta.as_ref().and_then(PartMeta::if_range);
+        let resp = self.request(req, job, (have > 0).then_some(have), if_range, cancel).await?;
         let status = resp.status();
         if status == StatusCode::RANGE_NOT_SATISFIABLE {
             let total = resp
@@ -535,22 +637,27 @@ impl DownloadManager {
                 return self.finish(id, job, &name, dest, part, have, None, cancel).await;
             }
             // The `.part` does not belong to this file any more: start over.
-            let _ = tokio::fs::remove_file(part).await;
+            remove_part(part).await;
             return Err(FileErr::Retry(Error::Runtime(
                 "il file parziale non corrisponde al file sul server (416): riparto da capo".into(),
             )));
         }
+        if is_html(&resp) {
+            return Err(FileErr::Fatal(Error::Runtime(format!(
+                "{name}: il server ha risposto con una pagina web (text/html) invece del file del modello: controlla che l'indirizzo punti direttamente al file"
+            ))));
+        }
         let range = resp.headers().get(CONTENT_RANGE).and_then(|v| v.to_str().ok()).and_then(parse_content_range);
         let resumed = status == StatusCode::PARTIAL_CONTENT && have > 0;
         if status == StatusCode::PARTIAL_CONTENT && range.map(|r| r.0) != Some(if resumed { have } else { 0 }) {
-            let _ = tokio::fs::remove_file(part).await;
+            remove_part(part).await;
             return Err(FileErr::Retry(Error::Runtime("risposta Range incoerente: riparto da capo".into())));
         }
         let start = if resumed { have } else { 0 };
         let file_total = range.and_then(|r| r.1).or_else(|| resp.content_length().map(|l| l + start));
         if let Some(t) = file_total {
             if job.size > 0 && t != job.size {
-                let _ = tokio::fs::remove_file(part).await;
+                remove_part(part).await;
                 return Err(FileErr::Fatal(Error::Runtime(format!(
                     "{name}: il server dichiara {t} byte invece dei {} attesi: il file potrebbe essere cambiato",
                     job.size
@@ -564,6 +671,10 @@ impl DownloadManager {
             self.modify(id, |p| p.total = total);
         }
         let expected = if job.size > 0 { Some(job.size) } else { file_total };
+        let validators = (!resumed).then(|| {
+            let h = |k| resp.headers().get(k).and_then(|v| v.to_str().ok()).map(String::from);
+            PartMeta { etag: h(ETAG), last_modified: h(LAST_MODIFIED), size: expected }
+        });
 
         let mut hasher = Sha256::new();
         let mut f = if resumed {
@@ -573,6 +684,9 @@ impl DownloadManager {
             self.modify(id, |p| p.status = "running".into());
             tokio::fs::OpenOptions::new().append(true).open(part).await.map_err(io_err)?
         } else {
+            if let Some(m) = &validators {
+                let _ = tokio::fs::write(meta_path(part), serde_json::to_vec(m).unwrap_or_default()).await;
+            }
             tokio::fs::OpenOptions::new().create(true).write(true).truncate(true).open(part).await.map_err(io_err)?
         };
         let mut w = tokio::io::BufWriter::with_capacity(1 << 20, &mut f);
@@ -625,7 +739,7 @@ impl DownloadManager {
                 return Err(FileErr::Retry(Error::Upstream(format!("download di {name} incompleto: ricevuti {written} byte su {exp}"))));
             }
             if written > exp {
-                let _ = tokio::fs::remove_file(part).await;
+                remove_part(part).await;
                 return Err(FileErr::Fatal(Error::Runtime(format!("{name}: ricevuti più byte del previsto ({written} su {exp})"))));
             }
         }
@@ -654,18 +768,34 @@ impl DownloadManager {
                 hex(&h.finalize())
             }
         };
-        if let Some(exp) = &job.sha256 {
-            if !exp.eq_ignore_ascii_case(&sha) {
-                let _ = tokio::fs::remove_file(part).await;
+        match &job.sha256 {
+            Some(exp) if !exp.eq_ignore_ascii_case(&sha) => {
+                remove_part(part).await;
                 return Err(FileErr::Fatal(Error::Runtime(format!(
                     "checksum sha256 non corrispondente per {name}: il file è stato scartato"
                 ))));
+            }
+            Some(_) => {}
+            // No checksum to trust: at least make sure it is not a web page or an error body.
+            None => {
+                let mut head = vec![0u8; 16];
+                let n = match tokio::fs::File::open(part).await {
+                    Ok(mut f) => f.read(&mut head).await.map_err(io_err)?,
+                    Err(e) => return Err(io_err(e)),
+                };
+                if !magic_ok(name, &head[..n], size) {
+                    remove_part(part).await;
+                    return Err(FileErr::Fatal(Error::Runtime(format!(
+                        "{name} non è un file di modello valido (l'intestazione non corrisponde al formato: forse è una pagina web o un messaggio di errore del server): il file è stato scartato"
+                    ))));
+                }
             }
         }
         if cfg!(windows) {
             let _ = tokio::fs::remove_file(dest).await;
         }
         tokio::fs::rename(part, dest).await.map_err(io_err)?;
+        let _ = tokio::fs::remove_file(meta_path(part)).await;
         self.modify(id, |p| p.status = "running".into());
         Ok((size, Some(sha)))
     }
@@ -676,6 +806,7 @@ impl DownloadManager {
         req: &DownloadRequest,
         job: &FileJob,
         range_from: Option<u64>,
+        if_range: Option<String>,
         cancel: &CancellationToken,
     ) -> std::result::Result<Response, FileErr> {
         let origin = Url::parse(&job.url).map_err(|_| FileErr::Fatal(Error::Invalid(format!("URL non valido: {}", job.url))))?;
@@ -690,6 +821,10 @@ impl DownloadManager {
             }
             if let Some(from) = range_from {
                 rb = rb.header(RANGE, format!("bytes={from}-"));
+                // Only the host that issued the validator can tell what it means.
+                if let (Some(v), true) = (&if_range, own_host) {
+                    rb = rb.header(IF_RANGE, v);
+                }
             }
             let resp = tokio::select! {
                 r = rb.send() => r.map_err(|e| FileErr::Retry(net_error(url.host_str().unwrap_or("il server"), &e)))?,
@@ -1325,6 +1460,276 @@ mod tests {
         }
         assert!(m.list().is_empty());
         assert!(m.enqueue(DownloadRequest { files: vec![], ..mk("m/a.gguf", "m") }).is_err());
+    }
+
+    /// Model-looking bytes: a GGUF magic followed by `n - 4` bytes of filler.
+    fn gguf_bytes(n: usize, seed: u8) -> Vec<u8> {
+        let mut b = b"GGUF".to_vec();
+        b.extend(data(n - 4, seed));
+        b
+    }
+
+    /// A job without checksum (a direct URL, or the catalog fallback).
+    fn job_no_sha(base: &str, path: &str, name: &str, size: usize, folder: &str) -> FileJob {
+        FileJob { url: format!("{base}{path}"), dest: PathBuf::from(folder).join(name), size: size as u64, sha256: None, headers: vec![] }
+    }
+
+    async fn serve_routes(app: Router) -> String {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_web_page_is_not_saved_as_a_model() {
+        let page = "<!doctype html><html><body>Accedi per continuare</body></html>";
+        let app = Router::new()
+            // Declares itself as HTML.
+            .route("/blob/page.gguf", get(move || async move { ([("content-type", "text/html; charset=utf-8")], page) }))
+            // Says nothing about its type, but the bytes are not a GGUF.
+            .route("/plain/page.gguf", get(move || async move { page }))
+            .route("/plain/ok.gguf", get(|| async { gguf_bytes(5000, 1) }));
+        let base = serve_routes(app).await;
+        let d = tempfile::tempdir().unwrap();
+        let m = manager(d.path());
+        for (path, size, needle) in
+            [("/blob/page.gguf", page.len(), "pagina web"), ("/plain/page.gguf", page.len(), "non è un file di modello")]
+        {
+            let p = m.enqueue(request("url", "u/a", vec![job_no_sha(&base, path, "page.gguf", size, "u/a")])).unwrap();
+            let p = wait_end(&m, &p.id).await;
+            assert_eq!(p.status, "error", "{path}");
+            assert!(p.error.as_deref().unwrap_or_default().contains(needle), "{path}: {:?}", p.error);
+            assert!(!d.path().join("u/a/page.gguf").exists(), "{path}: the page was kept as a model");
+            assert!(!d.path().join("u/a/page.gguf.part").exists(), "{path}: the bad file was not discarded");
+            assert!(sidecar::read(&d.path().join("u/a")).is_empty(), "{path}: an install was recorded");
+        }
+        // A real GGUF without checksum still installs.
+        let p = m.enqueue(request("url", "u/b", vec![job_no_sha(&base, "/plain/ok.gguf", "ok.gguf", 5000, "u/b")])).unwrap();
+        assert_eq!(wait_end(&m, &p.id).await.status, "done");
+    }
+
+    #[test]
+    fn magic_bytes_tell_gguf_and_safetensors_apart() {
+        assert!(magic_ok("m.gguf", b"GGUF\x03\0\0\0", 100));
+        assert!(!magic_ok("m.GGUF", b"<!doctype", 100));
+        assert!(!magic_ok("m.gguf", b"", 0));
+        let mut st = 10u64.to_le_bytes().to_vec();
+        st.push(b'{');
+        assert!(magic_ok("m.safetensors", &st, 18));
+        assert!(!magic_ok("m.safetensors", &st, 12), "the header would run past the end");
+        assert!(!magic_ok("m.safetensors", b"<!doctype html>", 100));
+        assert!(!magic_ok("m.safetensors", &st[..5], 100));
+        assert!(magic_ok("config.json", b"{}", 2), "other files are not checked");
+    }
+
+    #[tokio::test]
+    async fn the_retry_budget_counts_only_failures_without_progress() {
+        const SIZE: usize = 6 << 20;
+        let body = Arc::new(gguf_bytes(SIZE, 5));
+        // At most 1 MiB per connection, then the connection breaks: 5 cuts, each after real progress.
+        let b2 = body.clone();
+        let app = Router::new().route(
+            "/flaky.gguf",
+            get(move |h: HeaderMap| {
+                let b = b2.clone();
+                async move {
+                    let start = h
+                        .get("range")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.strip_prefix("bytes="))
+                        .and_then(|v| v.strip_suffix('-'))
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let end = (start + (1 << 20)).min(SIZE);
+                    let stream = futures::stream::iter(vec![
+                        Ok::<_, std::io::Error>(axum::body::Bytes::from(b[start..end].to_vec())),
+                        Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset")),
+                    ]);
+                    let r = Response::builder();
+                    let r = if start > 0 {
+                        r.status(206).header("content-range", format!("bytes {start}-{}/{SIZE}", SIZE - 1))
+                    } else {
+                        r.status(200)
+                    };
+                    r.header("content-length", SIZE - start).body(axum::body::Body::from_stream(stream)).unwrap()
+                }
+            }),
+        );
+        let base = serve_routes(app).await;
+        let d = tempfile::tempdir().unwrap();
+        let m = manager(d.path()); // 3 retries
+        let p = m.enqueue(request("url", "u/f", vec![job_no_sha(&base, "/flaky.gguf", "flaky.gguf", SIZE, "u/f")])).unwrap();
+        let p = wait_end(&m, &p.id).await;
+        // The last cut comes after the whole file was received: that is the "incomplete" case, retried too.
+        assert_eq!(p.status, "done", "{:?}", p.error);
+        assert_eq!(std::fs::read(d.path().join("u/f/flaky.gguf")).unwrap(), *body);
+    }
+
+    #[tokio::test]
+    async fn without_progress_the_retries_still_run_out() {
+        let app = Router::new().route("/down.gguf", get(|| async { StatusCode::SERVICE_UNAVAILABLE }));
+        let base = serve_routes(app).await;
+        let d = tempfile::tempdir().unwrap();
+        let m = manager(d.path());
+        let p = m.enqueue(request("url", "u/f", vec![job_no_sha(&base, "/down.gguf", "down.gguf", 100, "u/f")])).unwrap();
+        assert_eq!(wait_end(&m, &p.id).await.status, "error");
+    }
+
+    type RangeLog = Arc<Mutex<Vec<(Option<String>, Option<String>)>>>;
+
+    /// A server whose file has an ETag and honours `Range` with `If-Range`.
+    #[derive(Clone)]
+    struct Versioned {
+        body: Arc<Vec<u8>>,
+        etag: &'static str,
+        /// `(range, if-range)` of every request.
+        log: RangeLog,
+    }
+
+    async fn serve_versioned(v: Versioned) -> String {
+        let v2 = v.clone();
+        serve_routes(Router::new().route(
+            "/m.gguf",
+            get(move |h: HeaderMap| {
+                let v = v2.clone();
+                async move {
+                    let hv = |k: &str| h.get(k).and_then(|x| x.to_str().ok()).map(String::from);
+                    v.log.lock().unwrap().push((hv("range"), hv("if-range")));
+                    let start = hv("range")
+                        .and_then(|r| r.strip_prefix("bytes=").and_then(|r| r.strip_suffix('-')).and_then(|r| r.parse::<usize>().ok()))
+                        .filter(|_| hv("if-range").is_none_or(|e| e == v.etag));
+                    match start {
+                        Some(s) => (
+                            StatusCode::PARTIAL_CONTENT,
+                            [("etag", v.etag.to_string()), ("content-range", format!("bytes {s}-{}/{}", v.body.len() - 1, v.body.len()))],
+                            v.body[s..].to_vec(),
+                        )
+                            .into_response(),
+                        None => (StatusCode::OK, [("etag", v.etag.to_string())], v.body.to_vec()).into_response(),
+                    }
+                }
+            }),
+        ))
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_part_without_validators_is_not_resumed_when_no_checksum_is_known() {
+        let (v1, v2) = (gguf_bytes(10_000, 1), gguf_bytes(10_000, 2));
+        let log = Arc::new(Mutex::new(vec![]));
+        let base = serve_versioned(Versioned { body: Arc::new(v2.clone()), etag: "\"v2\"", log: log.clone() }).await;
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("u/m")).unwrap();
+        // Left by an older download of the same URL; nothing says which version it came from.
+        std::fs::write(d.path().join("u/m/m.gguf.part"), &v1[..4096]).unwrap();
+        let m = manager(d.path());
+        let p = m.enqueue(request("url", "u/m", vec![job_no_sha(&base, "/m.gguf", "m.gguf", 10_000, "u/m")])).unwrap();
+        assert_eq!(wait_end(&m, &p.id).await.status, "done");
+        assert_eq!(std::fs::read(d.path().join("u/m/m.gguf")).unwrap(), v2, "old prefix + new tail would be a corrupt file");
+        assert_eq!(*log.lock().unwrap(), [(None, None)], "started from zero with no Range");
+        assert!(!d.path().join("u/m/m.gguf.part.meta").exists(), "validators are dropped with the .part");
+    }
+
+    #[tokio::test]
+    async fn a_changed_file_is_refetched_through_if_range_and_an_unchanged_one_resumed() {
+        let (v1, v2) = (gguf_bytes(10_000, 1), gguf_bytes(10_000, 2));
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("u/m")).unwrap();
+        let part = |bytes: &[u8]| {
+            std::fs::write(d.path().join("u/m/m.gguf.part"), &bytes[..4096]).unwrap();
+            std::fs::write(d.path().join("u/m/m.gguf.part.meta"), br#"{"etag":"\"v1\"","size":10000}"#).unwrap();
+        };
+        let m = manager(d.path());
+
+        // Same size, new ETag: the server answers 200 with the whole new file.
+        part(&v1);
+        let log = Arc::new(Mutex::new(vec![]));
+        let base = serve_versioned(Versioned { body: Arc::new(v2.clone()), etag: "\"v2\"", log: log.clone() }).await;
+        let p = m.enqueue(request("url", "u/m", vec![job_no_sha(&base, "/m.gguf", "m.gguf", 10_000, "u/m")])).unwrap();
+        assert_eq!(wait_end(&m, &p.id).await.status, "done");
+        assert_eq!(std::fs::read(d.path().join("u/m/m.gguf")).unwrap(), v2);
+        assert_eq!(*log.lock().unwrap(), [(Some("bytes=4096-".to_string()), Some("\"v1\"".to_string()))]);
+
+        // Same ETag: resumed, and the result is the file.
+        std::fs::remove_file(d.path().join("u/m/m.gguf")).unwrap();
+        part(&v1);
+        let log = Arc::new(Mutex::new(vec![]));
+        let base = serve_versioned(Versioned { body: Arc::new(v1.clone()), etag: "\"v1\"", log: log.clone() }).await;
+        let mut req = request("url", "u/m", vec![job_no_sha(&base, "/m.gguf", "m.gguf", 10_000, "u/m")]);
+        req.variant = "again".into();
+        let p = m.enqueue(req).unwrap();
+        assert_eq!(wait_end(&m, &p.id).await.status, "done");
+        assert_eq!(std::fs::read(d.path().join("u/m/m.gguf")).unwrap(), v1);
+        assert_eq!(*log.lock().unwrap(), [(Some("bytes=4096-".to_string()), Some("\"v1\"".to_string()))]);
+    }
+
+    #[tokio::test]
+    async fn a_new_part_records_the_validators_of_the_server() {
+        let body = gguf_bytes(100_000, 3);
+        let b2 = body.clone();
+        // Sends the headers and then stalls: the `.part` and its record stay on disk.
+        let app = Router::new().route(
+            "/s.gguf",
+            get(move || {
+                let b = b2.clone();
+                async move {
+                    let stream = futures::stream::unfold(0u8, move |i| {
+                        let b = b.clone();
+                        async move {
+                            if i == 0 {
+                                Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(b[..1000].to_vec())), 1))
+                            } else {
+                                tokio::time::sleep(Duration::from_secs(3600)).await;
+                                None
+                            }
+                        }
+                    });
+                    Response::builder()
+                        .header("content-length", 100_000)
+                        .header("etag", "\"abc\"")
+                        .header("last-modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+                        .body(axum::body::Body::from_stream(stream))
+                        .unwrap()
+                }
+            }),
+        );
+        let base = serve_routes(app).await;
+        let d = tempfile::tempdir().unwrap();
+        let m = manager(d.path());
+        let p = m.enqueue(request("url", "u/s", vec![job_no_sha(&base, "/s.gguf", "s.gguf", 0, "u/s")])).unwrap();
+        for _ in 0..200 {
+            if d.path().join("u/s/s.gguf.part.meta").exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let meta: serde_json::Value = serde_json::from_slice(&std::fs::read(d.path().join("u/s/s.gguf.part.meta")).unwrap()).unwrap();
+        assert_eq!((meta["etag"].as_str(), meta["size"].as_u64()), (Some("\"abc\""), Some(100_000)));
+        assert_eq!(meta["last_modified"], "Wed, 21 Oct 2015 07:28:00 GMT");
+        // Cancel, then clear the job: its orphan `.part` and record go with it.
+        m.cancel(&p.id).unwrap();
+        assert!(d.path().join("u/s/s.gguf.part").exists(), "a cancelled job keeps its .part for a resume");
+        m.clear(&p.id).unwrap();
+        assert!(!d.path().join("u/s/s.gguf.part").exists());
+        assert!(!d.path().join("u/s/s.gguf.part.meta").exists());
+    }
+
+    #[tokio::test]
+    async fn busy_folders_are_reported_while_a_job_is_active() {
+        let app = Router::new().route("/stall", get(stall));
+        let base = serve_routes(app).await;
+        let d = tempfile::tempdir().unwrap();
+        let m = manager(d.path());
+        let folder = d.path().join("hf/acme/m");
+        assert!(!m.is_busy_in(&folder));
+        let j = FileJob { url: format!("{base}/stall"), dest: PathBuf::from("hf/acme/m/x.gguf"), size: 0, sha256: None, headers: vec![] };
+        let p = m.enqueue(request("hf", "hf/acme/m", vec![j])).unwrap();
+        assert!(m.is_busy_in(&folder));
+        assert!(m.is_busy_in(d.path()));
+        assert!(!m.is_busy_in(&d.path().join("hf/acme/other")));
+        m.cancel(&p.id).unwrap();
+        assert!(!m.is_busy_in(&folder));
     }
 
     #[test]
