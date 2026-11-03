@@ -8,7 +8,8 @@ use aiw_core::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Duration;
 
 /// Resolves a model id (as shown in the UI) to a file or directory path.
@@ -35,6 +36,10 @@ pub struct RuntimeRegistry {
     bin_dirs: Vec<PathBuf>,
     models_dir: PathBuf,
     resolver: RwLock<Option<ModelResolver>>,
+    /// Single-flight lock per runtime id: check / stop / start of a sidecar never interleave.
+    start_locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Chat requests in flight per sidecar runtime (see [`Tracked`]).
+    inflight: StdMutex<HashMap<String, Arc<AtomicUsize>>>,
 }
 
 impl RuntimeRegistry {
@@ -61,6 +66,8 @@ impl RuntimeRegistry {
             bin_dirs,
             models_dir,
             resolver: RwLock::new(None),
+            start_locks: StdMutex::new(HashMap::new()),
+            inflight: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -314,6 +321,33 @@ impl RuntimeRegistry {
     /// `OLLAMA_CONTEXT_LENGTH`…) for the process that is launched. A server that is already
     /// answering (started outside AIW) is reused as it is.
     pub async fn start_with(&self, id: &str, model: Option<String>, ctx: Option<u32>) -> Result<RuntimeInfo> {
+        let lock = self.start_lock(id);
+        let _guard = lock.lock().await;
+        // A healthy sidecar that already serves this model with enough context is reused: a
+        // second concurrent start must not spawn (and then kill) another process.
+        if self.supervisor.is_running(id).await {
+            if let Ok(m) = self.manifest(id) {
+                let (_, served) = self.supervisor.endpoint(id).await.unwrap_or_default();
+                let served_ctx = self.supervisor.served_ctx(id).await;
+                let single = m.launch.as_ref().map(launch_uses_model).unwrap_or(false);
+                if !needs_restart(single, m.ctx_setting().is_some(), model.as_deref(), served.as_deref(), ctx, served_ctx) {
+                    return self.refresh_one(id).await;
+                }
+            }
+        }
+        self.start_unlocked(id, model, ctx).await
+    }
+
+    fn start_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.start_locks.lock().unwrap().entry(id.to_string()).or_default().clone()
+    }
+
+    fn inflight_counter(&self, id: &str) -> Arc<AtomicUsize> {
+        self.inflight.lock().unwrap().entry(id.to_string()).or_default().clone()
+    }
+
+    /// The body of [`start_with`](Self::start_with); the caller holds the runtime's start lock.
+    async fn start_unlocked(&self, id: &str, model: Option<String>, ctx: Option<u32>) -> Result<RuntimeInfo> {
         let m = self.manifest(id)?;
         if !self.supports(&m) {
             return Err(Error::Unsupported(if m.supports_platform(&self.os) {
@@ -413,12 +447,30 @@ impl RuntimeRegistry {
         let timeout = Duration::from_secs(settings.get("timeout_s").and_then(|v| v.as_u64()).unwrap_or(900));
         let api_key = settings.get("api_key").and_then(|v| v.as_str()).map(String::from);
         let mut model_to_start = model.map(String::from);
+        // One start/stop/restart at a time per runtime: concurrent callers wait here and then
+        // find the sidecar the first one started.
+        let lock = self.start_lock(id);
+        let _guard = if m.kind == "sidecar" { Some(lock.lock().await) } else { None };
         if self.supervisor.is_running(id).await {
             let (ep, served) = self.supervisor.endpoint(id).await.unwrap_or_default();
             let served_ctx = self.supervisor.served_ctx(id).await;
             let single_model = m.launch.as_ref().map(launch_uses_model).unwrap_or(false);
-            if !needs_restart(single_model, m.ctx_setting().is_some(), model, served.as_deref(), ctx, served_ctx) {
-                return Ok(make_backend(&m, ep, api_key, timeout));
+            let supports_ctx = m.ctx_setting().is_some();
+            let mut restart = needs_restart(single_model, supports_ctx, model, served.as_deref(), ctx, served_ctx);
+            if restart && !needs_restart(single_model, supports_ctx, model, served.as_deref(), None, served_ctx) {
+                // Only the context grew. Restarting would cut the streams of the requests that
+                // are running right now: serve with the current context and say so.
+                let busy = self.inflight_counter(id).load(Ordering::SeqCst);
+                if busy > 0 {
+                    tracing::warn!(
+                        runtime = %id, busy, ?served_ctx, wanted = ?ctx,
+                        "context larger than the running sidecar's, but {busy} request(s) are in flight: not restarting"
+                    );
+                    restart = false;
+                }
+            }
+            if !restart {
+                return Ok(self.sidecar_backend(id, &m, ep, api_key, timeout).await);
             }
             // Different model or a larger context: stop it and take the start path below.
             model_to_start = model_to_start.or(served);
@@ -428,30 +480,133 @@ impl RuntimeRegistry {
             "remote" => {
                 let ep =
                     self.external_endpoint(&m, &settings).ok_or_else(|| Error::Invalid(format!("configura l'endpoint di {}", m.name)))?;
-                Ok(make_backend(&m, ep, api_key, timeout))
+                Ok(make_backend(&m, ep, api_key, timeout, None))
             }
             "sidecar" => {
                 if let Some(ep) = self.external_endpoint(&m, &settings) {
                     if self.probe_models(&ep, api_key.as_deref()).await.is_some() {
-                        return Ok(make_backend(&m, ep, api_key, timeout));
+                        return Ok(make_backend(&m, ep, api_key, timeout, None));
                     }
                 }
-                self.start_with(id, model_to_start, ctx).await?;
+                self.start_unlocked(id, model_to_start, ctx).await?;
                 let (ep, _) = self.supervisor.endpoint(id).await.ok_or_else(|| Error::Runtime(format!("{} non è partito", m.name)))?;
-                Ok(make_backend(&m, ep, api_key, timeout))
+                Ok(self.sidecar_backend(id, &m, ep, api_key, timeout).await)
             }
             _ => Err(Error::Unsupported(format!("{} richiede il plugin nativo dell'app", m.name))),
         }
     }
+
+    /// The backend for a sidecar AIW started: it sends the model name the server really serves
+    /// (see [`pick_served_name`]) and counts its in-flight requests.
+    async fn sidecar_backend(
+        &self,
+        id: &str,
+        m: &RuntimeManifest,
+        endpoint: String,
+        api_key: Option<String>,
+        timeout: Duration,
+    ) -> Arc<dyn ChatBackend> {
+        let mut served_name = None;
+        if m.api != "ollama" && m.launch.as_ref().is_some_and(launch_uses_model) {
+            let (_, model_id) = self.supervisor.endpoint(id).await.unwrap_or_default();
+            let path = self.supervisor.served_model_path(id).await.map(|p| p.display().to_string());
+            let ids = self.probe_models(&endpoint, api_key.as_deref()).await.unwrap_or_default();
+            served_name = pick_served_name(&ids, model_id.as_deref(), path.as_deref());
+        }
+        Arc::new(Tracked {
+            inner: make_backend(m, endpoint, api_key, timeout, served_name),
+            inflight: self.inflight_counter(id),
+            ctx: self.supervisor.served_ctx(id).await,
+        })
+    }
+}
+
+/// Counts the chat requests of a sidecar that are in flight (until their stream is dropped).
+struct Tracked {
+    inner: Arc<dyn ChatBackend>,
+    inflight: Arc<AtomicUsize>,
+    /// Context window the sidecar was launched with.
+    ctx: Option<u32>,
+}
+
+struct InflightGuard(Arc<AtomicUsize>);
+
+impl InflightGuard {
+    fn new(c: &Arc<AtomicUsize>) -> Self {
+        c.fetch_add(1, Ordering::SeqCst);
+        Self(c.clone())
+    }
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl ChatBackend for Tracked {
+    async fn list_models(&self) -> Result<Vec<String>> {
+        self.inner.list_models().await
+    }
+
+    async fn chat(&self, req: crate::types::ChatRequest, cancel: tokio_util::sync::CancellationToken) -> Result<crate::types::DeltaStream> {
+        use futures::StreamExt;
+        let guard = InflightGuard::new(&self.inflight);
+        let stream = self.inner.chat(req, cancel).await?;
+        Ok(stream
+            .map(move |d| {
+                let _held = &guard;
+                d
+            })
+            .boxed())
+    }
+
+    fn availability(&self) -> std::result::Result<(), String> {
+        self.inner.availability()
+    }
+
+    fn served_context(&self) -> Option<u32> {
+        self.ctx
+    }
+}
+
+/// The model name to put in chat requests for a single-model sidecar, `None` = keep the
+/// requested one. `ids` is what the server lists under `/v1/models`:
+/// - the profile's model id is listed: nothing to change;
+/// - the local path the server was launched with is listed: that is the served name (vLLM and
+///   SGLang without `--served-model-name`);
+/// - the server lists exactly one model: that one;
+/// - otherwise the local path itself, which is what `mlx_lm.server` accepts for the model it
+///   was started with (it would try to download any other name).
+pub fn pick_served_name(ids: &[String], model_id: Option<&str>, model_path: Option<&str>) -> Option<String> {
+    if model_id.is_some_and(|m| ids.iter().any(|i| i == m)) {
+        return None;
+    }
+    if let Some(p) = model_path {
+        if ids.iter().any(|i| i == p) {
+            return Some(p.to_string());
+        }
+    }
+    if let [only] = ids {
+        return Some(only.clone());
+    }
+    model_path.map(String::from)
 }
 
 /// The chat backend for a runtime endpoint: the OpenAI adapter, with the native Ollama bits
 /// (installed-model listing) for `api: "ollama"`.
-fn make_backend(m: &RuntimeManifest, endpoint: String, api_key: Option<String>, timeout: Duration) -> Arc<dyn ChatBackend> {
+fn make_backend(
+    m: &RuntimeManifest,
+    endpoint: String,
+    api_key: Option<String>,
+    timeout: Duration,
+    served_name: Option<String>,
+) -> Arc<dyn ChatBackend> {
     if m.api == "ollama" {
         Arc::new(OllamaBackend::new(endpoint, api_key, timeout))
     } else {
-        Arc::new(OpenAiBackend::new(endpoint, api_key, timeout))
+        Arc::new(OpenAiBackend::new(endpoint, api_key, timeout).with_model_override(served_name))
     }
 }
 
@@ -648,6 +803,21 @@ mod tests {
         assert!(needs_restart(false, true, None, None, Some(16384), None));
         // Runtimes without a context setting are never restarted for it.
         assert!(!needs_restart(true, false, Some("a"), Some("a"), Some(65536), None));
+    }
+
+    #[test]
+    fn served_name_follows_what_the_server_lists() {
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Listed under the profile id: unchanged.
+        assert_eq!(pick_served_name(&ids(&["qwen"]), Some("qwen"), Some("/m/qwen")), None);
+        // Listed under the path (vLLM without --served-model-name).
+        assert_eq!(pick_served_name(&ids(&["/m/qwen", "x"]), Some("qwen"), Some("/m/qwen")).as_deref(), Some("/m/qwen"));
+        // A single other name.
+        assert_eq!(pick_served_name(&ids(&["model.gguf"]), Some("qwen"), Some("/m/qwen.gguf")).as_deref(), Some("model.gguf"));
+        // mlx_lm lists its whole cache: the CLI path is what it accepts.
+        assert_eq!(pick_served_name(&ids(&["a", "b"]), Some("qwen"), Some("/m/qwen")).as_deref(), Some("/m/qwen"));
+        // Remote id, nothing to go on: unchanged.
+        assert_eq!(pick_served_name(&ids(&[]), Some("Qwen/Qwen3"), None), None);
     }
 
     #[test]

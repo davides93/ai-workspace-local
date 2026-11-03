@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const LOG_LINES: usize = 400;
+/// How long `stop` waits for a sidecar to exit after SIGTERM before killing it.
+const STOP_GRACE: Duration = Duration::from_secs(3);
 
 pub struct SidecarHandle {
     pub runtime_id: String,
@@ -21,7 +23,57 @@ pub struct SidecarHandle {
     pub ctx: Option<u32>,
     pub started_at: Instant,
     pub logs: Arc<Mutex<VecDeque<String>>>,
+    /// Local path the process was launched with (`{model}` / `{model_path}`), when the model
+    /// was resolved to one: single-model servers may serve the model under that name.
+    pub model_path: Option<PathBuf>,
+    /// Process id of the sidecar, also the id of its process group (Unix).
+    pid: Option<u32>,
     child: Option<tokio::process::Child>,
+}
+
+impl Drop for SidecarHandle {
+    fn drop(&mut self) {
+        // `kill_on_drop` only reaches the parent: take the workers down with it.
+        if self.child.is_some() {
+            if let Some(pid) = self.pid {
+                kill_group(pid, true);
+            }
+        }
+    }
+}
+
+/// Sends a termination signal to a sidecar and every process it spawned: on Unix the sidecar is
+/// its own process-group leader (`process_group(0)`), so the signal goes to the whole group;
+/// on Windows `taskkill /T` walks the process tree. `force`: SIGKILL / `/F` instead of SIGTERM.
+/// Best effort, errors are ignored (the group may already be gone).
+fn kill_group(pid: u32, force: bool) {
+    #[cfg(unix)]
+    {
+        let sig = if force { "KILL" } else { "TERM" };
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("kill -s {sig} -- -{pid} 2>/dev/null"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = force; // a console process tree does not reliably honour a polite request
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (pid, force);
+    }
 }
 
 #[derive(Default)]
@@ -118,6 +170,11 @@ impl Supervisor {
         self.running.lock().await.get(id).map(|h| (h.endpoint.clone(), h.model.clone()))
     }
 
+    /// Local path the running sidecar was launched with, if its model resolved to one.
+    pub async fn served_model_path(&self, id: &str) -> Option<PathBuf> {
+        self.running.lock().await.get(id).and_then(|h| h.model_path.clone())
+    }
+
     /// Context window the running sidecar was launched with (`None`: not running, or the
     /// runtime has no context setting).
     pub async fn served_ctx(&self, id: &str) -> Option<u32> {
@@ -159,6 +216,10 @@ impl Supervisor {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        // Own process group: `stop` signals the whole group, so workers spawned by the sidecar
+        // (vLLM engine cores, SGLang schedulers, `ollama runner`…) do not outlive it.
+        #[cfg(unix)]
+        cmd.process_group(0);
         for (k, v) in &plan.env {
             cmd.env(k, v);
         }
@@ -177,6 +238,7 @@ impl Supervisor {
         }
         tracing::info!(runtime = %id, binary = %spec.binary.display(), ?args, "starting sidecar");
         let mut child = cmd.spawn().map_err(|e| Error::Runtime(format!("impossibile avviare {}: {e}", spec.binary.display())))?;
+        let pid = child.id();
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         for pipe in [
             child.stdout.take().map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
@@ -201,6 +263,9 @@ impl Supervisor {
         loop {
             if !launch.detached {
                 if let Ok(Some(status)) = child.try_wait() {
+                    if let Some(pid) = pid {
+                        kill_group(pid, true);
+                    }
                     let tail: Vec<String> = logs.lock().unwrap().iter().rev().take(12).rev().cloned().collect();
                     return Err(Error::Runtime(format!("{} si è chiuso ({status}).\n{}", spec.manifest.name, tail.join("\n"))));
                 }
@@ -219,6 +284,9 @@ impl Supervisor {
                 }
             }
             if Instant::now() > deadline {
+                if let Some(pid) = pid {
+                    kill_group(pid, true);
+                }
                 let _ = child.kill().await;
                 return Err(Error::Runtime(format!("{} non è pronto dopo {} s", spec.manifest.name, launch.ready_timeout_s)));
             }
@@ -233,9 +301,14 @@ impl Supervisor {
             ctx: plan.ctx,
             started_at: Instant::now(),
             logs,
+            model_path: spec.model_path.clone(),
+            pid,
             child: if launch.detached { None } else { Some(child) },
         };
-        self.running.lock().await.insert(id, handle);
+        // Dropping a replaced handle (a concurrent start that slipped past the registry lock)
+        // kills its process group, so there is never more than one live process per runtime.
+        let old = self.running.lock().await.insert(id, handle);
+        drop(old);
         Ok(endpoint)
     }
 
@@ -244,8 +317,24 @@ impl Supervisor {
         match h {
             Some(mut h) => {
                 if let Some(mut c) = h.child.take() {
-                    let _ = c.start_kill();
-                    let _ = tokio::time::timeout(Duration::from_secs(5), c.wait()).await;
+                    match h.pid {
+                        Some(pid) => {
+                            // SIGTERM to the group, SIGKILL after a grace period; then a final
+                            // SIGKILL for workers that outlived the parent.
+                            kill_group(pid, false);
+                            if tokio::time::timeout(STOP_GRACE, c.wait()).await.is_err() {
+                                kill_group(pid, true);
+                                let _ = c.start_kill();
+                                let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
+                            } else {
+                                kill_group(pid, true);
+                            }
+                        }
+                        None => {
+                            let _ = c.start_kill();
+                            let _ = tokio::time::timeout(Duration::from_secs(5), c.wait()).await;
+                        }
+                    }
                 }
                 tracing::info!(runtime = %id, "sidecar stopped");
                 Ok(true)
@@ -396,6 +485,14 @@ mod tests {
         // TensorRT-LLM takes the model as its first positional argument.
         let (p, _) = plan("trtllm", json!({}), Some("llama-engine"), Some("/data/models/llama-engine"), None);
         assert_eq!(p.args[0], "/data/models/llama-engine");
+    }
+
+    #[test]
+    fn vllm_and_sglang_serve_the_model_under_its_profile_id() {
+        for id in ["vllm", "sglang"] {
+            let (_, args) = plan(id, json!({}), Some("qwen3-4b"), Some("/data/models/qwen3-4b"), None);
+            assert!(args.contains("--served-model-name qwen3-4b"), "{id}: {args}");
+        }
     }
 
     #[test]

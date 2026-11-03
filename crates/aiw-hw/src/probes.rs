@@ -291,6 +291,9 @@ struct Raw {
     mac_wired_limit: Option<String>,
     win_gpus: Option<String>,
     win_npus: Option<String>,
+    /// JSON of the 64-bit `HardwareInformation.qwMemorySize` registry values of the display
+    /// adapters (`Win32_VideoController.AdapterRAM` is a 32-bit field, capped at 4 GB).
+    win_gpu_qw: Option<String>,
 }
 
 fn collect(os: &str) -> Raw {
@@ -310,7 +313,7 @@ fn collect(os: &str) -> Raw {
         });
         let win = s.spawn(|| {
             if os != "windows" {
-                return (None, None);
+                return (None, None, None);
             }
             let gpus = run(
                 "powershell",
@@ -327,16 +330,49 @@ fn collect(os: &str) -> Raw {
                 &["-NoProfile", "-NonInteractive", "-Command", "Get-PnpDevice -PresentOnly | Where-Object { $_.Class -eq 'ComputeAccelerator' -or $_.FriendlyName -match 'NPU|Neural|AI Boost' } | Select-Object -ExpandProperty FriendlyName"],
                 T_WINDOWS,
             );
-            (gpus, npus)
+            let qw = run("powershell", &["-NoProfile", "-NonInteractive", "-Command", WIN_QW_SCRIPT], T_WINDOWS);
+            (gpus, npus, qw)
         });
         raw.nvidia_smi = nvidia.join().ok().flatten();
         raw.vulkaninfo = vulkan.join().ok().flatten();
         raw.rocm_smi = rocm_smi.join().ok().flatten();
         raw.rocminfo = rocminfo.join().ok().flatten();
         (raw.mac_brand, raw.mac_wired_limit) = mac.join().unwrap_or_default();
-        (raw.win_gpus, raw.win_npus) = win.join().unwrap_or_default();
+        (raw.win_gpus, raw.win_npus, raw.win_gpu_qw) = win.join().unwrap_or_default();
     });
     raw
+}
+
+/// Reads the 64-bit video memory size that display drivers publish in the registry.
+const WIN_QW_SCRIPT: &str = r"Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11cd-bfc1-08002be10318}' -ErrorAction SilentlyContinue | ForEach-Object { $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue; if ($p.'HardwareInformation.qwMemorySize') { [pscustomobject]@{ Name = $p.DriverDesc; Qw = [uint64]$p.'HardwareInformation.qwMemorySize' } } } | ConvertTo-Json -Compress";
+
+/// `Win32_VideoController.AdapterRAM` is an unsigned 32-bit value: a card with 4 GB or more is
+/// reported as (about) 4 GB, or wrapped to a small number.
+const ADAPTER_RAM_CAP: u64 = 0xFF00_0000;
+
+/// `(adapter name, bytes)` pairs from the JSON produced by [`WIN_QW_SCRIPT`] (one object, or an
+/// array when several adapters have the value).
+fn parse_qw_memory(json: &str) -> Vec<(String, u64)> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return vec![] };
+    let list = match v {
+        serde_json::Value::Array(a) => a,
+        o @ serde_json::Value::Object(_) => vec![o],
+        _ => vec![],
+    };
+    list.iter().filter_map(|e| Some((e["Name"].as_str()?.trim().to_string(), e["Qw"].as_u64().filter(|b| *b > 0)?))).collect()
+}
+
+/// Video memory of a Windows adapter in MB: `AdapterRAM`, unless that looks capped (4 GB or
+/// more, or missing) and the registry knows the real 64-bit size of an adapter with that name.
+fn windows_vram_mb(name: &str, adapter_ram: Option<u64>, qw: &[(String, u64)]) -> Option<u64> {
+    let mb = |b: u64| b / (1024 * 1024);
+    let reported = adapter_ram.filter(|b| *b > 0);
+    if reported.is_none_or(|b| b >= ADAPTER_RAM_CAP) {
+        if let Some((_, b)) = qw.iter().find(|(n, b)| n.eq_ignore_ascii_case(name.trim()) && *b >= reported.unwrap_or(0)) {
+            return Some(mb(*b));
+        }
+    }
+    reported.map(mb)
 }
 
 pub fn gpus_and_npus(os: &str, arch: &str, ram_mb: u64) -> Vec<Accelerator> {
@@ -403,9 +439,10 @@ pub fn gpus_and_npus(os: &str, arch: &str, ram_mb: u64) -> Vec<Accelerator> {
         "windows" => {
             if let Some(json) = raw.win_gpus.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()) {
                 let list = if json.is_array() { json.as_array().cloned().unwrap_or_default() } else { vec![json] };
+                let qw = raw.win_gpu_qw.as_deref().map(parse_qw_memory).unwrap_or_default();
                 for g in list {
                     let name = g["Name"].as_str().unwrap_or("GPU").to_string();
-                    let mem = g["AdapterRAM"].as_u64().map(|b| b / (1024 * 1024)).filter(|m| *m > 0);
+                    let mem = windows_vram_mb(&name, g["AdapterRAM"].as_u64(), &qw).filter(|m| *m > 0);
                     out.push(acc(
                         "directml",
                         name,
@@ -508,6 +545,25 @@ fn linux_drm_and_accel(out: &mut Vec<Accelerator>, rocm: &RocmProbe, vulkan_ok: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_vram_above_4gb_comes_from_the_64_bit_registry_value() {
+        let qw =
+            parse_qw_memory(r#"[{"Name":"NVIDIA GeForce RTX 4090","Qw":25757220864},{"Name":"Intel(R) UHD Graphics","Qw":134217728}]"#);
+        assert_eq!(qw.len(), 2);
+        // AdapterRAM capped just below 4 GB: the registry knows better.
+        assert_eq!(windows_vram_mb("NVIDIA GeForce RTX 4090", Some(4_293_918_720), &qw), Some(24564));
+        // Missing/wrapped to zero: same.
+        assert_eq!(windows_vram_mb("nvidia geforce rtx 4090", Some(0), &qw), Some(24564));
+        // A card below 4 GB keeps AdapterRAM; the registry value is not consulted.
+        assert_eq!(windows_vram_mb("Intel(R) UHD Graphics", Some(1_073_741_824), &qw), Some(1024));
+        // No registry entry for that name: the reported value stands.
+        assert_eq!(windows_vram_mb("Other GPU", Some(4_293_918_720), &qw), Some(4095));
+        assert_eq!(windows_vram_mb("Other GPU", None, &qw), None);
+        // A single object (one adapter has the value) and garbage input.
+        assert_eq!(parse_qw_memory(r#"{"Name":"X","Qw":8589934592}"#), vec![("X".to_string(), 8589934592)]);
+        assert!(parse_qw_memory("not json").is_empty());
+    }
 
     const VULKANINFO: &str = "\
 ==========
