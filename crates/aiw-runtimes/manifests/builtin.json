@@ -178,7 +178,17 @@
    "linux": "brew install llama.cpp · oppure release ggml-org/llama.cpp"
   },
   "homepage": "https://github.com/ggml-org/llama.cpp",
-  "api": "openai"
+  "api": "openai",
+  "installer": {
+   "macos": {
+    "kind": "brew",
+    "formula": "llama.cpp"
+   },
+   "linux": {
+    "kind": "brew",
+    "formula": "llama.cpp"
+   }
+  }
  },
  {
   "id": "ollama",
@@ -265,7 +275,17 @@
   "install": {
    "any": "https://ollama.com/download"
   },
-  "homepage": "https://ollama.com"
+  "homepage": "https://ollama.com",
+  "installer": {
+   "macos": {
+    "kind": "brew",
+    "formula": "ollama"
+   },
+   "linux": {
+    "kind": "brew",
+    "formula": "ollama"
+   }
+  }
  },
  {
   "id": "lmstudio",
@@ -738,7 +758,15 @@
    "macos": "pip install mlx-lm"
   },
   "homepage": "https://github.com/ml-explore/mlx-lm",
-  "api": "openai"
+  "api": "openai",
+  "installer": {
+   "macos": {
+    "kind": "pip",
+    "packages": [
+     "mlx-lm"
+    ]
+   }
+  }
  },
  {
   "id": "mlx-vlm",
@@ -799,7 +827,15 @@
    "macos": "pip install mlx-vlm"
   },
   "homepage": "https://github.com/Blaizzy/mlx-vlm",
-  "api": "openai"
+  "api": "openai",
+  "installer": {
+   "macos": {
+    "kind": "pip",
+    "packages": [
+     "mlx-vlm"
+    ]
+   }
+  }
  },
  {
   "id": "foundry-local",
