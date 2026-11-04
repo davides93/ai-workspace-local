@@ -9,6 +9,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Read-only by default; only the publish job (tags) gets write access to create the release.
+permissions:
+  contents: read
+
 jobs:
   desktop:
     name: Desktop ${{ matrix.name }}
@@ -73,21 +77,28 @@ jobs:
           # `llama-metal` (like `llama-cuda` and `llama-vulkan`) implies `llama-embedded`: the
           # in-process runtime is registered with any of them. GPU builds of Linux/Windows:
           # see the `daemon-gpu` job below.
-          - { os: ubuntu-22.04, features: llama-embedded }
-          - { os: windows-latest, features: llama-embedded }
-          - { os: macos-14, features: llama-metal }
+          - { os: ubuntu-22.04, features: llama-embedded, asset: aiw-linux-x64 }
+          - { os: windows-latest, features: llama-embedded, asset: aiw-windows-x64.exe }
+          - { os: macos-14, features: llama-metal, asset: aiw-macos-arm64 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p aiw-cli --features ${{ matrix.features }}
+      # Distinct file names per platform, so the artifacts can be merged without collisions.
+      - name: Name the binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          src=target/release/aiw
+          if [ "$RUNNER_OS" = "Windows" ]; then src=target/release/aiw.exe; fi
+          cp "$src" "dist/${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
           name: aiw-${{ matrix.os }}
-          path: |
-            target/release/aiw
-            target/release/aiw.exe
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
 
   # GPU builds of the daemon (embedded llama.cpp with Vulkan: NVIDIA, AMD and Intel GPUs from one
   # binary). Experimental and non-blocking: they need glslc and the Vulkan headers/loader on the
@@ -107,7 +118,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - { os: ubuntu-latest, asset: aiw-linux-x64-vulkan }
+          - { os: windows-latest, asset: aiw-windows-x64-vulkan.exe }
     runs-on: ${{ matrix.os }}
     env:
       # Pinned Vulkan SDK for Windows (LunarG installer). Bump together with the llama.cpp crate.
@@ -132,12 +145,17 @@ jobs:
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_SDK_VERSION"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_SDK_VERSION\Bin"
       - run: cargo build --release -p aiw-cli --features llama-vulkan
+      - name: Name the binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          src=target/release/aiw
+          if [ "$RUNNER_OS" = "Windows" ]; then src=target/release/aiw.exe; fi
+          cp "$src" "dist/${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
           name: aiw-${{ matrix.os }}-vulkan
-          path: |
-            target/release/aiw
-            target/release/aiw.exe
+          path: dist/${{ matrix.asset }}
           if-no-files-found: warn
 
   android:
@@ -200,3 +218,48 @@ jobs:
         run: |
           npx tauri ios init --ci
           npx tauri ios build --target aarch64-sim --ci || echo "::warning::iOS build richiede un team di firma per il dispositivo; la libreria Rust è stata compilata"
+
+  # Creates the GitHub (pre)release from the artifacts of the build jobs. Tags only.
+  # iOS is not in `needs`: it only compiles for the simulator and produces nothing installable.
+  # daemon-gpu is continue-on-error, so its (optional) artifacts are included when present.
+  publish:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [desktop, daemon, android, daemon-gpu]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: aiw-*
+          merge-multiple: true
+      - name: Rename and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          ver="${tag#v}"
+          mkdir -p release
+          # Desktop bundles keep the bundler names (spaces become underscores: GitHub rewrites them anyway).
+          while IFS= read -r f; do
+            b="$(basename "$f")"
+            case "$b" in
+              aiw-linux-*|aiw-windows-*|aiw-macos-*) cp "$f" "release/aiw-${ver}-${b#aiw-}" ;;
+              *.apk) cp "$f" "release/aiw-${ver}-android-arm64-unsigned.apk" ;;
+              *) cp "$f" "release/${b// /_}" ;;
+            esac
+          done < <(find artifacts -type f | sort)
+          ls -l release
+          test -n "$(ls -A release)"
+          (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: AI Workspace Local ${{ github.ref_name }}
+          body_path: docs/release-notes/${{ github.ref_name }}.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: release/*

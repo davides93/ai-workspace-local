@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-agent"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "aiw-runtimes",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-cli"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "aiw-engine",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-core"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-desktop"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "aiw-engine",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-engine"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-agent",
  "aiw-core",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-hw"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "libc",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-models"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "aiw-hw",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-runtimes"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "async-trait",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-server"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "aiw-engine",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-tools"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "aiw-winsandbox",
@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-winsandbox"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "aiw-workflow"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "async-trait",
@@ -5367,7 +5367,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-aiw-native"
-version = "0.1.0"
+version = "0.4.0-beta.1"
 dependencies = [
  "aiw-core",
  "aiw-runtimes",
