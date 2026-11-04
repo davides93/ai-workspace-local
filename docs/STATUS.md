@@ -21,13 +21,13 @@ e ciò che il codice faceva davvero, soprattutto in tre punti:
 3. **Sicurezza dell'API locale**: CORS permissivo e richieste da loopback senza token permettevano
    a qualunque pagina web di registrare hook o server MCP stdio, cioè di eseguire comandi.
 
-La v0.4 chiude questi tre punti e rifà la UI. Test Rust: da 82 a 345. Test UI: da 0 a 591 (Vitest),
+La v0.4 chiude questi tre punti e rifà la UI. Test Rust: da 82 a 348. Test UI: da 0 a 591 (Vitest),
 più uno smoke test Playwright (29 rotte × 2 larghezze × 2 temi).
 
-Dopo la bozza sono entrati quattro giri di correzioni, descritti nel §2.8: difetti emersi dal giro
+Dopo la bozza sono entrati cinque giri di correzioni, descritti nel §2.8: difetti emersi dal giro
 end to end di `aiw serve` con la UI reale, poi una revisione avversariale del codice Rust (sicurezza,
-agent loop, inferenza, model hub). La revisione ha confermato 32 difetti su 46 segnalati; ne restano
-aperti due, elencati nei limiti noti (§2.9).
+agent loop, inferenza, model hub). La revisione ha confermato 32 difetti su 46 segnalati; gli ultimi due (SEC-03 e SEC-05) sono
+chiusi dal quinto giro.
 
 ## 2. Copertura per layer
 
@@ -155,12 +155,10 @@ Non costruiti: Windows arm64, Linux arm64, Android x86_64/armv7.
 | Revisione dell'agent loop | prompt bloccati da hook non inviati al modello; conferme ritirate e stop distinto dal rifiuto; un run per sessione; eliminazione della sessione che ferma il run; 409 per agente o profilo mancanti; run interrotti segnati falliti all'avvio; profilo di ripiego del gateway |
 | Revisione dell'inferenza | vLLM e SGLang servono il modello con l'id del profilo (`--served-model-name`) e il backend usa il nome che il sidecar elenca in `/v1/models` (mlx-lm con un percorso locale); un solo avvio per runtime anche con richieste concorrenti; lo stop termina l'intero gruppo di processi del sidecar; nessun riavvio per un contesto più grande mentre altre richieste sono in corso; budget di compattazione = minimo tra contesto del profilo e contesto servito; memoria unificata senza doppio conteggio della RAM; VRAM oltre 4 GB su Windows dal valore a 64 bit del registro |
 | Revisione del model hub | nessuna eliminazione mentre un'altra variante della stessa cartella si scarica (409) e niente più `remove_dir_all`; pagine HTML rifiutate e magic byte GGUF/safetensors verificati; installazioni in corso o fallite non elencate come modelli; eliminazione dell'intero set di shard e pulizia dei `.part` orfani; ripresa con `If-Range` e validatori salvati; retry azzerati quando il download avanza; sidecar con lock per cartella; lettura degli header GGUF senza seek inutili; immagini degli eventi limitate a 1,5 MB e 4 per risultato |
+| Chiusura dei limiti di rete (SEC-03, SEC-05) | la policy di rete del browser si applica a ogni richiesta (documenti, XHR/fetch, iframe, script, immagini, WebSocket, target figli) con `Fetch.enable`/`Fetch.requestPaused` e `failRequest BlockedByClient` (verdetto con timeout, mai richieste appese), oltre al controllo dopo la navigazione; dietro un proxy HTTP(S) (rispettando `NO_PROXY`) `web_fetch` blocca IP letterali e `localhost`, richiede indirizzi pubblici se il nome si risolve in locale e rifiuta i nomi non risolvibili salvo `network.allow_domains`. Resta la finestra del DNS rebinding tra verifica e connessione di Chrome |
 
 ### 2.9 Limiti noti
 
-- La policy di rete del browser è verificata dopo la navigazione, non per ogni richiesta: serve
-  l'intercettazione CDP `Fetch`.
-- La protezione SSRF è più debole dietro un proxy HTTP, perché la risoluzione DNS la fa il proxy.
 - La rete della shell è aperta di default e `~/.aiw` è leggibile dentro la sandbox.
 - I server MCP stdio girano fuori dalla sandbox.
 - Esiste un solo token API condiviso, senza revoca.

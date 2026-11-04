@@ -31,25 +31,79 @@ pub async fn check_url(url: &str, ctx: &ToolContext) -> Result<reqwest::Url> {
 
 /// [`check_url`] plus the vetted addresses, resolving names with the system resolver.
 pub async fn vet_url(url: &str, ctx: &ToolContext) -> Result<Vetted> {
-    vet_url_with(url, ctx, system_resolve, proxy_configured()).await
+    let via_proxy = reqwest::Url::parse(url).is_ok_and(|u| proxy_applies(&u));
+    vet_url_with(url, ctx, system_resolve, via_proxy).await
 }
 
-async fn system_resolve(host: String, port: u16) -> std::io::Result<Vec<IpAddr>> {
+pub(crate) async fn system_resolve(host: String, port: u16) -> std::io::Result<Vec<IpAddr>> {
     let found = tokio::time::timeout(Duration::from_secs(8), tokio::net::lookup_host((host.as_str(), port)))
         .await
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout DNS"))??;
     Ok(found.map(|s| s.ip()).collect())
 }
 
-/// Is an HTTP(S) proxy configured in the environment? Then the proxy resolves host names itself.
-fn proxy_configured() -> bool {
-    ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
-        .iter()
-        .any(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty()))
+/// Will an HTTP(S) proxy from the environment carry the request to `u`? Then the proxy resolves
+/// the host name itself and the connection cannot be pinned to the addresses checked here.
+pub(crate) fn proxy_applies(u: &reqwest::Url) -> bool {
+    proxy_applies_with(u, |k| std::env::var(k).ok())
 }
 
-/// `via_proxy`: a proxy will resolve the host name, so a lookup that fails here is not fatal.
-async fn vet_url_with<R, F>(url: &str, ctx: &ToolContext, resolve: R, via_proxy: bool) -> Result<Vetted>
+/// [`proxy_applies`] with the environment injected: `HTTPS_PROXY` for https, `HTTP_PROXY` for http,
+/// `ALL_PROXY` for both, minus the hosts listed in `NO_PROXY` (`*`, names and their subdomains,
+/// IP addresses, CIDR ranges; an optional `:port` is ignored).
+pub(crate) fn proxy_applies_with(u: &reqwest::Url, env: impl Fn(&str) -> Option<String>) -> bool {
+    let get = |names: &[&str]| names.iter().find_map(|k| env(k).filter(|v| !v.trim().is_empty()));
+    let configured = match u.scheme() {
+        "https" => get(&["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]),
+        _ => get(&["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]),
+    };
+    if configured.is_none() {
+        return false;
+    }
+    let Some(host) = u.host_str() else { return true };
+    let host = host.to_lowercase();
+    let host = host.trim_start_matches('[').trim_end_matches(']').trim_end_matches('.');
+    let host_ip = host.parse::<IpAddr>().ok();
+    let no_proxy = get(&["NO_PROXY", "no_proxy"]).unwrap_or_default();
+    !no_proxy.split(',').map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty()).any(|e| no_proxy_entry_matches(&e, host, host_ip))
+}
+
+fn no_proxy_entry_matches(entry: &str, host: &str, host_ip: Option<IpAddr>) -> bool {
+    if entry == "*" {
+        return true;
+    }
+    if let Some((base, bits)) = entry.split_once('/') {
+        let (Ok(base), Ok(bits), Some(ip)) = (base.trim_matches(['[', ']']).parse::<IpAddr>(), bits.parse::<u32>(), host_ip) else {
+            return false;
+        };
+        let (a, b, width) = match (base, ip) {
+            (IpAddr::V4(a), IpAddr::V4(b)) => (u32::from(a) as u128, u32::from(b) as u128, 32),
+            (IpAddr::V6(a), IpAddr::V6(b)) => (u128::from(a), u128::from(b), 128),
+            _ => return false,
+        };
+        if bits > width {
+            return false;
+        }
+        let mask = if bits == 0 { 0 } else { (!0u128 << (128 - bits)) >> (128 - width) };
+        return (a & mask) == (b & mask);
+    }
+    // Drop a trailing `:port` (but not the colons of an IPv6 literal).
+    let entry = match entry.rsplit_once(':') {
+        Some((h, p)) if !h.contains(':') && p.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => entry,
+    };
+    let entry = entry.trim_matches(['[', ']']);
+    if let (Ok(e), Some(ip)) = (entry.parse::<IpAddr>(), host_ip) {
+        return e == ip;
+    }
+    let entry = entry.trim_start_matches("*.").trim_start_matches('.');
+    !entry.is_empty() && (host == entry || host.ends_with(&format!(".{entry}")))
+}
+
+/// `via_proxy`: a proxy will resolve the host name, so the connection cannot be pinned to the
+/// addresses checked here. A name that does not resolve locally then only goes through when the
+/// operator vouched for it with `network.allow_domains`.
+pub(crate) async fn vet_url_with<R, F>(url: &str, ctx: &ToolContext, resolve: R, via_proxy: bool) -> Result<Vetted>
 where
     R: Fn(String, u16) -> F,
     F: Future<Output = std::io::Result<Vec<IpAddr>>>,
@@ -78,8 +132,18 @@ where
     let port = u.port_or_known_default().unwrap_or(80);
     let ips = match resolve(name.to_string(), port).await {
         Ok(ips) if !ips.is_empty() => ips,
-        // A proxy that resolves names on its own is the only reason to go on without an answer.
-        _ if via_proxy => return Ok(Vetted { url: u, addrs: vec![] }),
+        // Behind a proxy a name we cannot resolve is not verifiable: only an explicit allowlist
+        // (checked above: the host matches it) lets it through.
+        _ if via_proxy => {
+            return if ctx.allow_domains.is_empty() {
+                Err(Error::Denied(format!(
+                    "{host} non è verificabile: è attivo un proxy HTTP(S), che risolve i nomi da sé, e il nome non si risolve in locale. \
+                     Per consentirlo aggiungi il dominio a network.allow_domains oppure escludilo dal proxy con NO_PROXY"
+                )))
+            } else {
+                Ok(Vetted { url: u, addrs: vec![] })
+            };
+        }
         Ok(_) => return Err(Error::Runtime(format!("impossibile risolvere {host}"))),
         Err(e) => return Err(Error::Runtime(format!("impossibile risolvere {host}: {e}"))),
     };
@@ -468,9 +532,63 @@ mod tests {
         // Without a proxy to resolve for us, a name we cannot resolve must not go through...
         assert!(matches!(vet_url_with("https://nxdomain.example/", &ctx, fail, false).await, Err(Error::Runtime(_))));
         assert!(matches!(vet_url_with("https://nxdomain.example/", &ctx, empty, false).await, Err(Error::Runtime(_))));
-        // ...with one, the proxy does the resolving and the request goes to it unpinned.
-        let via = vet_url_with("https://nxdomain.example/", &ctx, fail, true).await.unwrap();
+        // ...with one, a name we cannot resolve is not verifiable: refused with an explanation...
+        let r = vet_url_with("https://nxdomain.example/", &ctx, fail, true).await;
+        assert!(matches!(r, Err(Error::Denied(ref m)) if m.contains("proxy") && m.contains("allow_domains")), "{r:?}");
+        assert!(matches!(vet_url_with("https://nxdomain.example/", &ctx, empty, true).await, Err(Error::Denied(_))));
+        // ...unless the operator listed the domain: the proxy then resolves it, unpinned.
+        let mut listed = ctx.clone();
+        listed.allow_domains = vec!["example".into()];
+        let via = vet_url_with("https://nxdomain.example/", &listed, fail, true).await.unwrap();
         assert!(via.addrs.is_empty());
+        // The allowlist is not a way around the other checks.
+        assert!(matches!(
+            vet_url_with("https://nxdomain.example/", &listed, |_: String, _: u16| async { Ok(vec![ip("10.0.0.1")]) }, true).await,
+            Err(Error::Denied(_))
+        ));
+        // Literal IPs and localhost names are refused behind a proxy too.
+        for u in ["http://127.0.0.1/", "http://[::1]/", "http://169.254.169.254/", "http://localhost/", "http://x.localhost/"] {
+            assert!(matches!(vet_url_with(u, &ctx, fail, true).await, Err(Error::Denied(_))), "{u}");
+        }
+    }
+
+    #[test]
+    fn proxy_detection_respects_scheme_and_no_proxy() {
+        let env =
+            |pairs: &'static [(&'static str, &'static str)]| move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string());
+        let u = |s: &str| reqwest::Url::parse(s).unwrap();
+        assert!(!proxy_applies_with(&u("https://a.example/"), env(&[])));
+        assert!(!proxy_applies_with(&u("https://a.example/"), env(&[("HTTPS_PROXY", "  ")])));
+        assert!(proxy_applies_with(&u("https://a.example/"), env(&[("HTTPS_PROXY", "http://p:3128")])));
+        assert!(proxy_applies_with(&u("https://a.example/"), env(&[("https_proxy", "http://p:3128")])));
+        // Scheme-specific variables.
+        assert!(!proxy_applies_with(&u("http://a.example/"), env(&[("HTTPS_PROXY", "http://p:3128")])));
+        assert!(!proxy_applies_with(&u("https://a.example/"), env(&[("HTTP_PROXY", "http://p:3128")])));
+        assert!(proxy_applies_with(&u("http://a.example/"), env(&[("HTTP_PROXY", "http://p:3128")])));
+        assert!(proxy_applies_with(&u("http://a.example/"), env(&[("ALL_PROXY", "socks5://p:1080")])));
+        // NO_PROXY.
+        let p = |np: &'static str| -> bool {
+            let pairs: &'static [(&str, &str)] = Box::leak(Box::new([("HTTPS_PROXY", "http://p:3128"), ("NO_PROXY", np)]));
+            proxy_applies_with(&u("https://api.corp.example/"), env(pairs))
+        };
+        assert!(!p("*"));
+        assert!(!p("corp.example"));
+        assert!(!p(".corp.example"));
+        assert!(!p("localhost, *.corp.example"));
+        assert!(!p("api.corp.example:443"));
+        assert!(!p("example")); // suffix of the host: a domain-wide bypass
+        assert!(p("xample"));
+        assert!(p("orp.example"));
+        assert!(p("other.example,10.0.0.0/8"));
+        let ip_url = |np: &'static str, url: &str| {
+            let pairs: &'static [(&str, &str)] = Box::leak(Box::new([("HTTPS_PROXY", "http://p:3128"), ("NO_PROXY", np)]));
+            proxy_applies_with(&u(url), env(pairs))
+        };
+        assert!(!ip_url("10.0.0.0/8", "https://10.1.2.3/"));
+        assert!(ip_url("10.0.0.0/8", "https://11.1.2.3/"));
+        assert!(!ip_url("192.168.1.5", "https://192.168.1.5/"));
+        assert!(!ip_url("fd00::/8", "https://[fd00::1]/"));
+        assert!(ip_url("10.0.0.0/8", "https://a.example/"));
     }
 
     /// Minimal HTTP server: `handler(path)` returns the raw response for each request.
