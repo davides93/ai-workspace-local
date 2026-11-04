@@ -50,6 +50,9 @@ pub fn run() {
             let native = app.state::<tauri_plugin_aiw_native::NativeLlm<tauri::Wry>>();
             match native.availability() {
                 Ok(list) => {
+                    for rt in list.iter().filter(|r| !r.available) {
+                        tracing::info!("native runtime {} not available: {}", rt.id, rt.detail.as_deref().unwrap_or("-"));
+                    }
                     for rt in list.into_iter().filter(|r| r.available) {
                         let bridge: Arc<dyn tauri_plugin_aiw_native::NativeGenerate> = Arc::new(NativeHandle(app.handle().clone()));
                         engine
@@ -115,9 +118,10 @@ impl tauri_plugin_aiw_native::NativeGenerate for NativeHandle {
     fn generate(
         &self,
         args: tauri_plugin_aiw_native::GenerateArgs,
+        cancel: tokio_util::sync::CancellationToken,
         on_event: Box<dyn Fn(tauri_plugin_aiw_native::NativeEvent) + Send + Sync>,
     ) -> aiw_core::Result<()> {
         let native = self.0.state::<tauri_plugin_aiw_native::NativeLlm<tauri::Wry>>();
-        tauri_plugin_aiw_native::NativeGenerate::generate(native.inner(), args, on_event)
+        tauri_plugin_aiw_native::NativeGenerate::generate(native.inner(), args, cancel, on_event)
     }
 }
