@@ -1,0 +1,26 @@
+[package]
+name = "aiw-agent"
+description = "Agent loop: streaming tool calling, policy engine, hooks, skills, sub-agents, context compaction (AG-UI events)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aiw-core.workspace = true
+aiw-runtimes.workspace = true
+aiw-tools.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+globset.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+# Code mode: hermetic embedded scripting (no I/O of its own).
+rhai = { version = "1.27", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"

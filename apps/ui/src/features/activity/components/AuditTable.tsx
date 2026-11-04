@@ -1,0 +1,63 @@
+import type { ReactNode } from "react";
+import { Link } from "../../../app/router";
+import { formatDateTime } from "../../../shared/lib/format";
+import { chatPathForRun } from "../../../shared/lib/runIndex";
+import { Icon, Pill } from "../../../shared/ui";
+import type { AuditEntry } from "../../../shared/api/types";
+import { ACTOR_LABEL, decisionInfo } from "../model/filter";
+
+function RunCell({ runId }: { runId?: string }) {
+  if (!runId) return <>—</>;
+  const to = chatPathForRun(runId);
+  const label = <span className="act-run-id" title={runId}>{runId}</span>;
+  return to ? (
+    <Link to={to} className="act-run-link" title="Apri la sessione di questo run">
+      {label}
+      <Icon name="forward" size={12} />
+      <span className="sr-only">Apri la sessione di questo run</span>
+    </Link>
+  ) : label;
+}
+
+/**
+ * The audit rows as a table. On phones every row becomes a small card (the header row is hidden and
+ * each cell carries its label), so nothing scrolls sideways.
+ */
+export function AuditTable({ rows, empty }: { rows: AuditEntry[]; empty: ReactNode }) {
+  return (
+    <div className="table-wrap act-wrap">
+      <table className="data act-table" aria-label="Audit trail">
+        <thead>
+          <tr>
+            <th scope="col">Quando</th>
+            <th scope="col">Attore</th>
+            <th scope="col">Azione</th>
+            <th scope="col">Decisione</th>
+            <th scope="col">Dettaglio</th>
+            <th scope="col">Run</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((a) => {
+            const d = a.decision ? decisionInfo(a.decision) : null;
+            return (
+              <tr key={a.id}>
+                <td data-label="Quando" className="num act-when"><time dateTime={a.ts}>{formatDateTime(a.ts)}</time></td>
+                <td data-label="Attore">{ACTOR_LABEL[a.actor] ?? a.actor}</td>
+                <td data-label="Azione" className="mono act-action">{a.tool ? `${a.action}:${a.tool}` : a.action}</td>
+                <td data-label="Decisione">{d ? <Pill tone={d.tone}>{d.label}</Pill> : <span className="faint">—</span>}</td>
+                <td data-label="Dettaglio" className="mono text-xs act-detail">{a.detail || "—"}</td>
+                <td data-label="Run" className="mono text-xs faint"><RunCell runId={a.run_id} /></td>
+              </tr>
+            );
+          })}
+          {rows.length === 0 && (
+            <tr className="act-empty-row">
+              <td colSpan={6} className="table-empty">{empty}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}

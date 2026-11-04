@@ -1,0 +1,32 @@
+[package]
+name = "aiw-cli"
+description = "`aiw` — headless daemon and command line for AI Workspace Local"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "aiw"
+path = "src/main.rs"
+
+[features]
+default = []
+computer-use = ["aiw-engine/computer-use"]
+llama-embedded = ["aiw-engine/llama-embedded"]
+# Each GPU backend implies `aiw-engine/llama-embedded` (see aiw-engine/Cargo.toml), so the
+# in-process runtime is registered; `llama-embedded` is listed here too to make that explicit.
+llama-metal = ["llama-embedded", "aiw-engine/llama-metal"]
+llama-cuda = ["llama-embedded", "aiw-engine/llama-cuda"]
+llama-vulkan = ["llama-embedded", "aiw-engine/llama-vulkan"]
+
+[dependencies]
+aiw-core.workspace = true
+aiw-engine.workspace = true
+aiw-models.workspace = true
+aiw-server.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

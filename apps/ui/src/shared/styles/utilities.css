@@ -1,0 +1,24 @@
+/* Single-purpose helpers. They replace inline `style={{…}}` for layout, spacing and type. */
+.grow { flex: 1; min-width: 0; }
+.min-w-0 { min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block { display: block; }
+.inline-flex { display: inline-flex; }
+.dir-rtl { direction: rtl; }
+.maxw-full { max-width: 100%; }
+.maxw-55 { max-width: 55%; }
+
+.row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.row.nowrap { flex-wrap: nowrap; }
+.row-between { justify-content: space-between; }
+.row-baseline { align-items: baseline; gap: 14px; }
+.stack { display: flex; flex-direction: column; gap: var(--space-2); }
+.stack-sm { gap: 6px; }
+.stack-lg { gap: var(--space-4); }
+
+.ml-auto { margin-left: auto; }
+.mb-3 { margin-bottom: var(--space-3); }
+.mt-3 { margin-top: var(--space-3); }
+
+.text-xs { font-size: var(--fs-xs); }
+.text-sm { font-size: var(--fs-sm); }

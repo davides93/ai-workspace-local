@@ -1,0 +1,21 @@
+[package]
+name = "aiw-workflow"
+description = "Workflow engine: templated steps (tool, agent, llm, approval, condition) and cron/interval/file triggers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aiw-core.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+cron.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

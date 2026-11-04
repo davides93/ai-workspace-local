@@ -1,0 +1,143 @@
+/* Modelli: the model hub. Design tokens only (shared/styles/tokens.css); every class here starts with mh-. */
+
+/* ---------- Toolbars, counters, notes ---------- */
+.mh-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); }
+.mh-toolbar .field { min-width: 9rem; }
+.mh-toolbar .mh-search { flex: 1 1 16rem; }
+/* Same height as the text inputs, so the labels of the row line up. */
+.mh-toolbar .seg button { padding-block: 8px; }
+.mh-count { margin: 0; font-size: var(--fs-sm); color: var(--fg-faint); }
+.mh-more { justify-content: space-between; }
+.mh-note { margin: 0; font-size: var(--fs-xs); color: var(--fg-muted); }
+.mh-path { overflow-wrap: anywhere; }
+.field .mh-reset { display: flex; align-items: center; gap: 6px; margin-top: var(--space-1); font-size: var(--fs-xs); font-weight: 400; color: var(--fg-muted); cursor: pointer; }
+.field .mh-reset input { accent-color: var(--accent); }
+
+/* ---------- Cards: installed, search results, catalog ---------- */
+.mh-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 21rem), 1fr)); align-items: stretch; }
+.mh-card {
+  position: relative; display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); min-width: 0;
+}
+/* Status strip of the instrument module: the fit for this device says its state before any text does. */
+.mh-card[data-fit]::before { content: ""; position: absolute; inset: 12px auto 12px 0; width: 3px; border-radius: 0 3px 3px 0; background: var(--line-strong); }
+.mh-card[data-fit="great"]::before { background: var(--ok); }
+.mh-card[data-fit="ok"]::before { background: var(--info); }
+.mh-card[data-fit="tight"]::before { background: var(--warn); }
+.mh-card[data-fit="no"]::before { background: var(--crit); }
+.mh-card-head { display: flex; align-items: flex-start; gap: var(--space-3); }
+.mh-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.mh-title h3 { font-size: 1.02rem; font-weight: 650; }
+.mh-desc {
+  font-size: var(--fs-sm); color: var(--fg-muted);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.mh-card-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: auto; padding-top: var(--space-1); }
+.mh-meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); }
+.mh-readonly { display: inline-flex; align-items: center; gap: 5px; }
+.mh-repo { max-width: 55%; }
+
+/* Instrument-style readouts */
+.mh-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr)); gap: var(--space-2) var(--space-3); margin: 0;
+  padding: var(--space-2) var(--space-3); background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.mh-stats.wide { grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); }
+.mh-stat { min-width: 0; }
+.mh-stat dt { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--fg-faint); font-weight: 600; }
+.mh-stat dd { margin: 0; font-family: var(--font-mono); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.mh-stat dd small { display: block; font-family: var(--font-body); font-size: var(--fs-xs); color: var(--fg-faint); }
+
+.mh-runtimes { display: flex; flex-direction: column; gap: var(--space-1); }
+.mh-chip-off { background: transparent; border-style: dashed; color: var(--fg-faint); }
+.chip .led { margin-right: 1px; }
+
+/* ---------- Messages ---------- */
+.mh-alert {
+  display: flex; align-items: flex-start; gap: var(--space-2); flex-wrap: wrap; margin: 0; padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--crit); border-radius: var(--r-md); background: var(--crit-soft); color: var(--fg); font-size: var(--fs-sm);
+}
+.mh-alert > svg { flex: none; margin-top: 3px; color: var(--crit); }
+.mh-alert.warn { border-color: var(--warn); background: var(--warn-soft); }
+.mh-alert.warn > svg { color: var(--warn); }
+.mh-notice { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+.mh-notice > svg { flex: none; margin-top: 2px; color: var(--info); }
+.mh-trust { display: flex; align-items: flex-start; gap: var(--space-2); }
+.mh-trust > svg { flex: none; margin-top: 2px; }
+
+/* ---------- Provider picker and bar ---------- */
+.mh-providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr)); gap: var(--space-2); }
+.mh-provider {
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); padding: var(--space-3); text-align: left;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--fg); cursor: pointer; min-width: 0;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.mh-provider:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.mh-provider[aria-checked="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.mh-provider-name { display: flex; align-items: center; gap: var(--space-2); font-family: var(--font-display); font-weight: 650; }
+.mh-provider[aria-checked="true"] .mh-provider-name svg { color: var(--accent-ink); }
+.mh-provider-bar {
+  display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--space-4); padding: var(--space-3) var(--space-4);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.mh-provider-bar > .grow { flex: 1 1 18rem; }
+.mh-provider-desc { font-size: var(--fs-xs); color: var(--fg-muted); line-height: 1.45; }
+.mh-provider[aria-checked="true"] .mh-provider-desc { color: var(--fg); }
+/* On wide screens the description lives in the cards; the bar keeps notes, link and settings (and disappears when it has none). */
+.mh-bar-desc { display: none; }
+.mh-provider-bar.thin { display: none; }
+
+/* ---------- Variants drawer ---------- */
+.mh-variants { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.mh-variant {
+  display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); min-width: 0;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.mh-variant[data-recommended] { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
+.mh-variant-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); flex-wrap: wrap; }
+.mh-variant-head b { min-width: 0; }
+.mh-badges { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.mh-variant-meta { margin: 0; font-size: var(--fs-sm); }
+.mh-variant-action { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+.mh-variant-progress { display: flex; flex-direction: column; gap: var(--space-1); }
+.mh-files summary { cursor: pointer; font-size: var(--fs-xs); color: var(--fg-muted); }
+.mh-files ul { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-xs); }
+.mh-files li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--space-2); align-items: center; }
+
+/* ---------- Direct URL form ---------- */
+.mh-url-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+
+/* ---------- Downloads ---------- */
+.mh-jobs { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 26rem), 1fr)); align-items: start; }
+.mh-job {
+  display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); min-width: 0;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+}
+.mh-job[data-status="running"], .mh-job[data-status="verifying"] { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.mh-job[data-status="error"] { border-color: var(--crit); }
+.mh-job-head { display: flex; align-items: center; gap: var(--space-3); }
+.mh-job-head > svg { flex: none; color: var(--fg-muted); }
+.mh-job-head h3 { font-size: var(--fs-md); font-weight: 600; }
+.mh-job-stats { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: var(--fs-xs); color: var(--fg-muted); }
+.mh-job-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-1); }
+
+/* Compact "in download" strip above the other tabs */
+.mh-strip { padding: var(--space-3) var(--space-4); background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r-md); }
+.mh-strip-head { display: flex; align-items: center; gap: var(--space-2); }
+.mh-strip-head h2 { font-size: var(--fs-md); }
+.mh-strip-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.mh-strip-list li { display: grid; grid-template-columns: auto minmax(0, 15rem) minmax(4rem, 1fr) auto; gap: var(--space-3); align-items: center; font-size: var(--fs-sm); }
+
+/* ---------- Narrow screens ---------- */
+@media (max-width: 760px) {
+  .mh-providers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mh-provider .chips, .mh-provider-desc { display: none; }
+  .mh-bar-desc { display: block; }
+  .mh-provider-bar.thin { display: flex; }
+  .mh-url-pair { grid-template-columns: minmax(0, 1fr); }
+  .mh-strip-list li { grid-template-columns: auto minmax(0, 1fr); gap: var(--space-1) var(--space-2); }
+  .mh-strip-list .meter, .mh-strip-list .mh-strip-stats { grid-column: 1 / -1; }
+  .mh-toolbar .field { flex: 1 1 8rem; }
+  .mh-toolbar .mh-search { flex-basis: 100%; }
+  .mh-repo { max-width: 100%; margin-left: 0; }
+}

@@ -1,0 +1,6 @@
+/* Devices: hardware profile and mesh. Most layout comes from the shared .device-hero / .mesh-grid / .qr classes. Tokens only. */
+.dev-qr-note { padding: var(--space-2); }
+.dev-tiers { list-style: none; margin: 0; padding: 0; }
+.dev-tiers li[aria-current="true"] { font-weight: 600; }
+.dev-tiers .tier-chip { flex: none; }
+.dev-list { list-style: none; margin: 0; padding: 0; }

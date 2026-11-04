@@ -1,0 +1,90 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/aiw-core",
+  "crates/aiw-hw",
+  "crates/aiw-runtimes",
+  "crates/aiw-models",
+  "crates/aiw-tools",
+  "crates/aiw-agent",
+  "crates/aiw-workflow",
+  "crates/aiw-engine",
+  "crates/aiw-server",
+  "crates/aiw-cli",
+  "crates/aiw-winsandbox",
+  "apps/desktop/src-tauri",
+]
+# The Tauri shell needs WebKitGTK/WebView2/WKWebView system libraries; keep it out of the
+# default build so `cargo build` / `cargo test` work on headless machines and CI runners.
+default-members = [
+  "crates/aiw-core",
+  "crates/aiw-hw",
+  "crates/aiw-runtimes",
+  "crates/aiw-models",
+  "crates/aiw-tools",
+  "crates/aiw-agent",
+  "crates/aiw-workflow",
+  "crates/aiw-engine",
+  "crates/aiw-server",
+  "crates/aiw-cli",
+  "crates/aiw-winsandbox",
+]
+
+[workspace.package]
+version = "0.4.0-beta.1"
+edition = "2021"
+rust-version = "1.85"
+repository = "https://github.com/davides93/ai-workspace-local"
+
+[workspace.dependencies]
+aiw-core = { path = "crates/aiw-core" }
+aiw-hw = { path = "crates/aiw-hw" }
+aiw-runtimes = { path = "crates/aiw-runtimes" }
+aiw-winsandbox = { path = "crates/aiw-winsandbox" }
+aiw-models = { path = "crates/aiw-models" }
+aiw-tools = { path = "crates/aiw-tools", default-features = false }
+aiw-agent = { path = "crates/aiw-agent" }
+aiw-workflow = { path = "crates/aiw-workflow" }
+aiw-engine = { path = "crates/aiw-engine", default-features = false }
+aiw-server = { path = "crates/aiw-server" }
+
+anyhow = "1"
+async-trait = "0.1"
+axum = "0.8"
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+cron = "0.15"
+dirs = "6"
+futures = "0.3"
+globset = "0.4"
+ignore = "0.4"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "rustls-tls-native-roots", "rustls-tls-webpki-roots", "http2"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+sysinfo = "0.37"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-tungstenite = "0.26"
+tokio-util = "0.7"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "v7"] }
+which = "7"
+
+# llama.cpp is C++ built by CMake: keep it optimised even in dev builds.
+[profile.dev.package.llama-cpp-sys-2]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

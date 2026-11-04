@@ -1,0 +1,21 @@
+[package]
+name = "aiw-hw"
+description = "Hardware probe: CPU features, memory, GPUs (CUDA/ROCm/Metal/Vulkan/DirectML), NPUs → DeviceProfile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aiw-core.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+# sysinfo does not build for iOS (no proc_pidinfo); iOS uses sysctl directly.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+sysinfo.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

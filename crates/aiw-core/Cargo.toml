@@ -1,0 +1,18 @@
+[package]
+name = "aiw-core"
+description = "Shared types, AG-UI events, settings schemas and layered configuration for AI Workspace Local"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+dirs.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

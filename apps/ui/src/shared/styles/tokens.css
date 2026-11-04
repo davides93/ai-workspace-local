@@ -1,0 +1,122 @@
+/* AI Workspace Local — design tokens
+   Layout concept: an instrument rack. A fixed left rail of "modules" (or a bottom bar on phones),
+   a working surface in the middle, and an inspector that reads like a device status panel.
+   Accent = amber status LED. Neutrals = slate with a slight green bias.
+
+   Themes: light is the base; dark is ONE block keyed on [data-theme="dark"]. The theme module
+   (shared/lib/theme.ts) always resolves "system" to light or dark and writes it to <html>, so no
+   second copy of the palette is needed for prefers-color-scheme.
+
+   Contrast (WCAG AA, checked by tokens.test.ts): --fg-faint, --fg-muted and every status color on
+   its -soft background are >= 4.5:1 in both themes. */
+:root {
+  color-scheme: light;
+
+  --bg: #f3f4f1;
+  --surface: #ffffff;
+  --surface-2: #ebede8;
+  --surface-3: #e1e4dd;
+  --line: #d6dad2;
+  --line-strong: #b9bfb5;
+  --fg: #171a18;
+  --fg-muted: #4c544d;
+  --fg-faint: #5f675f;
+  --accent: #c77700;
+  --accent-ink: #8a4f00;
+  --accent-soft: #fbe8c8;
+  --on-accent: #1d1200;
+  --ok: #1a6f43;
+  --ok-soft: #dcefe3;
+  --warn: #8a5800;
+  --warn-soft: #f8ebcf;
+  --crit: #b3261e;
+  --crit-soft: #f6dcd9;
+  --on-crit: #ffffff;
+  --info: #2c5e8a;
+  --info-soft: #dce8f3;
+  --code-bg: #f0f1ec;
+  --scrim: rgb(10 12 10 / 0.42);
+  --shadow: 0 1px 2px rgb(20 24 20 / 0.06), 0 8px 24px rgb(20 24 20 / 0.08);
+
+  /* Type */
+  --font-display: "Bricolage Grotesque", "Segoe UI Variable Display", "SF Pro Display", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.9375rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.5rem;
+  --fs-2xl: 2rem;
+
+  /* Spacing scale (4px base) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-7: 2rem;
+  --space-8: 2.5rem;
+
+  /* Radii */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+
+  /* Stacking: content < inspector < banner < overlay < palette < toast */
+  --z-inspector: 30;
+  --z-banner: 35;
+  --z-overlay: 40;
+  --z-palette: 50;
+  --z-toast: 60;
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Layout */
+  --rail-w: 232px;
+  --inspector-w: 312px;
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #131617;
+  --surface: #1a1e1f;
+  --surface-2: #212628;
+  --surface-3: #2a3032;
+  --line: #2e3436;
+  --line-strong: #434b4d;
+  --fg: #e7ebe6;
+  --fg-muted: #a1aaa3;
+  --fg-faint: #939d95;
+  --accent: #f2a93b;
+  --accent-ink: #f6bd66;
+  --accent-soft: #3a2a10;
+  --on-accent: #1d1200;
+  --ok: #4cc38a;
+  --ok-soft: #173326;
+  --warn: #e8b04a;
+  --warn-soft: #3a2c10;
+  --crit: #f2786e;
+  --crit-soft: #3d1c19;
+  --on-crit: #1d0a08;
+  --info: #79acd9;
+  --info-soft: #182a3a;
+  --code-bg: #101314;
+  --scrim: rgb(0 0 0 / 0.6);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 10px 30px rgb(0 0 0 / 0.35);
+}
+
+/* First paint before the theme module runs: a dark OS must not flash white. */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    color-scheme: dark;
+    background: #131617;
+  }
+}

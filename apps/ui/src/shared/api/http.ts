@@ -1,0 +1,235 @@
+import { safeStorage, serverOrigin, storeToken } from "./tokens";
+import type { Transport, TransportCapabilities } from "./transport";
+import type {
+  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
+  ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
+  ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
+  PolicyRule, HookConfig, VoiceStatus, Transcript,
+} from "./types";
+
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+const enc = encodeURIComponent;
+
+/** Builds `?a=1&b=2`, skipping undefined and empty values. */
+export function queryString(params: Record<string, string | number | undefined | null>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+/** Body of POST /api/models/pull for the string form (id of a curated catalog entry). */
+export function pullBody(req: string | PullRequest): PullRequest {
+  return typeof req === "string" ? { id: req } : req;
+}
+
+/** Body of PUT /api/models/providers/{id}/auth: an absent field is left unchanged, `token: null` removes the token. */
+export function authBody(token: string | null | undefined, endpoint?: string): { token?: string | null; endpoint?: string } {
+  const body: { token?: string | null; endpoint?: string } = {};
+  if (token !== undefined) body.token = token;
+  if (endpoint !== undefined) body.endpoint = endpoint;
+  return body;
+}
+
+/** REST + SSE carrier for `aiw serve` (same routes the Tauri shell dispatches in-process). */
+export class HttpTransport implements Transport {
+  readonly kind: "http" | "tauri" = "http";
+  readonly capabilities: TransportCapabilities = { demo: false, native: false, pairing: true };
+
+  /** `origin` = origin of `base`, used to store the token obtained by pairing for this server only. */
+  constructor(protected base: string, protected token: string | null, protected origin: string | null = null) {}
+
+  protected async req<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    const res = await fetch(`${this.base}/api${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let msg = text;
+      try {
+        msg = JSON.parse(text).error ?? text;
+      } catch {
+        /* plain text error */
+      }
+      throw new ApiError(res.status, msg || res.statusText);
+    }
+    return (text ? JSON.parse(text) : undefined) as T;
+  }
+
+  system = () => this.req<SystemInfo>("GET", "/system");
+  kill = () => this.req<void>("POST", "/kill");
+
+  runtimes = () => this.req<RuntimeInfo[]>("GET", "/runtimes");
+  refreshRuntimes = () => this.req<RuntimeInfo[]>("POST", "/runtimes/refresh");
+  runtimeAction = (id: string, action: "start" | "stop" | "refresh", opts?: { model?: string }) =>
+    this.req<RuntimeInfo>("POST", `/runtimes/${enc(id)}/${action}`, opts ?? {});
+  updateRuntimeSettings = (id: string, settings: Record<string, unknown>) =>
+    this.req<RuntimeInfo>("PUT", `/runtimes/${enc(id)}/settings`, settings);
+  runtimeLogs = (id: string) => this.req<string[]>("GET", `/runtimes/${enc(id)}/logs`);
+
+  models = () => this.req<LocalModel[]>("GET", "/models");
+  catalog = () => this.req<CatalogModel[]>("GET", "/models/catalog");
+  modelProviders = () => this.req<ModelProviderInfo[]>("GET", "/models/providers");
+  setProviderAuth = (id: string, token: string | null | undefined, endpoint?: string) =>
+    this.req<ModelProviderInfo>("PUT", `/models/providers/${enc(id)}/auth`, authBody(token, endpoint));
+  searchModels = (p: ModelSearchParams) =>
+    this.req<SearchPage>("GET", `/models/search${queryString({ provider: p.provider, q: p.q, format: p.format, sort: p.sort, limit: p.limit, cursor: p.cursor })}`);
+  remoteModel = (provider: string, model: string, revision?: string) =>
+    this.req<RemoteModelDetail>("GET", `/models/remote${queryString({ provider, model, revision })}`);
+  pullModel = (req: string | PullRequest) => this.req<DownloadProgress>("POST", "/models/pull", pullBody(req));
+  downloads = () => this.req<DownloadProgress[]>("GET", "/models/downloads");
+  cancelDownload = (id: string) => this.req<DownloadProgress>("POST", `/models/downloads/${enc(id)}/cancel`);
+  clearDownload = (id: string) => this.req<void>("DELETE", `/models/downloads/${enc(id)}`);
+  deleteModel = (id: string) => this.req<void>("DELETE", `/models/${enc(id)}`);
+
+  profiles = () => this.req<InferenceProfile[]>("GET", "/profiles");
+  saveProfile = (p: InferenceProfile) => this.req<InferenceProfile>("PUT", `/profiles/${enc(p.id)}`, p);
+  deleteProfile = (id: string) => this.req<void>("DELETE", `/profiles/${enc(id)}`);
+  agents = () => this.req<AgentProfile[]>("GET", "/agents");
+  saveAgent = (a: AgentProfile) => this.req<AgentProfile>("PUT", `/agents/${enc(a.id)}`, a);
+  deleteAgent = (id: string) => this.req<void>("DELETE", `/agents/${enc(id)}`);
+
+  sessions = () => this.req<Session[]>("GET", "/sessions");
+  getSession = (id: string) => this.req<Session>("GET", `/sessions/${enc(id)}`);
+  createSession = (input: { agent_id: string; title?: string; isolation?: "none" | "worktree" }) => this.req<Session>("POST", "/sessions", input);
+  renameSession = (id: string, title: string) => this.req<Session>("PATCH", `/sessions/${enc(id)}`, { title });
+  deleteSession = (id: string) => this.req<void>("DELETE", `/sessions/${enc(id)}`);
+  mesh = () => this.req<MeshState>("GET", "/mesh");
+  pairPeer = (address: string, code: string) => this.req<PeerDevice>("POST", "/mesh/pair", { address, code });
+  removePeer = (id: string) => this.req<void>("DELETE", `/mesh/peers/${enc(id)}`);
+  pairingQr = () => this.req<{ url: string; svg: string }>("GET", "/pairing/qr");
+
+  voice = () => this.req<VoiceStatus>("GET", "/voice");
+
+  /** Raw audio body (no JSON/base64 overhead). The Tauri carrier overrides it. */
+  async transcribe(wav: Blob, language?: string): Promise<Transcript> {
+    const headers: Record<string, string> = { Accept: "application/json", "Content-Type": wav.type || "audio/wav" };
+    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    const res = await fetch(`${this.base}/api/voice/transcribe${queryString({ language: language !== "auto" ? language : undefined })}`, {
+      method: "POST",
+      headers,
+      body: wav,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let msg = text;
+      try {
+        msg = JSON.parse(text).error ?? text;
+      } catch {
+        /* plain text error */
+      }
+      throw new ApiError(res.status, msg || res.statusText);
+    }
+    return JSON.parse(text) as Transcript;
+  }
+
+  worktreeStatus = (sessionId: string) => this.req<WorktreeStatus>("GET", `/sessions/${enc(sessionId)}/worktree`);
+  worktreeApply = (sessionId: string) => this.req<WorktreeStatus>("POST", `/sessions/${enc(sessionId)}/worktree/apply`);
+  worktreeDiscard = (sessionId: string) => this.req<void>("DELETE", `/sessions/${enc(sessionId)}/worktree`);
+  messages = (sessionId: string) => this.req<ChatMessage[]>("GET", `/sessions/${enc(sessionId)}/messages`);
+  startRun = (sessionId: string, input: string, kind?: "a2ui.action") =>
+    this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, kind ? { input, kind } : { input });
+  cancelRun = (runId: string) => this.req<void>("POST", `/runs/${enc(runId)}/cancel`);
+  activeRun = async (sessionId: string) => (await this.req<{ run_id: string | null }>("GET", `/sessions/${enc(sessionId)}/active-run`)).run_id;
+  approvals = () => this.req<ApprovalRequest[]>("GET", "/approvals");
+  respondApproval = (id: string, decision: "allow" | "deny", remember?: boolean) =>
+    this.req<void>("POST", `/approvals/${enc(id)}`, { decision, remember: !!remember });
+
+  /**
+   * Streams the AG-UI events of a run over SSE. The server replays the whole history on every
+   * connection, so events whose `seq` (the SSE event id) was already delivered are dropped; on a
+   * network error the stream is reopened with `?after=<last seq>` (Last-Event-ID semantics, which
+   * EventSource cannot express for a manually created reconnect).
+   */
+  subscribeRun(runId: string, onEvent: (e: AgEvent) => void): () => void {
+    let lastSeq = -1;
+    let es: EventSource | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let closed = false;
+    let attempt = 0;
+
+    const connect = () => {
+      // EventSource cannot set headers, so the token travels in the query (the server accepts it).
+      const q = queryString({ token: this.token, after: lastSeq >= 0 ? lastSeq : undefined });
+      es = new EventSource(`${this.base}/api/runs/${enc(runId)}/events${q}`);
+      es.onopen = () => {
+        attempt = 0;
+      };
+      es.onmessage = (m) => {
+        const seq = m.lastEventId === "" ? NaN : Number(m.lastEventId);
+        if (!Number.isNaN(seq)) {
+          if (seq <= lastSeq) return;
+          lastSeq = seq;
+        }
+        let ev: AgEvent;
+        try {
+          ev = JSON.parse(m.data) as AgEvent;
+        } catch {
+          return; // keep-alive frame
+        }
+        onEvent(ev);
+        if (ev.type === "RUN_FINISHED" || ev.type === "RUN_ERROR") stop();
+      };
+      es.onerror = () => {
+        // Take over from EventSource's own reconnect so the retry carries `after`.
+        es?.close();
+        es = null;
+        if (closed) return;
+        attempt++;
+        timer = setTimeout(connect, Math.min(5000, 500 * 2 ** Math.min(attempt, 4)));
+      };
+    };
+
+    const stop = () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      es?.close();
+      es = null;
+    };
+    connect();
+    return stop;
+  }
+
+  workflows = () => this.req<WorkflowDef[]>("GET", "/workflows");
+  saveWorkflow = (w: WorkflowDef) => this.req<WorkflowDef>("PUT", `/workflows/${enc(w.id)}`, w);
+  deleteWorkflow = (id: string) => this.req<void>("DELETE", `/workflows/${enc(id)}`);
+  runWorkflow = (id: string, inputs?: Record<string, unknown>) =>
+    this.req<WorkflowRun>("POST", `/workflows/${enc(id)}/run`, { inputs: inputs ?? {} });
+  workflowRuns = () => this.req<WorkflowRun[]>("GET", "/workflows/runs");
+
+  tools = () => this.req<ToolInfo[]>("GET", "/tools");
+  setToolEnabled = (name: string, enabled: boolean) => this.req<void>("PUT", `/tools/${enc(name)}`, { enabled });
+  mcpServers = () => this.req<McpServer[]>("GET", "/mcp/servers");
+  saveMcpServer = (s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }) => this.req<McpServer>("POST", "/mcp/servers", s);
+  removeMcpServer = (id: string) => this.req<void>("DELETE", `/mcp/servers/${enc(id)}`);
+
+  policy = () => this.req<{ rules: PolicyRule[] }>("GET", "/policy");
+  setPolicy = (rules: PolicyRule[]) => this.req<{ rules: PolicyRule[] }>("PUT", "/policy", { rules });
+  hooks = () => this.req<{ hooks: HookConfig[] }>("GET", "/hooks");
+  setHooks = (hooks: HookConfig[]) => this.req<{ hooks: HookConfig[] }>("PUT", "/hooks", { hooks });
+
+  config = () => this.req<ConfigView>("GET", "/config");
+  setConfig = (layer: "global" | "device" | "workspace", key: string, value: unknown) =>
+    this.req<ConfigView>("PUT", "/config", { layer, key, value });
+  audit = () => this.req<AuditEntry[]>("GET", "/audit");
+
+  /** Exchanges the 6-digit pairing code shown on the host device for the API token. */
+  async pair(code: string): Promise<void> {
+    const r = await this.req<{ token: string }>("POST", "/pair", { code });
+    this.token = r.token;
+    storeToken(safeStorage(), this.origin ?? serverOrigin(this.base, location.href), r.token);
+  }
+}

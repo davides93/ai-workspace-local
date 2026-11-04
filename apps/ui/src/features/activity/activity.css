@@ -1,0 +1,45 @@
+/* Attività (audit trail). Tokens only. Class prefix `act-`. */
+
+.act-note { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); font-size: var(--fs-sm); color: var(--fg-muted); }
+.act-note > svg { flex: none; margin-top: 2px; }
+.act-note.is-warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); color: var(--fg); }
+.act-note.is-warn > svg { color: var(--warn); }
+
+.act-filters { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+.act-filters > .act-search { width: 100%; }
+.act-search { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); color: var(--fg-faint); max-width: 520px; }
+.act-search:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
+.act-search-input { flex: 1; min-width: 0; padding: 8px 0; border: 0; outline: none; background: transparent; font-size: var(--fs-sm); color: var(--fg); }
+.act-selects { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); }
+.act-selects .field { min-width: 11rem; }
+
+/* Table */
+.act-when { white-space: nowrap; }
+.act-action { overflow-wrap: anywhere; }
+.act-detail { max-width: 46ch; overflow-wrap: anywhere; }
+.act-run-link { display: inline-flex; align-items: center; gap: 2px; font-weight: 500; }
+.act-run-id { display: inline-block; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.act-empty-row td { padding: var(--space-5); }
+.act-empty-row .empty { border: 0; padding: 0; align-items: center; text-align: center; }
+
+.act-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); }
+.act-pager .row > * { white-space: nowrap; }
+.act-size { width: auto; padding-block: 4px; }
+
+/* Phone: one card per row */
+@media (max-width: 760px) {
+  .act-wrap { border: 0; background: transparent; overflow: visible; }
+  .act-table, .act-table tbody, .act-table tr, .act-table td { display: block; }
+  .act-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .act-table tr { margin-bottom: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+  .act-table tr:last-child { margin-bottom: 0; }
+  .act-table td { display: flex; align-items: baseline; gap: var(--space-3); padding: 3px 0; border: 0; min-width: 0; }
+  .act-table td::before { content: attr(data-label); flex: 0 0 5.2rem; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-faint); }
+  .act-table td.table-empty::before { content: none; }
+  .act-detail { max-width: none; flex: 1; }
+  .act-run-id { max-width: 22ch; }
+  .act-search { max-width: none; }
+  .act-filters, .act-selects { width: 100%; }
+  .act-selects .field { min-width: 0; flex: 1 1 8rem; }
+  .act-selects > .btn { margin-left: auto; }
+}

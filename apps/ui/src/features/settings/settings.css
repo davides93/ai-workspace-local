@@ -1,0 +1,32 @@
+/* Settings: layer bar, sections and rows. Tokens only. */
+.set-bar {
+  position: sticky; top: var(--space-2); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4); border: 1px solid var(--line-strong); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow);
+}
+.set-bar-label { font-weight: 600; }
+.set-bar-path { min-width: 0; overflow-wrap: anywhere; }
+.set-bar-path .mono { overflow-wrap: anywhere; }
+.set-search { max-width: 420px; }
+.set-note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--r-sm); background: var(--info-soft); color: var(--fg); }
+.set-note > svg { flex: none; color: var(--info); }
+.set-note > span { flex: 1 1 16rem; min-width: 0; }
+
+.set-list { list-style: none; margin: 0; padding: 0; }
+.set-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: var(--space-3) var(--space-5);
+  padding: var(--space-4); border-top: 1px solid var(--line); align-items: start;
+}
+.set-list > .set-row:first-child { border-top: 0; }
+.set-info, .set-edit { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.set-title { font-weight: 600; font-size: var(--fs-md); }
+.set-key { font-size: var(--fs-xs); color: var(--fg-faint); overflow-wrap: anywhere; }
+.set-hint { margin: 0; font-size: var(--fs-sm); color: var(--fg-muted); }
+.set-layers { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.set-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.set-warn { display: flex; gap: 6px; align-items: flex-start; margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--r-sm); background: var(--warn-soft); color: var(--fg); }
+.set-warn > svg { flex: none; margin-top: 2px; color: var(--warn); }
+.set-warn > span { flex: 1; min-width: 0; }
+@media (max-width: 760px) {
+  .set-row { grid-template-columns: minmax(0, 1fr); padding: var(--space-3); }
+  .set-bar { position: static; box-shadow: none; }
+}
