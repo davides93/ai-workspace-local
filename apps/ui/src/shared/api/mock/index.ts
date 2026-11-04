@@ -735,8 +735,8 @@ export class MockTransport implements Transport {
       discovery: true,
       address: "http://192.168.1.10:7777",
       discovered: [
-        { id: "dev_nas", name: "Mini PC del soggiorno", os: "linux", tier: "m", version: "0.1.0", address: "http://192.168.1.31:7777", last_seen: now() },
-        { id: "dev_mbp", name: "MacBook Pro M4 Max", os: "macos", tier: "xl", version: "0.1.0", address: "http://192.168.1.42:7777", last_seen: now() },
+        { id: "dev_nas", name: "Mini PC del soggiorno", os: "linux", tier: "m", version: "0.4.0-beta.1", address: "http://192.168.1.31:7777", last_seen: now() },
+        { id: "dev_mbp", name: "MacBook Pro M4 Max", os: "macos", tier: "xl", version: "0.4.0-beta.1", address: "http://192.168.1.42:7777", last_seen: now() },
       ],
       peers: structuredClone(system.peers),
     };
