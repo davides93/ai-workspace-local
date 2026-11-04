@@ -48,6 +48,9 @@ jobs:
       # the app and the other bundles keep the real version.
       - name: Build RPM (Linux)
         if: runner.os == 'Linux'
+        # RPM forbids '-' in versions: the rpm gets "0.4.0~beta.1". If the Tauri CLI refuses a
+        # non-semver override the release still ships the .deb and the AppImage.
+        continue-on-error: true
         working-directory: apps/desktop
         run: |
           rpm_version=$(node -p "require('./src-tauri/tauri.conf.json').version.replace('-', '~')")
