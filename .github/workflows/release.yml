@@ -183,8 +183,8 @@ jobs:
           $root = 'C:\VulkanSDK'
           $p = Start-Process -FilePath $installer -ArgumentList @('--root', $root, '--accept-licenses', '--default-answer', '--confirm-command', 'install') -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer exited with $($p.ExitCode)" }
-          # The installer creates C:\VulkanSDK\<version>; resolve whatever it installed.
-          $sdk = Get-ChildItem $root -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'Bin\glslc.exe') } | Sort-Object Name -Descending | Select-Object -First 1
+          # With --root the SDK lands in the root itself (older installers used a version subfolder).
+          $sdk = @(Get-Item $root) + @(Get-ChildItem $root -Directory | Sort-Object Name -Descending) | Where-Object { Test-Path (Join-Path $_.FullName 'Bin\glslc.exe') } | Select-Object -First 1
           if (-not $sdk) { throw "glslc.exe not found under $root after install" }
           Write-Host "Vulkan SDK at $($sdk.FullName)"
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=$($sdk.FullName)"
