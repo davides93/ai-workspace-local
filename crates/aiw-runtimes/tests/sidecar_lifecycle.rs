@@ -113,11 +113,12 @@ async fn ask(backend: &Arc<dyn aiw_runtimes::types::ChatBackend>, model: &str) -
 }
 
 fn alive(pid: u32) -> bool {
-    // A reaped or zombie process counts as dead.
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(s) => s.rsplit(')').next().is_some_and(|rest| !rest.trim_start().starts_with('Z')),
-        Err(_) => false,
-    }
+    // Portable (Linux and macOS have no common /proc): `ps` prints the state of the process and
+    // fails when it does not exist. A reaped or zombie process counts as dead.
+    let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
+    out.status.success()
+        && !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+        && !String::from_utf8_lossy(&out.stdout).trim().starts_with('Z')
 }
 
 #[tokio::test]

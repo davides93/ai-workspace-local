@@ -21,7 +21,7 @@ jobs:
       matrix:
         include:
           # xcap (computer-use) needs newer PipeWire headers than Ubuntu 22.04 ships: Linux builds without it.
-          - { name: Linux x64, os: ubuntu-22.04, args: "", targets: "" }
+          - { name: Linux x64, os: ubuntu-22.04, args: "--bundles deb,appimage", targets: "" }
           - { name: Windows x64, os: windows-latest, args: "--features computer-use", targets: "" }
           - { name: macOS universale, os: macos-14, args: "--features computer-use --target universal-apple-darwin", targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
     runs-on: ${{ matrix.os }}
@@ -42,6 +42,16 @@ jobs:
       - name: Build bundles
         working-directory: apps/desktop
         run: npx tauri build ${{ matrix.args }}
+      # RPM versions cannot contain '-' ("0.4.0-beta.1" is rejected by the bundler) and the Tauri
+      # config has no RPM-specific version, only release/epoch. The prerelease is spelled the RPM
+      # way (0.4.0~beta.1, sorts before 0.4.0) through a config override used by this build only;
+      # the app and the other bundles keep the real version.
+      - name: Build RPM (Linux)
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        run: |
+          rpm_version=$(node -p "require('./src-tauri/tauri.conf.json').version.replace('-', '~')")
+          npx tauri build --bundles rpm --config "{\"version\":\"$rpm_version\"}"
       - uses: actions/upload-artifact@v4
         with:
           name: aiw-desktop-${{ matrix.os }}
@@ -122,9 +132,6 @@ jobs:
           - { os: ubuntu-latest, asset: aiw-linux-x64-vulkan }
           - { os: windows-latest, asset: aiw-windows-x64-vulkan.exe }
     runs-on: ${{ matrix.os }}
-    env:
-      # Pinned Vulkan SDK for Windows (LunarG installer). Bump together with the llama.cpp crate.
-      VULKAN_SDK_VERSION: "1.4.313.2"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -134,16 +141,51 @@ jobs:
       - name: Vulkan headers, loader and glslc (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libvulkan-dev glslc spirv-headers
-      # humbletim/setup-vulkan-sdk is an alternative that caches the SDK; the installer below is
-      # the one llama.cpp's own CI uses and gives glslc in $VULKAN_SDK/Bin.
+      # No guessed SDK version: LunarG's "latest" endpoints are used (the installer is named
+      # vulkan-sdk.exe there; older SDKs used VulkanSDK-<ver>-Installer.exe). Every download is
+      # checked to be a real PE executable (MZ header, > 10 MB) before it is run, because LunarG
+      # answers an unknown URL with an HTML error page that "is not a valid application".
       - name: Vulkan SDK (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          curl.exe -o "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" -L "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/VulkanSDK-$env:VULKAN_SDK_VERSION-Installer.exe"
-          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_SDK_VERSION"
-          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_SDK_VERSION\Bin"
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk.exe'
+          $version = ''
+          try { $version = (Invoke-RestMethod -Uri 'https://vulkan.lunarg.com/sdk/latest/windows.txt' -TimeoutSec 60).ToString().Trim() } catch { Write-Host "latest version lookup failed: $_" }
+          $urls = @('https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe')
+          if ($version -match '^\d+\.\d+\.\d+(\.\d+)?$') {
+            Write-Host "LunarG latest SDK: $version"
+            $urls += "https://sdk.lunarg.com/sdk/download/$version/windows/vulkan_sdk.exe"
+            $urls += "https://sdk.lunarg.com/sdk/download/$version/windows/VulkanSDK-$version-Installer.exe"
+          }
+          $ok = $false
+          foreach ($url in $urls) {
+            for ($try = 1; $try -le 3 -and -not $ok; $try++) {
+              Write-Host "Downloading $url (attempt $try)"
+              Remove-Item $installer -ErrorAction SilentlyContinue
+              & curl.exe --fail --silent --show-error --location --retry 2 --connect-timeout 30 --max-time 900 -o $installer $url
+              if ($LASTEXITCODE -ne 0 -or -not (Test-Path $installer)) { Start-Sleep -Seconds (5 * $try); continue }
+              $bytes = [IO.File]::ReadAllBytes($installer)
+              if ($bytes.Length -gt 10MB -and $bytes[0] -eq 0x4D -and $bytes[1] -eq 0x5A) { $ok = $true }
+              else {
+                Write-Host "Not a PE executable ($($bytes.Length) bytes); first bytes:"
+                Write-Host ([Text.Encoding]::ASCII.GetString($bytes, 0, [Math]::Min(200, $bytes.Length)))
+                Start-Sleep -Seconds (5 * $try)
+              }
+            }
+            if ($ok) { break }
+          }
+          if (-not $ok) { throw 'Could not download a valid Vulkan SDK installer from LunarG' }
+          $root = 'C:\VulkanSDK'
+          $p = Start-Process -FilePath $installer -ArgumentList @('--root', $root, '--accept-licenses', '--default-answer', '--confirm-command', 'install') -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer exited with $($p.ExitCode)" }
+          # The installer creates C:\VulkanSDK\<version>; resolve whatever it installed.
+          $sdk = Get-ChildItem $root -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'Bin\glslc.exe') } | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $sdk) { throw "glslc.exe not found under $root after install" }
+          Write-Host "Vulkan SDK at $($sdk.FullName)"
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=$($sdk.FullName)"
+          Add-Content $env:GITHUB_PATH (Join-Path $sdk.FullName 'Bin')
       - run: cargo build --release -p aiw-cli --features llama-vulkan
       - name: Name the binary
         shell: bash

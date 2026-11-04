@@ -133,20 +133,17 @@ pub fn safe_rel(p: &Path) -> Result<PathBuf> {
 /// canonicalised (on Windows this yields the `\\?\` form and expands 8.3 short names) and the
 /// missing tail is appended, so paths compare equal whether or not the folder exists.
 fn canonical_lenient(p: &Path) -> PathBuf {
-    let mut tail = Vec::new();
-    let mut cur = p;
-    loop {
-        if let Ok(c) = std::fs::canonicalize(cur) {
-            return tail.iter().rev().fold(c, |acc, n| acc.join(n));
-        }
-        match (cur.parent(), cur.file_name()) {
-            (Some(parent), Some(name)) => {
-                tail.push(name.to_owned());
-                cur = parent;
-            }
-            _ => return p.to_path_buf(),
+    // Walk by components, not by `file_name()`: it is `None` for a trailing `..`, which used to
+    // make the walk give up and return the path unresolved (a symlinked ancestor such as
+    // macOS's `/var` -> `/private/var` then went unnoticed).
+    let comps: Vec<std::path::Component> = p.components().collect();
+    for k in (1..=comps.len()).rev() {
+        let prefix: PathBuf = comps[..k].iter().collect();
+        if let Ok(c) = std::fs::canonicalize(&prefix) {
+            return comps[k..].iter().fold(c, |acc, n| acc.join(n));
         }
     }
+    p.to_path_buf()
 }
 
 fn part_path(dest: &Path) -> PathBuf {
@@ -1758,6 +1755,21 @@ mod tests {
         assert_eq!(canonical_lenient(&d.path().join("a/b/c")), real.join("a/b/c"));
         assert_eq!(canonical_lenient(d.path()), real);
         assert_eq!(canonical_lenient(&d.path().join("x/../y")), real.join("x/../y"));
+    }
+
+    /// A symlinked ancestor (macOS: `/var` -> `/private/var`) must be resolved even when the
+    /// missing tail contains `..`.
+    #[cfg(unix)]
+    #[test]
+    fn canonical_lenient_resolves_a_symlinked_ancestor() {
+        let d = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(d.path()).unwrap();
+        std::fs::create_dir(real.join("target")).unwrap();
+        std::os::unix::fs::symlink(real.join("target"), real.join("link")).unwrap();
+        let t = real.join("target");
+        assert_eq!(canonical_lenient(&real.join("link/a/b")), t.join("a/b"));
+        assert_eq!(canonical_lenient(&real.join("link/x/../y")), t.join("x/../y"));
+        assert_eq!(canonical_lenient(&real.join("link")), t);
     }
 
     #[test]
