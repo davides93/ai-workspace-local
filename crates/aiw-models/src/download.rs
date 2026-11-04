@@ -129,6 +129,26 @@ pub fn safe_rel(p: &Path) -> Result<PathBuf> {
     Ok(out)
 }
 
+/// Canonicalise `p` even when it does not exist yet: the deepest existing ancestor is
+/// canonicalised (on Windows this yields the `\\?\` form and expands 8.3 short names) and the
+/// missing tail is appended, so paths compare equal whether or not the folder exists.
+fn canonical_lenient(p: &Path) -> PathBuf {
+    let mut tail = Vec::new();
+    let mut cur = p;
+    loop {
+        if let Ok(c) = std::fs::canonicalize(cur) {
+            return tail.iter().rev().fold(c, |acc, n| acc.join(n));
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_owned());
+                cur = parent;
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
+}
+
 fn part_path(dest: &Path) -> PathBuf {
     let mut n = dest.file_name().map(|s| s.to_os_string()).unwrap_or_default();
     n.push(".part");
@@ -408,8 +428,7 @@ impl DownloadManager {
 
     /// Whether a queued, running or verifying job writes below `folder` (an absolute path).
     pub fn is_busy_in(&self, folder: &Path) -> bool {
-        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        let (base, folder) = (canon(&self.inner.dir), canon(folder));
+        let (base, folder) = (canonical_lenient(&self.inner.dir), canonical_lenient(folder));
         let items = self.inner.items.lock().unwrap();
         items.iter().any(|i| active(&i.p.status) && i.dests.iter().any(|d| base.join(d).starts_with(&folder)))
     }
@@ -1730,6 +1749,15 @@ mod tests {
         assert!(!m.is_busy_in(&d.path().join("hf/acme/other")));
         m.cancel(&p.id).unwrap();
         assert!(!m.is_busy_in(&folder));
+    }
+
+    #[test]
+    fn canonical_lenient_resolves_missing_tail_against_existing_ancestor() {
+        let d = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(d.path()).unwrap();
+        assert_eq!(canonical_lenient(&d.path().join("a/b/c")), real.join("a/b/c"));
+        assert_eq!(canonical_lenient(d.path()), real);
+        assert_eq!(canonical_lenient(&d.path().join("x/../y")), real.join("x/../y"));
     }
 
     #[test]
