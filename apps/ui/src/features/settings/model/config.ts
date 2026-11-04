@@ -68,6 +68,7 @@ export const SECTIONS: SettingsSection[] = [
   { id: "server", title: "Server e accesso", description: "Come altri dispositivi e programmi raggiungono il workspace.", prefixes: ["server"] },
   { id: "folders", title: "Cartelle", description: "Dove stanno i modelli e dove lavorano gli agenti.", prefixes: ["models", "workspace"] },
   { id: "voice", title: "Voce", description: "Dettatura e conversazione a voce: lingua, motore di trascrizione e voce che legge le risposte.", prefixes: ["voice"] },
+  { id: "update", title: "Canale e aggiornamenti", description: "Quale canale seguire (produzione, beta, alpha) e se cercare e scaricare gli aggiornamenti da soli.", prefixes: ["update"] },
   { id: "telemetry", title: "Telemetria", description: "Esportazione di tracce e metriche.", prefixes: ["telemetry"] },
 ];
 

@@ -11,6 +11,7 @@ async fn engine(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, tempfile::
         device: None,
         extra_bin_dirs: vec![],
         offline: true,
+        ..Default::default()
     })
     .await
     .unwrap();

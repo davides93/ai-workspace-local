@@ -145,6 +145,41 @@ export interface RuntimeInfo {
   homepage?: string;
 }
 
+// ---------- Updates ----------
+export type UpdateChannel = "alpha" | "beta" | "rc" | "stable";
+export type UpdateState = "idle" | "checking" | "downloading" | "ready" | "installing" | "error";
+
+export interface ReleaseInfo {
+  tag: string;
+  version: string;
+  channel: UpdateChannel;
+  /** Release notes (Markdown) as published on GitHub. */
+  notes: string;
+  published_at?: string | null;
+  page: string;
+  /** Installer for this OS; missing when the release has none for it. */
+  asset?: { name: string; size: number; url: string } | null;
+}
+
+/** GET /api/update — current version, channel in use and what the last check found. */
+export interface UpdateStatus {
+  current: string;
+  /** The channel in use (what `auto` resolved to). */
+  channel: UpdateChannel;
+  /** The setting as saved: auto | stable | beta | alpha. */
+  configured: string;
+  state: UpdateState;
+  available?: ReleaseInfo | null;
+  checked_at?: string | null;
+  received: number;
+  total: number;
+  /** Verified installer on disk. */
+  file?: string | null;
+  /** What to do next after the installer was started. */
+  message?: string | null;
+  error?: string | null;
+}
+
 // ---------- Models ----------
 export type Fit = "great" | "ok" | "tight" | "no";
 

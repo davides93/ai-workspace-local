@@ -160,6 +160,21 @@ Ogni runtime è un file JSON dichiarativo (vedi `crates/aiw-runtimes/manifests/`
 - **Manifest utente**: ogni JSON in `~/.aiw/runtimes/*.json` si aggiunge al catalogo. Così si
   integra qualsiasi motore futuro senza ricompilare.
 
+### Aggiornamenti
+
+`aiw-engine::update` cerca nuove versioni nelle release GitHub del repository pubblico. Il **canale** si ricava
+dall'etichetta della versione nel tag: nessuna etichetta = `stable` (produzione), `-rc.N`, `-beta.N`, `-alpha.N`
+(o `-dev`, `-nightly`). Un canale riceve anche le release più stabili e vince la versione più alta; `auto`
+(default) segue la versione installata, quindi una beta resta sulle beta. Chiavi: `update.channel`,
+`update.auto_check` (all'avvio e ogni 6 ore), `update.auto_download`; il livello *workspace* le ignora, perché
+un repository non deve scegliere da dove si aggiorna l'app.
+
+L'installer del sistema (`.dmg`, `.msi`, `.AppImage`) viene scaricato solo da GitHub e **verificato con
+`SHA256SUMS.txt`** della stessa release prima di essere aperto; un file che non corrisponde viene eliminato.
+L'installazione è un passaggio di consegne al sistema (apre il dmg, avvia l'MSI, sostituisce l'AppImage in
+esecuzione): le release non sono ancora firmate, quindi il sistema chiede la sua solita conferma.
+API: `GET /api/update`, `POST /api/update/{check,download,install}`.
+
 ### 4.2 Interfaccia comune
 
 ```rust

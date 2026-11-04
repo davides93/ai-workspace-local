@@ -54,6 +54,7 @@ export const qk = {
   voice: () => ["voice"] as const,
 
   config: () => ["config"] as const,
+  update: () => ["update"] as const,
   audit: () => ["audit"] as const,
   policy: () => ["security", "policy"] as const,
   hooks: () => ["security", "hooks"] as const,

@@ -1,5 +1,9 @@
 # Changelog
 
+## Non rilasciato
+
+- Aggiornamenti automatici dalle release del repository pubblico su GitHub, con scelta del canale (`auto`, produzione/`stable`, `beta`, `alpha`): controllo all'avvio e ogni 6 ore, download con verifica SHA-256, installazione con l'installer del sistema (dmg, MSI, AppImage). Pannello in Impostazioni e indicatore nella barra laterale.
+
 ## 0.4.0-beta.1 - pre-release
 
 - Model hub multi-provider (Hugging Face, ModelScope, Ollama, URL diretto) con downloader robusto.

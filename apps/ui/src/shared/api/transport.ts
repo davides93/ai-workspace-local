@@ -4,7 +4,7 @@ import type {
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig, VoiceStatus, Transcript,
+  PolicyRule, HookConfig, VoiceStatus, Transcript, UpdateStatus,
 } from "./types";
 
 /** What the current carrier can do; the UI branches on this instead of sniffing `kind`. */
@@ -40,6 +40,15 @@ export interface Transport {
   runtimeAction(id: string, action: "start" | "stop" | "refresh", opts?: { model?: string }): Promise<RuntimeInfo>;
   updateRuntimeSettings(id: string, settings: Record<string, unknown>): Promise<RuntimeInfo>;
   runtimeLogs(id: string): Promise<string[]>;
+
+  /** Self-update from the GitHub releases (GET /api/update). */
+  updateStatus(): Promise<UpdateStatus>;
+  /** Looks for a newer release in the configured channel. */
+  checkUpdate(): Promise<UpdateStatus>;
+  /** Downloads the installer and verifies it against the published SHA-256 sums. */
+  downloadUpdate(): Promise<UpdateStatus>;
+  /** Hands the verified installer to the operating system. */
+  installUpdate(): Promise<UpdateStatus>;
 
   models(): Promise<LocalModel[]>;
   catalog(): Promise<CatalogModel[]>;

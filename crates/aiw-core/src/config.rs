@@ -50,6 +50,9 @@ pub fn app_schema() -> SettingsSchema {
             "models.dir": {"type": "string", "title": "Cartella modelli", "default": ""},
             "workspace.root": {"type": "string", "title": "Cartella di lavoro degli agenti", "default": ""},
             "telemetry.otlp": {"type": "string", "title": "Endpoint OTLP (vuoto = disattivato)", "default": ""},
+            "update.channel": {"type": "string", "title": "Canale di aggiornamento", "description": "auto segue la versione installata (una beta resta sulle beta); stable = produzione; beta e alpha ricevono anche le versioni più stabili", "enum": ["auto", "stable", "beta", "alpha"], "default": "auto"},
+            "update.auto_check": {"type": "boolean", "title": "Cerca aggiornamenti da solo", "description": "All'avvio e ogni 6 ore, dalle release del repository pubblico su GitHub", "default": true},
+            "update.auto_download": {"type": "boolean", "title": "Scarica da solo gli aggiornamenti", "description": "L'installer viene scaricato e verificato (SHA-256) in anticipo; l'installazione parte solo quando la confermi", "default": false},
             "voice.language": {"type": "string", "title": "Lingua della voce", "description": "Codice ISO 639-1 (it, en…) o auto per riconoscerla", "default": "auto"},
             "voice.stt_runtime": {"type": "string", "title": "Motore di trascrizione", "description": "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", "enum": ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], "default": "auto"},
             "voice.stt_model": {"type": "string", "title": "Modello Whisper", "description": "Vuoto = il più grande installato che sta in memoria", "default": ""},
@@ -66,8 +69,17 @@ const WORKSPACE_TIGHTEN_ONLY: &[(&str, &[&str])] =
 
 /// Machine-level keys the workspace layer cannot set: network reach, the listener, where models
 /// and the working folder live, and where telemetry goes.
-const WORKSPACE_FORBIDDEN: &[&str] =
-    &["network.allow_domains", "server.lan", "server.port", "models.dir", "workspace.root", "telemetry.otlp"];
+const WORKSPACE_FORBIDDEN: &[&str] = &[
+    "network.allow_domains",
+    "server.lan",
+    "server.port",
+    "models.dir",
+    "workspace.root",
+    "telemetry.otlp",
+    "update.channel",
+    "update.auto_check",
+    "update.auto_download",
+];
 
 pub struct LayeredConfig {
     schema: SettingsSchema,

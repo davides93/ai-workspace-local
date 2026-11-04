@@ -3,6 +3,7 @@ import { useTheme } from "../../shared/lib/theme";
 import { Button, EmptyState, Field, Icon, Input, Page, PageHeader, QueryState, Section, Segmented } from "../../shared/ui";
 import { useConfig, useSetConfig } from "./api";
 import { LayerBar } from "./components/LayerBar";
+import { UpdatePanel } from "./components/UpdatePanel";
 import { SettingRow } from "./components/SettingRow";
 import { configTheme, groupSettings, isTheme, LAYER_LABEL, THEME_LABEL, THEMES, winningLayer, type WritableLayer } from "./model/config";
 import "./settings.css";
@@ -42,6 +43,8 @@ export function SettingsView() {
           <Button size="sm" onClick={() => setTheme(wanted)}>Usa la configurazione</Button>
         </p>
       )}
+
+      <UpdatePanel />
 
       <QueryState query={cfg}>
         {(view) => {

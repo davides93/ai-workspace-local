@@ -5,7 +5,7 @@ import { SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus,
+  SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, UpdateStatus,
 } from "../types";
 import {
   agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
@@ -455,6 +455,42 @@ export class MockTransport implements Transport {
   async activeRun(sessionId?: string) {
     if (sessionId !== undefined && !sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     return null;
+  }
+  private update: UpdateStatus = { current: "0.4.0-beta.1", channel: "beta", configured: "auto", state: "idle", received: 0, total: 0 };
+  async updateStatus() {
+    const configured = String((effective() as Record<string, unknown>)["update.channel"] ?? "auto");
+    this.update.configured = configured;
+    this.update.channel = configured === "auto" ? "beta" : (configured as UpdateStatus["channel"]);
+    return structuredClone(this.update);
+  }
+  async checkUpdate() {
+    await sleep(600);
+    const u = this.update;
+    await this.updateStatus();
+    u.checked_at = new Date().toISOString();
+    u.available = u.channel === "stable" ? null : {
+      tag: "v0.4.0-beta.2", version: "0.4.0-beta.2", channel: "beta", page: "https://github.com/davides93/ai-workspace-local/releases/tag/v0.4.0-beta.2",
+      notes: "- Installazione automatica dei runtime.\n- Apple Foundation Models su macOS.\n- Aggiornamenti dalle release di GitHub.",
+      asset: { name: "AI_Workspace_Local_0.4.0-beta.2_universal.dmg", size: 96_000_000, url: "https://github.com/davides93/ai-workspace-local/releases/download/v0.4.0-beta.2/a.dmg" },
+    };
+    return this.updateStatus();
+  }
+  async downloadUpdate() {
+    const u = this.update;
+    if (!u.available) throw new ApiError(400, "nessun aggiornamento disponibile: controlla prima");
+    u.state = "downloading"; u.received = 0; u.total = u.available.asset?.size ?? 0;
+    const step = () => {
+      u.received = Math.min(u.total, u.received + u.total / 5);
+      if (u.received >= u.total) { u.state = "ready"; u.file = `~/.aiw/updates/${u.available?.version}/${u.available?.asset?.name}`; } else setTimeout(step, 350);
+    };
+    setTimeout(step, 350);
+    return this.updateStatus();
+  }
+  async installUpdate() {
+    const u = this.update;
+    if (!u.file) throw new ApiError(400, "nessun installer scaricato e verificato");
+    u.message = "Trascina AI Workspace Local nella cartella Applicazioni, poi riapri l'app.";
+    return this.updateStatus();
   }
   async runtimeLogs(id: string) {
     return id === "llama-server"

@@ -97,6 +97,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/system", get(system))
         .route("/api/kill", post(kill))
         .route("/api/pair", post(pair))
+        .route("/api/update", get(update_status))
+        .route("/api/update/check", post(update_check))
+        .route("/api/update/download", post(update_download))
+        .route("/api/update/install", post(update_install))
         .route("/api/runtimes", get(runtimes))
         .route("/api/runtimes/refresh", post(runtimes_refresh))
         .route("/api/runtimes/{id}/settings", put(runtime_settings))
@@ -268,6 +272,18 @@ async fn pair(State(s): State<AppState>, ClientIp(client): ClientIp, Json(b): Js
             res
         }
     }
+}
+async fn update_status(State(s): State<AppState>) -> ApiResult<aiw_engine::update::UpdateStatus> {
+    ok(s.engine.update_status())
+}
+async fn update_check(State(s): State<AppState>) -> ApiResult<aiw_engine::update::UpdateStatus> {
+    ok(s.engine.update_check().await?)
+}
+async fn update_download(State(s): State<AppState>) -> ApiResult<aiw_engine::update::UpdateStatus> {
+    ok(s.engine.update_download().await?)
+}
+async fn update_install(State(s): State<AppState>) -> ApiResult<aiw_engine::update::UpdateStatus> {
+    ok(s.engine.update_install()?)
 }
 async fn runtimes(State(s): State<AppState>) -> ApiResult<Vec<RuntimeInfo>> {
     ok(s.engine.runtimes())

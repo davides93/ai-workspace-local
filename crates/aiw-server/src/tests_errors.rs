@@ -394,3 +394,163 @@ async fn the_tool_list_has_the_internal_tools_and_they_cannot_be_switched() {
     let names: Vec<&str> = rpc["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
     assert!(names.contains(&"list_dir") && !names.contains(&"todo") && !names.contains(&"render_ui"), "{names:?}");
 }
+
+// ---------------------------------------------------------------- updates
+
+mod updates {
+    use super::*;
+    use axum::routing::get;
+    use sha2::{Digest, Sha256};
+
+    const REPO: &str = "davides93/ai-workspace-local";
+    const FILE: &[u8] = b"installer bytes";
+
+    /// A GitHub that serves the releases of the app: stable 0.3.0 and 0.4.0, beta 0.5.0-beta.1.
+    async fn fake_github(good_checksum: bool) -> String {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+        let hash: String = Sha256::digest(FILE).iter().map(|b| format!("{b:02x}")).collect();
+        let sums_hash = if good_checksum { hash } else { "0".repeat(64) };
+        let asset = |name: &str| json!({"name": name, "size": FILE.len(), "browser_download_url": format!("{base}/dl/{name}")});
+        let assets = |v: &str| {
+            json!([
+                asset(&format!("AI_Workspace_Local_{v}_universal.dmg")),
+                asset(&format!("AI_Workspace_Local_{v}_x64_en-US.msi")),
+                asset(&format!("AI_Workspace_Local_{v}_amd64.AppImage")),
+                asset(&format!("AI_Workspace_Local_{v}_aarch64.AppImage")),
+                asset("SHA256SUMS.txt"),
+            ])
+        };
+        let rel = |tag: &str, v: &str| json!({"tag_name": tag, "body": format!("Novità {tag}"), "draft": false, "html_url": format!("https://github.com/{REPO}/releases/tag/{tag}"), "assets": assets(v)});
+        let releases = json!([rel("v0.5.0-beta.1", "0.5.0-beta.1"), rel("v0.4.0", "0.4.0"), rel("v0.3.0", "0.3.0")]);
+        let sums = ["0.4.0", "0.5.0-beta.1"]
+            .iter()
+            .flat_map(|v| {
+                ["universal.dmg", "x64_en-US.msi", "amd64.AppImage", "aarch64.AppImage"]
+                    .iter()
+                    .map(|suffix| format!("{sums_hash}  AI_Workspace_Local_{v}_{suffix}\n"))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<String>();
+        let app = Router::new()
+            .route(&format!("/repos/{REPO}/releases"), get(move || async move { axum::Json(releases) }))
+            .route("/dl/SHA256SUMS.txt", get(move || async move { sums }))
+            .route("/dl/{name}", get(|| async { FILE.to_vec() }));
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        base
+    }
+
+    async fn engine_on(base: &str, current: &str, channel: &str) -> (Router, Engine, tempfile::TempDir) {
+        let data = tempfile::tempdir().unwrap();
+        let e = Engine::new(EngineOptions {
+            data_dir: Some(data.path().into()),
+            workspace_root: Some(data.path().join("ws")),
+            mode: "daemon".into(),
+            offline: true,
+            update_api_base: Some(base.into()),
+            current_version: Some(current.into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        e.set_config("global", "update.channel", json!(channel)).unwrap();
+        (router(e.clone(), None), e, data)
+    }
+
+    #[tokio::test]
+    async fn the_channel_decides_which_release_is_offered() {
+        let base = fake_github(true).await;
+        // Production, from 0.3.0: the stable 0.4.0, not the newer beta.
+        let (app, _e, _d) = engine_on(&base, "0.3.0", "stable").await;
+        let (st, s) = dispatch(app.clone(), "GET", "/api/update", None).await;
+        assert_eq!(st, 200, "{s}");
+        assert_eq!((s["state"].as_str(), s["current"].as_str(), s["channel"].as_str()), (Some("idle"), Some("0.3.0"), Some("stable")));
+        assert!(s["available"].is_null());
+        let (st, s) = dispatch(app.clone(), "POST", "/api/update/check", None).await;
+        assert_eq!(st, 200, "{s}");
+        assert_eq!(s["available"]["version"], "0.4.0");
+        assert_eq!(s["available"]["channel"], "stable");
+        assert_eq!(s["available"]["notes"], "Novità v0.4.0");
+        assert!(s["checked_at"].is_string());
+        // Beta: the newest version of all.
+        let (app, _e, _d) = engine_on(&base, "0.3.0", "beta").await;
+        let (_, s) = dispatch(app.clone(), "POST", "/api/update/check", None).await;
+        assert_eq!(s["available"]["version"], "0.5.0-beta.1");
+        assert_eq!(s["channel"], "beta");
+        // `auto` on a beta build stays on betas; already at the newest: nothing to offer.
+        let (app, _e, _d) = engine_on(&base, "0.5.0-beta.1", "auto").await;
+        let (_, s) = dispatch(app.clone(), "POST", "/api/update/check", None).await;
+        assert_eq!(s["channel"], "beta");
+        assert!(s["available"].is_null(), "{s}");
+        // A build older than every release, on auto = stable.
+        let (app, _e, _d) = engine_on(&base, "0.1.0", "auto").await;
+        let (_, s) = dispatch(app.clone(), "POST", "/api/update/check", None).await;
+        assert_eq!((s["channel"].as_str(), s["available"]["version"].as_str()), (Some("stable"), Some("0.4.0")));
+    }
+
+    #[tokio::test]
+    async fn download_is_verified_against_the_published_checksums() {
+        let base = fake_github(true).await;
+        let (app, e, data) = engine_on(&base, "0.3.0", "stable").await;
+        // Nothing to download before a check.
+        assert_eq!(failure(&app, "POST", "/api/update/download", None).await.0, 400);
+        dispatch(app.clone(), "POST", "/api/update/check", None).await;
+        let asset = e.update_status().available.unwrap().asset;
+        // The test machine may have no installer in the release (an ARM Windows, for instance).
+        let Some(asset) = asset else { return };
+        let (st, s) = dispatch(app.clone(), "POST", "/api/update/download", None).await;
+        assert_eq!(st, 200, "{s}");
+        assert_eq!(s["state"], "ready");
+        assert_eq!(s["received"], FILE.len());
+        let file = std::path::PathBuf::from(s["file"].as_str().unwrap());
+        assert!(file.starts_with(data.path().join("updates/0.4.0")), "{file:?}");
+        assert_eq!(file.file_name().unwrap().to_str().unwrap(), asset.name);
+        assert_eq!(std::fs::read(&file).unwrap(), FILE);
+        assert!(!file.with_extension("part").exists());
+        // A second request reuses the file.
+        assert_eq!(dispatch(app.clone(), "POST", "/api/update/download", None).await.1["state"], "ready");
+    }
+
+    #[tokio::test]
+    async fn a_file_that_does_not_match_its_checksum_is_discarded() {
+        let base = fake_github(false).await;
+        let (app, e, data) = engine_on(&base, "0.3.0", "stable").await;
+        dispatch(app.clone(), "POST", "/api/update/check", None).await;
+        if e.update_status().available.unwrap().asset.is_none() {
+            return;
+        }
+        let (st, msg) = failure(&app, "POST", "/api/update/download", None).await;
+        assert_eq!(st, 400);
+        assert!(msg.contains("checksum"), "{msg}");
+        let s = e.update_status();
+        assert_eq!(s.file, None);
+        assert_eq!(format!("{:?}", s.state), "Error");
+        let leftovers = std::fs::read_dir(data.path().join("updates/0.4.0")).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(leftovers, 0, "neither the partial nor the final file stays");
+        // Installing without a verified file is refused.
+        assert_eq!(failure(&app, "POST", "/api/update/install", None).await.0, 400);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_github_is_an_error_not_a_crash() {
+        let (app, _e, _d) = engine_on("http://127.0.0.1:1", "0.3.0", "stable").await;
+        let (st, msg) = failure(&app, "POST", "/api/update/check", None).await;
+        assert!(st >= 400, "{st}");
+        assert!(msg.contains("GitHub"), "{msg}");
+        let (_, s) = dispatch(app, "GET", "/api/update", None).await;
+        assert_eq!(s["state"], "error");
+    }
+
+    #[tokio::test]
+    async fn the_channel_setting_is_validated_and_not_settable_by_a_workspace() {
+        let base = fake_github(true).await;
+        let (app, e, _d) = engine_on(&base, "0.3.0", "stable").await;
+        assert!(e.set_config("global", "update.channel", json!("canary")).is_err());
+        // What a repository ships in its own .aiw/config.json is ignored for the update settings.
+        e.set_config("workspace", "update.channel", json!("alpha")).unwrap();
+        e.set_config("workspace", "update.auto_download", json!(true)).unwrap();
+        let (_, s) = dispatch(app, "GET", "/api/update", None).await;
+        assert_eq!(s["channel"], "stable", "a repository cannot pick the update channel");
+        assert_eq!(e.config().effective["update.auto_download"], json!(false));
+    }
+}

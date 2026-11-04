@@ -30,3 +30,10 @@
   .set-row { grid-template-columns: minmax(0, 1fr); padding: var(--space-3); }
   .set-bar { position: static; box-shadow: none; }
 }
+
+/* Updates */
+.upd { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); }
+.upd-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.upd-line { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+.upd-release { padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.upd-notes { max-height: 14rem; overflow: auto; }
