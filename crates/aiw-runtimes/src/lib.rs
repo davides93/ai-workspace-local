@@ -9,6 +9,7 @@ pub mod openai;
 pub mod ortgenai;
 pub mod registry;
 pub mod scripted;
+pub mod stt;
 pub mod supervisor;
 pub mod textproto;
 pub mod types;

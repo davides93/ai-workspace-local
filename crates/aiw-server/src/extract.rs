@@ -35,7 +35,7 @@ impl IntoResponse for ApiRejection {
 
 /// The phrases serde, serde_json and the standard parsers use most, in Italian. What is not here
 /// stays as the parser wrote it.
-fn localize(detail: &str) -> String {
+pub(crate) fn localize(detail: &str) -> String {
     // Applied in order: the specific phrases first, the general ones after them.
     const PHRASES: &[(&str, &str)] = &[
         ("missing field ", "campo mancante "),

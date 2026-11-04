@@ -1653,7 +1653,7 @@
   "vendor": "ggml-org",
   "kind": "sidecar",
   "api": "native",
-  "description": "Trascrizione vocale locale (STT) per voice mode e trigger audio.",
+  "description": "Trascrizione vocale locale (STT) per la voice mode: modelli Whisper in formato ggml.",
   "platforms": [
    "windows",
    "macos",
@@ -1684,14 +1684,24 @@
     "--host",
     "127.0.0.1",
     "--port",
-    "{port}"
+    "{port}",
+    "-l",
+    "{language}"
    ],
    "health": "/",
-   "requires_model": true
+   "requires_model": true,
+   "api_base": ""
   },
   "settings": {
    "type": "object",
    "properties": {
+    "base_url": {
+     "type": "string",
+     "title": "Server già avviato (URL)",
+     "description": "Es. http://127.0.0.1:8178 se avvii whisper-server da solo; vuoto = lo avvia AIW",
+     "default": "",
+     "advanced": true
+    },
     "binary": {
      "type": "string",
      "title": "Percorso dell'eseguibile",
@@ -1706,11 +1716,18 @@
      "minimum": 0,
      "maximum": 65535,
      "advanced": true
+    },
+    "language": {
+     "type": "string",
+     "title": "Lingua predefinita",
+     "description": "Codice ISO 639-1 (it, en…) o auto; la voice mode la indica a ogni richiesta",
+     "default": "auto"
     }
    }
   },
   "install": {
-   "any": "https://github.com/ggml-org/whisper.cpp"
+   "any": "https://github.com/ggml-org/whisper.cpp (compila con cmake e usa build/bin/whisper-server)",
+   "macos": "brew install whisper-cpp"
   },
   "homepage": "https://github.com/ggml-org/whisper.cpp"
  },
@@ -2306,7 +2323,8 @@
   "capabilities": [
    "chat",
    "tools",
-   "vision"
+   "vision",
+   "stt"
   ],
   "settings": {
    "type": "object",
@@ -2355,7 +2373,8 @@
   "capabilities": [
    "chat",
    "tools",
-   "vision"
+   "vision",
+   "stt"
   ],
   "settings": {
    "type": "object",

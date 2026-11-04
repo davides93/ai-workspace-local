@@ -146,7 +146,9 @@ fn finish(mut found: Vec<Scanned>) -> Vec<LocalModel> {
 fn qualified_id(root: &Path, p: &Path) -> String {
     let s = to_logical(p.strip_prefix(root).unwrap_or(p)).to_lowercase();
     match s.rsplit_once('.') {
-        Some((stem, ext)) if !ext.contains('/') && matches!(ext, "gguf" | "litertlm" | "task" | "pte" | "llamafile") => stem.to_string(),
+        Some((stem, ext)) if !ext.contains('/') && matches!(ext, "gguf" | "litertlm" | "task" | "pte" | "llamafile" | "bin") => {
+            stem.to_string()
+        }
         _ => s,
     }
 }
@@ -221,6 +223,8 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Scanned>) {
                 None => meta.len(),
             };
             Some(local_gguf(&p, size))
+        } else if lower.ends_with(".bin") && is_whisper_ggml(&p) {
+            Some(local_whisper(&p, meta.len()))
         } else {
             [(".litertlm", "litertlm"), (".task", "litertlm"), (".pte", "pte"), (".llamafile", "llamafile")]
                 .iter()
@@ -366,6 +370,34 @@ fn dir_size(dir: &Path, depth: usize) -> u64 {
         .sum()
 }
 
+/// whisper.cpp models (`ggml-*.bin`) start with the ggml magic 0x67676d6c, little endian.
+fn is_whisper_ggml(p: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    std::fs::File::open(p).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && u32::from_le_bytes(magic) == 0x6767_6d6c
+}
+
+/// A whisper.cpp model: speech-to-text only, never offered to chat profiles.
+fn local_whisper(p: &Path, size: u64) -> LocalModel {
+    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let short = stem.trim_start_matches("ggml-");
+    let (variant, quant) = match short.rsplit_once('-') {
+        Some((v, q)) if q.starts_with('q') || q == "f16" => (v, Some(q.to_uppercase())),
+        _ => (short, None),
+    };
+    LocalModel {
+        id: stem.to_lowercase(),
+        name: format!("Whisper {variant}"),
+        path: Some(p.display().to_string()),
+        format: "ggml".into(),
+        size_bytes: size,
+        quant,
+        arch: Some("whisper".into()),
+        capabilities: vec!["stt".into()],
+        runtimes: crate::runtimes_for_format("ggml").into_iter().map(String::from).collect(),
+        ..Default::default()
+    }
+}
+
 fn parse_params(label: &str) -> Option<f64> {
     crate::parse_params(label)
 }
@@ -463,6 +495,12 @@ fn sidecar_models(root: &Path, dir: &Path, out: &mut Vec<Scanned>) {
                     m.name = display;
                 }
                 m
+            }
+            "ggml" => {
+                let Some((p, _)) = files.iter().find(|f| f.0.extension().map(|e| e.eq_ignore_ascii_case("bin")).unwrap_or(false)) else {
+                    continue;
+                };
+                local_whisper(p, size)
             }
             "litertlm" | "pte" | "llamafile" => {
                 let (p, _) = &files[0];
@@ -845,6 +883,31 @@ mod tests {
         // A stale record (file deleted by hand) disappears.
         std::fs::remove_file(repo.join("tiny-Q8_0.gguf")).unwrap();
         assert_eq!(scan_models(dir.path()).len(), 1);
+    }
+
+    #[test]
+    fn whisper_models_are_recognised_flat_and_installed_through_the_hub() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bin = 0x6767_6d6cu32.to_le_bytes().to_vec();
+        bin.extend_from_slice(&[0; 32]);
+        write(&dir.path().join("ggml-base.bin"), &bin);
+        write(&dir.path().join("pytorch_model.bin"), b"not a whisper model");
+        let repo = dir.path().join("hf/ggerganov/whisper.cpp");
+        write(&repo.join("ggml-small-q8_0.bin"), &bin);
+        let mut inst = install("hf", "ggerganov/whisper.cpp", "ggml-small-q8_0", "ggml", &[("ggml-small-q8_0.bin", bin.len() as u64)]);
+        inst.quant = Some("Q8_0".into());
+        sidecar::upsert(&repo, inst).unwrap();
+        let found = scan_models(dir.path());
+        assert_eq!(found.len(), 2, "{found:#?}");
+        let manual = found.iter().find(|m| m.id == "ggml-base").unwrap();
+        assert_eq!((manual.origin.as_str(), manual.removable, manual.format.as_str()), ("manual", true, "ggml"));
+        let hub = found.iter().find(|m| m.origin == "aiw").unwrap();
+        assert_eq!(
+            (hub.name.as_str(), hub.quant.as_deref(), hub.capabilities.clone()),
+            ("Whisper small", Some("Q8_0"), vec!["stt".to_string()])
+        );
+        assert_eq!(hub.runtimes, vec!["whisper-server".to_string()]);
+        assert!(hub.source.as_deref().unwrap().starts_with("hf:ggerganov/whisper.cpp"));
     }
 
     #[test]

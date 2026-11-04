@@ -65,6 +65,21 @@ export function useCancelRun() {
   return useMutation({ mutationFn: (runId: string) => api.cancelRun(runId) });
 }
 
+/** Which speech-to-text backend voice mode would use here (and why not, when none is available). */
+export function useVoiceStatus() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.voice(), queryFn: () => api.voice() });
+}
+
+/** Speech to text of a recorded WAV. The voice flow reports its own failures, with the right wording. */
+export function useTranscribe() {
+  const api = useApi();
+  return useMutation({
+    mutationFn: (v: { wav: Blob; language?: string }) => api.transcribe(v.wav, v.language),
+    meta: { handled: true },
+  });
+}
+
 /** Changes of an isolated session; refetched by the panel whenever a run ends. */
 export function useWorktree(sessionId: string, enabled: boolean) {
   const api = useApi();

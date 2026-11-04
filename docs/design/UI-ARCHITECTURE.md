@@ -56,6 +56,19 @@ Regole:
   solo per valori calcolati (larghezza di una barra, colore di un grafico).
 - Niente `catch → toast` copiato: si usa `useAction()` o `useMutation` con `onError` comune.
 
+**Voce nella chat** (`features/chat`). Logica pura e testata in `voice/`: `vad.ts` (rilevatore di voce
+e ritaglio dei silenzi), `wav.ts` (ricampionamento a 16 kHz, WAV 16-bit mono), `speech.ts`
+(Markdown → testo da leggere, frasi, scelta della voce); le parti che toccano il browser stanno in
+`voice/capture.ts` (microfono) e `voice/tts.ts` (solo voci locali del sistema, mai quelle cloud).
+`useVoice.ts` sequenzia dettatura e conversazione (ascolto → invio → lettura della risposta →
+ascolto; le conferme dell'agente vengono annunciate; Esc o cambio sessione terminano) e legge lo
+stato del motore con `useVoiceStatus` e la trascrizione con `useTranscribe` (`chat/api.ts`). Il
+`Composer` mostra il microfono (`aria-pressed` mentre registra) e il pulsante della conversazione;
+`VoiceBar` dice cosa sta facendo l'agente. Il `Transport` ha `voice()` e `transcribe(wav, lingua?)`:
+HTTP manda l'audio grezzo, Tauri lo manda in base64 dentro JSON (l'IPC porta solo JSON), il mock
+risponde con frasi di esempio. Le impostazioni `voice.*` arrivano dallo schema della configurazione e
+stanno nella sezione "Voce" di Impostazioni.
+
 ## 2. Data layer
 
 - **TanStack Query v5** sopra `Transport`. Il `QueryClient` ha `staleTime` 5 s, `retry` 1 (0 per

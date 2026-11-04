@@ -21,7 +21,7 @@ e ciò che il codice faceva davvero, soprattutto in tre punti:
 3. **Sicurezza dell'API locale**: CORS permissivo e richieste da loopback senza token permettevano
    a qualunque pagina web di registrare hook o server MCP stdio, cioè di eseguire comandi.
 
-La v0.4 chiude questi tre punti e rifà la UI. Test Rust: da 82 a 348. Test UI: da 0 a 591 (Vitest),
+La v0.4 chiude questi tre punti e rifà la UI. Test Rust: da 82 a 357 (con la voce della 0.3). Test UI: da 0 a 629 (Vitest),
 più uno smoke test Playwright (29 rotte × 2 larghezze × 2 temi).
 
 Dopo la bozza sono entrati cinque giri di correzioni, descritti nel §2.8: difetti emersi dal giro
@@ -52,7 +52,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Bot e canali (Telegram, Slack, email) | ❌ | |
 | Documenti e RAG (knowledge base, embeddings) | ❌ | la capacità `embeddings` è solo un'etichetta nei manifest |
 | Memoria a lungo termine | ❌ | |
-| Voce (STT/TTS) | 📄 | `whisper-server` è solo un manifest |
+| Voce (STT/TTS) | ✅ STT · 🟡 TTS | STT con `whisper-server` (whisper.cpp, `POST /inference`) o con un server OpenAI-compatibile (`/v1/audio/transcriptions`: LocalAI, Nexa, remoto, dispositivo accoppiato); scelta automatica del motore e del modello Whisper più grande che sta in memoria, impostazioni `voice.*`, modelli ggml nel catalogo e nella scansione, `GET /api/voice`, `POST /api/voice/transcribe` (audio grezzo o base64 per l'IPC), `POST /v1/audio/transcriptions` (mai inoltrato a un peer). In chat: dettatura dal microfono e conversazione a voce (ascolto con rilevamento della pausa, risposta letta con le voci locali del sistema, conferme annunciate, Esc termina). TTS solo con le voci di sistema della UI, nessun motore neurale (Kokoro/Piper); trascrizione nativa su mobile assente; nel browser il microfono richiede `localhost` o HTTPS |
 | Allegati dell'utente (immagini, file) in chat | ❌ | |
 
 ### 2.2 Tool (L4) e interfacce (L6)
@@ -82,7 +82,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Embedded in-process | llama.cpp (FFI), ONNX Runtime GenAI (dlopen) | ✅ **v0.4** llama.cpp ora registrato anche con Metal/CUDA/Vulkan; ORT GenAI richiede la libreria installata |
 | Di sistema | Apple Foundation Models (iOS), Gemini Nano e LiteRT-LM (Android) | 🟡 plugin Swift e Kotlin reali ma minimi; Foundation Models non collegato su macOS desktop |
 | Solo manifest | Windows ML, MLX Swift, Core AI, ExecuTorch, MLC LLM, Phi Silica | 📄 la UI li mostra come "non ancora implementato" |
-| Voce | whisper-server | 📄 |
+| Voce | whisper-server | ✅ trascrizione (sidecar `whisper-server` o già avviato, modelli ggml) |
 | Remoti | OpenAI-compatibile, peer AIW | ✅ |
 
 ### 2.4 Acceleratori
@@ -196,8 +196,8 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 10. Client MCP completo: resources, prompts, sampling, OAuth, riconnessione.
 11. Rewind dei checkpoint, workflow durevoli (ripresa, foreach, retry, timeout), approvazioni con
     timeout e notifiche desktop.
-12. Team multi-agente (supervisor e handoff), canali (Telegram, Slack, email) e voce (whisper.cpp,
-    Kokoro/Piper).
+12. Team multi-agente (supervisor e handoff), canali (Telegram, Slack, email) e voce neurale locale
+    (Kokoro/Piper al posto delle voci di sistema; la trascrizione con whisper.cpp c'è già).
 
 **P3 · Sicurezza e distribuzione**
 13. Rete della shell chiusa di default, `~/.aiw` fuori dalla sandbox, server MCP stdio in sandbox e

@@ -76,7 +76,7 @@ impl ModelProvider for CatalogProvider {
             description: "Modelli selezionati e provati con AI Workspace Local, con la compatibilità per questo dispositivo.".into(),
             homepage: String::new(),
             capabilities: ["search", "files"].map(String::from).to_vec(),
-            formats: ["gguf", "mlx", "litertlm"].map(String::from).to_vec(),
+            formats: ["gguf", "mlx", "litertlm", "ggml"].map(String::from).to_vec(),
             auth: "none".into(),
             auth_configured: false,
             endpoint: String::new(),

@@ -22,6 +22,7 @@ import { setDraft } from "./model/drafts";
 import { forgetSessionImages } from "./model/imageCache";
 import { describeRunError, lastRunNotice } from "./model/runNotice";
 import { useConversation } from "./useConversation";
+import { useVoice } from "./useVoice";
 import { COMPACT_SESSIONS_QUERY, useDraft, useInspectorMode, useInspectorOpen } from "./useLayout";
 import "./chat.css";
 
@@ -138,6 +139,15 @@ export function ChatView() {
   const logState = listFailed
     ? { status: "error" as const, error: sessions.error, title: "Impossibile caricare le sessioni" }
     : sessions.isPending || (!!list?.length && !openId) ? { status: "loading" as const } : conv.history;
+  const voice = useVoice({
+    sessionId: openId, ready: !!openId && logState.status === "ready", running: conv.running, items: conv.items, pending: conv.pending,
+    send: (text, onRejected) => {
+      log.current?.scrollToBottom();
+      conv.send(text, onRejected);
+    },
+    insertText: (text) => setInput(input.trim() ? `${input.trimEnd()} ${text}` : text),
+  });
+
   const notice = lastRunNotice(active?.last_status, conv.items, conv.running);
   const compactAt = Number(config.data?.effective["context.compact_at"]) || 0.8;
   const inspector = (
@@ -175,7 +185,7 @@ export function ChatView() {
         )}
         <Composer
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}
-          focusKey={`${openId}:${focusTick}`}
+          focusKey={`${openId}:${focusTick}`} voice={voice}
           modelLabel={profile ? `${profile.runtime_id} · ${profile.model || "nessun modello"}` : undefined}
           placeholder={!openId ? "Crea una sessione per iniziare" : logState.status === "loading" ? "Carico la conversazione…" : `Scrivi a ${agent?.name ?? "l'agente"}…`}
         />

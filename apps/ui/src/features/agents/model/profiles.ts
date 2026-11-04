@@ -3,9 +3,17 @@
 import type { InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
 import { slugify, uniqueId } from "./agents";
 
-/** Models the runtime can serve, by `runtime_compat` (the same list the Models page shows). */
+/** A speech-to-text model (Whisper): it serves the voice mode, never a chat profile. */
+export const isSpeechOnly = (capabilities: readonly string[]): boolean => capabilities.length > 0 && capabilities.every((c) => c === "stt");
+
+/** Runtimes a chat profile can use (not the speech-only ones, like whisper.cpp). */
+export function chatRuntimes<T extends { capabilities: readonly string[] }>(runtimes: readonly T[]): T[] {
+  return runtimes.filter((r) => !isSpeechOnly(r.capabilities));
+}
+
+/** Models the runtime can serve, by `runtime_compat` (the same list the Models page shows); speech models are left out. */
 export function compatibleModels(models: readonly LocalModel[], runtimeId: string): LocalModel[] {
-  return models.filter((m) => m.runtime_compat.some((c) => c.id === runtimeId) || m.runtimes.includes(runtimeId));
+  return models.filter((m) => !isSpeechOnly(m.capabilities) && (m.runtime_compat.some((c) => c.id === runtimeId) || m.runtimes.includes(runtimeId)));
 }
 
 /** Why a model cannot run on a runtime ("" when it can, or when nothing is known). */

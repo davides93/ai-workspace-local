@@ -5,7 +5,7 @@ import type {
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig,
+  PolicyRule, HookConfig, VoiceStatus, Transcript,
 } from "./types";
 
 export class ApiError extends Error {
@@ -111,6 +111,31 @@ export class HttpTransport implements Transport {
   pairPeer = (address: string, code: string) => this.req<PeerDevice>("POST", "/mesh/pair", { address, code });
   removePeer = (id: string) => this.req<void>("DELETE", `/mesh/peers/${enc(id)}`);
   pairingQr = () => this.req<{ url: string; svg: string }>("GET", "/pairing/qr");
+
+  voice = () => this.req<VoiceStatus>("GET", "/voice");
+
+  /** Raw audio body (no JSON/base64 overhead). The Tauri carrier overrides it. */
+  async transcribe(wav: Blob, language?: string): Promise<Transcript> {
+    const headers: Record<string, string> = { Accept: "application/json", "Content-Type": wav.type || "audio/wav" };
+    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    const res = await fetch(`${this.base}/api/voice/transcribe${queryString({ language: language !== "auto" ? language : undefined })}`, {
+      method: "POST",
+      headers,
+      body: wav,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let msg = text;
+      try {
+        msg = JSON.parse(text).error ?? text;
+      } catch {
+        /* plain text error */
+      }
+      throw new ApiError(res.status, msg || res.statusText);
+    }
+    return JSON.parse(text) as Transcript;
+  }
+
   worktreeStatus = (sessionId: string) => this.req<WorktreeStatus>("GET", `/sessions/${enc(sessionId)}/worktree`);
   worktreeApply = (sessionId: string) => this.req<WorktreeStatus>("POST", `/sessions/${enc(sessionId)}/worktree/apply`);
   worktreeDiscard = (sessionId: string) => this.req<void>("DELETE", `/sessions/${enc(sessionId)}/worktree`);

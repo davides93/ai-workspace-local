@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { models, profiles, runtimes } from "../../../shared/api/mock/fixtures";
 import type { InferenceProfile, LocalModel } from "../../../shared/api/types";
 import {
-  blankProfile, compatibleModels, hasProfileErrors, idForProfile, incompatibility, modelAfterRuntimeChange, normalizeProfile, validateProfile,
+  blankProfile, chatRuntimes, compatibleModels, hasProfileErrors, idForProfile, incompatibility, modelAfterRuntimeChange, normalizeProfile, validateProfile,
 } from "./profiles";
 
 const model = (id: string, compat: { id: string; available: boolean; reason?: string }[], over: Partial<LocalModel> = {}): LocalModel => ({
@@ -20,6 +20,15 @@ describe("model compatibility", () => {
     expect(compatibleModels([a, b], "llama-server").map((m) => m.id)).toEqual(["a"]);
     expect(compatibleModels([a, b], "mlx").map((m) => m.id)).toEqual(["b"]);
     expect(compatibleModels([a, b], "nothing")).toEqual([]);
+  });
+
+  it("never offers speech models or speech runtimes to a chat profile", () => {
+    const whisper = model("ggml-small-q8_0", [{ id: "whisper-server", available: true }, { id: "llama-server", available: true }], { format: "ggml", capabilities: ["stt"] });
+    expect(compatibleModels([a, whisper], "llama-server").map((m) => m.id)).toEqual(["a"]);
+    expect(compatibleModels([whisper], "whisper-server")).toEqual([]);
+    expect(chatRuntimes(runtimes).some((r) => r.id === "whisper-server")).toBe(false);
+    expect(chatRuntimes(runtimes).some((r) => r.id === "llama-server")).toBe(true);
+    expect(chatRuntimes([{ capabilities: ["stt", "chat"] }, { capabilities: [] }])).toHaveLength(2);
   });
 
   it("works with the demo catalogue", () => {

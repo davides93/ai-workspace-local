@@ -75,6 +75,9 @@ export const runtimes: RuntimeInfo[] = [
     description: "llama.cpp collegato in-process via FFI: nessun processo esterno. Default su mobile.", accelerators: ["cuda", "metal", "vulkan", "opencl", "cpu"], capabilities: ["chat", "tools", "embeddings", "grammar"], settings_schema: llamaSchema, settings: { ctx_size: 8192, gpu_layers: 999 } }),
   rt({ id: "ollama", name: "Ollama", vendor: "Ollama", kind: "sidecar", status: "available", endpoint: "http://127.0.0.1:11434", api: "ollama",
     description: "Rilevato su questo PC. Gestione modelli via `ollama pull`.", accelerators: ["cuda", "rocm", "metal", "cpu"], capabilities: ["chat", "tools", "vision", "embeddings"], homepage: "https://ollama.com" }),
+  rt({ id: "whisper-server", name: "whisper.cpp server", vendor: "ggml-org", kind: "sidecar", status: "running", api: "native", endpoint: "http://127.0.0.1:39290", formats: ["ggml"],
+    description: "Trascrizione vocale locale (whisper-server) per la modalità voce.", accelerators: ["cuda", "metal", "vulkan", "cpu"], capabilities: ["stt"], loaded_models: ["ggml-large-v3-turbo-q5_0"],
+    status_detail: "ggml-large-v3-turbo-q5_0", install_hint: "winget install ggml.whispercpp", homepage: "https://github.com/ggml-org/whisper.cpp" }),
   rt({ id: "lmstudio", name: "LM Studio", vendor: "Element Labs", kind: "sidecar", status: "stopped", endpoint: "http://127.0.0.1:1234/v1",
     description: "Server locale di LM Studio (`lms server start`).", accelerators: ["cuda", "vulkan", "metal", "cpu"], formats: ["gguf", "mlx"], capabilities: ["chat", "tools", "vision", "embeddings"] }),
   rt({ id: "vllm", name: "vLLM", vendor: "vLLM project", kind: "sidecar", status: "installable", platforms: ["linux"],
@@ -163,6 +166,7 @@ const modelSeeds: ModelSeed[] = [
   { id: "holo2-8b-q5_k_m", name: "Holo2 8B (computer-use)", format: "gguf", quant: "Q5_K_M", size_bytes: 5.8 * GB, params_b: 8, context_length: 65536, arch: "qwen3vl", capabilities: ["chat", "vision", "gui-grounding"], runtimes: ["llama-server", "lmstudio"], source: "hf:Hcompany/Holo2-8B-GGUF" },
   { id: "gemma-4-e4b-q4_k_m", name: "Gemma 4 E4B", format: "gguf", quant: "Q4_K_M", size_bytes: 3.1 * GB, params_b: 8, context_length: 131072, arch: "gemma4", capabilities: ["chat", "tools", "vision", "audio"], runtimes: ["llama-server", "llama-embedded", "ollama"], source: "hf:google/gemma-4-E4B-it-GGUF" },
   { id: "qwen3-embedding-0.6b-q8_0", name: "Qwen3 Embedding 0.6B", format: "gguf", quant: "Q8_0", size_bytes: 0.64 * GB, params_b: 0.6, context_length: 32768, arch: "qwen3", capabilities: ["embeddings"], runtimes: ["llama-server", "llama-embedded"] },
+  { id: "ggml-large-v3-turbo-q5_0", name: "Whisper large-v3-turbo", format: "ggml", quant: "Q5_0", size_bytes: 0.53 * GB, arch: "whisper", capabilities: ["stt"], runtimes: ["whisper-server"], path: "models\\ggml-large-v3-turbo-q5_0.bin" },
   { id: "phi-4-mini-onnx-dml", name: "Phi-4 mini (ONNX DirectML)", format: "onnx", quant: "int4", size_bytes: 2.4 * GB, params_b: 3.8, context_length: 131072, capabilities: ["chat", "tools"], runtimes: ["foundry-local", "windows-ml"] },
 ]
 export const models: LocalModel[] = [
@@ -182,6 +186,7 @@ const catalogSeeds: CatalogSeed[] = [
   { id: "qwen3-coder-480b", name: "Qwen3 Coder 480B-A35B", family: "Qwen3", publisher: "Alibaba", description: "Agente di coding di frontiera, richiede un server multi-GPU.", params_b: 480, active_params_b: 35, format: "gguf", quant: "Q4_K_M", size_bytes: 290 * GB, context_length: 262144, capabilities: ["chat", "tools"], license: "Apache-2.0", source: { kind: "hf", repo: "Qwen/Qwen3-Coder-480B-A35B-Instruct-GGUF", file: "Q4_K_M" }, min_memory_mb: 300000, tags: ["coding"], fit: "no", fit_detail: "Servono circa 300 GB di memoria: usa un device remoto", installed: false },
   { id: "gemma-4-e2b-litert", name: "Gemma 4 E2B (LiteRT-LM)", family: "Gemma 4", publisher: "Google", description: "Per telefoni: NPU e GPU con LiteRT-LM.", params_b: 5, active_params_b: 2, format: "litertlm", quant: "int4", size_bytes: 1.4 * GB, context_length: 32768, capabilities: ["chat", "vision", "audio", "tools"], license: "Gemma", source: { kind: "hf", repo: "litert-community/gemma-4-E2B-it-litert-lm", file: "gemma-4-E2B-it.litertlm" }, min_memory_mb: 3000, tags: ["mobile"], fit: "great", fit_detail: "Pensato per mobile; qui gira su CPU", installed: false },
   { id: "qwen3-4b-mlx", name: "Qwen3 4B (MLX)", family: "Qwen3", publisher: "mlx-community", description: "Repository MLX a 4 bit per Apple Silicon: si scarica intero e gira solo con MLX su macOS.", params_b: 4, format: "mlx", quant: "4bit", size_bytes: 2.3 * GB, context_length: 40960, capabilities: ["chat", "tools"], license: "Apache-2.0", source: { kind: "hf", repo: "mlx-community/Qwen3-4B-4bit", file: "" }, min_memory_mb: 4000, tags: ["mlx", "apple-silicon"], fit: "no", fit_detail: "Richiede macOS su Apple Silicon: questo PC non è compatibile", installed: false },
+  { id: "whisper-small-q8", name: "Whisper Small", family: "Whisper", publisher: "OpenAI (ggml: ggml-org)", description: "Buon equilibrio tra qualità e velocità in italiano su CPU.", params_b: 0.244, format: "ggml", quant: "Q8_0", size_bytes: 0.25 * GB, context_length: 448, capabilities: ["stt"], license: "MIT", source: { kind: "hf", repo: "ggerganov/whisper.cpp", file: "ggml-small-q8_0.bin" }, min_memory_mb: 900, tags: ["voce"], fit: "great", fit_detail: "Tutto su GPU", installed: false },
   { id: "apple-fm-system", name: "Apple Foundation Model (di sistema)", family: "Apple", publisher: "Apple", description: "Già presente su iPhone e Mac con Apple Intelligence: non serve scaricarlo.", params_b: 3, format: "system", quant: "2-bit QAT", size_bytes: 0, context_length: 4096, capabilities: ["chat", "tools", "guided-generation"], license: "Apple", source: { kind: "system", runtime: "apple-fm" }, min_memory_mb: 0, tags: ["system", "mobile"], fit: "no", fit_detail: "Solo su dispositivi Apple", installed: false },
 ]
 export const catalog: CatalogModel[] = catalogSeeds.map<CatalogModel>((c) => ({ ...c, runtime_compat: compatForFormat(c.format), downloadable: c.source.kind !== "system" }));
@@ -382,6 +387,10 @@ export const configSchema: SettingsSchema = {
     "models.dir": { type: "string", title: "Cartella modelli", default: "~/.aiw/models" },
     "workspace.root": { type: "string", title: "Cartella di lavoro degli agenti", default: "" },
     "telemetry.otlp": { type: "string", title: "Endpoint OTLP (vuoto = disattivato)", default: "" },
+    "voice.language": { type: "string", title: "Lingua della voce", description: "Codice ISO 639-1 (it, en…) o auto per riconoscerla", default: "auto" },
+    "voice.stt_runtime": { type: "string", title: "Motore di trascrizione", description: "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", enum: ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], default: "auto" },
+    "voice.stt_model": { type: "string", title: "Modello Whisper", description: "Vuoto = il più grande installato che sta in memoria", default: "" },
+    "voice.tts_voice": { type: "string", title: "Voce per leggere le risposte", description: "Nome di una voce locale del sistema; vuoto = la prima per la lingua", default: "" },
   },
 };
 export const configLayers: ConfigView["layers"] = [

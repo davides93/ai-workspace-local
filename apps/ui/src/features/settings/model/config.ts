@@ -67,6 +67,7 @@ export const SECTIONS: SettingsSection[] = [
   { id: "security", title: "Sicurezza e rete", description: "Conferme, sandbox e siti raggiungibili da web e browser.", prefixes: ["policy", "sandbox", "network"] },
   { id: "server", title: "Server e accesso", description: "Come altri dispositivi e programmi raggiungono il workspace.", prefixes: ["server"] },
   { id: "folders", title: "Cartelle", description: "Dove stanno i modelli e dove lavorano gli agenti.", prefixes: ["models", "workspace"] },
+  { id: "voice", title: "Voce", description: "Dettatura e conversazione a voce: lingua, motore di trascrizione e voce che legge le risposte.", prefixes: ["voice"] },
   { id: "telemetry", title: "Telemetria", description: "Esportazione di tracce e metriche.", prefixes: ["telemetry"] },
 ];
 
@@ -148,6 +149,14 @@ const OPTION_LABEL: Record<string, Record<string, string>> = {
     "auto-edit": "auto-edit · modifica i file, chiede per i comandi",
     auto: "auto · chiede solo per computer-use",
     yolo: "yolo · non chiede mai",
+  },
+  "voice.stt_runtime": {
+    auto: "auto · whisper.cpp, poi un server locale, poi un dispositivo accoppiato",
+    "whisper-server": "whisper.cpp",
+    localai: "LocalAI",
+    nexa: "Nexa",
+    "aiw-peer": "Dispositivo accoppiato",
+    "remote-openai": "Endpoint compatibile OpenAI",
   },
   "sandbox.mode": { "read-only": "read-only · sola lettura", "workspace-write": "workspace-write · scrive nel workspace", off: "off · nessuna sandbox" },
 };

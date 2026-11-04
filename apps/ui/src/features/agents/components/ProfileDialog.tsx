@@ -3,7 +3,7 @@ import { Button, Dialog, Field, Input, Select, StatusPill } from "../../../share
 import { formatBytes, formatContext } from "../../../shared/lib/format";
 import type { InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
 import {
-  blankProfile, compatibleModels, CONTEXT_PRESETS, hasProfileErrors, idForProfile, modelAfterRuntimeChange, normalizeProfile, validateProfile,
+  blankProfile, chatRuntimes, compatibleModels, CONTEXT_PRESETS, hasProfileErrors, idForProfile, modelAfterRuntimeChange, normalizeProfile, validateProfile,
   type ProfileIssue,
 } from "../model/profiles";
 
@@ -29,9 +29,10 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
   onClose: () => void;
 }) {
   const isNew = profile === null;
+  const usable = useMemo(() => chatRuntimes(runtimes), [runtimes]);
   const [draft, setDraft] = useState<InferenceProfile>(() => {
     if (profile) return structuredClone(profile);
-    const rt = runtimes.find((r) => r.status === "running" || r.status === "available") ?? runtimes[0];
+    const rt = usable.find((r) => r.status === "running" || r.status === "available") ?? usable[0];
     return blankProfile(rt?.id ?? "", compatibleModels(models, rt?.id ?? "")[0]?.id ?? "");
   });
   const fits = useMemo(() => compatibleModels(models, draft.runtime_id), [models, draft.runtime_id]);
@@ -80,7 +81,7 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
             <Select id="pf-runtime" value={draft.runtime_id} onChange={(e) => changeRuntime(e.target.value)} aria-invalid={!!err(issues, "runtime_id")}>
               {!draft.runtime_id && <option value="">Scegli un runtime…</option>}
               {draft.runtime_id && !runtime && <option value={draft.runtime_id}>{draft.runtime_id} (non registrato)</option>}
-              {runtimes.map((r) => <option key={r.id} value={r.id}>{r.name} · {r.kind}</option>)}
+              {usable.map((r) => <option key={r.id} value={r.id}>{r.name} · {r.kind}</option>)}
             </Select>
           </Field>
           <Field

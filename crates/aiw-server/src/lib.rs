@@ -13,7 +13,7 @@ use aiw_core::api::*;
 use aiw_core::Error;
 use aiw_engine::{Engine, PairOutcome};
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -143,6 +143,9 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/mesh/pair", post(mesh_pair))
         .route("/api/mesh/peers/{id}", delete(mesh_remove_peer))
         .route("/api/pairing/qr", get(pairing_qr))
+        // Voice mode.
+        .route("/api/voice", get(voice_status))
+        .route("/api/voice/transcribe", post(voice_transcribe).layer(DefaultBodyLimit::max(VOICE_BODY_LIMIT)))
         .route("/.well-known/agent-card.json", get(a2a::agent_card))
         .route("/a2a", post(a2a::handle))
         .route("/api/tools", get(tools))
@@ -155,6 +158,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/v1/chat/completions", post(gateway::chat_completions))
         .route("/v1/messages", post(anthropic::messages))
         .route("/v1/messages/count_tokens", post(anthropic::count_tokens))
+        .route("/v1/audio/transcriptions", post(audio_transcriptions).layer(DefaultBodyLimit::max(VOICE_BODY_LIMIT)))
         .route("/mcp", post(mcp_server::handle).get(mcp_server::get_stream).delete(|| async { StatusCode::OK }));
     let mut app = api.method_not_allowed_fallback(method_not_allowed).with_state(st.clone());
     app = match ui_dir.filter(|d| d.join("index.html").exists()) {
@@ -591,6 +595,116 @@ async fn pairing_qr(State(s): State<AppState>, req: Request) -> ApiResult<Value>
     let (url, svg) =
         mesh::pairing_qr(&format!("http://{ip}:{}", server_port(&s)), &s.engine.pairing_code()).map_err(|e| ApiError(Error::Runtime(e)))?;
     ok(json!({"url": url, "svg": svg}))
+}
+
+// ------------------------------------------------------------------ voice
+
+/// Audio cap plus the base64 overhead of the JSON form used over the app's IPC bridge.
+const VOICE_BODY_LIMIT: usize = aiw_engine::voice::MAX_AUDIO_BYTES / 3 * 4 + (1 << 20);
+
+async fn voice_status(State(s): State<AppState>) -> ApiResult<VoiceStatus> {
+    ok(s.engine.voice_status())
+}
+
+#[derive(Deserialize, Default)]
+struct VoiceQuery {
+    language: Option<String>,
+}
+
+/// `POST /api/voice/transcribe`: the raw audio (`Content-Type: audio/wav`…), or JSON
+/// `{"audio": base64, "mime"?, "language"?}` for the app's IPC bridge, which carries JSON only.
+async fn voice_transcribe(State(s): State<AppState>, Query(q): Query<VoiceQuery>, req: Request) -> Result<Json<Transcript>, Response> {
+    use base64::Engine as _;
+    let ct = req.headers().get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("audio/wav").to_string();
+    let body = axum::body::to_bytes(req.into_body(), VOICE_BODY_LIMIT).await.map_err(|_| audio_too_large())?;
+    let invalid = |m: String| ApiError(Error::Invalid(m)).into_response();
+    let (audio, mime, language) = if ct.starts_with("application/json") {
+        let v: Value =
+            serde_json::from_slice(&body).map_err(|e| invalid(format!("JSON non valido: {}", extract::localize(&e.to_string()))))?;
+        let b64 = v["audio"].as_str().ok_or_else(|| invalid("manca il campo audio (base64)".into()))?;
+        let audio =
+            base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|_| invalid("l'audio non è base64 valido".into()))?;
+        (audio, v["mime"].as_str().unwrap_or("audio/wav").to_string(), v["language"].as_str().map(String::from).or(q.language))
+    } else {
+        (body.to_vec(), ct, q.language)
+    };
+    s.engine.transcribe(&audio, &mime, language.as_deref()).await.map(Json).map_err(|e| ApiError(e).into_response())
+}
+
+/// 413 in the API's error shape.
+fn audio_too_large() -> Response {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(json!({"error": format!("l'audio supera il limite di {} MB", aiw_engine::voice::MAX_AUDIO_BYTES >> 20)})),
+    )
+        .into_response()
+}
+
+/// A multipart parsing error in the API's error shape (413 when the size limit was hit).
+fn multipart_error(e: axum::extract::multipart::MultipartError) -> Response {
+    if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return audio_too_large();
+    }
+    ApiError(Error::Invalid("richiesta multipart non valida".into())).into_response()
+}
+
+/// `POST /v1/audio/transcriptions` (OpenAI multipart): other apps and paired devices use this
+/// device's speech recognition. Such requests are never forwarded to another device.
+async fn audio_transcriptions(
+    State(s): State<AppState>,
+    form: Result<axum::extract::Multipart, axum::extract::multipart::MultipartRejection>,
+) -> Response {
+    let Ok(mut form) = form else {
+        return ApiError(Error::Invalid("serve una richiesta multipart/form-data con il campo file".into())).into_response();
+    };
+    let invalid = |m: &str| ApiError(Error::Invalid(m.into())).into_response();
+    let (mut audio, mut mime, mut language, mut format) = (None, String::from("audio/wav"), None, String::from("json"));
+    loop {
+        let field = match form.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return multipart_error(e),
+        };
+        match field.name().unwrap_or_default() {
+            "file" => {
+                if let Some(ct) = field.content_type() {
+                    mime = ct.to_string();
+                }
+                match field.bytes().await {
+                    Ok(b) => audio = Some(b),
+                    Err(e) => return multipart_error(e),
+                }
+            }
+            "language" => match field.text().await {
+                Ok(t) => language = Some(t),
+                Err(e) => return multipart_error(e),
+            },
+            "response_format" => match field.text().await {
+                Ok(t) => format = t,
+                Err(e) => return multipart_error(e),
+            },
+            _ => {}
+        }
+    }
+    let Some(audio) = audio else { return invalid("manca il campo file") };
+    if aiw_runtimes::stt::wav_info(&audio).is_some() {
+        mime = "audio/wav".into();
+    }
+    let t = match s.engine.transcribe_for_peer(&audio, &mime, language.as_deref()).await {
+        Ok(t) => t,
+        Err(e) => return ApiError(e).into_response(),
+    };
+    match format.as_str() {
+        "text" => t.text.into_response(),
+        "verbose_json" => Json(json!({
+            "task": "transcribe",
+            "language": t.language,
+            "duration": t.duration_ms.map(|d| d as f64 / 1000.0),
+            "text": t.text
+        }))
+        .into_response(),
+        _ => Json(json!({ "text": t.text })).into_response(),
+    }
 }
 
 async fn workflows(State(s): State<AppState>) -> ApiResult<Vec<WorkflowDef>> {

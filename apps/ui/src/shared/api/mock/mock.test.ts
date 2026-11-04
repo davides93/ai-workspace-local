@@ -426,3 +426,41 @@ describe("direct URL downloads", () => {
     expect(urlDest("http://192.168.1.5:8080/x/m.gguf", "m.gguf")).toMatch(/\/url\/192\.168\.1\.5_8080\/m-[0-9a-f]{8}\/m\.gguf$/);
   });
 });
+
+describe("voice mode (demo)", () => {
+  it("reports an available backend with the voice settings", async () => {
+    const api = new MockTransport();
+    const v = await api.voice();
+    expect(v.available).toBe(true);
+    expect(v.runtime).toBe("whisper-server");
+    expect(v.models).toContain("ggml-large-v3-turbo-q5_0");
+    expect(v.language).toBe("it");
+    const view = await api.config();
+    expect(Object.keys(view.schema.properties).filter((k) => k.startsWith("voice."))).toEqual(["voice.language", "voice.stt_runtime", "voice.stt_model", "voice.tts_voice"]);
+  });
+
+  it("transcribes with a plausible sentence per request and the duration of the audio", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new MockTransport();
+      const wav = new Blob([new Uint8Array(44 + 32_000)], { type: "audio/wav" });
+      const first = api.transcribe(wav);
+      await vi.advanceTimersByTimeAsync(700);
+      const a = await first;
+      expect(a.text).not.toBe("");
+      expect(a.duration_ms).toBe(1000);
+      const second = api.transcribe(wav);
+      await vi.advanceTimersByTimeAsync(700);
+      expect((await second).text).not.toBe(a.text);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the speech models and runtime out of the chat profiles' choices (they are listed as models)", async () => {
+    const api = new MockTransport();
+    const whisper = (await api.models()).find((m) => m.id === "ggml-large-v3-turbo-q5_0")!;
+    expect(whisper.capabilities).toEqual(["stt"]);
+    expect(whisper.runtime_compat.map((c) => c.id)).toEqual(["whisper-server"]);
+  });
+});

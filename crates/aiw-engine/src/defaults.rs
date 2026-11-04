@@ -329,6 +329,19 @@ mod tests {
     }
 
     #[test]
+    fn speech_models_are_never_chat_profiles() {
+        let laptop = device("linux", 16, None);
+        let mut whisper = model("ggml-small-q8_0", 0.25, &["stt"], None);
+        whisper.format = "ggml".into();
+        let mut mislabeled = model("ggml-base", 0.08, &["chat"], None);
+        mislabeled.format = "ggml".into();
+        let models = vec![whisper, mislabeled, model("qwen-4b", 2.5, TOOLS, None)];
+        assert_eq!(default_profile(&models, &laptop, &avail(true, false, &[])).model, "qwen-4b");
+        let only_speech = vec![models[0].clone()];
+        assert_eq!(default_profile(&only_speech, &laptop, &avail(true, false, &[])).model, "");
+    }
+
+    #[test]
     fn tools_beat_size_and_nothing_that_does_not_fit_is_chosen() {
         let laptop = device("linux", 16, None);
         let models = vec![

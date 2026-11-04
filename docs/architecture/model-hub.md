@@ -7,7 +7,7 @@
 
 ## 1. Obiettivi
 
-1. **Scoperta live** dei modelli sui provider pubblici, non solo le 18 voci del catalogo curato.
+1. **Scoperta live** dei modelli sui provider pubblici, non solo le 21 voci del catalogo curato (tra cui i modelli Whisper `ggml-*.bin` per la voce).
 2. **Varianti**: per un repository GGUF si sceglie la quantizzazione (con tutti gli shard e
    l'`mmproj` per la vision). Per MLX, ONNX e safetensors si scarica il repository intero (o una
    sua sottocartella).
@@ -32,6 +32,8 @@
 Note:
 - `endpoint` di `hf` è `https://huggingface.co`, sovrascrivibile da `HF_ENDPOINT` o dalle
   impostazioni del provider (mirror).
+- I modelli Whisper (`ggerganov/whisper.cpp`, file `ggml-*.bin`) si scaricano dal catalogo come varianti
+  di formato `ggml`; la scansione li riconosce dal magic `ggml` e li lascia fuori dai profili di chat.
 - GitHub Releases e Kaggle sono in roadmap (§8). LM Studio non ha un hub proprio: scarica da
   Hugging Face; i suoi modelli locali si riusano con la scansione delle sorgenti esterne (§6).
 - Nessuno di questi endpoint è raggiungibile dall'ambiente di sviluppo in cui è stato scritto il
@@ -46,7 +48,7 @@ pub struct ModelProviderInfo {
     pub description: String,
     pub homepage: String,
     pub capabilities: Vec<String>, // search | files | auth | multi_file
-    pub formats: Vec<String>,      // formati che può fornire: gguf, mlx, onnx, safetensors, litertlm, …
+    pub formats: Vec<String>,      // formati che può fornire: gguf, mlx, onnx, safetensors, litertlm, ggml (Whisper), …
     pub auth: String,              // none | optional | required
     pub auth_configured: bool,
     pub endpoint: String,          // base URL effettiva ("" se non applicabile)

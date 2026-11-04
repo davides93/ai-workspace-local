@@ -21,6 +21,8 @@ export function useSetConfig() {
     mutationFn: (v: { layer: WritableLayer; key: string; value: unknown; title: string }) => api.setConfig(v.layer, v.key, v.value),
     onSuccess: (view: ConfigView, v) => {
       qc.setQueryData(qk.config(), view);
+      // The voice settings (language, engine, model) change what the chat's microphone uses.
+      if (v.key.startsWith("voice.")) void qc.invalidateQueries({ queryKey: qk.voice() });
       toast(v.value === null ? `«${v.title}» ripristinato nello strato ${LAYER_LABEL[v.layer]}` : `«${v.title}» salvato nello strato ${LAYER_LABEL[v.layer]}`);
     },
   });

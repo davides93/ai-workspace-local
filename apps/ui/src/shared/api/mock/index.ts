@@ -5,7 +5,7 @@ import { SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, WorkflowDef, WorkflowRun, WorktreeStatus,
+  SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus,
 } from "../types";
 import {
   agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
@@ -78,6 +78,9 @@ function validateMcp(s: { name: string; transport: string; command?: string; url
   }
 }
 
+/** What the demo "hears", one sentence per request. */
+const VOICE_DEMO_SENTENCES = ["Quali file ho modificato oggi nel workspace?", "Riassumi in due righe il preventivo più recente", "Grazie, per ora è tutto"];
+
 export class MockTransport implements Transport {
   readonly kind = "mock" as const;
   readonly capabilities: TransportCapabilities = { demo: true, native: false, pairing: false };
@@ -85,6 +88,7 @@ export class MockTransport implements Transport {
   private runEvents = new Map<string, AgEvent[]>();
   private pendingApprovals = new Map<string, { req: ApprovalRequest; resolve: (allow: boolean) => void }>();
   private jobs: MockJob[] = [];
+  private voiceTurn = 0;
   private installedVariants = new Set<string>();
   private variantByModel = new Map<string, string>();
   private providerAuth = new Map<string, { configured: boolean; endpoint?: string }>();
@@ -754,6 +758,22 @@ export class MockTransport implements Transport {
   }
   async pairingQr(): Promise<{ url: string; svg: string }> {
     throw new Error("Il QR richiede il backend: avvia aiw serve --lan");
+  }
+
+  async voice(): Promise<VoiceStatus> {
+    const eff = effective();
+    const lang = String(eff["voice.language"] ?? "auto");
+    return {
+      available: true, runtime: "whisper-server", model: "ggml-large-v3-turbo-q5_0", backend: "whisper.cpp server · ggml-large-v3-turbo-q5_0",
+      detail: null, language: lang === "auto" ? "it" : lang, tts_voice: String(eff["voice.tts_voice"] ?? ""), models: ["ggml-large-v3-turbo-q5_0"],
+    };
+  }
+  /** Demo: a plausible sentence per request (the audio itself stays in the browser). */
+  async transcribe(wav: Blob): Promise<Transcript> {
+    await sleep(650);
+    const text = VOICE_DEMO_SENTENCES[this.voiceTurn++ % VOICE_DEMO_SENTENCES.length];
+    // 16 kHz mono 16-bit: 32 bytes per millisecond after the 44-byte header.
+    return { text, language: "it", backend: "whisper.cpp server · ggml-large-v3-turbo-q5_0", duration_ms: Math.round(Math.max(0, wav.size - 44) / 32), elapsed_ms: 640 };
   }
 
   async config() { return { layers: structuredClone(configLayers), effective: effective(), schema: configSchema }; }

@@ -7,6 +7,7 @@ pub mod pairing;
 pub mod peers;
 mod secrets;
 pub mod store;
+pub mod voice;
 pub mod webhook;
 pub mod worktree;
 

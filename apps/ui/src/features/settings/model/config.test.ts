@@ -65,6 +65,14 @@ describe("sections", () => {
     expect(sectionOf("workspace.root").id).toBe("folders");
     expect(sectionOf("x.unknown").id).toBe("other");
   });
+  it("puts the voice settings in their own section", () => {
+    const voice = { type: "object", properties: { "voice.language": { type: "string" }, "voice.stt_runtime": { type: "string" }, "server.port": { type: "integer" } } } as unknown as SettingsSchema;
+    const groups = groupSettings(voice);
+    expect(groups.map((g) => g.section.id)).toEqual(["server", "voice"]);
+    expect(groups[1].entries.map((e) => e.key)).toEqual(["voice.language", "voice.stt_runtime"]);
+    expect(sectionOf("voice.tts_voice").title).toBe("Voce");
+  });
+
   it("groups the schema in the fixed order and drops empty sections", () => {
     expect(groupSettings(schema).map((g) => g.section.id)).toEqual(["ui", "security", "server", "folders", "other"]);
     expect(groupSettings(schema).find((g) => g.section.id === "security")!.entries.map((e) => e.key)).toEqual(["policy.mode", "network.allow_domains"]);

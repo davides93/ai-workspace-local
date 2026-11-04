@@ -33,6 +33,7 @@ pub fn runtimes_for_format(format: &str) -> Vec<&'static str> {
         "litertlm" => vec!["litert-lm"],
         "pte" => vec!["executorch"],
         "safetensors" => vec!["vllm", "sglang", "trtllm", "mistralrs"],
+        "ggml" => vec!["whisper-server"],
         _ => vec![],
     }
 }
@@ -207,6 +208,28 @@ mod tests {
         // qwen3-0.6b: 639446688 bytes → 609 MiB × 1.1 + 700 = 1369; the catalog says 1370.
         assert!((min_memory_mb(639_446_688, 0) as i64 - 1370).abs() <= 1);
         assert_eq!(min_memory_mb(0, 512), 700 + 512);
+    }
+
+    #[test]
+    fn scans_whisper_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut model = 0x6767_6d6cu32.to_le_bytes().to_vec();
+        model.extend_from_slice(&[0; 64]);
+        std::fs::write(dir.path().join("ggml-small-q8_0.bin"), &model).unwrap();
+        std::fs::write(dir.path().join("ggml-base.bin"), &model).unwrap();
+        std::fs::write(dir.path().join("weights.bin"), b"not a whisper model").unwrap();
+        let found = scan_models(dir.path());
+        assert_eq!(found.len(), 2, "{found:?}");
+        let small = found.iter().find(|m| m.id == "ggml-small-q8_0").unwrap();
+        assert_eq!((small.name.as_str(), small.quant.as_deref(), small.format.as_str()), ("Whisper small", Some("Q8_0"), "ggml"));
+        assert_eq!(small.capabilities, vec!["stt".to_string()]);
+        assert_eq!(small.runtimes, vec!["whisper-server".to_string()]);
+        assert_eq!(found.iter().find(|m| m.id == "ggml-base").unwrap().quant, None);
+        // Catalog entries download to the file names the scan recognises.
+        assert!(builtin_catalog()
+            .iter()
+            .filter(|c| c.format == "ggml")
+            .all(|c| matches!(&c.source, ModelSource::Hf { file, .. } if file.starts_with("ggml-") && file.ends_with(".bin"))));
     }
 
     #[test]

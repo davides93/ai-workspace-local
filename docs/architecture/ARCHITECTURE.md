@@ -98,7 +98,7 @@ flowchart LR
 - **Standalone**: il core gira dentro l'app (desktop o mobile).
 - **Daemon**: `aiw serve` su un PC o server headless; i client si collegano via HTTP.
 - **Mesh**: i device si accoppiano. Il telefono usa i modelli grandi del PC come runtime `remote`
-  e il PC delega al telefono i task che servono lì (roadmap: A2A).
+  e il PC delega al telefono i task che servono lì (A2A 1.0 e server MCP del peer).
 
 ## 4. Inferenza unificata (L2–L3)
 
@@ -235,7 +235,7 @@ sequenceDiagram
 |---|---|---|
 | Modalità | `ask` (chiede conferma per gli effetti collaterali) | `plan` (solo lettura), `auto-edit` (modifica file senza chiedere, comandi su conferma), `auto` (tutto entro la sandbox), `yolo` (tutto, sconsigliato) |
 | Regole | allow: read, list, search, web_fetch su host pubblici · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow |
-| Sandbox OS (P07) | `workspace-write`: Linux bwrap, macOS sandbox-exec, Windows integrità bassa + job object (`aiw-winsandbox`) | `read-only`, `workspace-write`, `off` |
+| Sandbox OS (P07) | `workspace-write`: Linux bwrap, macOS sandbox-exec, Windows token a integrità Low + job object + desktop dedicato (`aiw-winsandbox`) | `read-only`, `workspace-write`, `off` |
 | Rete dei tool | Consentita solo per i tool web e browser | Allowlist di domini |
 | Audit (P22) | Ogni decisione di policy ed esecuzione viene registrata con l'ID del run | Esportabile in JSONL |
 | Kill switch | `POST /kill` e scorciatoia globale: ferma run, sidecar avviati per i run e browser | — |
@@ -351,7 +351,17 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
    (fs, shell, web, browser, computer-use, MCP), workflow con trigger manual/interval/cron, server
    e gateway, UI completa, shell Tauri, plugin nativi mobili (Foundation Models, ML Kit GenAI,
    LiteRT-LM).
-2. v0.2: llama.cpp embedded su mobile come default, MLX Swift, ORT GenAI/Windows ML, gateway
-   Anthropic Messages, server MCP, renderer A2UI, git worktree per i task paralleli.
-3. v0.3: device mesh (pairing via QR, A2A), RPC llama.cpp ed exo per l'inferenza distribuita,
-   voice mode (whisper.cpp e Kokoro), code mode (interprete ermetico, P13), trigger webhook e file.
+2. v0.2 (fatto, tranne MLX Swift): llama.cpp in-process su tutte le piattaforme, ORT GenAI caricato
+   a runtime (anche DirectML/QNN, la base di Windows ML), gateway Anthropic Messages, server MCP,
+   renderer A2UI, git worktree per i task paralleli, sandbox Windows a integrità Low.
+3. v0.3 (fatto): device mesh (mDNS, pairing via QR, A2A 1.0, peer come runtime e server MCP), worker
+   RPC di llama.cpp ed exo per l'inferenza distribuita, voice mode (whisper.cpp o server
+   OpenAI-compatibili o peer, voci di sistema locali), code mode (Rhai ermetico, P13), trigger webhook.
+4. v0.4 (fatto): UI riorganizzata per domini con data layer TanStack Query, model hub multi-provider
+   (Hugging Face, ModelScope, registry Ollama, URL diretto, catalogo con i modelli Whisper), API locale
+   protetta (token, CORS ristretto, controllo di Origin/Host), correzioni di agent loop e runtime.
+   Il voice mode della 0.3 è nella nuova struttura (`features/chat/voice/`).
+5. Prossimi passi: MLX Swift su iOS (template Xcode con mlx-swift-lm e bridge `@_cdecl`), Kokoro come voce
+   neurale locale, trascrizione nativa on-device su mobile (SpeechAnalyzer, SpeechRecognizer)
+   quando manca whisper, catalogo degli execution provider di Windows ML, HTTPS in LAN (serve al
+   microfono nei browser), firma e notarizzazione dei pacchetti.

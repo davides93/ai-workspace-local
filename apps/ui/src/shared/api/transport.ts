@@ -4,7 +4,7 @@ import type {
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig,
+  PolicyRule, HookConfig, VoiceStatus, Transcript,
 } from "./types";
 
 /** What the current carrier can do; the UI branches on this instead of sniffing `kind`. */
@@ -105,6 +105,11 @@ export interface Transport {
   removePeer(id: string): Promise<void>;
   /** Link that pairs a phone in one step (its camera opens the web UI) and its QR as SVG. */
   pairingQr(): Promise<{ url: string; svg: string }>;
+
+  /** Voice mode: the speech-to-text backend that would be used, and the voice settings. */
+  voice(): Promise<VoiceStatus>;
+  /** Speech to text of a 16 kHz mono WAV recorded by the app; `language` overrides the setting. */
+  transcribe(wav: Blob, language?: string): Promise<Transcript>;
 
   config(): Promise<ConfigView>;
   setConfig(layer: "global" | "device" | "workspace", key: string, value: unknown): Promise<ConfigView>;

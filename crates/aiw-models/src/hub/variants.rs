@@ -321,6 +321,13 @@ pub fn build_variants(files: &[RepoFile], hints: &RepoHints) -> Vec<ModelVariant
         return vec![variant("repo".into(), "Repository intero".into(), "onnx", None, vf)];
     }
     let mut out = Vec::new();
+    // whisper.cpp repositories: one variant per `ggml-*.bin` file (the catalog's voice models).
+    for f in files.iter().filter(|f| file_name(&f.path).starts_with("ggml-") && ext_of(&f.path) == "bin") {
+        let name = file_name(&f.path);
+        let stem = name.trim_end_matches(".bin").to_string();
+        let quant = stem.rsplit_once('-').map(|x| x.1).filter(|q| q.starts_with('q') || *q == "f16").map(str::to_uppercase);
+        out.push(variant(stem.clone(), stem, "ggml", quant, vec![remote(f)]));
+    }
     for (ext, format) in [("litertlm", "litertlm"), ("task", "litertlm"), ("pte", "pte"), ("llamafile", "llamafile")] {
         for f in files.iter().filter(|f| ext_of(&f.path) == ext) {
             let name = file_name(&f.path);
@@ -425,6 +432,15 @@ mod tests {
 
     fn ids(v: &[ModelVariant]) -> Vec<&str> {
         v.iter().map(|x| x.id.as_str()).collect()
+    }
+
+    #[test]
+    fn whisper_cpp_repositories_give_one_ggml_variant_per_file() {
+        let files = [f("ggml-base.bin", 148_000_000), f("ggml-small-q8_0.bin", 264_000_000), f("README.md", 10), f("models/convert.py", 5)];
+        let v = build_variants(&files, &RepoHints::default());
+        assert_eq!(ids(&v), ["ggml-small-q8_0", "ggml-base"].iter().rev().copied().collect::<Vec<_>>());
+        assert!(v.iter().all(|x| x.format == "ggml" && x.files.len() == 1));
+        assert_eq!(v.iter().find(|x| x.id == "ggml-small-q8_0").unwrap().quant.as_deref(), Some("Q8_0"));
     }
 
     #[test]
