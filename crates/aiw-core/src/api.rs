@@ -144,6 +144,9 @@ pub struct RuntimeInfo {
     pub settings: Map<String, Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install_hint: Option<String>,
+    /// AIW can install this runtime by itself on this OS (a pip or Homebrew recipe exists).
+    #[serde(default)]
+    pub install_auto: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
 }

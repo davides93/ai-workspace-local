@@ -103,7 +103,9 @@ pub fn valid_package(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 100
         && !name.starts_with('-')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']' | '=' | '<' | '>' | '~' | ',' | '+' | '@' | '/'))
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']' | '=' | '<' | '>' | '~' | ',' | '+' | '@' | '/'))
         && !name.contains("..")
 }
 
@@ -140,16 +142,20 @@ pub fn system_python() -> Option<PathBuf> {
     ["python3", "python"].iter().filter_map(|n| which::which(n).ok()).next()
 }
 
-/// What the plan needs from the machine. `python_ok` is the result of the version probe.
+/// What the plan needs from the machine. `python_ok`: a Python 3.10+ is already there; without
+/// one, Homebrew can install it as part of the plan.
 fn prerequisites(installer: &Installer, python_ok: bool, brew: bool) -> Vec<Prerequisite> {
     match installer {
-        Installer::Pip { .. } => vec![Prerequisite {
-            name: "Python 3.10 o successivo".into(),
-            ok: python_ok,
-            hint: (!python_ok).then(|| {
-                "Installa Python 3 (macOS: `xcode-select --install` oppure https://www.python.org/downloads/), poi riprova.".to_string()
-            }),
-        }],
+        Installer::Pip { .. } => {
+            let ok = python_ok || brew;
+            vec![Prerequisite {
+                name: "Python 3.10 o successivo".into(),
+                ok,
+                hint: (!ok).then(|| {
+                    "Installa Homebrew (https://brew.sh) oppure Python 3 (https://www.python.org/downloads/), poi riprova.".to_string()
+                }),
+            }]
+        }
         Installer::Brew { .. } => vec![Prerequisite {
             name: "Homebrew".into(),
             ok: brew,
@@ -157,6 +163,9 @@ fn prerequisites(installer: &Installer, python_ok: bool, brew: bool) -> Vec<Prer
         }],
     }
 }
+
+/// The Homebrew formula AIW installs when the machine has no recent Python.
+pub const BREW_PYTHON: &str = "python@3.12";
 
 /// The plan for `manifest` on `os`. `python_ok` / `brew` describe the machine (probed by the
 /// caller, so this stays a pure function).
@@ -183,10 +192,14 @@ pub fn plan(manifest: &RuntimeManifest, os: &str, python_ok: bool, brew: bool) -
     p.prerequisites = prerequisites(inst, python_ok, brew);
     match inst {
         Installer::Pip { packages } => {
-            p.steps = vec![
-                InstallStep { title: "Ambiente Python di AIW".into(), command: "python3 -m venv ~/.aiw/pyenv".into() },
-                InstallStep { title: format!("Installa {}", packages.join(", ")), command: format!("pip install --upgrade {}", packages.join(" ")) },
-            ];
+            if !python_ok {
+                p.steps.push(InstallStep { title: "Installa Python 3.12".into(), command: format!("brew install {BREW_PYTHON}") });
+            }
+            p.steps.push(InstallStep { title: "Ambiente Python di AIW".into(), command: "python3 -m venv ~/.aiw/pyenv".into() });
+            p.steps.push(InstallStep {
+                title: format!("Installa {}", packages.join(", ")),
+                command: format!("pip install --upgrade {}", packages.join(" ")),
+            });
             p.note = "Viene installato in un ambiente Python isolato di AIW (`~/.aiw/pyenv`): non tocca il Python di sistema.".into();
         }
         Installer::Brew { formula } => {
@@ -197,9 +210,16 @@ pub fn plan(manifest: &RuntimeManifest, os: &str, python_ok: bool, brew: bool) -
     p
 }
 
-/// The commands behind a plan, in order. `pyenv` is the managed virtual environment;
-/// `python` the interpreter that creates it; `venv_exists` skips creating it again.
-pub fn commands(installer: &Installer, pyenv: &Path, python: Option<&Path>, brew: Option<&Path>, venv_exists: bool) -> Result<Vec<Command>, String> {
+/// The commands behind a plan, in order. `pyenv` is the managed virtual environment; `python` a
+/// Python 3.10+ that is already installed (without one, Homebrew installs Python 3.12 first);
+/// `venv_exists` skips creating the environment again.
+pub fn commands(
+    installer: &Installer,
+    pyenv: &Path,
+    python: Option<&Path>,
+    brew: Option<&Path>,
+    venv_exists: bool,
+) -> Result<Vec<Command>, String> {
     match installer {
         Installer::Pip { packages } => {
             if packages.is_empty() || !packages.iter().all(|n| valid_package(n)) {
@@ -207,8 +227,16 @@ pub fn commands(installer: &Installer, pyenv: &Path, python: Option<&Path>, brew
             }
             let mut out = Vec::new();
             if !venv_exists {
-                let py = python.ok_or("Python 3 non trovato")?;
-                out.push(Command { program: py.to_path_buf(), args: vec!["-m".into(), "venv".into(), pyenv.display().to_string()] });
+                let py = match (python, brew) {
+                    (Some(py), _) => py.to_path_buf(),
+                    (None, Some(b)) => {
+                        out.push(Command { program: b.to_path_buf(), args: vec!["install".into(), BREW_PYTHON.into()] });
+                        // Homebrew links `python3.12` next to `brew`.
+                        b.parent().unwrap_or(Path::new("")).join("python3.12")
+                    }
+                    (None, None) => return Err("Python 3.10 o successivo non trovato".into()),
+                };
+                out.push(Command { program: py, args: vec!["-m".into(), "venv".into(), pyenv.display().to_string()] });
             }
             let mut args = vec!["-m".to_string(), "pip".into(), "install".into(), "--upgrade".into(), "--disable-pip-version-check".into()];
             args.extend(packages.iter().cloned());
@@ -324,7 +352,12 @@ mod tests {
         assert!(p.automatic && p.ready());
         assert_eq!(p.steps.len(), 2);
         assert!(p.steps[1].command.contains("mlx-lm"));
-        // Python missing: the plan is shown but cannot run.
+        // No recent Python, but Homebrew: it installs Python first, still fully automatic.
+        let p = plan(&m, "macos", false, true);
+        assert!(p.ready());
+        assert_eq!(p.steps.len(), 3);
+        assert!(p.steps[0].command.contains("python@3.12"));
+        // Neither: the plan is shown but cannot run.
         let p = plan(&m, "macos", false, false);
         assert!(p.automatic && !p.ready());
         assert!(p.prerequisites[0].hint.is_some());
@@ -361,6 +394,11 @@ mod tests {
         let again = commands(&inst, pyenv, None, None, true).unwrap();
         assert_eq!(again.len(), 1);
         assert!(commands(&inst, pyenv, None, None, false).is_err(), "needs a Python to create the environment");
+        // Without a recent Python, Homebrew installs one and the environment is built with it.
+        let brewed = commands(&inst, pyenv, None, Some(Path::new("/opt/homebrew/bin/brew")), false).unwrap();
+        assert_eq!(brewed.len(), 3);
+        assert_eq!(brewed[0].args, ["install", "python@3.12"]);
+        assert_eq!(brewed[1].program, Path::new("/opt/homebrew/bin/python3.12"));
         assert!(commands(&Installer::Pip { packages: vec!["--pre".into()] }, pyenv, None, None, true).is_err());
     }
 

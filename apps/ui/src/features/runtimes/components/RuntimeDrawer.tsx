@@ -4,6 +4,7 @@ import type { LocalModel, RuntimeInfo } from "../../../shared/api/types";
 import { Button, Chip, Chips, CopyField, Drawer, Field, KeyValue, Pill, SchemaForm, Select, StatusPill, Toggle } from "../../../shared/ui";
 import { useRuntimeAction, useUpdateRuntimeSettings } from "../api";
 import { apiLabel, compatibleModels, FIT_META, settingsDirty } from "../model/runtimes";
+import { RuntimeInstall } from "./RuntimeInstall";
 import { RuntimeLogs } from "./RuntimeLogs";
 
 /** `#/runtimes/:runtimeId` — state, start with a model, settings and logs of one runtime. */
@@ -57,8 +58,10 @@ export function RuntimeDrawer({ runtime: r, models, deviceAccels, onClose }: {
           r.loaded_models.length > 0 ? ["Caricato", <span className="mono">{r.loaded_models.join(", ")}</span>] : false,
           r.homepage ? ["Progetto", <a href={r.homepage} target="_blank" rel="noreferrer">{r.homepage.replace(/^https?:\/\//, "")}</a>] : false,
         ]} />
-        {r.install_hint && <CopyField label="Installazione" value={r.install_hint} />}
+        {r.status !== "installable" && r.install_hint && <CopyField label="Installazione" value={r.install_hint} />}
       </section>
+
+      {r.status === "installable" && <RuntimeInstall runtime={r} />}
 
       <section className="stack" aria-label="Avvio">
         <h3>{active ? "In esecuzione" : "Avvia con un modello"}</h3>
@@ -68,7 +71,7 @@ export function RuntimeDrawer({ runtime: r, models, deviceAccels, onClose }: {
             {r.status === "starting" && <span className="faint text-sm">Avvio in corso…</span>}
           </div>
         ) : !canStart ? (
-          <p className="faint text-sm">{r.status === "installable" ? "Installa il runtime per poterlo avviare." : "Questo runtime non è utilizzabile su questo device."}</p>
+          <p className="faint text-sm">{r.status === "installable" ? "Installa il runtime (sopra) per poterlo avviare." : "Questo runtime non è utilizzabile su questo device."}</p>
         ) : options.length === 0 ? (
           <p className="muted text-sm">Nessun modello installato è compatibile con questo runtime. <Link to="/models/discover">Cerca un modello</Link> adatto ai suoi formati ({r.formats.map((f) => `.${f}`).join(", ") || "—"}).</p>
         ) : (

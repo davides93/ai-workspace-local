@@ -5,7 +5,7 @@ import { SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus,
+  SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan,
 } from "../types";
 import {
   agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
@@ -455,6 +455,39 @@ export class MockTransport implements Transport {
   async activeRun(sessionId?: string) {
     if (sessionId !== undefined && !sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     return null;
+  }
+  private installs = new Map<string, InstallJob>();
+  async runtimeInstallPlan(id: string): Promise<InstallPlan> {
+    const r = runtimes.find((x) => x.id === id);
+    if (!r) throw new ApiError(404, `runtime ${id} non trovato`);
+    const automatic = !!r.install_auto;
+    return {
+      runtime_id: r.id, runtime_name: r.name, automatic,
+      steps: automatic ? [{ title: "Ambiente Python di AIW", command: "python3 -m venv ~/.aiw/pyenv" }, { title: `Installa ${r.name}`, command: `pip install --upgrade ${r.id}` }] : [],
+      prerequisites: automatic ? [{ name: "Python 3.10 o successivo", ok: true }] : [],
+      hint: r.install_hint, homepage: r.homepage ?? null,
+      note: automatic ? "Viene installato in un ambiente Python isolato di AIW (`~/.aiw/pyenv`): non tocca il Python di sistema." : "",
+    };
+  }
+  async installRuntime(id: string): Promise<InstallJob> {
+    const r = runtimes.find((x) => x.id === id);
+    if (!r) throw new ApiError(404, `runtime ${id} non trovato`);
+    if (!r.install_auto) throw new ApiError(422, `${r.name}: installazione manuale. ${r.install_hint ?? ""}`);
+    const job: InstallJob = { runtime_id: id, state: "running", step: 1, steps: 2, log: ["$ python3 -m venv ~/.aiw/pyenv"] };
+    this.installs.set(id, job);
+    setTimeout(() => { job.step = 2; job.log.push("$ python -m pip install --upgrade " + id, `Collecting ${id}`, "Downloading wheel (214 MB)"); }, 700);
+    setTimeout(() => {
+      job.log.push("✓ Installazione completata");
+      job.state = "done";
+      r.status = "available";
+      r.status_detail = "~/.aiw/pyenv/bin";
+    }, 1800);
+    audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "runtime.install", detail: r.name });
+    return structuredClone(job);
+  }
+  async runtimeInstall(id: string): Promise<InstallJob | null> {
+    const j = this.installs.get(id);
+    return j ? structuredClone(j) : null;
   }
   async runtimeLogs(id: string) {
     return id === "llama-server"

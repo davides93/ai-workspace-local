@@ -38,6 +38,8 @@ export function RuntimeCard({ runtime: r, deviceAccels, busy, onAct, onOpen }: {
       <div className="rt-foot">
         {active ? (
           <Button icon="stop" disabled={busy} aria-label={`Ferma ${r.name}`} onClick={() => onAct("stop")}>Ferma</Button>
+        ) : r.status === "installable" && r.install_auto ? (
+          <Button variant="primary" icon="download" aria-label={`Installa ${r.name}`} onClick={onOpen}>Installa</Button>
         ) : r.status === "installable" ? (
           <span className="mono faint ellipsis text-xs" title={r.install_hint}>{r.install_hint ?? "installa dal sito del progetto"}</span>
         ) : !unsupported ? (

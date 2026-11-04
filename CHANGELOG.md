@@ -1,5 +1,9 @@
 # Changelog
 
+## Non rilasciato
+
+- Installazione automatica dei runtime: MLX LM e MLX VLM (pip in un ambiente Python isolato di AIW, Python 3.12 via Homebrew se manca), llama.cpp server e Ollama (Homebrew). Un clic dalla pagina Runtime o dalla scheda di un modello senza runtime pronto, con avanzamento e output in diretta.
+
 ## 0.4.0-beta.1 - pre-release
 
 - Model hub multi-provider (Hugging Face, ModelScope, Ollama, URL diretto) con downloader robusto.

@@ -2,10 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { RuntimeInfo } from "../../shared/api/types";
+import type { InstallJob, RuntimeInfo } from "../../shared/api/types";
 
 /** Polling of the runtime list while the runtimes view is open. */
 export const RUNTIMES_POLL_MS = 5_000;
+/** Polling of a running installation. */
+export const INSTALL_POLL_MS = 1_000;
 /** Polling of the process log while a runtime drawer is open. */
 export const LOGS_POLL_MS = 2_000;
 
@@ -64,5 +66,43 @@ export function useRuntimeLogs(id: string, opts: { poll: boolean }) {
     queryKey: qk.runtimes.logs(id),
     queryFn: () => api.runtimeLogs(id),
     refetchInterval: opts.poll ? LOGS_POLL_MS : false,
+  });
+}
+
+/** Steps and missing prerequisites of installing a runtime on this device. */
+export function useInstallPlan(id: string, enabled = true) {
+  const api = useApi();
+  return useQuery({ queryKey: qk.runtimes.installPlan(id), queryFn: () => api.runtimeInstallPlan(id), enabled });
+}
+
+/** The last installation of a runtime; polled every second while it runs, and the runtime list is
+ *  refreshed once it ends (the server detects the runtimes again by itself). */
+export function useInstallJob(id: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: qk.runtimes.install(id),
+    queryFn: async (): Promise<InstallJob | null> => {
+      const job = await api.runtimeInstall(id);
+      if (job && job.state !== "running") {
+        void qc.invalidateQueries({ queryKey: qk.runtimes.list() });
+        void qc.invalidateQueries({ queryKey: qk.models.installed() });
+      }
+      return job;
+    },
+    refetchInterval: (q) => (q.state.data?.state === "running" ? INSTALL_POLL_MS : false),
+  });
+}
+
+/** Installs a runtime by itself, no further confirmation: one click. */
+export function useInstallRuntime() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runtime: Pick<RuntimeInfo, "id" | "name">) => api.installRuntime(runtime.id),
+    onSuccess: (job, runtime) => {
+      qc.setQueryData(qk.runtimes.install(runtime.id), job);
+      toast(`Installazione di ${runtime.name} avviata`);
+    },
   });
 }

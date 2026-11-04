@@ -355,6 +355,7 @@ impl RuntimeRegistry {
             settings_schema: m.settings.clone(),
             settings: redact(&m, settings),
             install_hint: m.install_hint(&self.os),
+            install_auto: m.installer_for(&self.os).is_some(),
             homepage: m.homepage.clone(),
         })
     }
@@ -427,11 +428,9 @@ impl RuntimeRegistry {
                 } else {
                     None
                 };
-                let binary = find_binary(&m, &settings, &self.search_dirs())
-                    .or(python)
-                    .ok_or_else(|| {
-                        Error::Unsupported(format!("{} non è installato. {}", m.name, m.install_hint(&self.os).unwrap_or_default()))
-                    })?;
+                let binary = find_binary(&m, &settings, &self.search_dirs()).or(python).ok_or_else(|| {
+                    Error::Unsupported(format!("{} non è installato. {}", m.name, m.install_hint(&self.os).unwrap_or_default()))
+                })?;
                 let model_path = match (&model, self.resolver.read().unwrap().as_ref()) {
                     (Some(mid), Some(r)) => r(mid),
                     _ => None,
@@ -498,7 +497,11 @@ impl RuntimeRegistry {
         let pyenv = self.pyenv.read().unwrap().clone();
         let venv_exists = install::venv_python(&pyenv).is_file();
         let brew = install::find_brew_path();
-        let cmds = install::commands(installer, &pyenv, install::system_python().as_deref(), brew.as_deref(), venv_exists).map_err(Error::Invalid)?;
+        let python = match install::system_python() {
+            Some(py) if python_recent_enough(&py).await => Some(py),
+            _ => None,
+        };
+        let cmds = install::commands(installer, &pyenv, python.as_deref(), brew.as_deref(), venv_exists).map_err(Error::Invalid)?;
         let mut jobs = self.installs.lock().unwrap();
         if jobs.get(id).is_some_and(|j| j.lock().unwrap().state == InstallState::Running) {
             return Err(Error::Invalid(format!("{} è già in installazione", m.name)));
