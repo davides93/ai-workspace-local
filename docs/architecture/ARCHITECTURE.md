@@ -240,7 +240,8 @@ sequenceDiagram
   sono riproducibili.
 - **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo.
 - **Subagenti** (P09): il tool `agent` avvia un run figlio con un profilo diverso e contesto
-  isolato; al padre torna solo il risultato.
+  isolato; al padre torna solo il risultato. Modalità di approvazione, sandbox e tool del figlio
+  non sono mai più ampi di quelli del padre.
 - **Contesto** (P10): un budget di token per profilo; oltre la soglia i turni più vecchi vengono
   riassunti con il modello attivo o con uno dedicato.
 - **Memoria e skill** (P11): `AGENTS.md` del workspace entra nel system prompt; le skill

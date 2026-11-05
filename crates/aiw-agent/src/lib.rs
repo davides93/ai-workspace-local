@@ -5,6 +5,7 @@ pub mod code;
 pub mod fallback;
 pub mod hooks;
 pub mod internal;
+pub mod narrow;
 pub mod policy;
 pub mod runner;
 pub mod skills;
@@ -12,6 +13,7 @@ pub mod think;
 
 pub use hooks::HookConfig;
 pub use internal::{internal_tools, InternalTool};
+pub use narrow::{narrow_sandbox, narrow_tools};
 pub use policy::{Decision, Policy, PolicyRule};
 pub use runner::{to_msgs, AgentRunner, RunHost, RunInput, RunOutcome};
 pub use skills::Skill;
