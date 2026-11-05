@@ -93,6 +93,17 @@ describe("conversion", () => {
     expect(find(run("figlio", "[1]"), "inputs")).toHaveLength(1);
   });
 
+  it("accepts the json and error placeholders of earlier steps and warns about unknown endings", () => {
+    const steps: PlainDraft["steps"] = [
+      { id: "a", kind: "agent", agent: "operator", prompt: "x" },
+      { id: "b", kind: "agent", agent: "operator", prompt: "{{steps.a.json.items.0.name}} {{steps.a.error}} {{steps.a.output}}" },
+      { id: "c", kind: "agent", agent: "operator", prompt: "{{steps.a.result}}" },
+    ];
+    const warns = find(validateDraft({ ...base(), steps }, ctx), "placeholder");
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toMatchObject({ step: 2, level: "warn" });
+  });
+
   it("keeps non-string inputs as JSON and string ones as text", () => {
     const def: WorkflowDef = { id: "i", name: "I", enabled: false, trigger: { kind: "manual" }, inputs: { folder: "~/x", n: 3, flags: { a: true } }, steps: [] };
     const plain = plainFromDef(def);

@@ -1,6 +1,7 @@
 // Steps of a workflow as the visual editor edits them. The shapes follow `WorkflowStep` in
 // crates/aiw-core/src/api.rs; the engine (crates/aiw-workflow/src/engine.rs) gives them their meaning:
-//  - `{{inputs.x}}`, `{{steps.id.output}}` and `{{now}}` are replaced in args, prompts, messages and conditions;
+//  - `{{inputs.x}}`, `{{steps.id.output}}`, `{{steps.id.error}}`, `{{steps.id.json.a.b}}` (the output read as JSON) and `{{now}}`
+//    are replaced in args, prompts, messages and conditions; `{{item}}`, `{{item.field}}` and `{{index}}` inside a foreach;
 //  - a condition steers the steps named in `then` / `else`: those steps run only when chosen, and a step
 //    that comes before its condition is always skipped;
 //  - an approval that is refused ends the run as cancelled; with `timeout_s` it takes `default` (deny or allow) when nobody answers;
@@ -165,11 +166,24 @@ export function optionsSummary(o: StepOptions | undefined): string {
 
 const PLACEHOLDER = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
 
-/** Id of the step a placeholder path refers to (`steps.scan.output` → `scan`), or null. */
+/** Id of the step a placeholder path refers to (`steps.scan.output` → `scan`, `steps.scan.json.a.b` → `scan`), or null. */
 export function stepRef(path: string): string | null {
   if (!path.startsWith("steps.")) return null;
-  return path.slice("steps.".length).replace(/(\.output)+$/, "");
+  return path.slice("steps.".length).split(".")[0];
 }
+
+/** What follows the step id in a `steps.` placeholder (`steps.scan.json.a` → `json.a`); empty for `steps.scan`. */
+export function stepTail(path: string): string {
+  const rest = path.slice("steps.".length);
+  const dot = rest.indexOf(".");
+  return dot < 0 ? "" : rest.slice(dot + 1);
+}
+
+/**
+ * The parts of a step that a placeholder can read: `output` (also when absent), `error` (when the step went on after a
+ * failure) and `json` / `json.a.b.0` (the output read as JSON: all of it, or a ```json block).
+ */
+export const isKnownTail = (tail: string): boolean => tail === "" || /^(output)+$/.test(tail.replace(/\./g, "")) || tail === "error" || tail === "json" || tail.startsWith("json.");
 
 export interface Placeholder {
   path: string;
@@ -211,7 +225,7 @@ function mapTexts(s: StepDraft, fn: (t: string) => string): StepDraft {
 /** Renames a step: `then`/`else` lists and `{{steps.old.output}}` placeholders of every step follow. Length is kept. */
 export function renameReferences(steps: readonly StepDraft[], from: string, to: string): StepDraft[] {
   const rewrite = (text: string) =>
-    text.replace(PLACEHOLDER, (m, path: string) => (stepRef(path) === from ? `{{steps.${to}${/\.output$/.test(path) ? ".output" : ""}}}` : m));
+    text.replace(PLACEHOLDER, (m, path: string) => (stepRef(path) === from ? `{{steps.${to}${path.slice("steps.".length + from.length)}}}` : m));
   return steps.map((s) => {
     const t = mapTexts(s, rewrite);
     return t.kind === "condition" ? { ...t, then: t.then.map((x) => (x === from ? to : x)), else: t.else.map((x) => (x === from ? to : x)) } : t;

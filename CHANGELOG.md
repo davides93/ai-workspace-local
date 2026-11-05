@@ -7,6 +7,7 @@
 - Approvazioni con scadenza: il passo `approval` accetta `timeout_s` e `default` (`deny`/`allow`) e l'impostazione `approvals.timeout_s` (0 = nessun limite) rifiuta le richieste dei tool degli agenti rimaste senza risposta, spiegando il timeout all'agente. L'audit registra `decision: "timeout"`. Modificabili dall'editor visuale.
 - Workflow: passi `foreach` (un passo inline per ogni voce di un elenco, fino a 8 alla volta e 200 voci, con `{{item}}`, `{{item.campo}}`, `{{index}}`) e `parallel` (più passi insieme, output come oggetto JSON). Creabili e modificabili dall'editor visuale, con il passo inline in JSON.
 - Workflow: passo `workflow` (sotto-workflow) con input, profondità massima 3. Il figlio è un run normale con un riferimento al padre (`parent_run_id`); l'output è quello dell'ultimo suo passo completato. Scelta del workflow dall'editor visuale.
+- Workflow: segnaposto per l'output JSON dei passi (`{{steps.x.json}}`, `{{steps.x.json.a.b}}`, `{{steps.x.json.items.0.nome}}`; vale anche per un blocco ```json nel testo) e `{{steps.x.error}}`; li usano anche le `condition`. Il menu dei segnaposto dell'editor li propone.
 
 ## 0.4.0-rc.2 - release candidate
 

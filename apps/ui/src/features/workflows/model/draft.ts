@@ -5,7 +5,7 @@
 import { keyed, unkeyed, type Keyed } from "../../../shared/lib/keyedList";
 import type { WorkflowDef, WorkflowStep, WorkflowTrigger } from "../../../shared/api/types";
 import { parseCron } from "./cron";
-import { approvalTimeoutProblem, cleanOptions, FOREACH_MAX_PARALLEL, hasOptions, inlineJson, innerIds, optionsOf, optionsProblem, parseInline, placeholders, STEP_ID, stepRef, stepTexts, type StepDraft } from "./steps";
+import { approvalTimeoutProblem, cleanOptions, FOREACH_MAX_PARALLEL, hasOptions, inlineJson, innerIds, optionsOf, optionsProblem, parseInline, isKnownTail, placeholders, STEP_ID, stepRef, stepTail, stepTexts, type StepDraft } from "./steps";
 import { joinInterval, MIN_INTERVAL_S, splitInterval, type IntervalUnit } from "./triggers";
 
 export type TriggerDraft =
@@ -356,6 +356,7 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
           const at = ref === null ? undefined : index.get(ref);
           if (at === undefined) w("placeholder", `{{${p.path}}} non corrisponde a nessun passo.`);
           else if (at >= i) w("placeholder", `{{${p.path}}} legge un passo che non è ancora stato eseguito a questo punto.`);
+          else if (!isKnownTail(stepTail(p.path))) w("placeholder", `{{${p.path}}} non è un segnaposto noto: dopo l'id del passo usa output, error o json.`);
         } else if (p.root === "inputs") {
           const key = p.path.slice("inputs.".length);
           if (d.trigger.kind !== "webhook" && key !== "payload" && !keys.has(key)) w("placeholder", `L'input «${key}» non è definito: resterà vuoto.`);

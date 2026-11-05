@@ -46,7 +46,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Messaggi dei run annullati o falliti | ✅ **v0.4** | prima andavano persi; l'errore resta nella cronologia (messaggio `aiw.run_error`, mai inviato al modello) |
 | Esecuzione dei run | ✅ **v0.4** | un solo run per sessione (il secondo risponde 409); eliminare la sessione ferma il run; agente, profilo o runtime spariti → 409; i run rimasti `running` dopo un crash sono segnati falliti all'avvio; senza il profilo `default` il gateway ripiega sul profilo dell'agente predefinito |
 | Checkpoint prima delle scritture | 🟡 | salvati, ma il rewind non esiste |
-| Workflow (tool, agent, llm, approval, condition) e trigger (manuale, cron, intervallo, file, webhook) | 🟡 | mancano foreach, sotto-workflow, retry/timeout e ripresa dopo riavvio; **v0.4** editor visuale dei passi |
+| Workflow (tool, agent, llm, approval, condition, foreach, parallel, sotto-workflow) e trigger (manuale, cron, intervallo, file, webhook) | ✅ | retry, timeout e `on_error` per passo, approvazioni con scadenza, segnaposto JSON, stato salvato a ogni passo e ripresa dopo il riavvio (passo in corso rieseguito: almeno una volta); **v0.4** editor visuale dei passi |
 | A2A 1.0 server, server MCP, delega ai peer via MCP | 🟡 | A2A senza streaming, task in memoria |
 | Team multi-agente (supervisor, handoff) | ❌ | |
 | Bot e canali (Telegram, Slack, email) | ❌ | |

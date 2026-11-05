@@ -286,6 +286,14 @@ Tipi di step: `tool`, `agent`, `llm`, `approval`, `condition` (`if`), `foreach`,
 (sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
 ripresa dopo un'approvazione.
 
+**Segnaposto.** `{{inputs.x}}`, `{{now}}`, `{{steps.<id>.output}}` (anche `{{steps.<id>}}`),
+`{{steps.<id>.error}}` per un passo andato avanti con `on_error: continue`. L'output di un passo si
+legge come JSON con `{{steps.<id>.json}}` (riformattato compatto), `{{steps.<id>.json.a.b}}` e
+`{{steps.<id>.json.items.0.nome}}` (un numero indicizza un array): vale se l'output è JSON per
+intero o contiene un blocco ```json, altrimenti il segnaposto resta vuoto. Un valore stringa si
+inserisce senza virgolette, gli altri come JSON. Dentro un `foreach` ci sono anche `{{item}}`,
+`{{item.campo}}` e `{{index}}`. Le `condition` vedono il testo già sostituito.
+
 **Opzioni dei passi.** `tool`, `agent` e `llm` accettano `retry` (0–5 nuovi tentativi),
 `retry_delay_s` (attesa, default 2 s), `timeout_s` (limite per tentativo) e `on_error: continue`
 (il passo resta `failed`, il run prosegue e l'errore è in `{{steps.<id>.error}}`). Il timeout di un

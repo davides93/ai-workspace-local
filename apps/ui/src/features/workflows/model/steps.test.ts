@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  changeKind, cleanOptions, innerIds, parseInline, optionsOf, optionsProblem, optionsSummary, dropReferences, schemaParams, freshStepId, gatedIds, newStep, placeholders, renameReferences, stepRef, stepSummary, STEP_ID,
+  changeKind, cleanOptions, innerIds, parseInline, optionsOf, optionsProblem, optionsSummary, dropReferences, schemaParams, freshStepId, gatedIds, newStep, placeholders, renameReferences, stepRef, stepTail, isKnownTail, stepSummary, STEP_ID,
   type StepDraft,
 } from "./steps";
 
@@ -174,5 +174,27 @@ describe("sub-workflow steps", () => {
   it("follow a renamed step in their inputs", () => {
     const w: StepDraft = { id: "sub", kind: "workflow", workflow: "figlio", inputs: '{"dir": "{{steps.scan.output}}"}' };
     expect(renameReferences([steps[0], w], "scan", "list")[1]).toMatchObject({ inputs: '{"dir": "{{steps.list.output}}"}' });
+  });
+});
+
+describe("JSON and error placeholders", () => {
+  it("refer to the step whatever follows its id", () => {
+    expect(stepRef("steps.scan.json")).toBe("scan");
+    expect(stepRef("steps.scan.json.items.0.name")).toBe("scan");
+    expect(stepRef("steps.scan.error")).toBe("scan");
+    expect(stepTail("steps.scan.json.items.0")).toBe("json.items.0");
+    expect(stepTail("steps.scan")).toBe("");
+  });
+
+  it("tell known endings from unknown ones", () => {
+    for (const ok of ["", "output", "error", "json", "json.a.b", "json.items.0.name"]) expect(isKnownTail(ok), ok).toBe(true);
+    for (const bad of ["jsonx", "out", "result", "errors"]) expect(isKnownTail(bad), bad).toBe(false);
+  });
+
+  it("follow a renamed step and keep the ending", () => {
+    const f: StepDraft = { id: "x", kind: "llm", profile: "p", prompt: "{{steps.scan.json.items.0}} {{steps.scan.error}} {{steps.scan.output}} {{steps.scan}} {{steps.scanner.json}}" };
+    expect(renameReferences([steps[0], f], "scan", "list")[1]).toMatchObject({
+      prompt: "{{steps.list.json.items.0}} {{steps.list.error}} {{steps.list.output}} {{steps.list}} {{steps.scanner.json}}",
+    });
   });
 });

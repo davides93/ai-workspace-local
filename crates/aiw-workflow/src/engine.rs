@@ -75,7 +75,14 @@ pub fn parse_json_output(text: &str) -> Option<Value> {
     re.captures(t).and_then(|c| serde_json::from_str(c[1].trim()).ok())
 }
 
-/// Replaces `{{inputs.x}}`, `{{steps.id.output}}` and `{{steps.id.error}}` placeholders.
+/// Replaces the placeholders of a template:
+/// - `{{inputs.x}}`, `{{now}}`;
+/// - `{{steps.id.output}}` (or `{{steps.id}}`), `{{steps.id.error}}`;
+/// - `{{steps.id.json}}` (the output as compact JSON) and `{{steps.id.json.a.b}}`, `{{steps.id.json.items.0.name}}`
+///   (a number indexes an array); the output counts as JSON when it is JSON as a whole or holds a
+///   ```json block, otherwise the placeholder is empty. A string value is inserted without quotes,
+///   anything else as JSON;
+/// - `{{item}}`, `{{item.field}}` and `{{index}}` inside a `foreach`.
 pub fn render_ctx(template: &str, ctx: &RenderCtx) -> String {
     let re = regex::Regex::new(r"\{\{\s*([a-zA-Z0-9_.\-]+)\s*\}\}").unwrap();
     re.replace_all(template, |c: &regex::Captures| {
@@ -95,11 +102,17 @@ pub fn render_ctx(template: &str, ctx: &RenderCtx) -> String {
             return ctx.inputs.get(k).map(|v| v.as_str().map(String::from).unwrap_or_else(|| v.to_string())).unwrap_or_default();
         }
         if let Some(rest) = path.strip_prefix("steps.") {
-            if let Some(id) = rest.strip_suffix(".error") {
-                return ctx.errors.get(id).cloned().unwrap_or_default();
-            }
-            let id = rest.trim_end_matches(".output");
-            return ctx.outputs.get(id).cloned().unwrap_or_default();
+            let (id, tail) = rest.split_once('.').unwrap_or((rest, ""));
+            return match tail {
+                "" | "output" => ctx.outputs.get(id).cloned().unwrap_or_default(),
+                "error" => ctx.errors.get(id).cloned().unwrap_or_default(),
+                // The output read as JSON; a placeholder for something that is not JSON stays empty.
+                "json" => ctx.outputs.get(id).and_then(|o| parse_json_output(o)).map(|v| value_text(&v)).unwrap_or_default(),
+                t => t
+                    .strip_prefix("json.")
+                    .and_then(|p| json_get(&parse_json_output(ctx.outputs.get(id)?)?, p).map(value_text))
+                    .unwrap_or_default(),
+            };
         }
         if path == "now" {
             return chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
@@ -1077,5 +1090,51 @@ mod tests {
         assert!(run.steps[0].error.as_deref().unwrap().contains("troppi sotto-workflow"), "{run:?}");
         // Levels 1, 2 and 3 were started; the fourth was refused.
         assert_eq!(host.children.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn json_placeholders_read_the_output_of_a_step() {
+        let inputs = Map::new();
+        let outputs = HashMap::from([
+            ("list".to_string(), r#"{"items":[{"nome":"a"},{"nome":"b"}],"n":2,"ok":true,"s":"testo","nulla":null}"#.to_string()),
+            ("fenced".to_string(), "Ecco il risultato:\n```json\n{\"a\": {\"b\": 5}}\n```\nfine".to_string()),
+            ("plain".to_string(), "solo testo".to_string()),
+            ("arr".to_string(), "[1, 2, 3]".to_string()),
+        ]);
+        let errors = HashMap::from([("bad".to_string(), "esploso".to_string())]);
+        let r = |t: &str| render_ctx(t, &RenderCtx { inputs: &inputs, outputs: &outputs, errors: &errors, item: None });
+        // The whole output as compact JSON.
+        assert_eq!(r("{{steps.list.json}}"), r#"{"items":[{"nome":"a"},{"nome":"b"}],"n":2,"nulla":null,"ok":true,"s":"testo"}"#);
+        assert_eq!(r("{{steps.arr.json}}"), "[1,2,3]");
+        // Paths: objects by key, arrays by number.
+        assert_eq!(r("{{steps.list.json.items.1.nome}}"), "b");
+        assert_eq!(r("{{ steps.list.json.items.0 }}"), r#"{"nome":"a"}"#);
+        assert_eq!(r("{{steps.arr.json.2}}"), "3");
+        // Strings come out without quotes, everything else as JSON.
+        assert_eq!(r("{{steps.list.json.s}}|{{steps.list.json.n}}|{{steps.list.json.ok}}|{{steps.list.json.nulla}}"), "testo|2|true|null");
+        // A ```json block counts.
+        assert_eq!(r("{{steps.fenced.json.a.b}}"), "5");
+        // Anything else stays empty: not JSON, missing key, index out of range, unknown step.
+        for t in [
+            "{{steps.plain.json}}",
+            "{{steps.plain.json.x}}",
+            "{{steps.list.json.nope}}",
+            "{{steps.list.json.items.9}}",
+            "{{steps.arr.json.a}}",
+            "{{steps.zzz.json}}",
+            "{{steps.list.nonsense}}",
+        ] {
+            assert_eq!(r(t), "", "{t}");
+        }
+        // The plain forms keep working, and the error of a step that continued is there.
+        assert_eq!(r("{{steps.plain.output}}/{{steps.plain}}/{{steps.bad.error}}/{{steps.list.error}}"), "solo testo/solo testo/esploso/");
+        // A condition sees the rendered text.
+        assert!(evaluate_condition(&r("{{steps.list.json.ok}} == true")));
+        assert!(evaluate_condition(&r("{{steps.list.json.items.0.nome}} == a")));
+        assert!(!evaluate_condition(&r("{{steps.list.json.nope}}")));
+        // The loop placeholders.
+        let item = json!({"nome": "x", "tags": ["t1", "t2"]});
+        let r = |t: &str| render_ctx(t, &RenderCtx { inputs: &inputs, outputs: &outputs, errors: &errors, item: Some((&item, 4)) });
+        assert_eq!(r("{{index}} {{item.nome}} {{item.tags.1}} {{item.manca}} {{item}}"), r#"4 x t2  {"nome":"x","tags":["t1","t2"]}"#);
     }
 }
