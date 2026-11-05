@@ -284,7 +284,7 @@ setHooks(hooks: HookConfig[]): Promise<{ hooks: HookConfig[] }>;
 ```
 
 `PolicyRule = { tool: string; pattern?: string | null; action: "allow" | "ask" | "deny" }`,
-`HookConfig = { event: "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop"; matcher?: string | null; command: string; timeout_s: number }`.
+`HookConfig = { event: "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop" | "SubagentStart" | "SubagentStop" | "PreCompact"; matcher?: string | null; command: string; timeout_s: number }`.
 
 Eventi: il runner emette `CUSTOM` con `name: "aiw.image"` e
 `value: { toolCallId, mime, data }` (base64, senza prefisso `data:`) per gli screenshot di browser e

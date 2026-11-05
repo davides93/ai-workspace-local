@@ -9,9 +9,9 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HookConfig {
-    /// SessionStart | UserPromptSubmit | PreToolUse | PostToolUse | Stop
+    /// SessionStart | UserPromptSubmit | PreToolUse | PostToolUse | Stop | SubagentStart | SubagentStop | PreCompact
     pub event: String,
-    /// Glob on the tool name (tool events only).
+    /// Glob on the tool name (tool events) or on the agent id (subagent events).
     #[serde(default)]
     pub matcher: Option<String>,
     pub command: String,
@@ -24,7 +24,8 @@ fn default_timeout() -> u64 {
 }
 
 /// The lifecycle events a hook can listen to.
-pub const EVENTS: [&str; 5] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"];
+pub const EVENTS: [&str; 8] =
+    ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStart", "SubagentStop", "PreCompact"];
 /// Longest timeout a hook can ask for, in seconds.
 pub const MAX_TIMEOUT_S: u64 = 600;
 
@@ -86,7 +87,7 @@ pub async fn run_hooks(hooks: &[HookConfig], event: &str, tool: Option<&str>, pa
                     if let Some(c) = v["additionalContext"].as_str() {
                         out.context.push(c.to_string());
                     }
-                } else if code == 0 && !stdout.trim().is_empty() && event == "UserPromptSubmit" {
+                } else if code == 0 && !stdout.trim().is_empty() && matches!(event, "UserPromptSubmit" | "SessionStart") {
                     out.context.push(stdout.trim().to_string());
                 }
                 if out.block.is_some() {

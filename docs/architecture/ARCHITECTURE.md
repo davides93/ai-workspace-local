@@ -246,8 +246,10 @@ sequenceDiagram
 - **Memoria e skill** (P11): `AGENTS.md` del workspace entra nel system prompt; le skill
   (`SKILL.md` con frontmatter `name`/`description`) sono elencate solo con la descrizione e il
   modello le carica su richiesta con il tool `skill`.
-- **Hook** (P08): `SessionStart` (dichiarato, non ancora invocato), `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Un
-  hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
+- **Hook** (P08): `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStart`, `SubagentStop`,
+  `PreCompact`. `SessionStart` parte solo al primo messaggio di una conversazione e il suo output entra nel prompt di sistema;
+  per gli eventi dei subagenti il filtro (`matcher`) è un glob sull'id dell'agente; `PreCompact` può saltare la compattazione.
+  Un hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
 - **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in `checkpoints/`.
   Il rewind (ripristino dei file di un run) non è ancora implementato, né dalla UI né dalla CLI.
 

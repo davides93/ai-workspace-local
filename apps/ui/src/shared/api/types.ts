@@ -608,11 +608,11 @@ export interface PolicyRule {
   action: PolicyAction;
 }
 
-export type HookEvent = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop";
+export type HookEvent = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop" | "SubagentStart" | "SubagentStop" | "PreCompact";
 
 export interface HookConfig {
   event: HookEvent;
-  /** Glob on the tool name (tool events only). */
+  /** Glob on the tool name (tool events) or on the agent id (subagent events). */
   matcher?: string | null;
   command: string;
   timeout_s: number;

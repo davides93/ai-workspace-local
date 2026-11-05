@@ -11,7 +11,9 @@ describe("hook events", () => {
     expect(hookEvent("PostToolUse")?.tools).toBe(true);
     expect(hookEvent("Stop")?.tools).toBe(false);
     expect(hookEvent("UserPromptSubmit")?.active).toBe(true);
-    expect(hookEvent("SessionStart")?.active).toBe(false);
+    expect(hookEvent("SessionStart")?.active).toBe(true);
+    for (const id of ["SubagentStart", "SubagentStop"] as const) expect(hookEvent(id)).toMatchObject({ tools: true, active: true });
+    expect(hookEvent("PreCompact")).toMatchObject({ tools: false, active: true });
     expect(hookEvent("Nope")).toBeUndefined();
   });
 });
@@ -22,10 +24,12 @@ describe("checkHooks", () => {
     expect(issues.filter((i) => i.level === "error").map((i) => i.index)).toEqual([0, 1, 2, 3]);
   });
 
-  it("warns about SessionStart, and blocks saving on a filter the backend cannot parse as a glob", () => {
-    const issues = checkHooks([hook({ event: "SessionStart" }), hook({ matcher: "[x" })], (g) => (g === "[x" ? "classe [ non chiusa" : null));
-    expect(issues.map((i) => [i.index, i.level])).toEqual([[0, "warn"], [1, "error"]]);
-    expect(issues[1].message).toBe("Il filtro «[x» non è un glob valido (classe [ non chiusa).");
+  it("accepts every event the backend fires, and blocks saving on a filter the backend cannot parse as a glob", () => {
+    const events = ["SessionStart", "SubagentStart", "SubagentStop", "PreCompact"] as const;
+    expect(checkHooks(events.map((event) => hook({ event })), noProblem)).toEqual([]);
+    const issues = checkHooks([hook({ matcher: "[x" })], (g) => (g === "[x" ? "classe [ non chiusa" : null));
+    expect(issues.map((i) => [i.index, i.level])).toEqual([[0, "error"]]);
+    expect(issues[0].message).toBe("Il filtro «[x» non è un glob valido (classe [ non chiusa).");
   });
 
   it("refuses an event the backend does not know", () => {

@@ -18,6 +18,7 @@ pub use skills::Skill;
 
 #[cfg(test)]
 pub(crate) mod tests_support {
+    pub use super::tests::TestHost;
     pub use super::tests::{input, setup};
 }
 
@@ -35,9 +36,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     pub struct TestHost {
-        backend: ScriptedBackend,
+        pub(crate) backend: ScriptedBackend,
         tools: Arc<ToolRegistry>,
-        events: Mutex<Vec<AgEvent>>,
+        pub(crate) events: Mutex<Vec<AgEvent>>,
         approve: bool,
         audits: Mutex<Vec<AuditEntry>>,
         /// Tests that need a backend which can fail put it here instead of the scripted one.
@@ -514,5 +515,122 @@ mod ordering_tests {
         let out = AgentRunner::run(tests_support::input(dir.path(), "auto-edit"), host).await.unwrap();
         let listing = out.new_messages.iter().find(|m| m.name.as_deref() == Some("list_dir")).unwrap();
         assert!(listing.content.contains("x.txt"), "{}", listing.content);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod hook_event_tests {
+    use super::*;
+    use aiw_core::events::AgEvent;
+    use aiw_runtimes::{Msg, ScriptedBackend};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn hook(event: &str, command: String) -> HookConfig {
+        HookConfig { event: event.into(), matcher: None, command, timeout_s: 10 }
+    }
+
+    fn log_hook(event: &str, file: &std::path::Path) -> HookConfig {
+        hook(event, format!("echo {event} >> '{}'", file.display()))
+    }
+
+    fn logged(file: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(file).unwrap_or_default().lines().map(String::from).collect()
+    }
+
+    fn delegate_turns() -> Vec<Vec<aiw_runtimes::ChatDelta>> {
+        vec![
+            ScriptedBackend::tool_turn("c1", "agent", json!({"agent": "planner", "task": "fai un piano"})),
+            ScriptedBackend::text_turn("Fine"),
+        ]
+    }
+
+    #[tokio::test]
+    async fn session_and_subagent_hooks_fire_once() {
+        let (host, dir) = tests_support::setup(delegate_turns(), true);
+        let log = dir.path().join("events.log");
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.hooks = ["SessionStart", "SubagentStart", "SubagentStop"].iter().map(|e| log_hook(e, &log)).collect();
+        inp.hooks.push(hook("SessionStart", "echo 'branch main'".into()));
+        AgentRunner::run(inp, host.clone()).await.unwrap();
+        assert_eq!(logged(&log), vec!["SessionStart", "SubagentStart", "SubagentStop"]);
+        // The stdout of a SessionStart hook reaches the system prompt.
+        let reqs = host.backend.requests.lock().unwrap();
+        let system = reqs[0].messages[0].text();
+        assert!(system.contains("# Contesto di avvio sessione") && system.contains("branch main"), "{system}");
+    }
+
+    #[tokio::test]
+    async fn session_start_does_not_fire_on_a_continued_conversation() {
+        let (host, dir) = tests_support::setup(delegate_turns(), true);
+        let log = dir.path().join("events.log");
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.hooks = vec![log_hook("SessionStart", &log), log_hook("SubagentStart", &log)];
+        inp.history = vec![Msg::user("ciao"), Msg::assistant("ciao a te")];
+        AgentRunner::run(inp, host).await.unwrap();
+        assert_eq!(logged(&log), vec!["SubagentStart"]);
+    }
+
+    #[tokio::test]
+    async fn blocking_subagent_start_keeps_the_subagent_from_running() {
+        let (host, dir) = tests_support::setup(delegate_turns(), true);
+        let log = dir.path().join("events.log");
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.hooks = vec![hook("SubagentStart", "echo vietato >&2; exit 2".into()), log_hook("SubagentStop", &log)];
+        let out = AgentRunner::run(inp, host.clone()).await.unwrap();
+        let tool = out.new_messages.iter().find(|m| m.role == "tool").unwrap();
+        assert!(tool.content.contains("Negato da un hook") && tool.content.contains("vietato"), "{}", tool.content);
+        assert!(logged(&log).is_empty());
+        let evs = host.events.lock().unwrap();
+        assert!(!evs.iter().any(|e| matches!(e, AgEvent::SubagentStarted { .. })));
+    }
+
+    #[tokio::test]
+    async fn subagent_start_can_rewrite_the_task_and_stop_adds_context() {
+        let (host, dir) = tests_support::setup(delegate_turns(), true);
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.hooks = vec![
+            hook("SubagentStart", r#"echo '{"updatedInput":{"task":"nuovo compito"},"additionalContext":"extra"}'"#.into()),
+            hook("SubagentStop", r#"echo '{"additionalContext":"controllato"}'"#.into()),
+        ];
+        let out = AgentRunner::run(inp, host).await.unwrap();
+        let tool = out.new_messages.iter().find(|m| m.role == "tool").unwrap();
+        assert!(
+            tool.content.contains("nuovo compito") && tool.content.contains("[contesto aggiunto da un hook]\nextra"),
+            "{}",
+            tool.content
+        );
+        assert!(tool.content.ends_with("[hook] controllato"), "{}", tool.content);
+    }
+
+    fn long_history() -> Vec<Msg> {
+        (0..8).map(|i| if i % 2 == 0 { Msg::user(format!("domanda {i}")) } else { Msg::assistant(format!("risposta {i}")) }).collect()
+    }
+
+    #[tokio::test]
+    async fn pre_compact_runs_and_can_block_the_compaction() {
+        // Without a blocking hook the history is summarised (one extra model call).
+        let (host, dir) = tests_support::setup(vec![ScriptedBackend::text_turn("riassunto"), ScriptedBackend::text_turn("ok")], true);
+        let log = dir.path().join("events.log");
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.history = long_history();
+        inp.compact_at = 0.0001;
+        inp.hooks = vec![log_hook("PreCompact", &log)];
+        AgentRunner::run(inp, host.clone()).await.unwrap();
+        assert_eq!(logged(&log), vec!["PreCompact"]);
+        let has = |h: &Arc<tests_support::TestHost>| {
+            h.events.lock().unwrap().iter().any(|e| matches!(e, AgEvent::Custom { name, .. } if name == "aiw.compacted"))
+        };
+        assert!(has(&host));
+
+        // A blocking hook skips it.
+        let (host, dir) = tests_support::setup(vec![ScriptedBackend::text_turn("ok")], true);
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.history = long_history();
+        inp.compact_at = 0.0001;
+        inp.hooks = vec![hook("PreCompact", "exit 2".into())];
+        let out = AgentRunner::run(inp, host.clone()).await.unwrap();
+        assert_eq!(out.final_text, "ok");
+        assert!(!has(&host));
     }
 }

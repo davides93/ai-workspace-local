@@ -300,7 +300,30 @@ impl AgentRunner {
             ev.emit(AgEvent::RunError { message: format!("Prompt bloccato da un hook: {reason}"), code: Some("hook_blocked".into()) });
             return Err(Error::Denied(reason));
         }
-        let mut messages = vec![Msg::system(system_prompt(input, &skills))];
+        // SessionStart hooks run once, when a top-level run opens a conversation. They cannot block.
+        let mut start_context = Vec::new();
+        if input.depth == 0 && input.history.is_empty() {
+            let start = run_hooks(
+                &input.hooks,
+                "SessionStart",
+                None,
+                &json!({"session_id": input.thread_id, "run_id": input.run_id, "agent": input.agent.id}),
+            )
+            .await;
+            if let Some(reason) = start.block {
+                tracing::info!("SessionStart hook asked to block: {reason} (ignored: a session start cannot be blocked)");
+            }
+            start_context = start.context;
+        }
+        let mut system = system_prompt(input, &skills);
+        if !start_context.is_empty() {
+            system.push_str("\n# Contesto di avvio sessione\n");
+            for c in &start_context {
+                system.push_str(c.trim());
+                system.push('\n');
+            }
+        }
+        let mut messages = vec![Msg::system(system)];
         messages.extend(input.history.iter().cloned());
         let mut user_text = input.user_input.clone();
         for c in hook.context {
@@ -338,7 +361,16 @@ impl AgentRunner {
             }
             // Context compaction (P10).
             if estimate_tokens(&messages) as f64 > input.compact_at * ctx_max as f64 && messages.len() > 6 {
-                if let Some(n) = compact(&mut messages, backend.as_ref(), input).await {
+                let pre = run_hooks(
+                    &input.hooks,
+                    "PreCompact",
+                    None,
+                    &json!({"run_id": input.run_id, "messages": messages.len(), "estimated_tokens": estimate_tokens(&messages)}),
+                )
+                .await;
+                if let Some(reason) = pre.block {
+                    tracing::info!("PreCompact hook blocked the compaction for this turn: {reason}");
+                } else if let Some(n) = compact(&mut messages, backend.as_ref(), input).await {
                     ev.emit(AgEvent::Custom { name: "aiw.compacted".into(), value: json!({"removed_messages": n}) });
                 }
             }
@@ -843,18 +875,46 @@ impl AgentRunner {
             }
             "agent" => {
                 let agent_id = args["agent"].as_str().unwrap_or_default().to_string();
-                let task = args["task"].as_str().unwrap_or_default().to_string();
+                let mut task = args["task"].as_str().unwrap_or_default().to_string();
                 if input.depth >= MAX_DEPTH {
                     return (ToolOutput::error("profondità massima dei subagenti raggiunta"), None);
+                }
+                // SubagentStart hooks: the matcher applies to the agent id.
+                let start = run_hooks(
+                    &input.hooks,
+                    "SubagentStart",
+                    Some(&agent_id),
+                    &json!({"agent": agent_id, "task": task, "run_id": input.run_id, "depth": input.depth}),
+                )
+                .await;
+                if let Some(reason) = start.block {
+                    audit("deny", format!("hook: {reason}"));
+                    return (ToolOutput::error(format!("Negato da un hook: {reason}")), None);
+                }
+                if let Some(t) = start.updated_input.as_ref().and_then(|u| u.get("task")).and_then(|t| t.as_str()) {
+                    task = t.to_string();
+                }
+                for c in start.context {
+                    task.push_str(&format!("\n\n[contesto aggiunto da un hook]\n{c}"));
                 }
                 let sub_id = new_id("sub");
                 host.emit(&input.run_id, AgEvent::SubagentStarted { subagent_id: sub_id.clone(), name: agent_id.clone() });
                 audit("allow", format!("subagente {agent_id}: {}", task.chars().take(120).collect::<String>()));
                 let r = host.subagent(input, &agent_id, &task).await;
-                let (out, res) = match r {
+                let (mut out, res) = match r {
                     Ok(t) => (ToolOutput::text(t.clone()), Some(t)),
                     Err(e) => (ToolOutput::error(format!("subagente fallito: {e}")), None),
                 };
+                let stop = run_hooks(
+                    &input.hooks,
+                    "SubagentStop",
+                    Some(&agent_id),
+                    &json!({"agent": agent_id, "task": task, "result": out.content, "is_error": out.is_error, "run_id": input.run_id}),
+                )
+                .await;
+                for c in stop.context {
+                    out.content.push_str(&format!("\n\n[hook] {c}"));
+                }
                 host.emit(
                     &input.run_id,
                     AgEvent::SubagentFinished { subagent_id: sub_id, result: res.map(|r| r.chars().take(300).collect()) },
