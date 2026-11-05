@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  changeKind, cleanOptions, optionsOf, optionsProblem, optionsSummary, dropReferences, schemaParams, freshStepId, gatedIds, newStep, placeholders, renameReferences, stepRef, stepSummary, STEP_ID,
+  changeKind, cleanOptions, innerIds, parseInline, optionsOf, optionsProblem, optionsSummary, dropReferences, schemaParams, freshStepId, gatedIds, newStep, placeholders, renameReferences, stepRef, stepSummary, STEP_ID,
   type StepDraft,
 } from "./steps";
 
@@ -125,5 +125,41 @@ describe("step options", () => {
     const s: StepDraft = { id: "a", kind: "tool", tool: "x", args: "{}", opts: { retry: 1 } };
     expect(changeKind(s, "llm", [s], { profile: "p" })).toMatchObject({ kind: "llm", opts: { retry: 1 } });
     expect(changeKind(s, "approval", [s])).not.toHaveProperty("opts");
+  });
+});
+
+describe("foreach and parallel", () => {
+  it("start with an inline step and list the ids they bring", () => {
+    const f = newStep("foreach", [], { profile: "fast" });
+    expect(f).toMatchObject({ kind: "foreach", items: "" });
+    expect(innerIds(f)).toEqual(["foreach1-step"]);
+    const p = newStep("parallel", [], { profile: "fast" });
+    expect(innerIds(p)).toEqual(["parallel1-a"]);
+    expect(innerIds(steps[0])).toEqual([]);
+  });
+
+  it("accept only tool, agent and llm as inline steps", () => {
+    expect(parseInline('{"id": "a", "kind": "tool", "tool": "x"}', false)).toMatchObject({ ok: true });
+    expect(parseInline('[{"id": "a", "kind": "llm", "profile": "p", "prompt": "x"}, {"id": "b", "kind": "tool", "tool": "x"}]', true)).toMatchObject({ ok: true });
+    expect(parseInline("{", false)).toMatchObject({ ok: false });
+    expect(parseInline("[]", true)).toMatchObject({ ok: false });
+    expect(parseInline('[{"id": "a", "kind": "tool"}]', false)).toMatchObject({ ok: false });
+    expect(parseInline('{"id": "a", "kind": "approval", "message": "?"}', false)).toMatchObject({ ok: false, error: expect.stringContaining("niente annidamento") });
+    expect(parseInline('{"id": "a b", "kind": "tool", "tool": "x"}', false)).toMatchObject({ ok: false });
+    expect(parseInline('{"kind": "tool", "tool": "x"}', false)).toMatchObject({ ok: false });
+  });
+
+  it("are summarised and keep their options when the kind changes between steps that have them", () => {
+    expect(stepSummary({ id: "f", kind: "foreach", items: "{{steps.scan.output}}", body: "{}", parallel: 4 })).toBe("per ogni voce di {{steps.scan.output}} (4 alla volta)");
+    expect(stepSummary(newStep("parallel", [], {}))).toBe("in parallelo: parallel1-a");
+    const f: StepDraft = { ...newStep("foreach", [], {}), opts: { retry: 1 } } as StepDraft;
+    expect(changeKind(f, "parallel", [f], {})).toMatchObject({ kind: "parallel", opts: { retry: 1 } });
+  });
+
+  it("follow a renamed step in the list and in the inline step", () => {
+    const f: StepDraft = { id: "each", kind: "foreach", items: "{{steps.scan.output}}", body: '{"id": "i", "kind": "llm", "profile": "p", "prompt": "{{steps.scan.output}} {{item}}"}' };
+    const out = renameReferences([steps[0], f], "scan", "list")[1];
+    expect(out).toMatchObject({ items: "{{steps.list.output}}" });
+    expect((out as { body: string }).body).toContain("{{steps.list.output}} {{item}}");
   });
 });

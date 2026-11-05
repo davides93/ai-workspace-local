@@ -163,11 +163,22 @@ impl aiw_workflow::WorkflowHost for EngineHost {
 
     async fn run_agent(&self, _run_id: &str, agent_id: &str, prompt: &str) -> Result<String> {
         // Each workflow keeps one session per run so the work is inspectable in the Workspace view.
-        let existing = self.workflow_session.lock().unwrap().clone();
+        // A session runs one thing at a time: the session is taken while an agent works in it, so
+        // agents that run together (foreach, parallel) each get their own.
+        let existing = self.workflow_session.lock().unwrap().take();
         let name = self.workflow.as_ref().map(|w| w.name.clone()).unwrap_or_else(|| "Workflow".into());
-        let (text, session_id) = self.engine.run_agent_task(agent_id, prompt, existing.as_deref(), &format!("⚙ {name}")).await?;
-        *self.workflow_session.lock().unwrap() = Some(session_id);
-        Ok(text)
+        match self.engine.run_agent_task(agent_id, prompt, existing.as_deref(), &format!("⚙ {name}")).await {
+            Ok((text, session_id)) => {
+                self.workflow_session.lock().unwrap().get_or_insert(session_id);
+                Ok(text)
+            }
+            Err(e) => {
+                if let Some(s) = existing {
+                    self.workflow_session.lock().unwrap().get_or_insert(s);
+                }
+                Err(e)
+            }
+        }
     }
 
     async fn complete(&self, _run_id: &str, profile_id: &str, prompt: &str) -> Result<String> {

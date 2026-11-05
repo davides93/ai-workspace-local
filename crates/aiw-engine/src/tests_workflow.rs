@@ -175,3 +175,42 @@ async fn an_agent_whose_approval_expires_gets_an_explanation() {
     assert!(e.approvals().is_empty());
     assert!(e.audit().iter().any(|a| a.decision.as_deref() == Some("timeout")));
 }
+
+#[tokio::test]
+async fn agents_running_together_in_a_workflow_get_their_own_sessions() {
+    let data = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let e = Engine::new(options(data.path(), ws.path())).await.unwrap();
+    e.register_native_runtime(
+        "llama-embedded",
+        Arc::new(ScriptedBackend::new(vec![ScriptedBackend::text_turn("risposta"), ScriptedBackend::text_turn("risposta")])),
+    );
+    e.save_profile(InferenceProfile {
+        id: "default".into(),
+        name: "Test".into(),
+        description: None,
+        runtime_id: "llama-embedded".into(),
+        model: "scripted".into(),
+        params: InferenceParams { context: Some(8192), ..Default::default() },
+    })
+    .unwrap();
+    e.save_workflow(
+        serde_json::from_value(json!({
+            "id": "par", "name": "Par", "enabled": false, "trigger": {"kind": "manual"}, "inputs": {},
+            "steps": [
+                {"id": "both", "kind": "parallel", "steps": [
+                    {"id": "a", "kind": "agent", "agent": "operator", "prompt": "primo"},
+                    {"id": "b", "kind": "agent", "agent": "operator", "prompt": "secondo"}
+                ]}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let first = e.run_workflow("par", Map::new(), "test").await.unwrap();
+    wait_until("run finished", || e.workflow_runs().iter().any(|r| r.id == first.id && r.status != "running")).await;
+    let run = e.workflow_runs().into_iter().find(|r| r.id == first.id).unwrap();
+    assert_eq!(run.status, "succeeded", "{run:?}");
+    assert_eq!(run.steps[0].output.as_deref(), Some(r#"{"a":"risposta","b":"risposta"}"#));
+    assert!(e.sessions().unwrap().iter().filter(|s| s.title.starts_with("⚙ Par")).count() >= 2);
+}

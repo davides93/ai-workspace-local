@@ -604,7 +604,7 @@ impl Engine {
         let used_by: Vec<String> = self
             .workflows()?
             .into_iter()
-            .filter(|w| w.steps.iter().any(|s| matches!(s, WorkflowStep::Agent { agent: a, .. } if a == id)))
+            .filter(|w| w.steps.iter().flat_map(|s| s.with_inner()).any(|s| matches!(s, WorkflowStep::Agent { agent: a, .. } if a == id)))
             .map(|w| w.name)
             .collect();
         if !used_by.is_empty() {
@@ -625,7 +625,9 @@ impl Engine {
         used_by.extend(
             self.workflows()?
                 .into_iter()
-                .filter(|w| w.steps.iter().any(|s| matches!(s, WorkflowStep::Llm { profile: p, .. } if p == id)))
+                .filter(|w| {
+                    w.steps.iter().flat_map(|s| s.with_inner()).any(|s| matches!(s, WorkflowStep::Llm { profile: p, .. } if p == id))
+                })
                 .map(|w| format!("workflow {}", w.name)),
         );
         if !used_by.is_empty() {

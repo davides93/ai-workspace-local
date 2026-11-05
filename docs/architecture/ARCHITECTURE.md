@@ -291,6 +291,17 @@ ripresa dopo un'approvazione.
 (il passo resta `failed`, il run prosegue e l'errore è in `{{steps.<id>.error}}`). Il timeout di un
 passo `agent` annulla anche il run dell'agente.
 
+**`foreach` e `parallel`.** `foreach` (`items`, `do`, `parallel` 1–8) esegue un passo inline
+`tool`/`agent`/`llm` per ogni voce di `items`: un array JSON (anche in un blocco ```json) oppure un
+testo con una voce per riga, al massimo 200. Nel passo valgono `{{item}}`, `{{item.campo}}` e
+`{{index}}`; l'output è l'array JSON degli output nell'ordine delle voci (`null` per una voce
+fallita con `on_error: continue`). Con `on_error: fail` il primo errore ferma il ciclo e annulla le
+voci ancora in corso. `parallel` (`steps`) esegue più passi inline insieme; l'output è l'oggetto
+`{id_interno: output}` e ogni output è leggibile anche come `{{steps.<id_interno>.output}}`. I passi
+interni possono essere solo `tool`, `agent` o `llm` (niente annidamento, `approval` o `condition`) e
+i loro id contano nell'unicità degli id del workflow. Gli agenti eseguiti insieme usano sessioni
+diverse. Durante l'esecuzione il passo mostra «3/5 completati».
+
 **Approvazioni con scadenza.** Il passo `approval` accetta `timeout_s` e `default` (`deny` o `allow`,
 default `deny`): allo scadere vale il default, l'output è «scaduto: approvato» oppure il passo
 fallisce con «scaduto: rifiutato» (e il run risulta annullato), l'audit registra `decision: "timeout"`.

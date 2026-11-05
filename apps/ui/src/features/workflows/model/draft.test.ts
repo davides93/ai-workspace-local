@@ -42,6 +42,37 @@ describe("conversion", () => {
     expect(find(bad, "timeout_s")).toHaveLength(1);
   });
 
+  it("round-trips foreach and parallel steps with their inline steps", () => {
+    const def: WorkflowDef = {
+      id: "f", name: "F", enabled: false, trigger: { kind: "manual" }, inputs: {},
+      steps: [
+        { id: "each", kind: "foreach", items: "{{inputs.list}}", parallel: 4, retry: 1, do: { id: "one", kind: "llm", profile: "p", prompt: "{{item.name}} {{index}}", on_error: "continue" } },
+        { id: "both", kind: "parallel", steps: [{ id: "a", kind: "tool", tool: "list_dir", args: {} }, { id: "b", kind: "agent", agent: "operator", prompt: "x" }] },
+        { id: "seq", kind: "foreach", items: "uno\ndue", do: { id: "two", kind: "tool", tool: "list_dir", args: {} } },
+      ],
+    };
+    const plain = plainFromDef(def);
+    expect(plain.steps[0]).toMatchObject({ kind: "foreach", parallel: 4, opts: { retry: 1 } });
+    expect(plain.steps[2]).not.toHaveProperty("parallel");
+    expect(defFromPlain(plain)).toEqual(def);
+    expect(parseWorkflowJson(previewJson(plain), "f")).toMatchObject({ ok: true });
+  });
+
+  it("checks the inline steps, the ids they use and the loop placeholders", () => {
+    const loop = (over: object) => ({ id: "each", kind: "foreach" as const, items: "a", body: '{"id": "one", "kind": "llm", "profile": "fast-local", "prompt": "{{item}} {{item.x}} {{index}}"}', ...over });
+    const run = (steps: PlainDraft["steps"]) => validateDraft({ ...base(), steps }, ctx);
+    expect(run([loop({})]).filter((i) => i.level === "error")).toEqual([]);
+    expect(run([loop({})]).filter((i) => i.field === "placeholder")).toEqual([]);
+    expect(find(run([loop({ body: "{" })]), "body")).toHaveLength(1);
+    expect(find(run([loop({ body: '{"id": "z", "kind": "approval", "message": "?"}' })]), "body")).toHaveLength(1);
+    expect(find(run([loop({ items: " " })]), "items")).toHaveLength(1);
+    expect(find(run([loop({ parallel: 9 })]), "parallel")).toHaveLength(1);
+    expect(run([loop({}), { id: "one", kind: "agent", agent: "operator", prompt: "x" }]).some((i) => i.message.includes("duplicato"))).toBe(true);
+    expect(find(run([{ id: "p", kind: "parallel", steps: "[]" }]), "steps")).toHaveLength(1);
+    // {{item}} outside a loop is not known.
+    expect(find(run([{ id: "a", kind: "agent", agent: "operator", prompt: "{{item}}" }]), "placeholder")).toHaveLength(1);
+  });
+
   it("keeps non-string inputs as JSON and string ones as text", () => {
     const def: WorkflowDef = { id: "i", name: "I", enabled: false, trigger: { kind: "manual" }, inputs: { folder: "~/x", n: 3, flags: { a: true } }, steps: [] };
     const plain = plainFromDef(def);

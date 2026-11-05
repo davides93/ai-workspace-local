@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Chip, Field, Input, Select, Textarea } from "../../../shared/ui";
 import type { AgentProfile, InferenceProfile, ToolInfo } from "../../../shared/api/types";
 import type { Issue } from "../model/draft";
-import { cleanOptions, DEFAULT_RETRY_DELAY_S, OPTION_LIMITS, schemaParams, type StepDraft } from "../model/steps";
+import { cleanOptions, DEFAULT_RETRY_DELAY_S, FOREACH_MAX_PARALLEL, OPTION_LIMITS, schemaParams, type StepDraft } from "../model/steps";
 import type { StepOptions } from "../../../shared/api/types";
 import { PlaceholderInsert } from "./PlaceholderInsert";
 
@@ -101,6 +101,42 @@ export function LlmFields({ step, uid, issues, catalog, before, inputKeys, onCha
       </Field>
       <PromptField id={`st-${uid}-prompt`} label="Prompt" value={step.prompt} placeholder="Una sola richiesta al modello, senza tool." issues={issues} field="prompt" before={before} inputKeys={inputKeys} onChange={(prompt) => onChange({ ...step, prompt })} />
     </>
+  );
+}
+
+/** The text of an inline step (or list of steps) as JSON, with the check of what it says. */
+function InlineJson({ id, label, value, hint, rows, issues, field, onChange }: { id: string; label: string; value: string; hint: ReactNode; rows: number; issues: Issue[]; field: string; onChange: (v: string) => void }) {
+  const n = note(issues, field);
+  return (
+    <Field label={label} htmlFor={id} error={n.error} hint={n.hint ?? hint}>
+      <Textarea id={id} rows={rows} className="mono" spellCheck={false} value={value} onChange={(e) => onChange(e.target.value)} aria-invalid={!!n.error} />
+    </Field>
+  );
+}
+
+export function ForeachFields({ step, uid, issues, before, inputKeys, onChange }: Props<"foreach">) {
+  const p = note(issues, "parallel");
+  return (
+    <>
+      <PromptField id={`st-${uid}-items`} label="Elenco da scorrere" value={step.items} rows={2} placeholder="{{steps.scan.output}}" issues={issues} field="items" before={before} inputKeys={inputKeys} onChange={(items) => onChange({ ...step, items })} />
+      <p className="faint text-xs">Un array JSON (anche in un blocco ```json) oppure un testo con una voce per riga; al massimo 200 voci.</p>
+      <Field label="Voci alla volta" htmlFor={`st-${uid}-parallel`} error={p.error} hint={`1–${FOREACH_MAX_PARALLEL}`}>
+        <Input id={`st-${uid}-parallel`} type="number" min={1} max={FOREACH_MAX_PARALLEL} value={step.parallel ?? ""} placeholder="1" onChange={(e) => onChange({ ...step, parallel: e.target.value.trim() === "" ? undefined : Number(e.target.value) })} aria-invalid={!!p.error} />
+      </Field>
+      <InlineJson
+        id={`st-${uid}-body`} label="Passo da ripetere (JSON)" value={step.body} rows={7} issues={issues} field="body" onChange={(body) => onChange({ ...step, body })}
+        hint={<>Un passo <code>tool</code>, <code>agent</code> o <code>llm</code>. Usa <code>{"{{item}}"}</code>, <code>{"{{item.campo}}"}</code> e <code>{"{{index}}"}</code>.</>}
+      />
+    </>
+  );
+}
+
+export function ParallelFields({ step, uid, issues, onChange }: Props<"parallel">) {
+  return (
+    <InlineJson
+      id={`st-${uid}-steps`} label="Passi da eseguire insieme (JSON)" value={step.steps} rows={10} issues={issues} field="steps" onChange={(steps) => onChange({ ...step, steps })}
+      hint={<>Un elenco di passi <code>tool</code>, <code>agent</code> o <code>llm</code>. L'output di ognuno è anche <code>{"{{steps.<id>.output}}"}</code>.</>}
+    />
   );
 }
 

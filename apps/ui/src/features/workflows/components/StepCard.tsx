@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Icon, IconButton, Input, Select, StatusPill, RowControls } from "../../../shared/ui";
 import type { Issue } from "../model/draft";
 import { hasOptions, optionsSummary, STEP_ID, STEP_KINDS, stepMeta, stepSummary, type StepDraft, type StepKind } from "../model/steps";
-import { AgentFields, ApprovalFields, ConditionFields, LlmFields, OptionsFields, ToolFields, type StepCatalog } from "./StepForms";
+import { AgentFields, ApprovalFields, ConditionFields, ForeachFields, LlmFields, OptionsFields, ParallelFields, ToolFields, type StepCatalog } from "./StepForms";
 
 /** Id of a step: edited as text, applied on blur so that references only follow a valid, free id. */
 function IdField({ uid, index, value, taken, onCommit }: { uid: number; index: number; value: string; taken: string[]; onCommit: (id: string) => void }) {
@@ -74,6 +74,8 @@ export function StepCard({ uid, index, steps, catalog, inputKeys, issues, runSta
             {step.kind === "tool" && <ToolFields {...common} step={step} />}
             {step.kind === "agent" && <AgentFields {...common} step={step} />}
             {step.kind === "llm" && <LlmFields {...common} step={step} />}
+            {step.kind === "foreach" && <ForeachFields {...common} step={step} />}
+            {step.kind === "parallel" && <ParallelFields {...common} step={step} />}
             {step.kind === "approval" && <ApprovalFields {...common} step={step} />}
             {step.kind === "condition" && <ConditionFields {...common} step={step} />}
             {hasOptions(step) && <OptionsFields uid={uid} issues={issues} opts={step.opts} onChange={(opts) => onChange({ ...step, opts })} />}

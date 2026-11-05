@@ -5,7 +5,7 @@
 import { keyed, unkeyed, type Keyed } from "../../../shared/lib/keyedList";
 import type { WorkflowDef, WorkflowStep, WorkflowTrigger } from "../../../shared/api/types";
 import { parseCron } from "./cron";
-import { approvalTimeoutProblem, cleanOptions, hasOptions, optionsOf, optionsProblem, placeholders, STEP_ID, stepRef, stepTexts, type StepDraft } from "./steps";
+import { approvalTimeoutProblem, cleanOptions, FOREACH_MAX_PARALLEL, hasOptions, inlineJson, innerIds, optionsOf, optionsProblem, parseInline, placeholders, STEP_ID, stepRef, stepTexts, type StepDraft } from "./steps";
 import { joinInterval, MIN_INTERVAL_S, splitInterval, type IntervalUnit } from "./triggers";
 
 export type TriggerDraft =
@@ -56,12 +56,14 @@ export function triggerFromDraft(t: TriggerDraft, secret = ""): WorkflowTrigger 
 }
 
 function stepToDraft(s: WorkflowStep): StepDraft {
-  const opts = s.kind === "tool" || s.kind === "agent" || s.kind === "llm" ? optionsOf(s) : undefined;
+  const opts = s.kind === "tool" || s.kind === "agent" || s.kind === "llm" || s.kind === "foreach" || s.kind === "parallel" ? optionsOf(s) : undefined;
   const o = opts ? { opts } : {};
   switch (s.kind) {
     case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: pretty(s.args ?? {}), ...o };
     case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt, ...o };
     case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt, ...o };
+    case "foreach": return { id: s.id, kind: "foreach", items: s.items, body: inlineJson(s.do), ...(s.parallel !== undefined && s.parallel !== 1 ? { parallel: s.parallel } : {}), ...o };
+    case "parallel": return { id: s.id, kind: "parallel", steps: inlineJson(s.steps), ...o };
     case "approval": return { id: s.id, kind: "approval", message: s.message, ...(s.timeout_s ? { timeout_s: s.timeout_s } : {}), ...(s.timeout_s && s.default === "allow" ? { default: "allow" as const } : {}) };
     case "condition": return { id: s.id, kind: "condition", if: s.if, then: [...s.then], else: [...(s.else ?? [])] };
   }
@@ -84,6 +86,14 @@ function stepFromDraft(s: StepDraft): WorkflowStep {
     case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: parseArgs(s.args) ?? {}, ...o };
     case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt, ...o };
     case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt, ...o };
+    case "foreach": {
+      const inner = parseInline(s.body, false);
+      return { id: s.id, kind: "foreach", items: s.items, do: inner.ok ? inner.steps[0] : { id: "", kind: "llm", profile: "", prompt: "" }, ...(s.parallel !== undefined && s.parallel !== 1 ? { parallel: s.parallel } : {}), ...o };
+    }
+    case "parallel": {
+      const inner = parseInline(s.steps, true);
+      return { id: s.id, kind: "parallel", steps: inner.ok ? inner.steps : [], ...o };
+    }
     case "approval": return { id: s.id, kind: "approval", message: s.message, ...(s.timeout_s ? { timeout_s: s.timeout_s } : {}), ...(s.timeout_s && s.default === "allow" ? { default: "allow" as const } : {}) };
     case "condition": return s.else.length ? { id: s.id, kind: "condition", if: s.if, then: s.then, else: s.else } : { id: s.id, kind: "condition", if: s.if, then: s.then };
   }
@@ -163,7 +173,7 @@ export function previewJson(d: PlainDraft): string {
   return JSON.stringify(shown, null, 2);
 }
 
-const KINDS = ["tool", "agent", "llm", "approval", "condition"];
+const KINDS = ["tool", "agent", "llm", "foreach", "parallel", "approval", "condition"];
 const TRIGGERS = ["manual", "interval", "cron", "file", "webhook"];
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 const isStr = (v: unknown): v is string => typeof v === "string";
@@ -194,6 +204,8 @@ export function parseWorkflowJson(text: string, id: string): { ok: true; draft: 
       s.kind === "tool" ? need("tool", isStr(s.tool)) ?? need("args", s.args === undefined || isObj(s.args))
       : s.kind === "agent" ? need("agent", isStr(s.agent)) ?? need("prompt", isStr(s.prompt))
       : s.kind === "llm" ? need("profile", isStr(s.profile)) ?? need("prompt", isStr(s.prompt))
+      : s.kind === "foreach" ? need("items", isStr(s.items)) ?? need("do", isObj(s.do))
+      : s.kind === "parallel" ? need("steps", Array.isArray(s.steps))
       : s.kind === "approval" ? need("message", isStr(s.message))
       : need("if", isStr(s.if)) ?? need("then", isStrList(s.then)) ?? need("else", s.else === undefined || isStrList(s.else));
     if (err) return { ok: false, error: err };
@@ -258,6 +270,10 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
   if (d.steps.length === 0) add({ scope: "steps", level: "warn", message: "Il workflow non ha passi: non farà nulla." });
   const index = new Map<string, number>();
   d.steps.forEach((s, i) => {
+    for (const inner of innerIds(s)) {
+      if (index.has(inner)) add({ scope: "step", step: i, field: s.kind === "foreach" ? "body" : "steps", level: "error", message: `Identificativo duplicato: «${inner}» è già usato dal passo ${index.get(inner)! + 1}.` });
+      else index.set(inner, i);
+    }
     if (!s.id.trim()) add({ scope: "step", step: i, field: "id", level: "error", message: "Il passo ha bisogno di un identificativo." });
     else if (!STEP_ID.test(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: "L'identificativo può contenere solo lettere, cifre, «_» e «-»." });
     else if (index.has(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: `Identificativo duplicato: «${s.id}» è già usato dal passo ${index.get(s.id)! + 1}.` });
@@ -282,6 +298,19 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
         else if (ctx.profiles.length > 0 && !ctx.profiles.includes(s.profile)) w("profile", `Il profilo «${s.profile}» non esiste: il passo fallirà.`);
         if (!s.prompt.trim()) e("prompt", "Scrivi il prompt.");
         break;
+      case "foreach": {
+        if (!s.items.trim()) e("items", "Indica l'elenco da scorrere: un array JSON o un testo con una voce per riga.");
+        if (s.parallel !== undefined && (!Number.isInteger(s.parallel) || s.parallel < 1 || s.parallel > FOREACH_MAX_PARALLEL)) e("parallel", `Le voci in parallelo vanno da 1 a ${FOREACH_MAX_PARALLEL}.`);
+        const r = parseInline(s.body, false);
+        if (!r.ok) e("body", r.error);
+        else if (r.steps[0].kind === "agent" && ctx.agents.length > 0 && !ctx.agents.includes(r.steps[0].agent)) w("body", `L'agente «${r.steps[0].agent}» non esiste: il passo fallirà.`);
+        break;
+      }
+      case "parallel": {
+        const r = parseInline(s.steps, true);
+        if (!r.ok) e("steps", r.error);
+        break;
+      }
       case "approval":
         if (!s.message.trim()) e("message", "Scrivi la domanda da porre.");
         {
@@ -314,6 +343,8 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
         } else if (p.root === "inputs") {
           const key = p.path.slice("inputs.".length);
           if (d.trigger.kind !== "webhook" && key !== "payload" && !keys.has(key)) w("placeholder", `L'input «${key}» non è definito: resterà vuoto.`);
+        } else if (s.kind === "foreach" && (p.root === "item" || p.path === "index")) {
+          // Bound by the loop.
         } else if (p.path !== "now") {
           w("placeholder", `{{${p.path}}} non è un segnaposto noto: resterà com'è.`);
         }

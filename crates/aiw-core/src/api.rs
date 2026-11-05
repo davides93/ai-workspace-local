@@ -643,6 +643,15 @@ pub const MAX_RETRY_DELAY_S: u64 = 300;
 pub const MAX_STEP_TIMEOUT_S: u64 = 86_400;
 pub const DEFAULT_RETRY_DELAY_S: u64 = 2;
 
+pub const MAX_FOREACH_PARALLEL: u32 = 8;
+pub const MAX_FOREACH_ITEMS: usize = 200;
+
+fn one() -> u32 {
+    1
+}
+fn is_one(n: &u32) -> bool {
+    *n == 1
+}
 fn default_retry_delay() -> u64 {
     DEFAULT_RETRY_DELAY_S
 }
@@ -701,6 +710,29 @@ pub enum WorkflowStep {
         #[serde(default, flatten)]
         opts: StepOptions,
     },
+    /// Runs `do` once for every entry of `items` (a JSON array, or one entry per non-empty line),
+    /// `parallel` at a time. `{{item}}`, `{{item.field}}` and `{{index}}` are available in `do`.
+    /// The output is the JSON array of the outputs, in the order of the entries.
+    Foreach {
+        id: String,
+        items: String,
+        /// A single inline `tool`, `agent` or `llm` step.
+        #[serde(rename = "do")]
+        body: Box<WorkflowStep>,
+        /// How many entries run at the same time (1..=8).
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        parallel: u32,
+        #[serde(default, flatten)]
+        opts: StepOptions,
+    },
+    /// Runs inline `tool`, `agent` and `llm` steps all at once. The output is the JSON object
+    /// `{inner_id: output}`; each inner output is also `{{steps.<inner_id>.output}}`.
+    Parallel {
+        id: String,
+        steps: Vec<WorkflowStep>,
+        #[serde(default, flatten)]
+        opts: StepOptions,
+    },
     Approval {
         id: String,
         message: String,
@@ -727,15 +759,35 @@ impl WorkflowStep {
             WorkflowStep::Tool { id, .. }
             | WorkflowStep::Agent { id, .. }
             | WorkflowStep::Llm { id, .. }
+            | WorkflowStep::Foreach { id, .. }
+            | WorkflowStep::Parallel { id, .. }
             | WorkflowStep::Approval { id, .. }
             | WorkflowStep::Condition { id, .. } => id,
         }
     }
 
+    /// The inline steps of a `foreach` (its `do`) or `parallel`.
+    pub fn inner(&self) -> Vec<&WorkflowStep> {
+        match self {
+            WorkflowStep::Foreach { body, .. } => vec![body.as_ref()],
+            WorkflowStep::Parallel { steps, .. } => steps.iter().collect(),
+            _ => vec![],
+        }
+    }
+
+    /// The step and its inline steps.
+    pub fn with_inner(&self) -> Vec<&WorkflowStep> {
+        std::iter::once(self).chain(self.inner()).collect()
+    }
+
     /// The retry/timeout/error options of the steps that have them.
     pub fn opts(&self) -> Option<&StepOptions> {
         match self {
-            WorkflowStep::Tool { opts, .. } | WorkflowStep::Agent { opts, .. } | WorkflowStep::Llm { opts, .. } => Some(opts),
+            WorkflowStep::Tool { opts, .. }
+            | WorkflowStep::Agent { opts, .. }
+            | WorkflowStep::Llm { opts, .. }
+            | WorkflowStep::Foreach { opts, .. }
+            | WorkflowStep::Parallel { opts, .. } => Some(opts),
             WorkflowStep::Approval { .. } | WorkflowStep::Condition { .. } => None,
         }
     }

@@ -517,6 +517,10 @@ export type WorkflowStep =
   | ({ id: string; kind: "tool"; tool: string; args: Record<string, unknown> } & StepOptions)
   | ({ id: string; kind: "agent"; agent: string; prompt: string } & StepOptions)
   | ({ id: string; kind: "llm"; profile: string; prompt: string } & StepOptions)
+  /** `do` is one inline tool/agent/llm step that can use `{{item}}`, `{{item.field}}` and `{{index}}`; the output is the JSON array of its outputs. */
+  | ({ id: string; kind: "foreach"; items: string; do: WorkflowStep; parallel?: number } & StepOptions)
+  /** Inline tool/agent/llm steps that run together; the output is the JSON object `{inner_id: output}`. */
+  | ({ id: string; kind: "parallel"; steps: WorkflowStep[] } & StepOptions)
   | { id: string; kind: "approval"; message: string; timeout_s?: number; default?: "deny" | "allow" }
   | { id: string; kind: "condition"; if: string; then: string[]; else?: string[] };
 

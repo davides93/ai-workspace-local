@@ -1,6 +1,10 @@
-use aiw_core::api::{ApprovalDefault, ApprovalOutcome, OnError, StepOptions, WorkflowDef, WorkflowRun, WorkflowStep, WorkflowStepRun};
+use aiw_core::api::{
+    ApprovalDefault, ApprovalOutcome, OnError, StepOptions, WorkflowDef, WorkflowRun, WorkflowStep, WorkflowStepRun, MAX_FOREACH_ITEMS,
+    MAX_FOREACH_PARALLEL,
+};
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use async_trait::async_trait;
+use futures::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -25,11 +29,45 @@ pub trait WorkflowHost: Send + Sync {
 }
 
 /// What the placeholders of a template can see.
+#[derive(Clone, Copy)]
 pub struct RenderCtx<'a> {
     pub inputs: &'a Map<String, Value>,
     pub outputs: &'a HashMap<String, String>,
     /// Errors of the steps that failed with `on_error: continue`.
     pub errors: &'a HashMap<String, String>,
+    /// The entry and its position inside a `foreach`.
+    pub item: Option<(&'a Value, usize)>,
+}
+
+/// A value as it goes into a template: strings without quotes, anything else as compact JSON.
+fn value_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Follows `a.b.0.c` into a JSON value (a number indexes an array).
+fn json_get<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut cur = v;
+    for key in path.split('.').filter(|k| !k.is_empty()) {
+        cur = match cur {
+            Value::Object(o) => o.get(key)?,
+            Value::Array(a) => a.get(key.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    Some(cur)
+}
+
+/// The output of a step read as JSON: the whole text, or the first fenced ```json block.
+pub fn parse_json_output(text: &str) -> Option<Value> {
+    let t = text.trim();
+    if let Ok(v) = serde_json::from_str::<Value>(t) {
+        return Some(v);
+    }
+    let re = regex::Regex::new(r"(?s)```json\s*(.*?)```").unwrap();
+    re.captures(t).and_then(|c| serde_json::from_str(c[1].trim()).ok())
 }
 
 /// Replaces `{{inputs.x}}`, `{{steps.id.output}}` and `{{steps.id.error}}` placeholders.
@@ -37,6 +75,17 @@ pub fn render_ctx(template: &str, ctx: &RenderCtx) -> String {
     let re = regex::Regex::new(r"\{\{\s*([a-zA-Z0-9_.\-]+)\s*\}\}").unwrap();
     re.replace_all(template, |c: &regex::Captures| {
         let path = &c[1];
+        if let Some((item, index)) = ctx.item {
+            if path == "item" {
+                return value_text(item);
+            }
+            if path == "index" {
+                return index.to_string();
+            }
+            if let Some(p) = path.strip_prefix("item.") {
+                return json_get(item, p).map(value_text).unwrap_or_default();
+            }
+        }
         if let Some(k) = path.strip_prefix("inputs.") {
             return ctx.inputs.get(k).map(|v| v.as_str().map(String::from).unwrap_or_else(|| v.to_string())).unwrap_or_default();
         }
@@ -66,11 +115,11 @@ pub fn render_value_ctx(v: &Value, ctx: &RenderCtx) -> Value {
 
 /// Replaces `{{inputs.x}}` and `{{steps.id.output}}` placeholders.
 pub fn render(template: &str, inputs: &Map<String, Value>, outputs: &HashMap<String, String>) -> String {
-    render_ctx(template, &RenderCtx { inputs, outputs, errors: &HashMap::new() })
+    render_ctx(template, &RenderCtx { inputs, outputs, errors: &HashMap::new(), item: None })
 }
 
 pub fn render_value(v: &Value, inputs: &Map<String, Value>, outputs: &HashMap<String, String>) -> Value {
-    render_value_ctx(v, &RenderCtx { inputs, outputs, errors: &HashMap::new() })
+    render_value_ctx(v, &RenderCtx { inputs, outputs, errors: &HashMap::new(), item: None })
 }
 
 /// Tiny condition language (after templating): `A contains B`, `A == B`, `A != B`, `not A`, `A`.
@@ -205,6 +254,131 @@ async fn exec_leaf(step: &WorkflowStep, run_id: &str, ctx: &RenderCtx<'_>, host:
     }
 }
 
+/// Executes the body of an executable step, composite ones included.
+async fn exec_body(sh: &Shared<'_>, i: usize, step: &WorkflowStep, run_id: &str, ctx: &RenderCtx<'_>) -> Result<String> {
+    match step {
+        WorkflowStep::Foreach { items, body, parallel, .. } => exec_foreach(sh, i, items, body, *parallel, run_id, ctx).await,
+        WorkflowStep::Parallel { steps, .. } => exec_parallel(sh, i, steps, run_id, ctx).await,
+        other => exec_leaf(other, run_id, ctx, sh.host).await,
+    }
+}
+
+/// An inline step of a `foreach` or `parallel`, with its own retry and timeout.
+async fn exec_inline(step: &WorkflowStep, run_id: &str, ctx: &RenderCtx<'_>, host: &dyn WorkflowHost) -> Result<String> {
+    let opts = step.opts().cloned().unwrap_or_default();
+    run_with_options(&opts, |_| {}, || exec_leaf(step, run_id, ctx, host)).await
+}
+
+/// One entry of a `foreach`, with `{{item}}` and `{{index}}` bound.
+async fn foreach_entry<'a>(
+    index: usize,
+    item: &'a Value,
+    body: &'a WorkflowStep,
+    run_id: &'a str,
+    ctx: &'a RenderCtx<'a>,
+    host: &'a dyn WorkflowHost,
+) -> (usize, Result<String>) {
+    let ctx = RenderCtx { item: Some((item, index)), ..*ctx };
+    (index, exec_inline(body, run_id, &ctx, host).await)
+}
+
+async fn parallel_member<'a>(
+    step: &'a WorkflowStep,
+    run_id: &'a str,
+    ctx: &'a RenderCtx<'a>,
+    host: &'a dyn WorkflowHost,
+) -> (&'a WorkflowStep, Result<String>) {
+    (step, exec_inline(step, run_id, ctx, host).await)
+}
+
+fn continues_on_error(step: &WorkflowStep) -> bool {
+    matches!(step.opts(), Some(o) if o.on_error == OnError::Continue)
+}
+
+/// The entries of a `foreach`: a JSON array, or one entry per non-empty line.
+fn parse_items(rendered: &str) -> Result<Vec<Value>> {
+    let list = match parse_json_output(rendered) {
+        Some(Value::Array(a)) => a,
+        _ => rendered.lines().map(str::trim).filter(|l| !l.is_empty()).map(|l| Value::String(l.to_string())).collect(),
+    };
+    if list.len() > MAX_FOREACH_ITEMS {
+        return Err(Error::Invalid(format!("troppe voci ({}): il massimo è {MAX_FOREACH_ITEMS}", list.len())));
+    }
+    Ok(list)
+}
+
+async fn exec_foreach(
+    sh: &Shared<'_>,
+    i: usize,
+    items: &str,
+    body: &WorkflowStep,
+    parallel: u32,
+    run_id: &str,
+    ctx: &RenderCtx<'_>,
+) -> Result<String> {
+    let list = parse_items(&render_ctx(items, ctx))?;
+    let total = list.len();
+    let keep_going = continues_on_error(body);
+    let mut results: Vec<Option<String>> = vec![None; total];
+    let mut done = 0usize;
+    let limit = parallel.clamp(1, MAX_FOREACH_PARALLEL) as usize;
+    let mut entries = list.iter().enumerate();
+    let mut pending = FuturesUnordered::new();
+    loop {
+        while pending.len() < limit {
+            let Some((index, item)) = entries.next() else { break };
+            pending.push(foreach_entry(index, item, body, run_id, ctx, sh.host));
+        }
+        // The first failure stops the loop: dropping `pending` cancels the entries still running.
+        let Some((index, result)) = pending.next().await else { break };
+        match result {
+            Ok(out) => results[index] = Some(out),
+            Err(_) if keep_going => {}
+            Err(e) => return Err(Error::Runtime(format!("voce {} di {total}: {e}", index + 1))),
+        }
+        done += 1;
+        sh.publish(|st| st.run.steps[i].output = Some(format!("{done}/{total} completati")));
+    }
+    Ok(Value::Array(results.into_iter().map(|r| r.map_or(Value::Null, Value::String)).collect()).to_string())
+}
+
+async fn exec_parallel(sh: &Shared<'_>, i: usize, steps: &[WorkflowStep], run_id: &str, ctx: &RenderCtx<'_>) -> Result<String> {
+    let total = steps.len();
+    let mut pending = FuturesUnordered::new();
+    for step in steps {
+        pending.push(parallel_member(step, run_id, ctx, sh.host));
+    }
+    let mut outs: Vec<(String, std::result::Result<String, String>)> = Vec::new();
+    while let Some((step, result)) = pending.next().await {
+        match result {
+            Ok(out) => outs.push((step.id().to_string(), Ok(out))),
+            Err(e) if continues_on_error(step) => outs.push((step.id().to_string(), Err(e.to_string()))),
+            Err(e) => return Err(Error::Runtime(format!("passo {}: {e}", step.id()))),
+        }
+        let done = outs.len();
+        sh.publish(|st| st.run.steps[i].output = Some(format!("{done}/{total} completati")));
+    }
+    // Every inner output is also readable as {{steps.<inner id>.output}}.
+    sh.publish(|st| {
+        for (id, r) in &outs {
+            match r {
+                Ok(out) => {
+                    st.outputs.insert(id.clone(), out.clone());
+                }
+                Err(e) => {
+                    st.errors.insert(id.clone(), e.clone());
+                }
+            }
+        }
+    });
+    let mut obj = Map::new();
+    for step in steps {
+        let found = outs.iter().find(|(id, _)| id == step.id());
+        obj.insert(step.id().to_string(), found.and_then(|(_, r)| r.as_ref().ok()).map_or(Value::Null, |o| Value::String(o.clone())));
+    }
+    Ok(Value::Object(obj).to_string())
+}
+
 pub async fn run_workflow(wf: &WorkflowDef, inputs: Map<String, Value>, host: &dyn WorkflowHost) -> WorkflowRun {
     run_from(WorkflowState::new(wf, inputs), host).await
 }
@@ -255,11 +429,15 @@ pub async fn run_from(state: WorkflowState, host: &dyn WorkflowHost) -> Workflow
             let g = sh.st.lock().unwrap();
             (g.inputs.clone(), g.outputs.clone(), g.errors.clone())
         };
-        let ctx = RenderCtx { inputs: &inputs, outputs: &outputs, errors: &errors };
+        let ctx = RenderCtx { inputs: &inputs, outputs: &outputs, errors: &errors, item: None };
         let result: Result<String> = match step {
-            WorkflowStep::Tool { .. } | WorkflowStep::Agent { .. } | WorkflowStep::Llm { .. } => {
+            WorkflowStep::Tool { .. }
+            | WorkflowStep::Agent { .. }
+            | WorkflowStep::Llm { .. }
+            | WorkflowStep::Foreach { .. }
+            | WorkflowStep::Parallel { .. } => {
                 let opts = step.opts().cloned().unwrap_or_default();
-                run_with_options(&opts, |n| sh.publish(|st| st.run.steps[i].attempts = Some(n)), || exec_leaf(step, &run_id, &ctx, host))
+                run_with_options(&opts, |n| sh.publish(|st| st.run.steps[i].attempts = Some(n)), || exec_body(&sh, i, step, &run_id, &ctx))
                     .await
             }
             WorkflowStep::Approval { message, timeout_s, on_timeout, .. } => {
@@ -616,5 +794,146 @@ mod tests {
             serde_json::to_value(&timed).unwrap(),
             json!({"kind": "approval", "id": "ok", "message": "Procedo?", "timeout_s": 30, "default": "allow"})
         );
+    }
+
+    /// An `llm` host that answers `echo:<prompt>` after a pause and records how many calls overlap.
+    #[derive(Default)]
+    struct Overlap {
+        now: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait]
+    impl WorkflowHost for Overlap {
+        async fn call_tool(&self, _r: &str, _t: &str, _a: Value) -> Result<String> {
+            Ok("tool".into())
+        }
+        async fn run_agent(&self, _r: &str, _a: &str, _p: &str) -> Result<String> {
+            Ok("agent".into())
+        }
+        async fn complete(&self, _r: &str, _p: &str, prompt: &str) -> Result<String> {
+            use std::sync::atomic::Ordering::SeqCst;
+            let n = self.now.fetch_add(1, SeqCst) + 1;
+            self.peak.fetch_max(n, SeqCst);
+            tokio::time::sleep(Duration::from_millis(if prompt.contains("slow") { 500 } else { 50 })).await;
+            self.now.fetch_sub(1, SeqCst);
+            if prompt == "bad" {
+                return Err(Error::Runtime(format!("rifiutato: {prompt}")));
+            }
+            Ok(format!("echo:{prompt}"))
+        }
+        async fn approval(&self, _r: &str, _m: &str, _t: Option<u64>) -> ApprovalOutcome {
+            ApprovalOutcome::Allowed
+        }
+        fn update(&self, _run: &WorkflowRun) {}
+    }
+
+    fn wf_of(steps: Value) -> WorkflowDef {
+        serde_json::from_value(
+            json!({"id": "w", "name": "W", "trigger": {"kind": "manual"}, "inputs": {"list": "uno\n\ndue\ntre\n"}, "steps": steps}),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn foreach_runs_every_entry_in_order_with_limited_concurrency() {
+        let wf = wf_of(json!([
+            {"id": "src", "kind": "tool", "tool": "list"},
+            {"id": "each", "kind": "foreach", "items": "[{\"name\": \"a\"}, {\"name\": \"b\"}, {\"name\": \"c\"}, {\"name\": \"d\"}]", "parallel": 3,
+             "do": {"id": "one", "kind": "llm", "profile": "p", "prompt": "{{index}}={{item.name}}/{{item}}"}},
+            {"id": "after", "kind": "llm", "profile": "p", "prompt": "{{steps.each.output}}"}
+        ]));
+        let host = Overlap::default();
+        let run = run_workflow(&wf, Map::new(), &host).await;
+        assert_eq!(run.status, "succeeded", "{run:?}");
+        let out: Vec<String> = serde_json::from_str(run.steps[1].output.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            out,
+            vec![r#"echo:0=a/{"name":"a"}"#, r#"echo:1=b/{"name":"b"}"#, r#"echo:2=c/{"name":"c"}"#, r#"echo:3=d/{"name":"d"}"#]
+        );
+        assert_eq!(host.peak.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert!(run.steps[2].output.as_deref().unwrap().starts_with("echo:[\"echo:0=a"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn foreach_takes_one_entry_per_line_and_defaults_to_one_at_a_time() {
+        let wf = wf_of(json!([
+            {"id": "each", "kind": "foreach", "items": "{{inputs.list}}", "do": {"id": "one", "kind": "llm", "profile": "p", "prompt": "{{item}}"}}
+        ]));
+        let host = Overlap::default();
+        let run = run_workflow(&wf, Map::new(), &host).await;
+        assert_eq!(run.steps[0].output.as_deref(), Some(r#"["echo:uno","echo:due","echo:tre"]"#));
+        assert_eq!(host.peak.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // The output of a step that contains a ```json block works too, and an empty list is fine.
+        let wf = wf_of(json!([
+            {"id": "src", "kind": "tool", "tool": "list"},
+            {"id": "each", "kind": "foreach", "items": "", "do": {"id": "one", "kind": "llm", "profile": "p", "prompt": "{{item}}"}}
+        ]));
+        let run = run_workflow(&wf, Map::new(), &host).await;
+        assert_eq!(run.steps[1].output.as_deref(), Some("[]"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn foreach_stops_at_the_first_error_unless_the_inner_step_continues() {
+        let items = r#"["ok", "bad", "slow"]"#;
+        let wf = wf_of(
+            json!([{"id": "each", "kind": "foreach", "items": items, "parallel": 2, "do": {"id": "one", "kind": "llm", "profile": "p", "prompt": "{{item}}"}}]),
+        );
+        let run = run_workflow(&wf, Map::new(), &Overlap::default()).await;
+        assert_eq!(run.status, "failed");
+        assert!(run.steps[0].error.as_deref().unwrap().contains("voce 2 di 3"), "{run:?}");
+
+        let wf = wf_of(
+            json!([{"id": "each", "kind": "foreach", "items": items, "do": {"id": "one", "kind": "llm", "profile": "p", "prompt": "{{item}}", "on_error": "continue"}}]),
+        );
+        let run = run_workflow(&wf, Map::new(), &Overlap::default()).await;
+        assert_eq!(run.status, "succeeded");
+        assert_eq!(run.steps[0].output.as_deref(), Some(r#"["echo:ok",null,"echo:slow"]"#));
+    }
+
+    #[tokio::test]
+    async fn foreach_refuses_too_many_entries() {
+        let items: Vec<String> = (0..201).map(|n| n.to_string()).collect();
+        let wf = wf_of(
+            json!([{"id": "each", "kind": "foreach", "items": items.join("\n"), "do": {"id": "one", "kind": "llm", "profile": "p", "prompt": "{{item}}"}}]),
+        );
+        let run = run_workflow(&wf, Map::new(), &Overlap::default()).await;
+        assert_eq!(run.status, "failed");
+        assert!(run.steps[0].error.as_deref().unwrap().contains("troppe voci"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn parallel_runs_together_and_exposes_the_inner_outputs() {
+        let wf = wf_of(json!([
+            {"id": "par", "kind": "parallel", "steps": [
+                {"id": "x", "kind": "llm", "profile": "p", "prompt": "uno"},
+                {"id": "y", "kind": "llm", "profile": "p", "prompt": "due"},
+                {"id": "z", "kind": "tool", "tool": "t"}
+            ]},
+            {"id": "after", "kind": "llm", "profile": "p", "prompt": "{{steps.x.output}}+{{steps.y.output}}+{{steps.z.output}}"}
+        ]));
+        let host = Overlap::default();
+        let run = run_workflow(&wf, Map::new(), &host).await;
+        assert_eq!(run.status, "succeeded", "{run:?}");
+        let out: Value = serde_json::from_str(run.steps[0].output.as_deref().unwrap()).unwrap();
+        assert_eq!(out, json!({"x": "echo:uno", "y": "echo:due", "z": "tool"}));
+        assert_eq!(host.peak.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(run.steps[1].output.as_deref(), Some("echo:echo:uno+echo:due+tool"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn parallel_fails_on_the_first_error_and_can_continue() {
+        let steps = |on_error: &str| {
+            wf_of(json!([{"id": "par", "kind": "parallel", "steps": [
+                {"id": "x", "kind": "llm", "profile": "p", "prompt": "slow"},
+                {"id": "y", "kind": "llm", "profile": "p", "prompt": "bad", "on_error": on_error}
+            ]}, {"id": "after", "kind": "llm", "profile": "p", "prompt": "[{{steps.y.error}}]"}]))
+        };
+        let run = run_workflow(&steps("fail"), Map::new(), &Overlap::default()).await;
+        assert_eq!(run.status, "failed");
+        assert!(run.steps[0].error.as_deref().unwrap().contains("passo y"));
+        let run = run_workflow(&steps("continue"), Map::new(), &Overlap::default()).await;
+        assert_eq!(run.status, "succeeded");
+        assert_eq!(run.steps[0].output.as_deref(), Some(r#"{"x":"echo:slow","y":null}"#));
+        assert!(run.steps[1].output.as_deref().unwrap().contains("rifiutato: bad"));
     }
 }
