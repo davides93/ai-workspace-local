@@ -5,7 +5,7 @@ import type {
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan,
+  PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
 } from "./types";
 
 export class ApiError extends Error {
@@ -82,6 +82,11 @@ export class HttpTransport implements Transport {
   runtimeInstallPlan = (id: string) => this.req<InstallPlan>("GET", `/runtimes/${enc(id)}/install-plan`);
   installRuntime = (id: string) => this.req<InstallJob>("POST", `/runtimes/${enc(id)}/install`, {});
   runtimeInstall = (id: string) => this.req<InstallJob | null>("GET", `/runtimes/${enc(id)}/install`);
+
+  updateStatus = () => this.req<UpdateStatus>("GET", "/update");
+  checkUpdate = () => this.req<UpdateStatus>("POST", "/update/check", {});
+  downloadUpdate = () => this.req<UpdateStatus>("POST", "/update/download", {});
+  installUpdate = () => this.req<UpdateStatus>("POST", "/update/install", {});
 
   models = () => this.req<LocalModel[]>("GET", "/models");
   catalog = () => this.req<CatalogModel[]>("GET", "/models/catalog");

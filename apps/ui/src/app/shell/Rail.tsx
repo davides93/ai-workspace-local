@@ -1,3 +1,4 @@
+import { useUpdateStatus } from "../../features/settings/updateApi";
 import { useSystem } from "../../shared/query/system";
 import { Icon } from "../../shared/ui";
 import { Link } from "../router";
@@ -8,6 +9,7 @@ import { KillSwitch } from "./KillSwitch";
 /** Left navigation on desktop; icon-only between 761 and 1100 px (labels stay as tooltips and accessible names). */
 export function Rail({ current, onOpenPalette }: { current?: RouteId; onOpenPalette: () => void }) {
   const { data: system } = useSystem();
+  const update = useUpdateStatus().data?.available;
   return (
     <nav className="rail" aria-label="Sezioni">
       <div className="brand">
@@ -17,6 +19,12 @@ export function Rail({ current, onOpenPalette }: { current?: RouteId; onOpenPale
           <div className="brand-sub">locale · {system?.version ?? "…"}</div>
         </div>
       </div>
+      {update && (
+        <Link to="/settings" className="rail-update" title={`Disponibile la versione ${update.version}`} aria-label={`Aggiornamento disponibile: versione ${update.version}`}>
+          <Icon name="download" size={15} />
+          <span className="nav-text">Aggiornamento {update.version}</span>
+        </Link>
+      )}
       <DeviceChip />
       <button type="button" className="rail-search" onClick={onOpenPalette} title="Cerca e comandi (Ctrl+K)" aria-label="Cerca e comandi (Ctrl+K)">
         <Icon name="search" size={16} />

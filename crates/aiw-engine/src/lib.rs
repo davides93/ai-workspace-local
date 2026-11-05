@@ -7,6 +7,7 @@ pub mod pairing;
 pub mod peers;
 mod secrets;
 pub mod store;
+pub mod update;
 pub mod voice;
 pub mod webhook;
 pub mod worktree;
@@ -46,6 +47,10 @@ pub struct EngineOptions {
     pub extra_bin_dirs: Vec<PathBuf>,
     /// Skip network probes and background tasks (tests).
     pub offline: bool,
+    /// Base URL of the GitHub API used to look for updates (tests point it at a fake server).
+    pub update_api_base: Option<String>,
+    /// Version to compare releases against (default: this build's; tests set their own).
+    pub current_version: Option<String>,
 }
 
 /// One event on the global bus (Tauri forwards these as `aiw://run-event`).
@@ -116,6 +121,8 @@ pub(crate) struct Inner {
     pub pairing: Mutex<(String, Instant)>,
     /// Failed-attempt limiter of the pairing endpoint.
     pub pair_guard: Mutex<pairing::PairGuard>,
+    pub updater: update::Updater,
+    pub current_version: semver::Version,
 }
 
 #[derive(Clone)]
@@ -200,6 +207,8 @@ impl Engine {
             }
         };
         let (bus, _) = broadcast::channel(8192);
+        let (updater_os, updater_arch) = (device.os.clone(), device.arch.clone());
+        let updates_dir = dirs.root.join("updates");
         let engine = Engine(Arc::new(Inner {
             mode: if opts.mode.is_empty() { "embedded".into() } else { opts.mode.clone() },
             started: Instant::now(),
@@ -229,6 +238,9 @@ impl Engine {
             token,
             pairing: Mutex::new((random_digits(6), Instant::now())),
             pair_guard: Default::default(),
+            updater: update::Updater::new(opts.update_api_base.clone(), &updater_os, &updater_arch, updates_dir),
+            current_version: semver::Version::parse(opts.current_version.as_deref().unwrap_or(aiw_core::VERSION))
+                .map_err(|e| Error::Invalid(format!("versione non valida: {e}")))?,
         }));
         if !opts.offline {
             engine.0.runtimes.refresh().await;
@@ -236,6 +248,7 @@ impl Engine {
         engine.seed()?;
         if !opts.offline {
             engine.start_background();
+            engine.start_update_checks();
         }
         Ok(engine)
     }

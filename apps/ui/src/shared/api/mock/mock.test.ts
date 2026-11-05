@@ -493,3 +493,38 @@ describe("runtime installation (demo)", () => {
     await expect(api.installRuntime("nope")).rejects.toThrow(/non trovato/);
   });
 });
+
+describe("updates (demo)", () => {
+  it("checks, downloads with progress, then hands the installer over", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new MockTransport();
+      const first = await api.updateStatus();
+      expect(first.state).toBe("idle");
+      expect(first.available ?? null).toBeNull();
+      await expect(api.downloadUpdate()).rejects.toThrow(/controlla prima/);
+      await expect(api.installUpdate()).rejects.toThrow(/verificato/);
+      const check = api.checkUpdate();
+      await vi.advanceTimersByTimeAsync(700);
+      const found = await check;
+      expect(found.available?.version).toBe("0.4.0-beta.2");
+      expect(found.checked_at).toBeTruthy();
+      expect((await api.downloadUpdate()).state).toBe("downloading");
+      await vi.advanceTimersByTimeAsync(2500);
+      const ready = await api.updateStatus();
+      expect(ready.state).toBe("ready");
+      expect(ready.received).toBe(ready.total);
+      expect(ready.file).toContain("0.4.0-beta.2");
+      expect((await api.installUpdate()).message).toMatch(/Applicazioni/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lists the update settings in the demo configuration", async () => {
+    const view = await new MockTransport().config();
+    expect(view.schema.properties["update.channel"].enum).toEqual(["auto", "stable", "beta", "alpha"]);
+    expect(view.effective["update.auto_check"]).toBe(true);
+    expect(view.effective["update.auto_download"]).toBe(false);
+  });
+});

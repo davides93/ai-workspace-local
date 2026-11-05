@@ -39,6 +39,7 @@ async fn engine_for(device: Option<DeviceProfile>) -> (Engine, tempfile::TempDir
         device,
         extra_bin_dirs: vec![],
         offline: true,
+        ..Default::default()
     })
     .await
     .unwrap();
