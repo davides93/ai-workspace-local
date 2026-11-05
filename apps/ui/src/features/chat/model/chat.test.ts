@@ -119,6 +119,22 @@ describe("aiw.budget_exceeded", () => {
   });
 });
 
+describe("aiw.handoff", () => {
+  it("becomes a note live, and the stored messages of the handoff become notes too", () => {
+    const live = fold([{ type: "CUSTOM", name: "aiw.handoff", value: { from: "a", to: "b", to_name: "Revisore", summary: "Controlla" } }]);
+    expect(live[0]).toMatchObject({ kind: "note", text: expect.stringContaining("Revisore") });
+    const at = "2026-11-02T10:00:00Z";
+    const stored = historyToItems([
+      { id: "1", role: "user", name: "aiw.handoff", content: "[Passaggio da Pianificatore] Controlla il lavoro", created_at: at },
+      { id: "2", role: "system", name: "aiw.handoff", content: "Limite di 3 passaggi tra agenti raggiunto: la conversazione si ferma qui.", created_at: at },
+    ]);
+    expect(stored).toEqual([
+      { kind: "note", id: "1", text: "Passaggio di conversazione da Pianificatore: Controlla il lavoro" },
+      { kind: "note", id: "2", text: "Limite di 3 passaggi tra agenti raggiunto: la conversazione si ferma qui." },
+    ]);
+  });
+});
+
 describe("aiw.image", () => {
   const png = { toolCallId: "c1", mime: "image/png", data: "iVBORw0KGgo=" };
   const tool = (): Item[] => fold([{ type: "TOOL_CALL_START", toolCallId: "c1", toolCallName: "computer_screenshot" }]);

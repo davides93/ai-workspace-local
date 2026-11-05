@@ -15,12 +15,29 @@ pub struct InternalTool {
     pub parameters: Value,
 }
 
+/// Name of the tool that hands the conversation over to another agent.
+pub const HANDOFF: &str = "handoff";
+
 /// Names of the internal tools.
-pub const NAMES: [&str; 5] = ["todo", "agent", "skill", crate::a2ui::TOOL, crate::code::TOOL];
+pub const NAMES: [&str; 6] = ["todo", "agent", "skill", crate::a2ui::TOOL, crate::code::TOOL, HANDOFF];
 
 /// Is `name` an internal tool?
 pub fn is_internal(name: &str) -> bool {
     NAMES.contains(&name)
+}
+
+/// The live `handoff` spec of a run: `agents` is `(id, description)` of the possible targets.
+pub fn handoff_spec(agents: &[(String, String)]) -> aiw_runtimes::ToolSpec {
+    let names: Vec<Value> = agents.iter().map(|(id, _)| Value::String(id.clone())).collect();
+    let desc: Vec<String> = agents.iter().map(|(id, d)| format!("{id}: {d}")).collect();
+    aiw_runtimes::ToolSpec::function(
+        HANDOFF,
+        format!(
+            "Passa la conversazione a un altro agente quando il resto del lavoro è di sua competenza: il tuo run termina e continua lui, con il riassunto che scrivi. Agenti: {}",
+            desc.join("; ")
+        ),
+        json!({"type":"object","properties":{"agent":{"type":"string","enum":names},"summary":{"type":"string","description":"Cosa è stato fatto e cosa deve fare l'agente successivo"}},"required":["agent","summary"]}),
+    )
 }
 
 fn parameters_of(spec: aiw_runtimes::ToolSpec) -> Value {
@@ -55,6 +72,11 @@ pub fn internal_tools() -> Vec<InternalTool> {
             description: "Esegue uno script Rhai che orchestra più strumenti in un solo passo (cicli, filtri, conteggi).",
             parameters: parameters_of(crate::code::spec()),
         },
+        InternalTool {
+            name: HANDOFF,
+            description: "Passa la conversazione a un altro agente: il run termina e il nuovo agente prosegue con il tuo riassunto.",
+            parameters: parameters_of(handoff_spec(&[])),
+        },
     ]
 }
 
@@ -71,5 +93,26 @@ mod tests {
             assert!(!t.description.is_empty() && t.parameters["type"] == "object", "{}", t.name);
         }
         assert!(!is_internal("shell") && !is_internal("mcp__github__list_issues"));
+    }
+
+    #[tokio::test]
+    async fn handoff_is_offered_only_to_a_top_level_agent_that_lists_it() {
+        use crate::tests_support::{input, setup};
+        let offered = |tools: &[&str], depth: u32| {
+            let tools: Vec<String> = tools.iter().map(|t| t.to_string()).collect();
+            async move {
+                let (host, dir) = setup(vec![aiw_runtimes::ScriptedBackend::text_turn("ok")], true);
+                let mut inp = input(dir.path(), "auto");
+                inp.agent.tools = tools;
+                inp.depth = depth;
+                crate::AgentRunner::run(inp, host.clone()).await.unwrap();
+                let reqs = host.backend.requests.lock().unwrap();
+                reqs[0].tools.iter().any(|t| t.function.name == HANDOFF)
+            }
+        };
+        assert!(offered(&["*"], 0).await);
+        assert!(offered(&["handoff"], 0).await);
+        assert!(!offered(&["read_file"], 0).await);
+        assert!(!offered(&["*"], 1).await, "a sub-agent cannot hand the conversation over");
     }
 }

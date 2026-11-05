@@ -307,7 +307,7 @@ describe("backend fixes in the demo", () => {
   it("lists the tools of the agent loop as internal, always on, and refuses to switch them (400)", async () => {
     const api = new MockTransport();
     const internal = (await api.tools()).filter((t) => t.source === "internal");
-    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "render_ui", "skill", "todo"]);
+    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "handoff", "render_ui", "skill", "todo"]);
     expect(internal.every((t) => t.enabled && t.available && t.risk === "read")).toBe(true);
     await expect(api.setToolEnabled("todo", false)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strumento interno") });
     await expect(api.setToolEnabled("nope", false)).rejects.toMatchObject({ status: 404 });

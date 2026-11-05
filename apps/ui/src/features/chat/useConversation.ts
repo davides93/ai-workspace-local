@@ -11,7 +11,7 @@ import { actionText, type A2uiAction } from "./a2ui";
 import { useCancelRun, useStartRun } from "./api";
 import { historyToItems } from "./model/history";
 import { imagesFor, rememberImage } from "./model/imageCache";
-import type { ApprovalItem, Item } from "./model/items";
+import { HANDOFF, type ApprovalItem, type Item } from "./model/items";
 import { parseImageEvent, reduce } from "./model/reduce";
 
 export type HistoryState = { status: "loading" | "ready" | "error"; error?: unknown; title?: string };
@@ -38,6 +38,9 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
   const [history, setHistory] = useState<HistoryState>({ status: "loading" });
   const [reloadTick, setReloadTick] = useState(0);
   const unsub = useRef<(() => void) | null>(null);
+  // The run asked to hand the conversation over: the engine starts the next agent's run once this one is stored.
+  const handoffSeen = useRef(false);
+  const follow = useRef<((forSession: string) => Promise<void>) | null>(null);
   const current = useRef(sessionId);
   current.current = sessionId;
   const onGone = useRef(opts.onGone);
@@ -49,6 +52,7 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
       if (current.current !== forSession) return;
       if (e.type === "RUN_STARTED") rememberRun(e.runId, forSession);
       if (e.type === "STATE_SNAPSHOT") setRunState(e.snapshot);
+      if (e.type === "CUSTOM" && e.name === HANDOFF) handoffSeen.current = true;
       if (e.type === "CUSTOM" && e.name === "aiw.image") {
         const img = parseImageEvent(e.value);
         if (img) rememberImage(forSession, img.toolCallId, img.image);
@@ -60,6 +64,7 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
         setRunId(null);
         void qc.invalidateQueries({ queryKey: qk.sessions.all() });
         void qc.invalidateQueries({ queryKey: qk.approvals() });
+        if (e.type === "RUN_FINISHED" && handoffSeen.current) void follow.current?.(forSession);
       }
       setItems((prev) => reduce(prev, e));
     },
@@ -76,7 +81,28 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
     [api, handle],
   );
 
+  /** After a handoff: waits for the run of the agent the conversation moved to, and follows it. */
+  const followHandoff = useCallback(
+    async (forSession: string) => {
+      handoffSeen.current = false;
+      for (let i = 0; i < 24 && current.current === forSession; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        const next = await api.activeRun(forSession).catch(() => null);
+        if (current.current !== forSession) return;
+        if (next) {
+          void qc.invalidateQueries({ queryKey: qk.sessions.all() });
+          return attach(next, forSession);
+        }
+      }
+      void qc.invalidateQueries({ queryKey: qk.sessions.all() });
+      setReloadTick((n) => n + 1);
+    },
+    [api, qc, attach],
+  );
+  follow.current = followHandoff;
+
   useEffect(() => {
+    handoffSeen.current = false;
     unsub.current?.();
     unsub.current = null;
     setRunId(null);

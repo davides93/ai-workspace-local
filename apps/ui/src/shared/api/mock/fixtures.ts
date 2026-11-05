@@ -310,7 +310,7 @@ tools.push(
  * The tools of the agent loop, as `GET /api/tools` lists them after the built-in and MCP ones: `source: "internal"`,
  * always on, risk `read`, no switch (crates/aiw-agent/src/internal.rs).
  */
-export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code"] as const;
+export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff"] as const;
 tools.push(
   ...([
     ["todo", "Pubblica e aggiorna il piano di lavoro dell'agente: elenco di passi con il loro stato."],
@@ -318,6 +318,7 @@ tools.push(
     ["skill", "Carica le istruzioni complete di una skill elencata nel prompt di sistema."],
     ["render_ui", "Mostra all'utente un'interfaccia interattiva (A2UI): moduli, scelte, riepiloghi, tabelle di card."],
     ["code", "Esegue uno script Rhai che orchestra più strumenti in un solo passo (cicli, filtri, conteggi)."],
+    ["handoff", "Passa la conversazione a un altro agente: il run termina e il nuovo agente prosegue con il tuo riassunto."],
   ] as const).map(([name, description]): ToolInfo => ({ name, description, source: "internal", risk: "read", enabled: true, available: true, parameters: {} })),
 );
 

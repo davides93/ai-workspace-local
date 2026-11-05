@@ -291,3 +291,84 @@ async fn a_session_of_a_missing_team_is_refused_or_conflicts() {
     // The session still exists, its team is gone: a conflict the user can fix, not a 404.
     assert!(matches!(e.start_run(&s.id, "ciao".into()).await, Err(Error::Conflict(_))));
 }
+
+fn handoff_turn(to: &str, summary: &str) -> Vec<aiw_runtimes::ChatDelta> {
+    ScriptedBackend::tool_turn("h", "handoff", json!({"agent": to, "summary": summary}))
+}
+
+/// Waits until the session has no run going and its last message satisfies `done`.
+async fn wait_messages(e: &Engine, session_id: &str, done: impl Fn(&[ChatMessage]) -> bool) -> Vec<ChatMessage> {
+    for _ in 0..200 {
+        let msgs = e.messages(session_id).unwrap();
+        let idle = e.active_run(session_id).is_none() && e.session(session_id).unwrap().last_status.as_deref() != Some("running");
+        if idle && done(&msgs) {
+            return msgs;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the conversation did not settle: {:?}", e.messages(session_id).unwrap().iter().map(|m| &m.content).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn a_handoff_moves_the_session_to_the_other_agent_and_starts_its_run() {
+    let backend = ScriptedBackend::new(vec![handoff_turn("secondo", "Serve una revisione"), ScriptedBackend::text_turn("Revisione fatta")]);
+    let (e, _d, _w) = engine(vec![]).await;
+    e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+    copy_agent(&e, "planner", "primo");
+    copy_agent(&e, "planner", "secondo");
+    let s = e.create_session("primo", None).unwrap();
+    let run = e.start_run(&s.id, "Aiutami".into()).await.unwrap();
+    let msgs = wait_messages(&e, &s.id, |m| m.last().is_some_and(|x| x.content == "Revisione fatta")).await;
+
+    assert_eq!(e.session(&s.id).unwrap().agent_id, "secondo");
+    let shown: Vec<(&str, &str)> = msgs.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect();
+    assert_eq!(shown[0], ("user", "Aiutami"));
+    assert_eq!(shown[3], ("assistant", "Passo la conversazione a secondo: Serve una revisione"));
+    assert_eq!((shown[4].0, shown[4].1), ("user", "[Passaggio da primo] Serve una revisione"));
+    assert_eq!(msgs[4].name.as_deref(), Some(HANDOFF_MESSAGE));
+    assert_eq!(shown[5], ("assistant", "Revisione fatta"));
+    // The first run announced it and ended normally.
+    let evs = e.run_events(&run);
+    assert!(evs.iter().any(|x| matches!(&x.event.event, AgEvent::Custom { name, value } if name == "aiw.handoff" && value["to"] == "secondo" && value["from"] == "primo")));
+    assert!(matches!(evs.last().unwrap().event.event, AgEvent::RunFinished { .. }));
+    // The second run uses the new agent's profile and sees the summary, not the first system prompt.
+    let reqs = backend.requests.lock().unwrap();
+    assert!(reqs[1].messages.last().unwrap().text().starts_with("[Passaggio da primo]"));
+}
+
+#[tokio::test]
+async fn a_handoff_to_a_more_permissive_agent_is_refused_and_the_run_goes_on() {
+    let backend = ScriptedBackend::new(vec![handoff_turn("libero", "Passa a te"), ScriptedBackend::text_turn("Resto io")]);
+    let (e, _d, _w) = engine(vec![]).await;
+    e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+    copy_agent(&e, "planner", "cauto");
+    copy_agent(&e, "planner", "libero");
+    let mut cauto = e.agent("cauto").unwrap();
+    cauto.mode = "ask".into();
+    e.save_agent(cauto).unwrap();
+    let mut libero = e.agent("libero").unwrap();
+    libero.mode = "yolo".into();
+    e.save_agent(libero).unwrap();
+    let s = e.create_session("cauto", None).unwrap();
+    e.start_run(&s.id, "Aiutami".into()).await.unwrap();
+    let msgs = wait_messages(&e, &s.id, |m| m.iter().any(|x| x.content == "Resto io")).await;
+    assert_eq!(e.session(&s.id).unwrap().agent_id, "cauto");
+    let tool = msgs.iter().find(|m| m.role == "tool").unwrap();
+    assert!(tool.content.contains("Passaggio rifiutato") && tool.content.contains("più permissiva"), "{}", tool.content);
+}
+
+#[tokio::test]
+async fn handoffs_stop_after_three_per_user_message() {
+    let turns = (0..5).map(|i| handoff_turn(if i % 2 == 0 { "secondo" } else { "primo" }, "Tocca a te")).collect();
+    let (e, _d, _w) = engine(turns).await;
+    copy_agent(&e, "planner", "primo");
+    copy_agent(&e, "planner", "secondo");
+    let s = e.create_session("primo", None).unwrap();
+    e.start_run(&s.id, "Aiutami".into()).await.unwrap();
+    let msgs =
+        wait_messages(&e, &s.id, |m| m.last().is_some_and(|x| x.name.as_deref() == Some(HANDOFF_MESSAGE) && x.role == "system")).await;
+    assert!(msgs.last().unwrap().content.contains("Limite di 3 passaggi"), "{}", msgs.last().unwrap().content);
+    // The user's run plus three handoffs: four handoff requests were answered, the fourth refused.
+    assert_eq!(msgs.iter().filter(|m| m.role == "user" && m.name.as_deref() == Some(HANDOFF_MESSAGE)).count(), 3);
+    assert_eq!(e.session(&s.id).unwrap().agent_id, "secondo", "primo → secondo → primo → secondo, the fourth is refused");
+}

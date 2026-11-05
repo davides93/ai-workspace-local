@@ -2,7 +2,7 @@
 //
 // Rules of the backend this mirrors (crates/aiw-agent/src/runner.rs):
 //  - `tools` is a list of names, and `"*"` means every tool that is enabled;
-//  - five tools are internal to the agent loop (todo, agent, skill, render_ui, code): the catalogue
+//  - six tools are internal to the agent loop (todo, agent, skill, render_ui, code, handoff): the catalogue
 //    (`GET /api/tools`) lists them with `source: "internal"` and the backend accepts them by name, or by `"*"`,
 //    like any other. Dropping them while editing a list would silently take the plan, sub-agents, skills and
 //    code mode away from the agent. `INTERNAL_TOOLS` is the fallback for a catalogue that does not list them
@@ -28,7 +28,7 @@ export const INTERNAL_TOOLS: InternalTool[] = [
 
 export const INTERNAL_NAMES: ReadonlySet<string> = new Set(INTERNAL_TOOLS.map((t) => t.name));
 
-/** An internal tool of the agent loop: by the catalogue's `source`, or by name for the five that are known. */
+/** An internal tool of the agent loop: by the catalogue's `source`, or by name for the ones that are known. */
 const isInternal = (t: Pick<ToolInfo, "name"> & Partial<Pick<ToolInfo, "source">>): boolean => t.source === "internal" || INTERNAL_NAMES.has(t.name);
 
 export type CategoryId = "file" | "shell" | "web" | "browser" | "computer" | "internal" | "other" | `mcp:${string}`;

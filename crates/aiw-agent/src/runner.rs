@@ -33,6 +33,12 @@ pub trait RunHost: Send + Sync {
     fn skills(&self) -> Vec<Skill>;
     /// Runs `task` with another agent profile in an isolated context; returns its final answer.
     async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str) -> Result<String>;
+    /// Checks that the conversation may be handed over to `agent_id` (the `handoff` tool) and
+    /// returns the name to show for it.
+    fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {
+        let _ = from;
+        Ok(agent_id.to_string())
+    }
 }
 
 pub struct RunInput {
@@ -66,6 +72,9 @@ pub struct RunOutcome {
     pub usage: Usage,
     /// The final answer parsed and validated against the agent's `output_schema`.
     pub structured: Option<Value>,
+    /// `(agent id, summary)` when the agent handed the conversation over (the `handoff` tool): the
+    /// run ended with that request, and the engine starts the next agent.
+    pub handoff: Option<(String, String)>,
 }
 
 const MAX_SELF_CHECKS: u32 = 2;
@@ -122,6 +131,9 @@ fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
             format!("Delega un sotto-compito a un altro agente con contesto separato; restituisce solo la sua risposta finale. Puoi chiamarlo più volte nello stesso turno per lavori indipendenti: girano in parallelo. Agenti: {}", desc.join("; ")),
             json!({"type":"object","properties":{"agent":{"type":"string","enum":names},"task":{"type":"string","description":"Istruzioni complete e autosufficienti"}},"required":["agent","task"]}),
         ));
+    }
+    if allowed(crate::internal::HANDOFF) && input.depth == 0 && !input.subagents.is_empty() {
+        v.push(crate::internal::handoff_spec(&input.subagents));
     }
     if allowed(crate::a2ui::TOOL) {
         v.push(crate::a2ui::spec());
@@ -691,7 +703,13 @@ impl AgentRunner {
                 }
             }
             let mut images = Vec::new();
+            let mut handoff: Option<(String, String)> = None;
             for (_, (tc, out)) in results {
+                if tc.name == crate::internal::HANDOFF && !out.is_error && handoff.is_none() {
+                    let a: Value = serde_json::from_str(&tc.arguments).unwrap_or_default();
+                    let to = a["agent"].as_str().unwrap_or_default().to_string();
+                    handoff = Some((to, a["summary"].as_str().unwrap_or_default().trim().to_string()));
+                }
                 let content = aiw_tools::truncate_middle(&out.content, MAX_TOOL_OUTPUT);
                 // User/policy denials are final: they are not handed back by the self-check.
                 if out.is_error && !content.starts_with("Negato") && content != "annullato" {
@@ -721,6 +739,32 @@ impl AgentRunner {
                 for img in out.images {
                     images.push((tc.name.clone(), img));
                 }
+            }
+            // A handoff ends the run: the answer says who continues, the engine starts that agent.
+            if let Some((to, summary)) = handoff {
+                let name = host.handoff_target(input, &to).unwrap_or_else(|_| to.clone());
+                let note = format!("Passo la conversazione a {name}: {summary}");
+                let msg_id = new_id("msg");
+                ev.emit(AgEvent::TextMessageStart { message_id: msg_id.clone(), role: "assistant".into() });
+                ev.emit(AgEvent::TextMessageContent { message_id: msg_id.clone(), delta: note.clone() });
+                ev.emit(AgEvent::TextMessageEnd { message_id: msg_id });
+                ev.emit(AgEvent::Custom {
+                    name: "aiw.handoff".into(),
+                    value: json!({"from": input.agent.id, "to": to, "to_name": name, "summary": summary}),
+                });
+                outcome.new_messages.push(ChatMessage {
+                    id: new_id("msg"),
+                    role: "assistant".into(),
+                    content: note.clone(),
+                    reasoning: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                    created_at: now_rfc3339(),
+                });
+                outcome.final_text = note;
+                outcome.handoff = Some((to, summary));
+                break;
             }
             if !images.is_empty() {
                 let mut parts = vec![ContentPart::Text {
@@ -1014,6 +1058,29 @@ impl AgentRunner {
                         (ToolOutput::text(skills::load(s)), None)
                     }
                     None => (ToolOutput::error(format!("skill `{name}` non trovata")), None),
+                };
+            }
+            crate::internal::HANDOFF => {
+                let to = args["agent"].as_str().unwrap_or_default();
+                let summary = args["summary"].as_str().unwrap_or_default().trim();
+                if input.depth > 0 {
+                    return (ToolOutput::error("il passaggio di conversazione è possibile solo dall'agente della sessione"), None);
+                }
+                if summary.is_empty() {
+                    return (ToolOutput::error("`summary` mancante: riassumi all'agente successivo cosa serve"), None);
+                }
+                if !input.subagents.iter().any(|(id, _)| id == to) {
+                    return (ToolOutput::error(format!("agente `{to}` sconosciuto: scegli tra quelli elencati")), None);
+                }
+                return match host.handoff_target(input, to) {
+                    Ok(name) => {
+                        audit("allow", format!("passaggio a {name} ({to})"));
+                        (ToolOutput::text(format!("Passaggio a {name} richiesto: la conversazione continua con lui.")), None)
+                    }
+                    Err(e) => {
+                        audit("deny", format!("passaggio a {to}: {e}"));
+                        (ToolOutput::error(format!("Passaggio rifiutato: {e}")), None)
+                    }
                 };
             }
             "agent" => {

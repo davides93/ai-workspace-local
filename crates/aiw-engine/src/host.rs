@@ -136,6 +136,18 @@ impl RunHost for EngineHost {
         let out = AgentRunner::run(input, host).await?;
         Ok(if out.final_text.is_empty() { "(nessuna risposta)".into() } else { out.final_text })
     }
+
+    fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {
+        let target = self.engine.agent(agent_id)?;
+        // The conversation never moves to an agent with more freedom than the one that started it.
+        if mode_rank(&target.mode) > mode_rank(&from.policy.mode) {
+            return Err(Error::Denied(format!(
+                "«{}» ha una modalità più permissiva ({}) di quella di partenza ({})",
+                target.name, target.mode, from.policy.mode
+            )));
+        }
+        Ok(target.name)
+    }
 }
 
 pub(crate) fn mode_rank(m: &str) -> u8 {

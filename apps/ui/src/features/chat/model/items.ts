@@ -35,6 +35,15 @@ export const SELF_CHECK = "aiw.self_check";
 /** Stored user messages written when a structured answer did not match the agent's schema. */
 export const FORMAT_CHECK = "aiw.format_check";
 
+/** `name` of the stored messages written by a handoff to another agent (api.rs `HANDOFF_MESSAGE`). */
+export const HANDOFF = "aiw.handoff";
+
+/** The row for the user message that opens the next agent's run (`[Passaggio da X] summary`). */
+export const handoffText = (content: string) => {
+  const m = /^\[Passaggio da ([^\]]+)\]\s*([\s\S]*)$/.exec(content);
+  return m ? `Passaggio di conversazione da ${m[1]}: ${m[2]}` : content;
+};
+
 export const formatCheckText = (errors: string[]) =>
   `Controllo del formato: la risposta non rispettava lo schema richiesto (${errors.slice(0, 3).join("; ")}${errors.length > 3 ? "; …" : ""}). L'agente la corregge.`;
 

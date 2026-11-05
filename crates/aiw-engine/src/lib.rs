@@ -1133,6 +1133,25 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
+        self.start_run_inner(session_id, input, name, 0).await
+    }
+
+    /// Most handoffs one user message can chain before the conversation stops with a note.
+    const MAX_HANDOFFS: u32 = 3;
+
+    /// Starts a run; `hops` is how many handoffs led to it (0 for a run the user asked for). Boxed:
+    /// a handoff starts the next run from inside the task of the previous one.
+    fn start_run_inner<'a>(
+        &'a self,
+        session_id: &'a str,
+        input: String,
+        name: Option<String>,
+        hops: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(self.start_run_body(session_id, input, name, hops))
+    }
+
+    async fn start_run_body(&self, session_id: &str, input: String, name: Option<String>, hops: u32) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
         // removed meanwhile is a conflict the user can fix (the UI must not treat it as deleted).
@@ -1189,6 +1208,7 @@ impl Engine {
         }
         let engine = self.clone();
         let rid = run_id.clone();
+        let (from_name, from_mode) = (run_input.agent.name.clone(), run_input.policy.mode.clone());
         tokio::spawn(async move {
             let host = Arc::new(EngineHost::new(engine.clone(), Some(session.id.clone()), None));
             // What the run produced is stored whatever its outcome: when it was cancelled or failed
@@ -1236,8 +1256,50 @@ impl Engine {
                 s.updated_at = now_rfc3339();
                 let _ = engine.0.store.upsert_session(&s);
             }
+            if let (Ok(()), Some((to, summary))) = (&res, out.handoff) {
+                engine.continue_handoff(&session.id, &from_name, &from_mode, &to, &summary, hops).await;
+            }
         });
         Ok(run_id)
+    }
+
+    /// The run of a session ended asking for a handoff: moves the session to the new agent and
+    /// starts it with the summary. A handoff that cannot be carried out leaves a note instead.
+    async fn continue_handoff(&self, session_id: &str, from_name: &str, from_mode: &str, to: &str, summary: &str, hops: u32) {
+        let note = |text: String| {
+            let msg = ChatMessage {
+                id: new_id("msg"),
+                role: "system".into(),
+                content: text,
+                reasoning: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: Some(HANDOFF_MESSAGE.into()),
+                created_at: now_rfc3339(),
+            };
+            let _ = self.0.store.append_messages(session_id, &[msg]);
+        };
+        if hops >= Self::MAX_HANDOFFS {
+            return note(format!("Limite di {} passaggi tra agenti raggiunto: la conversazione si ferma qui.", Self::MAX_HANDOFFS));
+        }
+        let target = match self.agent(to) {
+            Ok(a) if host::mode_rank(&a.mode) <= host::mode_rank(from_mode) => a,
+            Ok(a) => return note(format!("Passaggio a «{}» rifiutato: ha una modalità più permissiva di quella di partenza.", a.name)),
+            Err(e) => return note(format!("Passaggio a `{to}` non riuscito: {e}")),
+        };
+        match self.0.store.session(session_id) {
+            Ok(mut s) => {
+                s.agent_id = to.to_string();
+                s.updated_at = now_rfc3339();
+                let _ = self.0.store.upsert_session(&s);
+            }
+            Err(_) => return, // the session was deleted meanwhile
+        }
+        self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
+        let input = format!("[Passaggio da {from_name}] {summary}");
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1).await {
+            note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
+        }
     }
 
     pub fn cancel_run(&self, run_id: &str) -> Result<()> {

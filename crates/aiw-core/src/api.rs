@@ -566,6 +566,10 @@ pub const RUN_ERROR_MESSAGE: &str = "aiw.run_error";
 /// `name` of a user message that a `UserPromptSubmit` hook blocked: kept for the chat history,
 /// never sent to the model.
 pub const BLOCKED_PROMPT_MESSAGE: &str = "aiw.blocked_prompt";
+/// `name` of the messages written by a handoff to another agent: the user message that opens the
+/// next agent's run (`[Passaggio da …] summary`, sent to the model) and the `system` notes about a
+/// handoff that was not carried out (history only).
+pub const HANDOFF_MESSAGE: &str = "aiw.handoff";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
