@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 #[cfg(desktop)]
 mod desktop;
+pub mod helper;
 #[cfg(mobile)]
 mod mobile;
 
@@ -62,7 +63,9 @@ pub enum NativeEvent {
 
 /// Platform side of the bridge (implemented by `mobile` and `desktop`).
 pub trait NativeGenerate: Send + Sync + 'static {
-    fn generate(&self, args: GenerateArgs, on_event: Box<dyn Fn(NativeEvent) + Send + Sync>) -> Result<()>;
+    /// Runs one generation, blocking until it ends. `cancel` fires when the caller is no longer
+    /// interested: the implementation must stop generating (it keeps the model busy otherwise).
+    fn generate(&self, args: GenerateArgs, cancel: CancellationToken, on_event: Box<dyn Fn(NativeEvent) + Send + Sync>) -> Result<()>;
 }
 
 /// Flattens an OpenAI-style conversation into (system, prompt) for single-session native APIs.
@@ -146,11 +149,13 @@ impl ChatBackend for NativeBackend {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<ChatDelta>>();
         let native = self.native.clone();
         let tx2 = tx.clone();
+        let stop = cancel.clone();
         // Native calls block until generation completes; tokens arrive through the callback.
         std::thread::spawn(move || {
             let cb_tx = tx2.clone();
             let r = native.generate(
                 args,
+                stop,
                 Box::new(move |ev| {
                     let _ = match ev {
                         NativeEvent::Text { delta } => cb_tx.send(Ok(ChatDelta::Text(delta))),
@@ -193,7 +198,7 @@ mod tests {
 
     struct Echo;
     impl NativeGenerate for Echo {
-        fn generate(&self, args: GenerateArgs, on_event: Box<dyn Fn(NativeEvent) + Send + Sync>) -> Result<()> {
+        fn generate(&self, args: GenerateArgs, _cancel: CancellationToken, on_event: Box<dyn Fn(NativeEvent) + Send + Sync>) -> Result<()> {
             for w in args.prompt.split_whitespace().take(3) {
                 on_event(NativeEvent::Text { delta: format!("{w} ") });
             }
