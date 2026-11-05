@@ -105,8 +105,27 @@ export function LlmFields({ step, uid, issues, catalog, before, inputKeys, onCha
 }
 
 export function ApprovalFields({ step, uid, issues, before, inputKeys, onChange }: Props<"approval">) {
+  const t = note(issues, "timeout_s");
   return (
-    <PromptField id={`st-${uid}-message`} label="Domanda per te" value={step.message} rows={2} placeholder="Sposto i file come proposto?" issues={issues} field="message" before={before} inputKeys={inputKeys} onChange={(message) => onChange({ ...step, message })} />
+    <>
+      <PromptField id={`st-${uid}-message`} label="Domanda per te" value={step.message} rows={2} placeholder="Sposto i file come proposto?" issues={issues} field="message" before={before} inputKeys={inputKeys} onChange={(message) => onChange({ ...step, message })} />
+      <div className="step-options-grid">
+        <Field label="Attendi al massimo (s)" htmlFor={`st-${uid}-wait`} error={t.error} hint="Vuoto = aspetta senza limite">
+          <Input
+            id={`st-${uid}-wait`} type="number" min={1} max={OPTION_LIMITS.timeout} value={step.timeout_s ?? ""}
+            onChange={(e) => onChange({ ...step, timeout_s: e.target.value.trim() === "" ? undefined : Number(e.target.value) })} aria-invalid={!!t.error}
+          />
+        </Field>
+        {step.timeout_s !== undefined && (
+          <Field label="Se nessuno risponde" htmlFor={`st-${uid}-default`}>
+            <Select id={`st-${uid}-default`} value={step.default ?? "deny"} onChange={(e) => onChange({ ...step, default: e.target.value === "allow" ? "allow" : undefined })}>
+              <option value="deny">Rifiuta (il workflow finisce)</option>
+              <option value="allow">Approva e prosegui</option>
+            </Select>
+          </Field>
+        )}
+      </div>
+    </>
   );
 }
 

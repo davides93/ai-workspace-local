@@ -3,7 +3,7 @@
 //  - `{{inputs.x}}`, `{{steps.id.output}}` and `{{now}}` are replaced in args, prompts, messages and conditions;
 //  - a condition steers the steps named in `then` / `else`: those steps run only when chosen, and a step
 //    that comes before its condition is always skipped;
-//  - an approval that is refused ends the run as cancelled;
+//  - an approval that is refused ends the run as cancelled; with `timeout_s` it takes `default` (deny or allow) when nobody answers;
 //  - tool, agent and llm steps take `retry`, `retry_delay_s`, `timeout_s` and `on_error` (see `StepOptions`).
 
 import type { StepOptions, WorkflowStep } from "../../../shared/api/types";
@@ -25,7 +25,8 @@ export type StepDraft =
   | { id: string; kind: "tool"; tool: string; args: string; opts?: StepOptions }
   | { id: string; kind: "agent"; agent: string; prompt: string; opts?: StepOptions }
   | { id: string; kind: "llm"; profile: string; prompt: string; opts?: StepOptions }
-  | { id: string; kind: "approval"; message: string }
+  /** `timeout_s`: seconds to wait for the answer; `default` is the answer taken when the time is up (deny when absent). */
+  | { id: string; kind: "approval"; message: string; timeout_s?: number; default?: "allow" }
   | { id: string; kind: "condition"; if: string; then: string[]; else: string[] };
 
 export interface StepDefaults {
@@ -85,6 +86,12 @@ export function cleanOptions(o: StepOptions | undefined): StepOptions | undefine
 /** The options of a wire-form step. */
 export function optionsOf(s: StepOptions): StepOptions | undefined {
   return cleanOptions({ retry: s.retry, retry_delay_s: s.retry_delay_s, timeout_s: s.timeout_s, on_error: s.on_error });
+}
+
+/** Problem with the time limit of an approval, or null. */
+export function approvalTimeoutProblem(t: number | undefined): string | null {
+  if (t === undefined) return null;
+  return Number.isInteger(t) && t >= 1 && t <= OPTION_LIMITS.timeout ? null : `Il tempo di attesa va da 1 a ${OPTION_LIMITS.timeout} secondi.`;
 }
 
 /** First problem with the option values, or null. */
@@ -175,7 +182,7 @@ export function stepSummary(s: StepDraft): string {
     case "tool": return `${s.tool || "tool da scegliere"} ${s.args.replace(/\s+/g, " ").trim()}`.trim();
     case "agent": return `${s.agent || "agente da scegliere"}: ${s.prompt}`;
     case "llm": return `${s.profile || "profilo da scegliere"}: ${s.prompt}`;
-    case "approval": return s.message;
+    case "approval": return s.timeout_s ? `${s.message} (dopo ${s.timeout_s} s: ${s.default === "allow" ? "approva" : "rifiuta"})` : s.message;
     case "condition": return `se ${s.if || "…"} → ${s.then.join(", ") || "nessun passo"}${s.else.length ? ` altrimenti ${s.else.join(", ")}` : ""}`;
   }
 }

@@ -1053,7 +1053,21 @@ impl Engine {
     pub fn approvals(&self) -> Vec<ApprovalRequest> {
         self.0.approvals.lock().unwrap().values().map(|p| p.req.clone()).collect()
     }
+    /// Seconds after which an approval request of an agent is refused (`approvals.timeout_s`, 0 = never).
+    fn approval_timeout(&self) -> Option<Duration> {
+        self.0.config.get("approvals.timeout_s").and_then(|v| v.as_u64()).filter(|s| *s > 0).map(Duration::from_secs)
+    }
     pub(crate) async fn wait_approval(&self, req: ApprovalRequest, session_id: Option<String>) -> bool {
+        self.wait_approval_outcome(req, session_id, self.approval_timeout()).await == ApprovalOutcome::Allowed
+    }
+    /// Waits for the user's answer for at most `timeout`. The request is withdrawn when the wait
+    /// ends for any reason, and a timeout is written to the audit trail as `decision: "timeout"`.
+    pub(crate) async fn wait_approval_outcome(
+        &self,
+        req: ApprovalRequest,
+        session_id: Option<String>,
+        timeout: Option<Duration>,
+    ) -> ApprovalOutcome {
         /// Withdraws the request when the run stops waiting (answered, cancelled, dropped): a stale
         /// request must not stay in the inbox, where a later "allow" would record a decision
         /// that nobody was waiting for.
@@ -1065,8 +1079,32 @@ impl Engine {
         }
         let (tx, rx) = oneshot::channel();
         let _withdraw = Withdraw(self, req.id.clone());
+        let (run_id, tool, reason) = (req.run_id.clone(), req.tool.clone(), req.reason.clone());
         self.0.approvals.lock().unwrap().insert(req.id.clone(), PendingApproval { req, tx, session_id });
-        rx.await.unwrap_or(false)
+        let answer = match timeout {
+            Some(limit) => match tokio::time::timeout(limit, rx).await {
+                Ok(a) => a,
+                Err(_) => {
+                    let _ = self.0.store.add_audit(&AuditEntry {
+                        id: new_id("aud"),
+                        ts: now_rfc3339(),
+                        run_id: Some(run_id),
+                        actor: "system".into(),
+                        action: "approval".into(),
+                        tool: Some(tool),
+                        decision: Some("timeout".into()),
+                        detail: format!("nessuna risposta entro {} s: {reason}", limit.as_secs()),
+                    });
+                    return ApprovalOutcome::TimedOut;
+                }
+            },
+            None => rx.await,
+        };
+        if answer.unwrap_or(false) {
+            ApprovalOutcome::Allowed
+        } else {
+            ApprovalOutcome::Denied
+        }
     }
     pub fn respond_approval(&self, id: &str, allow: bool, remember: bool) -> Result<()> {
         let p = self
@@ -1441,9 +1479,18 @@ impl Engine {
                     reason: format!("{actor}: {reason}"),
                     risk: aiw_agent::policy::risk_level(t.risk()).into(),
                 };
-                if !self.wait_approval(req, None).await {
-                    audit("rejected");
-                    return Err(Error::Denied("rifiutato dall'utente".into()));
+                match self.wait_approval_outcome(req, None, self.approval_timeout()).await {
+                    ApprovalOutcome::Allowed => {}
+                    ApprovalOutcome::Denied => {
+                        audit("rejected");
+                        return Err(Error::Denied("rifiutato dall'utente".into()));
+                    }
+                    ApprovalOutcome::TimedOut => {
+                        audit("timeout");
+                        return Err(Error::Denied(
+                            "nessuna risposta entro il tempo limite (approvals.timeout_s): richiesta rifiutata".into(),
+                        ));
+                    }
                 }
                 audit("approved");
             }

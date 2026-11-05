@@ -39,6 +39,11 @@ pub fn validate(wf: &WorkflowDef) -> Result<()> {
         if let Some(o) = s.opts() {
             check_options(s.id(), o)?;
         }
+        if let aiw_core::api::WorkflowStep::Approval { timeout_s: Some(t), .. } = s {
+            if *t == 0 || *t > MAX_STEP_TIMEOUT_S {
+                return Err(Error::Invalid(format!("il passo {}: timeout_s deve essere tra 1 e {MAX_STEP_TIMEOUT_S}", s.id())));
+            }
+        }
     }
     for s in &wf.steps {
         if let aiw_core::api::WorkflowStep::Condition { then, otherwise, .. } = s {
@@ -126,5 +131,13 @@ steps:
 
     fn load_str_for_test(step: &str) -> WorkflowDef {
         serde_yaml::from_str(&format!("id: w\nname: W\ntrigger: {{ kind: manual }}\nsteps:\n  - {step}\n")).unwrap()
+    }
+
+    #[test]
+    fn validates_the_timeout_of_an_approval() {
+        let mk = |t: &str| load_str_for_test(&format!("{{ id: a, kind: approval, message: ok, timeout_s: {t} }}"));
+        assert!(validate(&mk("60")).is_ok());
+        assert!(validate(&mk("0")).is_err());
+        assert!(validate(&mk("86401")).is_err());
     }
 }

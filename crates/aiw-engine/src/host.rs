@@ -2,7 +2,7 @@
 
 use crate::Engine;
 use aiw_agent::{AgentRunner, RunHost, RunInput, Skill};
-use aiw_core::api::{ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun};
+use aiw_core::api::{ApprovalOutcome, ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun};
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, Error, Result};
 use aiw_runtimes::{ChatBackend, ChatDelta, ChatRequest, Msg};
@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -85,6 +86,10 @@ impl RunHost for EngineHost {
 
     async fn approve(&self, req: ApprovalRequest) -> bool {
         self.engine.wait_approval(req, self.session_id.clone()).await
+    }
+
+    async fn approve_outcome(&self, req: ApprovalRequest) -> ApprovalOutcome {
+        self.engine.wait_approval_outcome(req, self.session_id.clone(), self.engine.approval_timeout()).await
     }
 
     fn audit(&self, entry: AuditEntry) {
@@ -179,7 +184,7 @@ impl aiw_workflow::WorkflowHost for EngineHost {
         Self::collect_text(backend, req, CancellationToken::new()).await
     }
 
-    async fn approval(&self, run_id: &str, message: &str) -> bool {
+    async fn approval(&self, run_id: &str, message: &str, timeout_s: Option<u64>) -> ApprovalOutcome {
         let name = self.workflow.as_ref().map(|w| w.name.clone()).unwrap_or_default();
         let req = ApprovalRequest {
             id: new_id("apr"),
@@ -189,7 +194,7 @@ impl aiw_workflow::WorkflowHost for EngineHost {
             reason: message.into(),
             risk: "medium".into(),
         };
-        self.engine.wait_approval(req, None).await
+        self.engine.wait_approval_outcome(req, None, timeout_s.map(Duration::from_secs)).await
     }
 
     fn update(&self, run: &WorkflowRun) {

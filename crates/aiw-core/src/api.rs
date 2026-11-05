@@ -597,6 +597,30 @@ pub enum WorkflowTrigger {
     },
 }
 
+/// The answer an `approval` step takes when nobody answers in time.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ApprovalDefault {
+    #[default]
+    Deny,
+    Allow,
+}
+
+impl ApprovalDefault {
+    fn is_deny(&self) -> bool {
+        *self == ApprovalDefault::Deny
+    }
+}
+
+/// How an approval request ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    Allowed,
+    Denied,
+    /// Nobody answered within the time limit.
+    TimedOut,
+}
+
 /// What a workflow does when a step fails (after its retries).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -680,6 +704,12 @@ pub enum WorkflowStep {
     Approval {
         id: String,
         message: String,
+        /// Seconds to wait for the answer (1..=86400); without it the step waits for ever.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_s: Option<u64>,
+        /// What counts as the answer when the time is up.
+        #[serde(default, rename = "default", skip_serializing_if = "ApprovalDefault::is_deny")]
+        on_timeout: ApprovalDefault,
     },
     Condition {
         id: String,

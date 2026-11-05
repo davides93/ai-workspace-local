@@ -517,7 +517,7 @@ export type WorkflowStep =
   | ({ id: string; kind: "tool"; tool: string; args: Record<string, unknown> } & StepOptions)
   | ({ id: string; kind: "agent"; agent: string; prompt: string } & StepOptions)
   | ({ id: string; kind: "llm"; profile: string; prompt: string } & StepOptions)
-  | { id: string; kind: "approval"; message: string }
+  | { id: string; kind: "approval"; message: string; timeout_s?: number; default?: "deny" | "allow" }
   | { id: string; kind: "condition"; if: string; then: string[]; else?: string[] };
 
 export interface WorkflowDef {

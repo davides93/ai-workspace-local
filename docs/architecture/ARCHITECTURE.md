@@ -291,6 +291,13 @@ ripresa dopo un'approvazione.
 (il passo resta `failed`, il run prosegue e l'errore è in `{{steps.<id>.error}}`). Il timeout di un
 passo `agent` annulla anche il run dell'agente.
 
+**Approvazioni con scadenza.** Il passo `approval` accetta `timeout_s` e `default` (`deny` o `allow`,
+default `deny`): allo scadere vale il default, l'output è «scaduto: approvato» oppure il passo
+fallisce con «scaduto: rifiutato» (e il run risulta annullato), l'audit registra `decision: "timeout"`.
+Per le richieste dei tool degli agenti vale l'impostazione globale `approvals.timeout_s` (0 = nessun
+limite, il default): allo scadere la richiesta è rifiutata e l'agente riceve un messaggio che spiega
+il timeout. Il livello *workspace* non può impostarla.
+
 **Durabilità.** Il motore tiene lo stato del run (`WorkflowState`: run, definizione, input, output,
 rami abilitati, passo corrente) e lo salva a ogni cambiamento nella tabella `workflow_state`; il run
 stesso è aggiornato in `workflow_runs`. All'avvio l'engine riprende i run `running` e

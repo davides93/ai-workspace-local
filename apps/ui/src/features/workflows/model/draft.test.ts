@@ -29,6 +29,19 @@ describe("conversion", () => {
     expect(find(validateDraft({ ...base(), steps: [{ id: "a", kind: "llm", profile: "fast-local", prompt: "x", opts: { retry: 9 } }] }, ctx), "retry")).toHaveLength(1);
   });
 
+  it("keeps the time limit and default answer of an approval", () => {
+    const def: WorkflowDef = {
+      id: "a", name: "A", enabled: false, trigger: { kind: "manual" }, inputs: {},
+      steps: [{ id: "ok", kind: "approval", message: "Procedo?", timeout_s: 600, default: "allow" }, { id: "no", kind: "approval", message: "E ora?", timeout_s: 30 }, { id: "plain", kind: "approval", message: "?" }],
+    };
+    const plain = plainFromDef(def);
+    expect(plain.steps[0]).toMatchObject({ timeout_s: 600, default: "allow" });
+    expect(plain.steps[2]).not.toHaveProperty("timeout_s");
+    expect(defFromPlain(plain)).toEqual(def);
+    const bad = validateDraft({ ...base(), steps: [{ id: "ok", kind: "approval", message: "?", timeout_s: 0 }] }, ctx);
+    expect(find(bad, "timeout_s")).toHaveLength(1);
+  });
+
   it("keeps non-string inputs as JSON and string ones as text", () => {
     const def: WorkflowDef = { id: "i", name: "I", enabled: false, trigger: { kind: "manual" }, inputs: { folder: "~/x", n: 3, flags: { a: true } }, steps: [] };
     const plain = plainFromDef(def);

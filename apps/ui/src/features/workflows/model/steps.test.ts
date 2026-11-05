@@ -99,6 +99,8 @@ describe("summary", () => {
     expect(stepSummary(steps[1])).toBe("se {{steps.scan.output}} contains pdf → act altrimenti skip");
     expect(stepSummary({ id: "t", kind: "tool", tool: "", args: "{}" })).toBe("tool da scegliere {}");
     expect(stepSummary({ id: "c", kind: "condition", if: "", then: [], else: [] })).toBe("se … → nessun passo");
+    expect(stepSummary({ id: "a", kind: "approval", message: "Procedo?" })).toBe("Procedo?");
+    expect(stepSummary({ id: "a", kind: "approval", message: "Procedo?", timeout_s: 60, default: "allow" })).toBe("Procedo? (dopo 60 s: approva)");
   });
 });
 

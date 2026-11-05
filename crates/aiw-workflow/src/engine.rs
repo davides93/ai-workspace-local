@@ -1,4 +1,4 @@
-use aiw_core::api::{OnError, StepOptions, WorkflowDef, WorkflowRun, WorkflowStep, WorkflowStepRun};
+use aiw_core::api::{ApprovalDefault, ApprovalOutcome, OnError, StepOptions, WorkflowDef, WorkflowRun, WorkflowStep, WorkflowStepRun};
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,8 @@ pub trait WorkflowHost: Send + Sync {
     async fn call_tool(&self, run_id: &str, tool: &str, args: Value) -> Result<String>;
     async fn run_agent(&self, run_id: &str, agent: &str, prompt: &str) -> Result<String>;
     async fn complete(&self, run_id: &str, profile: &str, prompt: &str) -> Result<String>;
-    async fn approval(&self, run_id: &str, message: &str) -> bool;
+    /// Asks the user and waits for the answer, at most `timeout_s` seconds when given.
+    async fn approval(&self, run_id: &str, message: &str, timeout_s: Option<u64>) -> ApprovalOutcome;
     fn update(&self, run: &WorkflowRun);
     /// Called after every change of a run that has not finished: the state is enough to go on with
     /// [`run_from`] after a restart.
@@ -261,15 +262,22 @@ pub async fn run_from(state: WorkflowState, host: &dyn WorkflowHost) -> Workflow
                 run_with_options(&opts, |n| sh.publish(|st| st.run.steps[i].attempts = Some(n)), || exec_leaf(step, &run_id, &ctx, host))
                     .await
             }
-            WorkflowStep::Approval { message, .. } => {
-                let ok = host.approval(&run_id, &render_ctx(message, &ctx)).await;
-                if ok {
+            WorkflowStep::Approval { message, timeout_s, on_timeout, .. } => {
+                let outcome = host.approval(&run_id, &render_ctx(message, &ctx), *timeout_s).await;
+                // Nobody answered in time: the default of the step is the answer.
+                let (allowed, reason, output) = match (outcome, on_timeout) {
+                    (ApprovalOutcome::Allowed, _) => (true, "", "approvato"),
+                    (ApprovalOutcome::Denied, _) => (false, "rifiutato dall'utente", ""),
+                    (ApprovalOutcome::TimedOut, ApprovalDefault::Allow) => (true, "", "scaduto: approvato"),
+                    (ApprovalOutcome::TimedOut, ApprovalDefault::Deny) => (false, "scaduto: rifiutato", ""),
+                };
+                if allowed {
                     sh.publish(|st| st.run.status = "running".into());
-                    Ok("approvato".into())
+                    Ok(output.into())
                 } else {
                     sh.publish(|st| {
                         st.run.steps[i].status = "failed".into();
-                        st.run.steps[i].error = Some("rifiutato dall'utente".into());
+                        st.run.steps[i].error = Some(reason.into());
                         st.run.status = "cancelled".into();
                         st.run.finished_at = Some(now_rfc3339());
                     });
@@ -343,6 +351,7 @@ mod tests {
 
     struct Host {
         approve: bool,
+        timed_out: bool,
         calls: Mutex<Vec<String>>,
     }
     #[async_trait]
@@ -359,8 +368,14 @@ mod tests {
             self.calls.lock().unwrap().push(format!("llm:{prompt}"));
             Ok("notifica".into())
         }
-        async fn approval(&self, _r: &str, _m: &str) -> bool {
-            self.approve
+        async fn approval(&self, _r: &str, _m: &str, _t: Option<u64>) -> ApprovalOutcome {
+            if self.timed_out {
+                ApprovalOutcome::TimedOut
+            } else if self.approve {
+                ApprovalOutcome::Allowed
+            } else {
+                ApprovalOutcome::Denied
+            }
         }
         fn update(&self, _run: &WorkflowRun) {}
     }
@@ -382,7 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn runs_steps_with_branches_and_approval() {
-        let host = Host { approve: true, calls: Mutex::new(vec![]) };
+        let host = Host { approve: true, timed_out: false, calls: Mutex::new(vec![]) };
         let run = run_workflow(&wf(), Map::new(), &host).await;
         assert_eq!(run.status, "succeeded");
         let st: Vec<_> = run.steps.iter().map(|s| (s.id.as_str(), s.status.as_str())).collect();
@@ -398,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_approval_cancels_the_run() {
-        let host = Host { approve: false, calls: Mutex::new(vec![]) };
+        let host = Host { approve: false, timed_out: false, calls: Mutex::new(vec![]) };
         let run = run_workflow(&wf(), Map::new(), &host).await;
         assert_eq!(run.status, "cancelled");
         assert_eq!(run.steps.last().unwrap().status, "pending");
@@ -436,8 +451,8 @@ mod tests {
             }
             Ok(format!("ok:{prompt}"))
         }
-        async fn approval(&self, _r: &str, _m: &str) -> bool {
-            true
+        async fn approval(&self, _r: &str, _m: &str, _t: Option<u64>) -> ApprovalOutcome {
+            ApprovalOutcome::Allowed
         }
         fn update(&self, run: &WorkflowRun) {
             *self.last.lock().unwrap() = Some(run.clone());
@@ -518,8 +533,8 @@ mod tests {
         async fn complete(&self, _r: &str, _p: &str, _prompt: &str) -> Result<String> {
             Ok("llm".into())
         }
-        async fn approval(&self, _r: &str, _m: &str) -> bool {
-            true
+        async fn approval(&self, _r: &str, _m: &str, _t: Option<u64>) -> ApprovalOutcome {
+            ApprovalOutcome::Allowed
         }
         fn update(&self, _run: &WorkflowRun) {}
         fn save_state(&self, state: &WorkflowState) {
@@ -564,5 +579,42 @@ mod tests {
         assert!(run.steps.iter().all(|s| s.status == "done"));
         assert_eq!(*second.calls.lock().unwrap(), vec!["agent:op:Esegui risultato di list_dir".to_string(), "tool:notify".to_string()]);
         assert_eq!(*second.cleared.lock().unwrap(), vec![run_id]);
+    }
+
+    fn approval_wf(extra: Value) -> WorkflowDef {
+        let mut step = json!({"id": "ok", "kind": "approval", "message": "Procedo?", "timeout_s": 30});
+        step.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(json!({
+            "id": "w", "name": "W", "trigger": {"kind": "manual"},
+            "steps": [step, {"id": "after", "kind": "tool", "tool": "list_dir"}]
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn approval_timeout_takes_the_default_answer() {
+        let host = Host { approve: false, timed_out: true, calls: Mutex::new(vec![]) };
+        // Default: deny. The run is cancelled like after a refusal.
+        let run = run_workflow(&approval_wf(json!({})), Map::new(), &host).await;
+        assert_eq!(run.status, "cancelled");
+        assert_eq!(run.steps[0].status, "failed");
+        assert_eq!(run.steps[0].error.as_deref(), Some("scaduto: rifiutato"));
+        assert_eq!(run.steps[1].status, "pending");
+        // default: allow. The run goes on and the output says what happened.
+        let run = run_workflow(&approval_wf(json!({"default": "allow"})), Map::new(), &host).await;
+        assert_eq!(run.status, "succeeded");
+        assert_eq!(run.steps[0].output.as_deref(), Some("scaduto: approvato"));
+        assert_eq!(run.steps[1].status, "done");
+    }
+
+    #[test]
+    fn approval_options_are_optional_and_round_trip() {
+        let plain: WorkflowStep = serde_json::from_value(json!({"id": "ok", "kind": "approval", "message": "?"})).unwrap();
+        assert_eq!(serde_json::to_value(&plain).unwrap(), json!({"kind": "approval", "id": "ok", "message": "?"}));
+        let timed = approval_wf(json!({"default": "allow"})).steps.remove(0);
+        assert_eq!(
+            serde_json::to_value(&timed).unwrap(),
+            json!({"kind": "approval", "id": "ok", "message": "Procedo?", "timeout_s": 30, "default": "allow"})
+        );
     }
 }

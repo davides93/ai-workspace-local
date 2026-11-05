@@ -5,7 +5,7 @@
 import { keyed, unkeyed, type Keyed } from "../../../shared/lib/keyedList";
 import type { WorkflowDef, WorkflowStep, WorkflowTrigger } from "../../../shared/api/types";
 import { parseCron } from "./cron";
-import { cleanOptions, hasOptions, optionsOf, optionsProblem, placeholders, STEP_ID, stepRef, stepTexts, type StepDraft } from "./steps";
+import { approvalTimeoutProblem, cleanOptions, hasOptions, optionsOf, optionsProblem, placeholders, STEP_ID, stepRef, stepTexts, type StepDraft } from "./steps";
 import { joinInterval, MIN_INTERVAL_S, splitInterval, type IntervalUnit } from "./triggers";
 
 export type TriggerDraft =
@@ -62,7 +62,7 @@ function stepToDraft(s: WorkflowStep): StepDraft {
     case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: pretty(s.args ?? {}), ...o };
     case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt, ...o };
     case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt, ...o };
-    case "approval": return { id: s.id, kind: "approval", message: s.message };
+    case "approval": return { id: s.id, kind: "approval", message: s.message, ...(s.timeout_s ? { timeout_s: s.timeout_s } : {}), ...(s.timeout_s && s.default === "allow" ? { default: "allow" as const } : {}) };
     case "condition": return { id: s.id, kind: "condition", if: s.if, then: [...s.then], else: [...(s.else ?? [])] };
   }
 }
@@ -84,7 +84,7 @@ function stepFromDraft(s: StepDraft): WorkflowStep {
     case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: parseArgs(s.args) ?? {}, ...o };
     case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt, ...o };
     case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt, ...o };
-    case "approval": return { id: s.id, kind: "approval", message: s.message };
+    case "approval": return { id: s.id, kind: "approval", message: s.message, ...(s.timeout_s ? { timeout_s: s.timeout_s } : {}), ...(s.timeout_s && s.default === "allow" ? { default: "allow" as const } : {}) };
     case "condition": return s.else.length ? { id: s.id, kind: "condition", if: s.if, then: s.then, else: s.else } : { id: s.id, kind: "condition", if: s.if, then: s.then };
   }
 }
@@ -284,6 +284,10 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
         break;
       case "approval":
         if (!s.message.trim()) e("message", "Scrivi la domanda da porre.");
+        {
+          const p = approvalTimeoutProblem(s.timeout_s);
+          if (p) e("timeout_s", p);
+        }
         break;
       case "condition":
         if (!s.if.trim()) e("if", "Scrivi l'espressione da valutare.");
