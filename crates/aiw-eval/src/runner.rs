@@ -21,6 +21,8 @@ pub struct RunOptions {
     pub agent: Option<String>,
     /// Inference profile that replaces the ones named by the suite.
     pub profile: Option<String>,
+    /// System prompt that replaces the agent's own in every task.
+    pub system_prompt: Option<String>,
     /// Times each task is run (at least 1).
     pub repeat: u32,
     /// Keep the working folders (their path is in the report).
@@ -33,7 +35,7 @@ pub struct RunOptions {
 
 impl RunOptions {
     pub fn new(work_root: PathBuf) -> Self {
-        Self { agent: None, profile: None, repeat: 1, keep: false, work_root, report_id: None }
+        Self { agent: None, profile: None, system_prompt: None, repeat: 1, keep: false, work_root, report_id: None }
     }
 }
 
@@ -117,6 +119,7 @@ async fn run_task(host: &dyn EvalHost, suite: &Suite, task: &Task, attempt: u32,
     let req = TaskRequest {
         agent: opts.agent.clone().or_else(|| task.agent.clone()).or_else(|| suite.agent.clone()).unwrap_or_else(|| DEFAULT_AGENT.into()),
         profile: opts.profile.clone().or_else(|| task.profile.clone()).or_else(|| suite.profile.clone()),
+        system_prompt: opts.system_prompt.clone(),
         prompt: task.prompt.clone(),
         workdir: dir.clone(),
         timeout,
@@ -302,6 +305,7 @@ tasks:
         // Agent: the task's, else the suite's. Profile: the task's.
         let seen = host.seen.lock().unwrap();
         assert_eq!((seen[0].agent.as_str(), seen[0].profile.as_deref()), ("planner", None));
+        assert!(seen.iter().all(|r| r.system_prompt.is_none()));
         assert_eq!((seen[1].agent.as_str(), seen[1].profile.as_deref()), ("coder", Some("veloce")));
         assert_eq!(seen[0].timeout, Duration::from_secs(DEFAULT_TIMEOUT_S));
         // The files were there for the agent, and the folders are gone.
@@ -316,6 +320,7 @@ tasks:
         let opts = RunOptions {
             agent: Some("operator".into()),
             profile: Some("p".into()),
+            system_prompt: Some("Prompt di prova".into()),
             repeat: 2,
             keep: true,
             ..RunOptions::new(work.path().into())
@@ -328,6 +333,8 @@ tasks:
         assert_eq!(crea.graders.iter().map(|g| g.passed).collect::<Vec<_>>(), vec![true, true, false]);
         assert!((crea.score - 2.0 / 3.0).abs() < 1e-9);
         assert!(host.seen.lock().unwrap().iter().all(|r| r.agent == "operator" && r.profile.as_deref() == Some("p")));
+        // The prompt of the options reaches every task; without it the agent keeps its own.
+        assert!(host.seen.lock().unwrap().iter().all(|r| r.system_prompt.as_deref() == Some("Prompt di prova")));
         assert_eq!((report.agent.as_deref(), report.profile.as_deref(), report.repeat), (Some("operator"), Some("p"), 2));
         // `keep`: the folders stay, and the report says where.
         let dir = PathBuf::from(crea.workdir.as_deref().unwrap());

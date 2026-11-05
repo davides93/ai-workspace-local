@@ -596,6 +596,48 @@ pub struct Lesson {
     pub decided_at: Option<String>,
 }
 
+/// A candidate system prompt tried by a [`PromptOptimization`], with how the suite went with it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PromptVariant {
+    pub prompt: String,
+    pub rationale: String,
+    pub score: f64,
+    pub pass_rate: f64,
+    /// Report of the suite run with this prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_id: Option<String>,
+    /// Unified diff of the prompt against the current one.
+    pub diff: String,
+}
+
+/// Outcome of trying variants of an agent's system prompt against an evaluation suite.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PromptOptimization {
+    pub id: String,
+    pub suite_id: String,
+    pub agent_id: String,
+    /// running | done | failed | applied
+    pub status: String,
+    pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    /// System prompt of the agent when the optimization started.
+    pub base_prompt: String,
+    pub baseline_score: f64,
+    pub baseline_pass_rate: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_report_id: Option<String>,
+    pub variants: Vec<PromptVariant>,
+    /// Index in `variants` of the one that beats the baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best: Option<usize>,
+    /// Index of the variant applied to the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Todo {
     pub content: String,

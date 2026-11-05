@@ -170,6 +170,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/evals", get(eval_suites))
         .route("/api/evals/{id}", get(eval_suite).put(save_eval_suite).delete(delete_eval_suite))
         .route("/api/evals/{id}/runs", post(start_eval))
+        .route("/api/evals/{id}/optimize", post(start_optimization))
+        .route("/api/prompt-optimizations", get(prompt_optimizations))
+        .route("/api/prompt-optimizations/{id}", get(prompt_optimization))
+        .route("/api/prompt-optimizations/{id}/apply", post(apply_optimization))
         .route("/api/eval-runs", get(eval_runs))
         .route("/api/eval-runs/compare", get(compare_eval_runs))
         .route("/api/eval-runs/{id}", get(eval_run))
@@ -893,6 +897,44 @@ async fn start_eval(State(s): State<AppState>, Path(id): Path<String>, body: Opt
     };
     ok(s.engine.start_eval(suite, req)?)
 }
+#[derive(Deserialize)]
+struct StartOptimization {
+    agent: String,
+    variants: Option<u32>,
+    profile: Option<String>,
+    repeat: Option<u32>,
+}
+/// Starts the optimization of an agent's prompt in the background; the answer is the record as it is (`running`), to be
+/// polled at `/api/prompt-optimizations/{id}`. Nothing is applied to the agent.
+async fn start_optimization(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<StartOptimization>,
+) -> ApiResult<PromptOptimization> {
+    let suite = s.engine.eval_suite(&id)?;
+    let opts =
+        aiw_engine::optimize::OptimizeOptions { variants: b.variants, profile: b.profile.filter(|p| !p.is_empty()), repeat: b.repeat };
+    ok(s.engine.start_prompt_optimization(suite, &b.agent, opts)?)
+}
+async fn prompt_optimizations(State(s): State<AppState>) -> ApiResult<Vec<PromptOptimization>> {
+    ok(s.engine.prompt_optimizations()?)
+}
+async fn prompt_optimization(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<PromptOptimization> {
+    ok(s.engine.prompt_optimization(&id)?)
+}
+#[derive(Deserialize)]
+struct ApplyOptimization {
+    /// Index in `variants` (from 0).
+    variant: usize,
+}
+/// Saves the prompt of a variant as the system prompt of the agent: the only way a prompt changes, always asked for.
+async fn apply_optimization(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<ApplyOptimization>,
+) -> ApiResult<PromptOptimization> {
+    ok(s.engine.apply_prompt_optimization(&id, b.variant)?)
+}
 async fn eval_runs(State(s): State<AppState>) -> ApiResult<Vec<aiw_eval::EvalReport>> {
     ok(s.engine.eval_reports()?)
 }
@@ -995,6 +1037,8 @@ mod tests_eval;
 mod tests_learning;
 #[cfg(test)]
 mod tests_models;
+#[cfg(test)]
+mod tests_optimize;
 #[cfg(test)]
 mod tests_security;
 #[cfg(test)]

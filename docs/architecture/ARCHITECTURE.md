@@ -403,6 +403,28 @@ decide. Nulla viene scritto prima dell'approvazione.
 
 CLI: `aiw lessons [list [--status pending|approved|rejected|all]|approve <id> [--title] [--content]|reject <id>]`.
 
+**Ottimizzazione del prompt** (`Engine::optimize_prompt`, `aiw eval optimize`): usa la valutazione per
+migliorare il system prompt di un agente, senza cambiarlo da sola.
+
+1. Esegue la suite con il prompt attuale (baseline). `TaskRequest.system_prompt` sovrascrive il prompt
+   dell'agente solo per quel task: l'agente salvato non viene toccato.
+2. Chiede al profilo `learning.profile` (vuoto: il `--profile` indicato, altrimenti il profilo
+   dell'agente) da 1 a 5 varianti (default 3) come JSON `{variants: [{prompt, rationale}]}`, validato
+   come le lezioni (un tentativo di correzione), dandogli il prompt attuale e i task falliti con i
+   dettagli dei grader. Le varianti vuote, ripetute o uguali all'attuale sono scartate.
+3. Esegue la suite per ogni variante.
+4. Sceglie la migliore per score, a parità per pass rate, poi per prompt più corto, **solo se batte la
+   baseline** (score maggiore, o uguale con pass rate maggiore); altrimenti `best` manca e il
+   risultato dice che non c'è nulla da applicare.
+
+Il risultato è un documento `kind: "prompt_optimization"` (`running` → `done` | `failed` → `applied`):
+baseline e varianti con score, pass rate, id dei report e diff unificato rispetto al prompt di
+partenza. Quelli rimasti `running` all'avvio del motore diventano `failed`. L'applicazione
+(`Engine::apply_prompt_optimization`, audit `prompt.apply`) salva il prompt con le stesse validazioni
+di `save_agent` e si rifiuta se il prompt dell'agente è cambiato nel frattempo. Non è mai automatica:
+`--apply` chiede conferma sul terminale (fuori da un terminale serve anche `--yes`) e la UI chiede
+conferma prima di «Applica all'agente».
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
@@ -440,6 +462,9 @@ CLI: `aiw lessons [list [--status pending|approved|rejected|all]|approve <id> [-
 | GET | `/api/eval-runs` · `/api/eval-runs/{id}` · `/api/eval-runs/compare?a=&b=` | Report (aggiornati a ogni task), confronto A/B tra due report salvati |
 | GET | `/api/lessons?status=` | Lezioni proposte dagli agenti (`pending`, `approved`, `rejected`) |
 | POST | `/api/lessons/{id}/approve` · `/api/lessons/{id}/reject` | Approva (scrive `AGENTS.md` o una skill; `{title?, content?}` per modificare) o scarta |
+| POST | `/api/evals/{id}/optimize` | Avvia in background l'ottimizzazione del prompt di un agente su una suite (`{agent, variants?, profile?, repeat?}`); risponde con il record `running` |
+| GET | `/api/prompt-optimizations[/{id}]` | Ottimizzazioni (baseline, varianti, diff), aggiornate a ogni esecuzione |
+| POST | `/api/prompt-optimizations/{id}/apply` | Salva nell'agente il prompt della variante (`{variant}`) |
 | POST | `/api/sessions/{id}/reflect` | Chiede subito all'agente una lezione sulla conversazione |
 | GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET/POST | `/api/mcp/servers` | Server MCP |

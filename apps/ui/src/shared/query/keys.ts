@@ -59,6 +59,8 @@ export const qk = {
     reports: () => ["evals", "reports"] as const,
     report: (id: string) => ["evals", "reports", id] as const,
     compare: (a: string, b: string) => ["evals", "compare", a, b] as const,
+    optimizations: () => ["evals", "optimizations"] as const,
+    optimization: (id: string) => ["evals", "optimizations", id] as const,
   },
 
   tools: () => ["tools"] as const,

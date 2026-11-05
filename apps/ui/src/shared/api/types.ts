@@ -596,6 +596,48 @@ export interface EvalComparison {
   score_delta: number;
 }
 
+export type OptimizationStatus = "running" | "done" | "failed" | "applied";
+
+/** A candidate system prompt and how the suite went with it. */
+export interface PromptVariant {
+  prompt: string;
+  rationale: string;
+  score: number;
+  pass_rate: number;
+  /** The report of the suite run with this prompt. */
+  report_id?: string;
+  /** Unified diff against the prompt the agent had. */
+  diff: string;
+}
+
+/** The suite run with the agent's prompt and with variants of it; applying one to the agent is the user's choice. */
+export interface PromptOptimization {
+  id: string;
+  suite_id: string;
+  agent_id: string;
+  status: OptimizationStatus;
+  started_at: string;
+  finished_at?: string;
+  base_prompt: string;
+  baseline_score: number;
+  baseline_pass_rate: number;
+  baseline_report_id?: string;
+  variants: PromptVariant[];
+  /** Index in `variants` of the one that beats the baseline; missing when none does. */
+  best?: number;
+  /** Index of the variant applied to the agent. */
+  applied?: number;
+  error?: string;
+}
+
+export interface OptimizeRequest {
+  agent: string;
+  /** 1 to 5 (default 3). */
+  variants?: number;
+  profile?: string;
+  repeat?: number;
+}
+
 export type RunStatus = "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled";
 
 export interface ToolCall {

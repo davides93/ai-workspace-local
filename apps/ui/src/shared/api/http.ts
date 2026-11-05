@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus,
+  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -234,6 +234,10 @@ export class HttpTransport implements Transport {
   evalReports = () => this.req<EvalReport[]>("GET", "/eval-runs");
   evalReport = (id: string) => this.req<EvalReport>("GET", `/eval-runs/${enc(id)}`);
   compareEvalReports = (a: string, b: string) => this.req<EvalComparison>("GET", `/eval-runs/compare?a=${enc(a)}&b=${enc(b)}`);
+  startPromptOptimization = (suiteId: string, req: OptimizeRequest) => this.req<PromptOptimization>("POST", `/evals/${enc(suiteId)}/optimize`, req);
+  promptOptimizations = () => this.req<PromptOptimization[]>("GET", "/prompt-optimizations");
+  promptOptimization = (id: string) => this.req<PromptOptimization>("GET", `/prompt-optimizations/${enc(id)}`);
+  applyPromptOptimization = (id: string, variant: number) => this.req<PromptOptimization>("POST", `/prompt-optimizations/${enc(id)}/apply`, { variant });
 
   tools = () => this.req<ToolInfo[]>("GET", "/tools");
   setToolEnabled = (name: string, enabled: boolean) => this.req<void>("PUT", `/tools/${enc(name)}`, { enabled });

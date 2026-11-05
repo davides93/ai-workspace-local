@@ -3,7 +3,7 @@ import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
 } from "../types";
@@ -12,6 +12,7 @@ import {
   runtimes, sessionMessages, sessions, sleep, system, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
+import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 
@@ -878,6 +879,60 @@ export class MockTransport implements Transport {
   }
   async compareEvalReports(a: string, b: string): Promise<EvalComparison> {
     return compareReports(await this.evalReport(a), await this.evalReport(b));
+  }
+
+  async startPromptOptimization(suiteId: string, req: OptimizeRequest) {
+    const suite = evalSuites.find((x) => x.id === suiteId);
+    if (!suite) throw new ApiError(404, `suite di valutazione ${suiteId} non trovata`);
+    const agent = agents.find((a) => a.id === req.agent);
+    if (!agent) throw new ApiError(404, `agente ${req.agent} non trovato`);
+    if (req.profile && !profiles.some((p) => p.id === req.profile)) throw new ApiError(404, `profilo ${req.profile} non trovato`);
+    const n = req.variants ?? 3;
+    if (!Number.isInteger(n) || n < 1 || n > 5) throw new ApiError(400, "variants deve essere tra 1 e 5");
+    const repeat = req.repeat ?? 1;
+    if (!Number.isInteger(repeat) || repeat < 1 || repeat > 50) throw new ApiError(400, "repeat deve essere tra 1 e 50");
+    const o: PromptOptimization = {
+      id: nid("opt"), suite_id: suite.id, agent_id: agent.id, status: "running", started_at: now(), base_prompt: agent.system_prompt,
+      baseline_score: 0, baseline_pass_rate: 0, variants: [],
+    };
+    optimizations.unshift(o);
+    void (async () => {
+      await sleep(900);
+      o.baseline_score = 0.5;
+      o.baseline_pass_rate = 0.33;
+      o.baseline_report_id = nid("evr");
+      for (const [i, c] of demoPrompts(agent.system_prompt, n).entries()) {
+        await sleep(900);
+        const [score, rate] = DEMO_SCORES[i];
+        o.variants.push({ ...variant(agent.system_prompt, c.prompt, c.rationale, score, rate, nid("evr")) });
+      }
+      const top = o.variants.reduce((b, v, i) => (v.score > o.variants[b].score ? i : b), 0);
+      if (o.variants[top].score > o.baseline_score) o.best = top;
+      o.status = "done";
+      o.finished_at = now();
+    })();
+    return structuredClone(o);
+  }
+  async promptOptimizations() { return structuredClone(optimizations); }
+  async promptOptimization(id: string) {
+    const o = optimizations.find((x) => x.id === id);
+    if (!o) throw new ApiError(404, `ottimizzazione del prompt ${id} non trovata`);
+    return structuredClone(o);
+  }
+  async applyPromptOptimization(id: string, variantIndex: number) {
+    const o = optimizations.find((x) => x.id === id);
+    if (!o) throw new ApiError(404, `ottimizzazione del prompt ${id} non trovata`);
+    if (o.status !== "done") throw new ApiError(409, o.status === "applied" ? "questa ottimizzazione è già stata applicata" : o.status === "running" ? "l'ottimizzazione è ancora in corso" : "l'ottimizzazione non è finita: non c'è nulla da applicare");
+    const v = o.variants[variantIndex];
+    if (!v) throw new ApiError(400, `la variante ${variantIndex} non esiste`);
+    const agent = agents.find((a) => a.id === o.agent_id);
+    if (!agent) throw new ApiError(404, `agente ${o.agent_id} non trovato`);
+    if (agent.system_prompt !== o.base_prompt) throw new ApiError(409, `il prompt dell'agente «${agent.name}» è cambiato dopo l'ottimizzazione: rifalla con il prompt attuale`);
+    agent.system_prompt = v.prompt;
+    o.status = "applied";
+    o.applied = variantIndex;
+    audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "prompt.apply", detail: `agente ${agent.id} · ottimizzazione ${o.id} · variante ${variantIndex + 1}` });
+    return structuredClone(o);
   }
 
   async tools() { return structuredClone(tools); }

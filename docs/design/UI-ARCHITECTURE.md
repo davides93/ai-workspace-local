@@ -99,7 +99,7 @@ Router su hash scritto in casa (nessuna dipendenza). Percorsi:
 | chat | `#/chat`, `#/chat/:sessionId` | la sessione attiva sta nell'URL |
 | agents | `#/agents`, `#/agents/:agentId` | |
 | workflows | `#/workflows`, `#/workflows/:workflowId` | |
-| evals | `#/evals/:tab?` | `suites` (default; `?suite=` la suite aperta, `new` per crearne una), `reports` (`?report=` il report aperto, `?b=` quello con cui confrontarlo) |
+| evals | `#/evals/:tab?` | `suites` (default; `?suite=` la suite aperta, `new` per crearne una), `reports` (`?report=` il report aperto, `?b=` quello con cui confrontarlo), `optimizations` (`?opt=` l'ottimizzazione del prompt aperta) |
 | capabilities | `#/capabilities/:tab?` | `tools` (default), `mcp`, `browser` |
 | integrations | `#/integrations` | |
 | models | `#/models/:tab?` | `installed` (default), `discover`, `downloads`, `catalog`; query `?provider=&q=&format=` |

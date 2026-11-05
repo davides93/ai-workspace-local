@@ -5,6 +5,7 @@ pub mod eval;
 mod host;
 mod learning;
 mod models;
+pub mod optimize;
 pub mod pairing;
 pub mod peers;
 mod secrets;
@@ -286,6 +287,7 @@ impl Engine {
             }
         }
         self.fail_interrupted_eval_reports()?;
+        self.fail_interrupted_optimizations()?;
         if s.list_docs::<aiw_eval::Suite>("eval_suite")?.is_empty() {
             for suite in defaults::eval_suites() {
                 s.put_doc("eval_suite", &suite.id, &suite)?;
@@ -1655,6 +1657,8 @@ mod tests_hardening;
 mod tests_inference;
 #[cfg(test)]
 mod tests_learning;
+#[cfg(test)]
+mod tests_optimize;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]

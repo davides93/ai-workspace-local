@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus,
+  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -125,6 +125,12 @@ export interface Transport {
   evalReports(): Promise<EvalReport[]>;
   evalReport(id: string): Promise<EvalReport>;
   compareEvalReports(a: string, b: string): Promise<EvalComparison>;
+  /** Tries variants of the agent's prompt on the suite in the background: the record comes back as `running` and is polled with `promptOptimization`. Nothing is applied. */
+  startPromptOptimization(suiteId: string, req: OptimizeRequest): Promise<PromptOptimization>;
+  promptOptimizations(): Promise<PromptOptimization[]>;
+  promptOptimization(id: string): Promise<PromptOptimization>;
+  /** Saves the prompt of a variant (index in `variants`) as the agent's system prompt. */
+  applyPromptOptimization(id: string, variant: number): Promise<PromptOptimization>;
 
   tools(): Promise<ToolInfo[]>;
   setToolEnabled(name: string, enabled: boolean): Promise<void>;

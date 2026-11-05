@@ -135,6 +135,30 @@ enum EvalCmd {
         #[arg(long)]
         keep: bool,
     },
+    /// Prova varianti del system prompt di un agente sulla suite e propone la migliore. Il prompt dell'agente
+    /// cambia solo con --apply (e una conferma)
+    Optimize {
+        /// File della suite oppure id di una suite salvata
+        suite: String,
+        /// Agente di cui ottimizzare il prompt
+        #[arg(long)]
+        agent: String,
+        /// Quante varianti provare (da 1 a 5)
+        #[arg(long, default_value_t = 3)]
+        variants: u32,
+        /// Profilo di inferenza dei task (e delle varianti, se `learning.profile` è vuoto)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Quante volte eseguire ogni task
+        #[arg(long, default_value_t = 1)]
+        repeat: u32,
+        /// Applica all'agente la variante migliore, se batte quella attuale
+        #[arg(long)]
+        apply: bool,
+        /// Con --apply: non chiede conferma (necessario fuori da un terminale)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Confronta due report (id salvati o file JSON): le differenze sono B meno A
     Compare {
         a: String,
@@ -480,6 +504,54 @@ async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
             } else {
                 print!("{}", comparison.to_text());
             }
+        }
+        EvalCmd::Optimize { suite, agent, variants, profile, repeat, apply, yes } => {
+            use std::io::IsTerminal;
+            if apply && !yes && !std::io::stdin().is_terminal() {
+                anyhow::bail!("--apply fuori da un terminale richiede anche --yes");
+            }
+            eprintln!("Ottimizzo il prompt di «{agent}» con {variants} varianti: la suite gira {} volte in tutto…", variants + 1);
+            let opts = aiw_engine::optimize::OptimizeOptions { variants: Some(variants), profile, repeat: Some(repeat) };
+            let o = engine.optimize_prompt(&suite, &agent, &opts).await?;
+            println!("{:<12} {:>7} {:>10}  REPORT", "", "SCORE", "PASS RATE");
+            println!(
+                "{:<12} {:>7.2} {:>10}  {}",
+                "attuale",
+                o.baseline_score,
+                percent(o.baseline_pass_rate),
+                o.baseline_report_id.as_deref().unwrap_or("-")
+            );
+            for (i, v) in o.variants.iter().enumerate() {
+                println!(
+                    "{:<12} {:>7.2} {:>10}  {}  {}",
+                    format!("variante {}{}", i + 1, if o.best == Some(i) { " *" } else { "" }),
+                    v.score,
+                    percent(v.pass_rate),
+                    v.report_id.as_deref().unwrap_or("-"),
+                    v.rationale
+                );
+            }
+            let Some(best) = o.best else {
+                println!("\nNessuna variante batte il prompt attuale: non c'è nulla da applicare.");
+                return Ok(());
+            };
+            println!("\nLa migliore è la variante {} (*). Differenze rispetto al prompt attuale:\n{}", best + 1, o.variants[best].diff);
+            if !apply {
+                println!("Per applicarla: aiw eval optimize … --apply, oppure dalla pagina Valutazioni (ottimizzazione {}).", o.id);
+                return Ok(());
+            }
+            if !yes {
+                eprint!("Applicare la variante {} al prompt dell'agente «{agent}»? [s/N] ", best + 1);
+                std::io::stderr().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                if !matches!(line.trim().to_lowercase().as_str(), "s" | "si" | "sì" | "y" | "yes") {
+                    println!("Prompt non modificato.");
+                    return Ok(());
+                }
+            }
+            engine.apply_prompt_optimization(&o.id, best)?;
+            println!("Prompt di «{agent}» aggiornato.");
         }
         EvalCmd::Run { suite, agent, profile, repeat, out, keep } => {
             let suite = engine.resolve_eval_suite(&suite)?;
