@@ -639,6 +639,73 @@ impl Engine {
         self.audit_user("agent.delete", &format!("{} ({id})", agent.name));
         Ok(())
     }
+    /// The profile a session runs with, and the team when its agent id is `team:<id>`. A
+    /// supervisor team runs as its supervisor (the team's budget and output schema win); the
+    /// other strategies have no model in charge, so they run under a neutral profile that never
+    /// narrows the members: the widest mode and sandbox among them.
+    pub(crate) fn session_agent(&self, agent_id: &str) -> Result<(AgentProfile, Option<TeamDef>)> {
+        let Some(team_id) = agent_id.strip_prefix(TEAM_PREFIX) else { return Ok((self.agent(agent_id)?, None)) };
+        let team = self.team(team_id)?;
+        let locals: Vec<AgentProfile> = team
+            .members
+            .iter()
+            .map(|m| m.agent.as_str())
+            .chain(team.supervisor.as_deref())
+            .chain(team.aggregator.as_deref())
+            .filter(|id| !id.starts_with(REMOTE_PREFIX))
+            .map(|id| self.agent(id))
+            .collect::<Result<_>>()?;
+        let mut agent = match (team.strategy.as_str(), &team.supervisor) {
+            ("supervisor", Some(sup)) => {
+                let mut a = self.agent(sup)?;
+                if !a.tools.iter().any(|t| t == "*" || t == "agent") {
+                    a.tools.push("agent".into());
+                }
+                a
+            }
+            _ => {
+                let first = locals.first().ok_or_else(|| Error::Invalid("il team non ha agenti locali".into()))?;
+                let widest = |f: fn(&AgentProfile) -> u8| locals.iter().max_by_key(|a| f(a)).unwrap_or(first);
+                AgentProfile {
+                    id: agent_id.into(),
+                    name: team.name.clone(),
+                    description: team.description.clone(),
+                    inference_profile: first.inference_profile.clone(),
+                    system_prompt: String::new(),
+                    tools: vec!["*".into()],
+                    mode: widest(|a| host::mode_rank(&a.mode)).mode.clone(),
+                    sandbox: widest(|a| sandbox_rank(&a.sandbox)).sandbox.clone(),
+                    max_turns: first.max_turns,
+                    output_schema: None,
+                    budget: None,
+                }
+            }
+        };
+        if team.output_schema.is_some() {
+            agent.output_schema = team.output_schema.clone();
+        }
+        if team.budget.is_some() {
+            agent.budget = team.budget.clone();
+        }
+        Ok((agent, Some(team)))
+    }
+
+    /// Adds what a supervisor team needs to a run input: only the members as sub-agents and the
+    /// `# Team` section of the system prompt.
+    fn apply_team(&self, input: &mut RunInput, team: &TeamDef) {
+        if team.strategy != "supervisor" {
+            return;
+        }
+        let described = |m: &TeamMember| {
+            if !m.role.trim().is_empty() {
+                return m.role.trim().to_string();
+            }
+            self.agent(&m.agent).map(|a| a.description).unwrap_or_default()
+        };
+        input.subagents = team.members.iter().map(|m| (m.agent.clone(), described(m))).collect();
+        input.system_extra.push(aiw_agent::team::supervisor_section(team, &input.subagents));
+    }
+
     // ------------------------------------------------------------------ teams
     pub fn teams(&self) -> Result<Vec<TeamDef>> {
         self.0.store.list_docs("team")
@@ -786,7 +853,10 @@ impl Engine {
     }
     /// `isolation: Some("worktree")` gives the session its own git worktree and branch.
     pub fn create_session_with(&self, agent_id: &str, title: Option<String>, isolation: Option<&str>) -> Result<Session> {
-        self.agent(agent_id)?;
+        match agent_id.strip_prefix(TEAM_PREFIX) {
+            Some(team_id) => self.team(team_id).map(|_| ())?,
+            None => self.agent(agent_id).map(|_| ())?,
+        }
         let now = now_rfc3339();
         let mut s = Session {
             id: new_id("ses"),
@@ -1070,7 +1140,7 @@ impl Engine {
             Error::NotFound(m) => Error::Conflict(format!("{m}: {what} di questa sessione non esiste più, scegline un altro in Agenti")),
             other => other,
         };
-        let agent = self.agent(&session.agent_id).map_err(|e| gone("l'agente", e))?;
+        let (agent, team) = self.session_agent(&session.agent_id).map_err(|e| gone("l'agente o il team", e))?;
         let profile = self.profile(&agent.inference_profile).map_err(|e| gone("il profilo", e))?;
         let manifest = self.0.runtimes.manifest(&profile.runtime_id).map_err(|e| gone("il runtime", e))?;
         if profile.model.is_empty() && manifest.launch.as_ref().map(|l| l.requires_model).unwrap_or(false) {
@@ -1112,7 +1182,11 @@ impl Engine {
         session.updated_at = now_rfc3339();
         session.last_status = Some("running".into());
         self.0.store.upsert_session(&session)?;
-        let run_input = self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
+        let mut run_input =
+            self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
+        if let Some(team) = &team {
+            self.apply_team(&mut run_input, team);
+        }
         let engine = self.clone();
         let rid = run_id.clone();
         tokio::spawn(async move {
@@ -1120,7 +1194,12 @@ impl Engine {
             // What the run produced is stored whatever its outcome: when it was cancelled or failed
             // its files were still written and its commands run, and the next turn must know.
             // (`new_messages[0]` is the user message, stored above.)
-            let (out, res) = AgentRunner::run_partial(run_input, host).await;
+            let (out, res) = match team {
+                Some(team) if aiw_agent::team::is_scripted(&team.strategy) => {
+                    aiw_agent::team::run_team_partial(run_input, team, host).await
+                }
+                _ => AgentRunner::run_partial(run_input, host).await,
+            };
             let status = match &res {
                 Ok(()) => "succeeded",
                 Err(Error::Cancelled) => "cancelled",
@@ -1647,3 +1726,11 @@ mod tests_hardening;
 mod tests_inference;
 #[cfg(test)]
 mod tests_validation;
+
+fn sandbox_rank(s: &str) -> u8 {
+    match s {
+        "read-only" => 0,
+        "workspace-write" => 1,
+        _ => 2,
+    }
+}

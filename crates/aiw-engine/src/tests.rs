@@ -193,3 +193,101 @@ async fn isolated_session_writes_in_its_worktree_until_applied() {
     assert!(e.audit().iter().any(|a| a.action == "worktree_apply"));
     assert!(e.create_session_with("operator", None, Some("altro")).is_err());
 }
+
+fn team_def(strategy: &str, supervisor: Option<&str>, members: &[&str]) -> TeamDef {
+    TeamDef {
+        id: "squadra".into(),
+        name: "Squadra".into(),
+        description: "Un team di prova".into(),
+        strategy: strategy.into(),
+        supervisor: supervisor.map(String::from),
+        members: members.iter().map(|a| TeamMember { agent: a.to_string(), role: format!("ruolo di {a}") }).collect(),
+        aggregator: None,
+        budget: None,
+        output_schema: None,
+    }
+}
+
+fn copy_agent(e: &Engine, from: &str, id: &str) {
+    let mut a = e.agent(from).unwrap();
+    a.id = id.into();
+    a.name = id.into();
+    e.save_agent(a).unwrap();
+}
+
+#[tokio::test]
+async fn a_team_session_runs_the_supervisor_with_only_the_members_as_subagents() {
+    let call = |index: usize, id: &str, agent: &str| aiw_runtimes::ChatDelta::ToolCall {
+        index,
+        id: Some(id.into()),
+        name: Some("agent".into()),
+        arguments: json!({"agent": agent, "task": format!("compito per {agent}")}).to_string(),
+    };
+    let backend = ScriptedBackend::new(vec![
+        vec![
+            call(0, "a", "membro-a"),
+            call(1, "b", "membro-b"),
+            aiw_runtimes::ChatDelta::Done { finish_reason: Some("tool_calls".into()) },
+        ],
+        ScriptedBackend::text_turn("risposta del membro"),
+        ScriptedBackend::text_turn("risposta del membro"),
+        ScriptedBackend::text_turn("Sintesi finale"),
+    ]);
+    let (e, _d, _w) = engine(vec![]).await;
+    e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+    for id in ["membro-a", "membro-b", "capo"] {
+        copy_agent(&e, "planner", id);
+    }
+    e.save_team(team_def("supervisor", Some("capo"), &["membro-a", "membro-b"])).unwrap();
+
+    let s = e.create_session("team:squadra", None).unwrap();
+    assert_eq!(s.agent_id, "team:squadra");
+    let run = e.start_run(&s.id, "Fate il lavoro".into()).await.unwrap();
+    wait_finished(&e, &run).await;
+    let msgs = e.messages(&s.id).unwrap();
+    assert_eq!(msgs.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), ["user", "assistant", "tool", "tool", "assistant"]);
+    assert_eq!(msgs.last().unwrap().content, "Sintesi finale");
+    assert!(msgs[2].content.contains("risposta del membro"), "{}", msgs[2].content);
+
+    // The supervisor saw the team section and only the members as sub-agents.
+    let reqs = backend.requests.lock().unwrap();
+    let first = &reqs[0];
+    let system = first.messages[0].text();
+    assert!(system.contains("# Team «Squadra»") && system.contains("- membro-a: ruolo di membro-a"), "{system}");
+    let spec = first.tools.iter().find(|t| t.function.name == "agent").unwrap();
+    assert_eq!(spec.function.parameters["properties"]["agent"]["enum"], json!(["membro-a", "membro-b"]));
+    let evs = e.run_events(&run);
+    assert_eq!(evs.iter().filter(|x| matches!(x.event.event, AgEvent::SubagentStarted { .. })).count(), 2);
+}
+
+#[tokio::test]
+async fn parallel_and_pipeline_teams_run_without_a_supervisor_model() {
+    let (e, _d, _w) = engine(vec![ScriptedBackend::text_turn("uno"), ScriptedBackend::text_turn("due")]).await;
+    for id in ["primo", "secondo"] {
+        copy_agent(&e, "planner", id);
+    }
+    e.save_team(team_def("pipeline", None, &["primo", "secondo"])).unwrap();
+    let s = e.create_session("team:squadra", None).unwrap();
+    let run = e.start_run(&s.id, "Procedi".into()).await.unwrap();
+    wait_finished(&e, &run).await;
+    let msgs = e.messages(&s.id).unwrap();
+    assert_eq!(msgs.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect::<Vec<_>>(), [("user", "Procedi"), ("assistant", "due")]);
+    let types: Vec<String> =
+        e.run_events(&run).iter().map(|x| serde_json::to_value(&x.event.event).unwrap()["type"].as_str().unwrap().to_string()).collect();
+    assert_eq!(types.first().unwrap(), "RUN_STARTED");
+    assert_eq!(types.last().unwrap(), "RUN_FINISHED");
+    assert_eq!(types.iter().filter(|t| *t == "SUBAGENT_FINISHED").count(), 2);
+    assert_eq!(e.sessions().unwrap()[0].last_status.as_deref(), Some("succeeded"));
+}
+
+#[tokio::test]
+async fn a_session_of_a_missing_team_is_refused_or_conflicts() {
+    let (e, _d, _w) = engine(vec![]).await;
+    assert!(matches!(e.create_session("team:nessuno", None), Err(Error::NotFound(_))));
+    copy_agent(&e, "planner", "primo");
+    e.save_team(team_def("pipeline", None, &["primo"])).unwrap();
+    let s = e.create_session("team:squadra", None).unwrap();
+    e.delete_team("squadra").unwrap();
+    // The session still exists, its team is gone: a conflict the user can fix, not a 404.
+    assert!(matches!(e.start_run(&s.id, "ciao".into()).await, Err(Error::Conflict(_))));
+}

@@ -11,6 +11,7 @@ pub mod policy;
 pub mod runner;
 pub mod schema;
 pub mod skills;
+pub mod team;
 pub mod think;
 
 pub use budget::RunBudget;

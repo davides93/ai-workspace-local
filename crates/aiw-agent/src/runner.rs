@@ -278,6 +278,62 @@ fn seal_dangling_tool_calls(msgs: &mut Vec<ChatMessage>) {
     msgs.extend(missing);
 }
 
+/// Delegates `task` to another agent in an isolated context: SubagentStart/Stop hooks, the
+/// SUBAGENT_* events and the audit entry. Used by the `agent` tool and by the team strategies.
+pub(crate) async fn delegate(input: &RunInput, host: &Arc<dyn RunHost>, agent_id: &str, task: &str) -> ToolOutput {
+    let audit = |decision: &str, detail: String| {
+        host.audit(AuditEntry {
+            id: new_id("aud"),
+            ts: now_rfc3339(),
+            run_id: Some(input.run_id.clone()),
+            actor: "agent".into(),
+            action: "tool".into(),
+            tool: Some("agent".into()),
+            decision: Some(decision.into()),
+            detail,
+        });
+    };
+    let mut task = task.to_string();
+    // SubagentStart hooks: the matcher applies to the agent id.
+    let start = run_hooks(
+        &input.hooks,
+        "SubagentStart",
+        Some(agent_id),
+        &json!({"agent": agent_id, "task": task, "run_id": input.run_id, "depth": input.depth}),
+    )
+    .await;
+    if let Some(reason) = start.block {
+        audit("deny", format!("hook: {reason}"));
+        return ToolOutput::error(format!("Negato da un hook: {reason}"));
+    }
+    if let Some(t) = start.updated_input.as_ref().and_then(|u| u.get("task")).and_then(|t| t.as_str()) {
+        task = t.to_string();
+    }
+    for c in start.context {
+        task.push_str(&format!("\n\n[contesto aggiunto da un hook]\n{c}"));
+    }
+    let sub_id = new_id("sub");
+    host.emit(&input.run_id, AgEvent::SubagentStarted { subagent_id: sub_id.clone(), name: agent_id.to_string() });
+    audit("allow", format!("subagente {agent_id}: {}", task.chars().take(120).collect::<String>()));
+    let r = host.subagent(input, agent_id, &task).await;
+    let (mut out, res) = match r {
+        Ok(t) => (ToolOutput::text(t.clone()), Some(t)),
+        Err(e) => (ToolOutput::error(format!("subagente fallito: {e}")), None),
+    };
+    let stop = run_hooks(
+        &input.hooks,
+        "SubagentStop",
+        Some(agent_id),
+        &json!({"agent": agent_id, "task": task, "result": out.content, "is_error": out.is_error, "run_id": input.run_id}),
+    )
+    .await;
+    for c in stop.context {
+        out.content.push_str(&format!("\n\n[hook] {c}"));
+    }
+    host.emit(&input.run_id, AgEvent::SubagentFinished { subagent_id: sub_id, result: res.map(|r| r.chars().take(300).collect()) });
+    out
+}
+
 pub struct AgentRunner;
 
 impl AgentRunner {
@@ -962,51 +1018,11 @@ impl AgentRunner {
             }
             "agent" => {
                 let agent_id = args["agent"].as_str().unwrap_or_default().to_string();
-                let mut task = args["task"].as_str().unwrap_or_default().to_string();
+                let task = args["task"].as_str().unwrap_or_default().to_string();
                 if input.depth >= MAX_DEPTH {
                     return (ToolOutput::error("profondità massima dei subagenti raggiunta"), None);
                 }
-                // SubagentStart hooks: the matcher applies to the agent id.
-                let start = run_hooks(
-                    &input.hooks,
-                    "SubagentStart",
-                    Some(&agent_id),
-                    &json!({"agent": agent_id, "task": task, "run_id": input.run_id, "depth": input.depth}),
-                )
-                .await;
-                if let Some(reason) = start.block {
-                    audit("deny", format!("hook: {reason}"));
-                    return (ToolOutput::error(format!("Negato da un hook: {reason}")), None);
-                }
-                if let Some(t) = start.updated_input.as_ref().and_then(|u| u.get("task")).and_then(|t| t.as_str()) {
-                    task = t.to_string();
-                }
-                for c in start.context {
-                    task.push_str(&format!("\n\n[contesto aggiunto da un hook]\n{c}"));
-                }
-                let sub_id = new_id("sub");
-                host.emit(&input.run_id, AgEvent::SubagentStarted { subagent_id: sub_id.clone(), name: agent_id.clone() });
-                audit("allow", format!("subagente {agent_id}: {}", task.chars().take(120).collect::<String>()));
-                let r = host.subagent(input, &agent_id, &task).await;
-                let (mut out, res) = match r {
-                    Ok(t) => (ToolOutput::text(t.clone()), Some(t)),
-                    Err(e) => (ToolOutput::error(format!("subagente fallito: {e}")), None),
-                };
-                let stop = run_hooks(
-                    &input.hooks,
-                    "SubagentStop",
-                    Some(&agent_id),
-                    &json!({"agent": agent_id, "task": task, "result": out.content, "is_error": out.is_error, "run_id": input.run_id}),
-                )
-                .await;
-                for c in stop.context {
-                    out.content.push_str(&format!("\n\n[hook] {c}"));
-                }
-                host.emit(
-                    &input.run_id,
-                    AgEvent::SubagentFinished { subagent_id: sub_id, result: res.map(|r| r.chars().take(300).collect()) },
-                );
-                return (out, None);
+                return (delegate(input, &host, &agent_id, &task).await, None);
             }
             _ => {}
         }

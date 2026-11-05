@@ -138,7 +138,7 @@ impl RunHost for EngineHost {
     }
 }
 
-fn mode_rank(m: &str) -> u8 {
+pub(crate) fn mode_rank(m: &str) -> u8 {
     match m {
         "plan" => 0,
         "ask" => 1,
