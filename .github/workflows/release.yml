@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag da pubblicare (es. v0.4.0-rc.1); vuoto = solo build, nessuna release"
+        description: "Tag da pubblicare (es. v0.4.0-rc.2); vuoto = solo build, nessuna release"
         required: false
         default: ""
   push:
@@ -344,8 +344,13 @@ jobs:
           ls -l release
           test -n "$(ls -A release)"
           (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      # The repository has immutable releases: files can only be attached while the release is a
+      # draft, and publishing locks it (and its tag) for good. So the release is created as a draft
+      # with every file, and published only afterwards.
       - uses: softprops/action-gh-release@v2
+        id: release
         with:
+          draft: true
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
           name: AI Workspace Local ${{ env.RELEASE_TAG }}
@@ -353,3 +358,8 @@ jobs:
           prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           fail_on_unmatched_files: true
           files: release/*
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false

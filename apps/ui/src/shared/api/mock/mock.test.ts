@@ -507,14 +507,14 @@ describe("updates (demo)", () => {
       const check = api.checkUpdate();
       await vi.advanceTimersByTimeAsync(700);
       const found = await check;
-      expect(found.available?.version).toBe("0.4.0-rc.2");
+      expect(found.available?.version).toBe("0.4.0-rc.3");
       expect(found.checked_at).toBeTruthy();
       expect((await api.downloadUpdate()).state).toBe("downloading");
       await vi.advanceTimersByTimeAsync(2500);
       const ready = await api.updateStatus();
       expect(ready.state).toBe("ready");
       expect(ready.received).toBe(ready.total);
-      expect(ready.file).toContain("0.4.0-rc.2");
+      expect(ready.file).toContain("0.4.0-rc.3");
       expect((await api.installUpdate()).message).toMatch(/Applicazioni/);
     } finally {
       vi.useRealTimers();
