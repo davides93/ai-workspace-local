@@ -13,6 +13,8 @@ export const qk = {
     all: () => ["runtimes"] as const,
     list: () => ["runtimes", "list"] as const,
     logs: (id: string) => ["runtimes", "logs", id] as const,
+    installPlan: (id: string) => ["runtimes", "install-plan", id] as const,
+    install: (id: string) => ["runtimes", "install", id] as const,
   },
 
   models: {

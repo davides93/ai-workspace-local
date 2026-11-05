@@ -157,6 +157,13 @@ Ogni runtime è un file JSON dichiarativo (vedi `crates/aiw-runtimes/manifests/`
   riavviato; uno più grande viene riusato. Un server avviato fuori da AIW non si modifica.
 - **Architettura**: `arch` (opzionale, es. `["aarch64"]`) limita un runtime a una CPU oltre che al
   sistema operativo: MLX e Apple Foundation Models non sono offerti su un Mac Intel.
+- **Installazione automatica**: un manifest può avere un campo `installer` per OS
+  (`{"macos": {"kind": "pip", "packages": ["mlx-lm"]}}` oppure `{"kind": "brew", "formula": "llama.cpp"}`).
+  Un clic nella UI installa il runtime senza altre domande: i pacchetti `pip` vanno in un ambiente Python
+  isolato di AIW (`~/.aiw/pyenv`, creato con un Python 3.10+ del sistema o, se manca, installato con Homebrew),
+  le formule con `brew`. Solo gestori di pacchetti, mai `curl | sh`; i nomi dei pacchetti sono validati.
+  API: `GET /api/runtimes/{id}/install-plan`, `POST` e `GET /api/runtimes/{id}/install` (avanzamento e output).
+  I runtime senza ricetta mostrano solo le istruzioni manuali.
 - **Manifest utente**: ogni JSON in `~/.aiw/runtimes/*.json` si aggiunge al catalogo. Così si
   integra qualsiasi motore futuro senza ricompilare.
 

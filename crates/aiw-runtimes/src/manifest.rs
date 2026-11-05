@@ -42,8 +42,23 @@ pub struct RuntimeManifest {
     pub settings: SettingsSchema,
     #[serde(default)]
     pub install: BTreeMap<String, String>,
+    /// Guided installation per OS (`macos`, `linux`, `windows`, `any`): a recipe AIW can run
+    /// itself. Runtimes without one only show the `install` hint.
+    #[serde(default)]
+    pub installer: BTreeMap<String, Installer>,
     #[serde(default)]
     pub homepage: Option<String>,
+}
+
+/// A recipe for installing a runtime from inside the app. Only package managers are supported
+/// (no `curl | sh`), and the package names are validated before anything is run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Installer {
+    /// `pip install` into the virtual environment AIW manages (`<root>/pyenv`).
+    Pip { packages: Vec<String> },
+    /// `brew install <formula>`.
+    Brew { formula: String },
 }
 
 fn openai() -> String {
@@ -145,6 +160,9 @@ impl RuntimeManifest {
         let v = v as u32;
         settings.insert(key, Value::from(v));
         Some(v)
+    }
+    pub fn installer_for(&self, os: &str) -> Option<&Installer> {
+        self.installer.get(os).or_else(|| self.installer.get("any"))
     }
     pub fn install_hint(&self, os: &str) -> Option<String> {
         self.install.get(os).or_else(|| self.install.get("any")).cloned()

@@ -465,6 +465,35 @@ describe("voice mode (demo)", () => {
   });
 });
 
+describe("runtime installation (demo)", () => {
+  it("shows the plan, installs by itself and leaves the runtime ready", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new MockTransport();
+      const plan = await api.runtimeInstallPlan("vllm");
+      expect(plan.automatic).toBe(true);
+      expect(plan.steps.length).toBe(2);
+      expect(await api.runtimeInstall("vllm")).toBeNull();
+      const job = await api.installRuntime("vllm");
+      expect(job.state).toBe("running");
+      await vi.advanceTimersByTimeAsync(2000);
+      const done = await api.runtimeInstall("vllm");
+      expect(done?.state).toBe("done");
+      expect(done?.log.at(-1)).toContain("completata");
+      expect((await api.runtimes()).find((r) => r.id === "vllm")?.status).toBe("available");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses runtimes that are installed by hand, and unknown ones", async () => {
+    const api = new MockTransport();
+    expect((await api.runtimeInstallPlan("lmstudio")).automatic).toBe(false);
+    await expect(api.installRuntime("lmstudio")).rejects.toThrow(/manuale/);
+    await expect(api.installRuntime("nope")).rejects.toThrow(/non trovato/);
+  });
+});
+
 describe("updates (demo)", () => {
   it("checks, downloads with progress, then hands the installer over", async () => {
     vi.useFakeTimers();

@@ -395,6 +395,33 @@ async fn the_tool_list_has_the_internal_tools_and_they_cannot_be_switched() {
     assert!(names.contains(&"list_dir") && !names.contains(&"todo") && !names.contains(&"render_ui"), "{names:?}");
 }
 
+/// Guided installation of runtimes: the plan is public, a runtime without a safe recipe is
+/// refused with its manual instructions, and nothing runs for unknown ids.
+#[tokio::test]
+async fn runtime_installation_api() {
+    let (app, _e, _d) = fixture(None).await;
+    // LM Studio is installed from its website: no recipe, only the hint.
+    let (st, plan) = dispatch(app.clone(), "GET", "/api/runtimes/lmstudio/install-plan", None).await;
+    assert_eq!(st, 200, "{plan}");
+    assert_eq!(plan["automatic"], false);
+    assert!(plan["hint"].as_str().unwrap().contains("lmstudio.ai"), "{plan}");
+    assert!(plan["steps"].as_array().unwrap().is_empty());
+    let (st, msg) = failure(&app, "POST", "/api/runtimes/lmstudio/install", None).await;
+    assert_eq!(st, 422);
+    assert!(msg.contains("manuale") && msg.contains("lmstudio.ai"), "{msg}");
+    // No installation has run.
+    let (st, job) = dispatch(app.clone(), "GET", "/api/runtimes/lmstudio/install", None).await;
+    assert_eq!(st, 200);
+    assert!(job.is_null(), "{job}");
+    // Unknown runtime.
+    assert_eq!(failure(&app, "POST", "/api/runtimes/nope/install", None).await.0, 404);
+    assert_eq!(dispatch(app.clone(), "GET", "/api/runtimes/nope/install-plan", None).await.0, 404);
+    // A runtime with a recipe shows its steps (the plan is the same whatever this machine has).
+    let (st, plan) = dispatch(app.clone(), "GET", "/api/runtimes/llama-server/install-plan", None).await;
+    assert_eq!(st, 200, "{plan}");
+    assert!(plan["runtime_name"].is_string());
+}
+
 // ---------------------------------------------------------------- updates
 
 mod updates {

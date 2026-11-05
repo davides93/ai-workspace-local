@@ -1,3 +1,4 @@
+use crate::install::{self, InstallJob, InstallPlan, InstallState};
 use crate::manifest::{builtin, Launch, RuntimeManifest};
 use crate::ollama::{self, OllamaBackend};
 use crate::openai::OpenAiBackend;
@@ -40,6 +41,10 @@ pub struct RuntimeRegistry {
     start_locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Chat requests in flight per sidecar runtime (see [`Tracked`]).
     inflight: StdMutex<HashMap<String, Arc<AtomicUsize>>>,
+    /// Python virtual environment AIW manages for pip-installed runtimes (MLX…).
+    pyenv: RwLock<PathBuf>,
+    /// Guided installations, one per runtime (the last one is kept for the UI).
+    installs: StdMutex<HashMap<String, Arc<StdMutex<InstallJob>>>>,
 }
 
 impl RuntimeRegistry {
@@ -54,6 +59,7 @@ impl RuntimeRegistry {
             }
         }
         let http = reqwest::Client::builder().connect_timeout(Duration::from_millis(800)).build().expect("http client");
+        let pyenv = models_dir.parent().unwrap_or(&models_dir).join("pyenv");
         Self {
             manifests: RwLock::new(manifests),
             os: os.into(),
@@ -68,7 +74,41 @@ impl RuntimeRegistry {
             resolver: RwLock::new(None),
             start_locks: StdMutex::new(HashMap::new()),
             inflight: StdMutex::new(HashMap::new()),
+            pyenv: RwLock::new(pyenv),
+            installs: StdMutex::new(HashMap::new()),
         }
+    }
+
+    /// Where the managed Python environment lives (default: next to the models folder).
+    pub fn set_pyenv_dir(&self, dir: PathBuf) {
+        *self.pyenv.write().unwrap() = dir;
+    }
+
+    /// Folders searched for runtime executables: the app's own, the managed Python environment
+    /// and, on macOS and Linux, Homebrew's (a GUI app does not inherit the shell `PATH`).
+    fn search_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = self.bin_dirs.clone();
+        dirs.push(install::venv_bin(&self.pyenv.read().unwrap()));
+        if self.os != "windows" {
+            dirs.extend(install::brew_dirs());
+        }
+        dirs
+    }
+
+    /// The first Python (managed environment, then the system one) that imports all `modules`.
+    async fn python_with(&self, modules: &[String]) -> Option<PathBuf> {
+        let managed = install::venv_python(&self.pyenv.read().unwrap());
+        let mut candidates = Vec::new();
+        if managed.is_file() {
+            candidates.push(managed);
+        }
+        candidates.extend(install::system_python());
+        for py in candidates {
+            if python_has(&py, modules).await {
+                return Some(py);
+            }
+        }
+        None
     }
 
     pub fn os(&self) -> &str {
@@ -223,10 +263,10 @@ impl RuntimeRegistry {
                         };
                     }
                 }
-                if let Some(bin) = find_binary(m, &settings, &self.bin_dirs) {
+                if let Some(bin) = find_binary(m, &settings, &self.search_dirs()) {
                     return Status { status: "available".into(), detail: Some(bin.display().to_string()), ..Default::default() };
                 }
-                if !m.detect.python_modules.is_empty() && python_has(&m.detect.python_modules).await {
+                if !m.detect.python_modules.is_empty() && self.python_with(&m.detect.python_modules).await.is_some() {
                     // `start` can only run what it can launch: `python3 -m …` recipes, or a
                     // command found in PATH. A Python module without its CLI is not "available".
                     return match m.launch.as_ref().map(|l| l.command.as_str()) {
@@ -315,6 +355,7 @@ impl RuntimeRegistry {
             settings_schema: m.settings.clone(),
             settings: redact(&m, settings),
             install_hint: m.install_hint(&self.os),
+            install_auto: m.installer_for(&self.os).is_some(),
             homepage: m.homepage.clone(),
         })
     }
@@ -379,11 +420,17 @@ impl RuntimeRegistry {
                 }
                 let launch =
                     m.launch.as_ref().ok_or_else(|| Error::Unsupported(format!("{}: avvialo manualmente e AIW lo rileverà", m.name)))?;
-                let binary = find_binary(&m, &settings, &self.bin_dirs)
-                    .or_else(|| (launch.command == "python3").then(|| which::which("python3").ok()).flatten())
-                    .ok_or_else(|| {
-                        Error::Unsupported(format!("{} non è installato. {}", m.name, m.install_hint(&self.os).unwrap_or_default()))
-                    })?;
+                let python = if launch.command == "python3" {
+                    match m.detect.python_modules.is_empty() {
+                        true => install::system_python(),
+                        false => self.python_with(&m.detect.python_modules).await.or_else(install::system_python),
+                    }
+                } else {
+                    None
+                };
+                let binary = find_binary(&m, &settings, &self.search_dirs()).or(python).ok_or_else(|| {
+                    Error::Unsupported(format!("{} non è installato. {}", m.name, m.install_hint(&self.os).unwrap_or_default()))
+                })?;
                 let model_path = match (&model, self.resolver.read().unwrap().as_ref()) {
                     (Some(mid), Some(r)) => r(mid),
                     _ => None,
@@ -419,6 +466,54 @@ impl RuntimeRegistry {
                 }
             }
         }
+    }
+
+    /// What installing `id` here takes, and whether this machine has what it needs.
+    pub async fn install_plan(&self, id: &str) -> Result<InstallPlan> {
+        let m = self.manifest(id)?;
+        let python_ok = match install::system_python() {
+            Some(py) => python_recent_enough(&py).await,
+            None => false,
+        };
+        let brew = self.os != "windows" && install::find_brew_path().is_some();
+        Ok(install::plan(&m, &self.os, python_ok, brew))
+    }
+
+    /// Registers a guided installation and returns what the caller has to run
+    /// ([`install::run`]). One installation per runtime at a time.
+    pub async fn begin_install(&self, id: &str) -> Result<(Vec<install::Command>, Arc<StdMutex<InstallJob>>)> {
+        let m = self.manifest(id)?;
+        if !self.supports(&m) {
+            return Err(Error::Unsupported(format!("{} {}", m.name, self.unsupported_detail(&m))));
+        }
+        let plan = self.install_plan(id).await?;
+        if !plan.automatic {
+            return Err(Error::Unsupported(format!("{}: installazione manuale. {}", m.name, plan.hint.unwrap_or_default())));
+        }
+        if let Some(p) = plan.prerequisites.iter().find(|p| !p.ok) {
+            return Err(Error::Unsupported(format!("{} richiede: {}. {}", m.name, p.name, p.hint.clone().unwrap_or_default())));
+        }
+        let installer = m.installer_for(&self.os).ok_or_else(|| Error::Unsupported(format!("{}: nessuna ricetta", m.name)))?;
+        let pyenv = self.pyenv.read().unwrap().clone();
+        let venv_exists = install::venv_python(&pyenv).is_file();
+        let brew = install::find_brew_path();
+        let python = match install::system_python() {
+            Some(py) if python_recent_enough(&py).await => Some(py),
+            _ => None,
+        };
+        let cmds = install::commands(installer, &pyenv, python.as_deref(), brew.as_deref(), venv_exists).map_err(Error::Invalid)?;
+        let mut jobs = self.installs.lock().unwrap();
+        if jobs.get(id).is_some_and(|j| j.lock().unwrap().state == InstallState::Running) {
+            return Err(Error::Invalid(format!("{} è già in installazione", m.name)));
+        }
+        let job = Arc::new(StdMutex::new(InstallJob::new(id, cmds.len())));
+        jobs.insert(id.to_string(), job.clone());
+        Ok((cmds, job))
+    }
+
+    /// The last installation of `id`, running or finished.
+    pub fn install_job(&self, id: &str) -> Option<InstallJob> {
+        self.installs.lock().unwrap().get(id).map(|j| j.lock().unwrap().clone())
     }
 
     pub async fn stop(&self, id: &str) -> Result<RuntimeInfo> {
@@ -723,15 +818,25 @@ fn load_user_manifests(dir: &Path) -> Vec<RuntimeManifest> {
     out
 }
 
-async fn python_has(modules: &[String]) -> bool {
+/// Python 3.10+ (MLX does not support older versions).
+async fn python_recent_enough(py: &Path) -> bool {
+    let fut = tokio::process::Command::new(py)
+        .args(["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    matches!(tokio::time::timeout(Duration::from_secs(10), fut).await, Ok(Ok(s)) if s.success())
+}
+
+async fn python_has(py: &Path, modules: &[String]) -> bool {
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
-        let _ = modules;
+        let _ = (py, modules);
         false
     }
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
-        let Ok(py) = which::which("python3").or_else(|_| which::which("python")) else { return false };
         let code = modules.iter().map(|m| format!("import {m}")).collect::<Vec<_>>().join(";");
         let fut = tokio::process::Command::new(py)
             .arg("-c")
@@ -739,7 +844,7 @@ async fn python_has(modules: &[String]) -> bool {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
-        matches!(tokio::time::timeout(Duration::from_secs(4), fut).await, Ok(Ok(s)) if s.success())
+        matches!(tokio::time::timeout(Duration::from_secs(10), fut).await, Ok(Ok(s)) if s.success())
     }
 }
 

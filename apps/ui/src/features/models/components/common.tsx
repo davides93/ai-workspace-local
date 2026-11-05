@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
-import { Chip, Led, Pill } from "../../../shared/ui";
+import { navigate } from "../../../app/router";
+import { Button, Chip, Led, Pill } from "../../../shared/ui";
+import { useInstallRuntime, useRuntimes } from "../../runtimes/api";
 import type { RuntimeCompat } from "../../../shared/api/types";
 import { FIT, isFit } from "../model/fit";
 import { originInfo } from "../model/origin";
@@ -49,11 +51,35 @@ export function RuntimeChips({ runtimes, explain = false }: { runtimes: RuntimeC
         ))}
       </ChipRow>
       {explain && available.length === 0 && (
-        <p className="mh-note">
-          Nessun runtime pronto su questo device:{" "}
-          {unavailable.map((r) => `${r.name}${r.reason ? ` (${r.reason})` : ""}`).join(", ")}.
-        </p>
+        <>
+          <p className="mh-note">
+            Nessun runtime pronto su questo device:{" "}
+            {unavailable.map((r) => `${r.name}${r.reason ? ` (${r.reason})` : ""}`).join(", ")}.
+          </p>
+          <InstallRuntimeAction candidates={unavailable} />
+        </>
       )}
+    </div>
+  );
+}
+
+/** One click to install, by itself, the first compatible runtime that AIW knows how to install
+ *  (the progress is followed in that runtime's page). Nothing when none can be installed here. */
+function InstallRuntimeAction({ candidates }: { candidates: RuntimeCompat[] }) {
+  const runtimes = useRuntimes();
+  const install = useInstallRuntime();
+  const target = candidates
+    .map((c) => runtimes.data?.find((r) => r.id === c.id))
+    .find((r) => r && r.install_auto && r.status === "installable");
+  if (!target) return null;
+  return (
+    <div className="row">
+      <Button
+        variant="primary" size="sm" icon="download" disabled={install.isPending}
+        onClick={() => install.mutate(target, { onSuccess: () => navigate(`/runtimes/${target.id}`) })}
+      >
+        {install.isPending ? "Avvio l'installazione…" : `Installa ${target.name}`}
+      </Button>
     </div>
   );
 }

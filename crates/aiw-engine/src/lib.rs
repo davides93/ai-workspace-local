@@ -159,6 +159,7 @@ impl Engine {
         bin_dirs.extend(opts.extra_bin_dirs.clone());
         let runtimes = RuntimeRegistry::new(device.os.clone(), Some(&dirs.runtimes()), bin_dirs, models_dir.clone());
         runtimes.set_arch(&device.arch); // MLX needs Apple Silicon, not just macOS
+        runtimes.set_pyenv_dir(dirs.root.join("pyenv")); // pip-installed runtimes (MLX…) live here
         let store = Store::open(&dirs.db_file())?;
         let overrides: Vec<Value> = store.list_docs("runtime_settings")?;
         runtimes.load_overrides(
@@ -484,6 +485,31 @@ impl Engine {
         self.audit_user(&format!("runtime.{action}"), &r.name);
         Ok(r)
     }
+    /// What installing the runtime takes on this machine (steps, missing prerequisites).
+    pub async fn runtime_install_plan(&self, id: &str) -> Result<aiw_runtimes::install::InstallPlan> {
+        self.0.runtimes.install_plan(id).await
+    }
+
+    /// Installs the runtime in the background (one click, no further questions) and returns the
+    /// job to follow with [`runtime_install_status`](Self::runtime_install_status). When it
+    /// ends the runtimes are detected again, so the UI sees the new state.
+    pub async fn runtime_install_start(&self, id: &str) -> Result<aiw_runtimes::install::InstallJob> {
+        let (cmds, job) = self.0.runtimes.begin_install(id).await?;
+        let name = self.0.runtimes.manifest(id).map(|m| m.name).unwrap_or_else(|_| id.to_string());
+        self.audit_user("runtime.install", &format!("{name}: {}", cmds.iter().map(|c| c.display()).collect::<Vec<_>>().join(" && ")));
+        let initial = job.lock().unwrap().clone();
+        let engine = self.clone();
+        tokio::spawn(async move {
+            aiw_runtimes::install::run(cmds, job).await;
+            engine.0.runtimes.refresh().await;
+        });
+        Ok(initial)
+    }
+
+    pub fn runtime_install_status(&self, id: &str) -> Option<aiw_runtimes::install::InstallJob> {
+        self.0.runtimes.install_job(id)
+    }
+
     pub async fn runtime_logs(&self, id: &str) -> Vec<String> {
         self.0.runtimes.logs(id).await
     }

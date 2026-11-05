@@ -1,4 +1,4 @@
-import type { Fit, LocalModel, RuntimeInfo, RuntimeKind, SettingsSchema } from "../../../shared/api/types";
+import type { Fit, InstallJob, LocalModel, RuntimeInfo, RuntimeKind, SettingsSchema } from "../../../shared/api/types";
 import type { PillTone } from "../../../shared/ui";
 
 export const KIND_ORDER: RuntimeKind[] = ["sidecar", "embedded", "system", "remote"];
@@ -80,6 +80,13 @@ const stable = (o: Record<string, unknown>) => JSON.stringify(Object.keys(o).sor
 /** Did the user change anything compared with what is saved? Untouched defaults do not count. */
 export function settingsDirty(schema: SettingsSchema, saved: Record<string, unknown>, draft: Record<string, unknown>): boolean {
   return stable(effectiveSettings(schema, saved)) !== stable(effectiveSettings(schema, draft));
+}
+
+/** Progress of an installation as a fraction of its steps: the one that runs counts as half done. */
+export function installProgress(job: Pick<InstallJob, "state" | "step" | "steps">): { value: number; max: number } {
+  const max = Math.max(job.steps, 1);
+  if (job.state === "done") return { value: max, max };
+  return { value: Math.min(Math.max(job.step - 1, 0) + (job.state === "running" ? 0.5 : 0), max), max };
 }
 
 /** The last `n` log lines (a long log would make the box and the DOM huge). */

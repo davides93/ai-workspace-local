@@ -142,7 +142,33 @@ export interface RuntimeInfo {
   settings_schema: SettingsSchema;
   settings: Record<string, unknown>;
   install_hint?: string;
+  /** AIW can install this runtime by itself on this device (pip into its own environment, Homebrew). */
+  install_auto?: boolean;
   homepage?: string;
+}
+
+/** What installing a runtime takes here (GET /api/runtimes/:id/install-plan). */
+export interface InstallPlan {
+  runtime_id: string;
+  runtime_name: string;
+  /** A recipe exists for this OS; otherwise only `hint` (manual instructions) applies. */
+  automatic: boolean;
+  steps: { title: string; command: string }[];
+  prerequisites: { name: string; ok: boolean; hint?: string }[];
+  hint?: string;
+  homepage?: string | null;
+  note: string;
+}
+
+/** An installation in progress or finished (POST/GET /api/runtimes/:id/install). */
+export interface InstallJob {
+  runtime_id: string;
+  state: "running" | "done" | "failed";
+  /** 1-based step that is running (or ran last). */
+  step: number;
+  steps: number;
+  log: string[];
+  error?: string;
 }
 
 // ---------- Updates ----------

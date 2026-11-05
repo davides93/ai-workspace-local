@@ -4,7 +4,7 @@ import type {
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig, VoiceStatus, Transcript, UpdateStatus,
+  PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
 } from "./types";
 
 /** What the current carrier can do; the UI branches on this instead of sniffing `kind`. */
@@ -40,6 +40,12 @@ export interface Transport {
   runtimeAction(id: string, action: "start" | "stop" | "refresh", opts?: { model?: string }): Promise<RuntimeInfo>;
   updateRuntimeSettings(id: string, settings: Record<string, unknown>): Promise<RuntimeInfo>;
   runtimeLogs(id: string): Promise<string[]>;
+  /** Steps and missing prerequisites of installing a runtime. */
+  runtimeInstallPlan(id: string): Promise<InstallPlan>;
+  /** Starts installing a runtime in the background (no further confirmation). */
+  installRuntime(id: string): Promise<InstallJob>;
+  /** The last installation of a runtime, or null when none ran. */
+  runtimeInstall(id: string): Promise<InstallJob | null>;
 
   /** Self-update from the GitHub releases (GET /api/update). */
   updateStatus(): Promise<UpdateStatus>;
