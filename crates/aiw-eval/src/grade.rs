@@ -1,8 +1,8 @@
 //! The deterministic graders.
 
-use crate::host::TaskRun;
+use crate::host::{EvalHost, TaskRun};
 use crate::report::GraderResult;
-use crate::suite::{resolve_inside, GraderSpec, DEFAULT_COMMAND_TIMEOUT_S};
+use crate::suite::{resolve_inside, GraderSpec, DEFAULT_COMMAND_TIMEOUT_S, DEFAULT_JUDGE_THRESHOLD};
 use regex::Regex;
 use std::path::Path;
 use std::process::Stdio;
@@ -16,6 +16,12 @@ const MAX_OUTPUT: usize = 400;
 pub struct GradeContext<'a> {
     pub workdir: &'a Path,
     pub run: &'a TaskRun,
+    /// Asks the model for the `judge` grader.
+    pub host: &'a dyn EvalHost,
+    /// The prompt the agent was given.
+    pub prompt: &'a str,
+    /// What the run changed in the working folder, one line per file (`creato: note.md`).
+    pub changes: &'a [String],
 }
 
 fn result(kind: &str, passed: bool, detail: impl Into<String>) -> GraderResult {
@@ -60,6 +66,9 @@ pub async fn grade(spec: &GraderSpec, ctx: &GradeContext<'_>) -> GraderResult {
                 Err(errors) => result(kind, false, errors.into_iter().take(3).collect::<Vec<_>>().join("; ")),
             }
         }
+        GraderSpec::Judge { criteria, profile, threshold } => {
+            judge(ctx, criteria, profile.as_deref(), threshold.unwrap_or(DEFAULT_JUDGE_THRESHOLD)).await
+        }
         GraderSpec::Command { run, expect_exit, timeout_s } => {
             let limit = Duration::from_secs(timeout_s.unwrap_or(DEFAULT_COMMAND_TIMEOUT_S));
             match run_command(run, ctx.workdir, limit).await {
@@ -72,6 +81,56 @@ pub async fn grade(spec: &GraderSpec, ctx: &GradeContext<'_>) -> GraderResult {
                 Err(why) => result(kind, false, format!("`{run}` {why}")),
             }
         }
+    }
+}
+
+/// Longest piece of the task prompt and of the final answer shown to the judge.
+const JUDGE_PROMPT_CHARS: usize = 4_000;
+const JUDGE_ANSWER_CHARS: usize = 8_000;
+
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    format!("{}… (troncato)", text.chars().take(max).collect::<String>())
+}
+
+/// What the judge is asked.
+pub fn judge_prompt(criteria: &str, task_prompt: &str, answer: &str, changes: &[String]) -> String {
+    let files = if changes.is_empty() {
+        "(nessun file cambiato)".to_string()
+    } else {
+        changes.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n")
+    };
+    format!(
+        "Sei un valutatore rigoroso e imparziale. Giudica il lavoro di un agente su un compito.\n\n\
+         # Compito assegnato\n{}\n\n# Risposta finale dell'agente\n{}\n\n# File cambiati nella cartella di lavoro\n{files}\n\n\
+         # Criteri\n{criteria}\n\n\
+         Rispondi SOLO con un oggetto JSON: {{\"score\": <numero da 0 a 1>, \"reason\": \"<motivazione breve>\"}}. \
+         1 vuol dire che i criteri sono soddisfatti del tutto, 0 che non lo sono affatto.",
+        clip(task_prompt, JUDGE_PROMPT_CHARS),
+        if answer.trim().is_empty() { "(nessuna risposta)".to_string() } else { clip(answer, JUDGE_ANSWER_CHARS) },
+    )
+}
+
+async fn judge(ctx: &GradeContext<'_>, criteria: &str, profile: Option<&str>, threshold: f64) -> GraderResult {
+    let kind = "judge";
+    let prompt = judge_prompt(criteria, ctx.prompt, &ctx.run.final_text, ctx.changes);
+    let answer = match ctx.host.complete(profile, &prompt).await {
+        Ok(a) => a,
+        Err(e) => return result(kind, false, format!("il giudice non ha risposto: {e}")),
+    };
+    let Some(v) = aiw_agent::schema::extract_json(&answer) else {
+        return result(kind, false, format!("la risposta del giudice non contiene un JSON: {}", clip(answer.trim(), 200)));
+    };
+    let reason = v["reason"].as_str().map(str::trim).filter(|r| !r.is_empty()).unwrap_or("nessuna motivazione");
+    match v["score"].as_f64() {
+        Some(score) if (0.0..=1.0).contains(&score) => {
+            let passed = score >= threshold;
+            GraderResult { kind: kind.into(), passed, score, detail: format!("{score:.2} (soglia {threshold:.2}): {reason}") }
+        }
+        Some(score) => result(kind, false, format!("il punteggio del giudice ({score}) è fuori dall'intervallo da 0 a 1: {reason}")),
+        None => result(kind, false, format!("la risposta del giudice non ha un punteggio numerico: {reason}")),
     }
 }
 
@@ -110,11 +169,32 @@ async fn run_command(run: &str, dir: &Path, limit: Duration) -> Result<(Option<i
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::TaskRequest;
+    use aiw_core::{Error, Result};
+    use async_trait::async_trait;
     use serde_json::json;
+
+    /// A judge that gives a fixed answer and remembers what it was asked.
+    struct Judge(std::sync::Mutex<Vec<(Option<String>, String)>>, std::result::Result<String, String>);
+
+    #[async_trait]
+    impl EvalHost for Judge {
+        async fn run_task(&self, _req: TaskRequest) -> Result<TaskRun> {
+            unreachable!("graders do not run tasks")
+        }
+        async fn complete(&self, profile: Option<&str>, prompt: &str) -> Result<String> {
+            self.0.lock().unwrap().push((profile.map(String::from), prompt.to_string()));
+            self.1.clone().map_err(Error::Runtime)
+        }
+    }
+
+    fn judge_host(answer: &str) -> Judge {
+        Judge(Default::default(), Ok(answer.into()))
+    }
 
     async fn run(spec: GraderSpec, dir: &Path, output: &str) -> GraderResult {
         let run = TaskRun { final_text: output.into(), ..Default::default() };
-        grade(&spec, &GradeContext { workdir: dir, run: &run }).await
+        grade(&spec, &GradeContext { workdir: dir, run: &run, host: &judge_host("{}"), prompt: "", changes: &[] }).await
     }
 
     #[tokio::test]
@@ -152,7 +232,59 @@ mod tests {
         assert!(run(schema.clone(), dir.path(), "nessun json").await.detail.contains("JSON"));
         // The structured result of the run wins over the text.
         let with_structured = TaskRun { final_text: "testo".into(), structured: Some(json!({"ok": false})), ..Default::default() };
-        assert!(grade(&schema, &GradeContext { workdir: dir.path(), run: &with_structured }).await.passed);
+        let ctx = GradeContext { workdir: dir.path(), run: &with_structured, host: &judge_host("{}"), prompt: "", changes: &[] };
+        assert!(grade(&schema, &ctx).await.passed);
+    }
+
+    async fn judged(answer: &str, threshold: Option<f64>) -> (GraderResult, Judge) {
+        let host = judge_host(answer);
+        let dir = tempfile::tempdir().unwrap();
+        let run = TaskRun { final_text: "Ho creato note.md".into(), ..Default::default() };
+        let changes = ["creato: note.md".to_string()];
+        let ctx = GradeContext { workdir: dir.path(), run: &run, host: &host, prompt: "Crea una nota", changes: &changes };
+        let spec = GraderSpec::Judge { criteria: "La nota è cortese".into(), profile: Some("giudice".into()), threshold };
+        (grade(&spec, &ctx).await, host)
+    }
+
+    #[tokio::test]
+    async fn the_judge_sees_the_work_and_scores_it() {
+        let (r, host) = judged("Ecco: ```json\n{\"score\": 0.85, \"reason\": \"cortese\"}\n```", None).await;
+        assert!(r.passed && r.score == 0.85 && r.detail.contains("cortese"), "{r:?}");
+        {
+            let asked = host.0.lock().unwrap();
+            assert_eq!(asked[0].0.as_deref(), Some("giudice"));
+            for part in ["Crea una nota", "Ho creato note.md", "- creato: note.md", "La nota è cortese", "\"score\""] {
+                assert!(asked[0].1.contains(part), "{part} missing from {}", asked[0].1);
+            }
+        }
+        // Below the threshold it fails but keeps its score; the threshold can be moved.
+        let (r, _) = judged("{\"score\": 0.5, \"reason\": \"così così\"}", None).await;
+        assert!(!r.passed && r.score == 0.5);
+        let (r, _) = judged("{\"score\": 0.5, \"reason\": \"così così\"}", Some(0.5)).await;
+        assert!(r.passed);
+    }
+
+    #[tokio::test]
+    async fn a_judge_that_does_not_answer_properly_fails_the_grader_with_the_reason() {
+        for (answer, expect) in [
+            ("{\"score\": 1.5, \"reason\": \"x\"}", "fuori dall'intervallo"),
+            ("{\"score\": -0.1}", "fuori dall'intervallo"),
+            ("{\"reason\": \"boh\"}", "non ha un punteggio"),
+            ("{\"score\": \"alto\"}", "non ha un punteggio"),
+            ("Direi molto bene", "non contiene un JSON"),
+        ] {
+            let (r, _) = judged(answer, None).await;
+            assert!(!r.passed && r.score == 0.0 && r.detail.contains(expect), "{answer}: {r:?}");
+        }
+        let host = Judge(Default::default(), Err("modello spento".into()));
+        let dir = tempfile::tempdir().unwrap();
+        let run = TaskRun::default();
+        let spec = GraderSpec::Judge { criteria: "x".into(), profile: None, threshold: None };
+        let r = grade(&spec, &GradeContext { workdir: dir.path(), run: &run, host: &host, prompt: "", changes: &[] }).await;
+        assert!(!r.passed && r.detail.contains("il giudice non ha risposto") && r.detail.contains("modello spento"));
+        assert!(
+            host.0.lock().unwrap()[0].1.contains("(nessuna risposta)") && host.0.lock().unwrap()[0].1.contains("(nessun file cambiato)")
+        );
     }
 
     #[cfg(unix)]

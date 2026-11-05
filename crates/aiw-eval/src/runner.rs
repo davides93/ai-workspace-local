@@ -129,7 +129,8 @@ async fn run_task(host: &dyn EvalHost, suite: &Suite, task: &Task, attempt: u32,
             TaskRun { error: Some(format!("il run non si è fermato entro {} secondi", (timeout + GRACE).as_secs())), ..Default::default() }
         }
     };
-    let ctx = GradeContext { workdir: &dir, run: &run };
+    let changes = if task.graders.iter().any(|g| g.kind() == "judge") { workdir_changes(&dir, task) } else { vec![] };
+    let ctx = GradeContext { workdir: &dir, run: &run, host, prompt: &task.prompt, changes: &changes };
     let mut graders: Vec<GraderResult> = Vec::with_capacity(task.graders.len());
     for spec in &task.graders {
         graders.push(grade(spec, &ctx).await);
@@ -155,6 +156,55 @@ async fn run_task(host: &dyn EvalHost, suite: &Suite, task: &Task, attempt: u32,
         error: run.error,
         workdir: kept,
     }
+}
+
+/// Most files and folder levels looked at when telling what a run changed.
+const MAX_CHANGE_FILES: usize = 200;
+const MAX_CHANGE_DEPTH: usize = 8;
+
+/// What the run changed in the working folder compared to the task's starting files, one line per
+/// file (`creato: a.md`, `modificato: b.txt`, `eliminato: c.txt`), sorted.
+fn workdir_changes(dir: &std::path::Path, task: &Task) -> Vec<String> {
+    fn walk(base: &std::path::Path, dir: &std::path::Path, depth: usize, out: &mut Vec<String>) {
+        if depth > MAX_CHANGE_DEPTH || out.len() >= MAX_CHANGE_FILES {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else { continue };
+            let path = entry.path();
+            if kind.is_dir() {
+                walk(base, &path, depth + 1, out);
+            } else if kind.is_file() {
+                if let Ok(rel) = path.strip_prefix(base) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    let mut now = vec![];
+    walk(dir, dir, 0, &mut now);
+    let start: std::collections::BTreeMap<String, &String> =
+        task.files.iter().map(|(rel, content)| (rel.trim_start_matches("./").replace('\\', "/"), content)).collect();
+    let mut lines = vec![];
+    for rel in &now {
+        match start.get(rel) {
+            None => lines.push(format!("creato: {rel}")),
+            Some(before) => {
+                if std::fs::read(dir.join(rel)).map(|b| b != before.as_bytes()).unwrap_or(false) {
+                    lines.push(format!("modificato: {rel}"));
+                }
+            }
+        }
+    }
+    for rel in start.keys() {
+        if !now.contains(rel) {
+            lines.push(format!("eliminato: {rel}"));
+        }
+    }
+    lines.sort();
+    lines.truncate(MAX_CHANGE_FILES);
+    lines
 }
 
 /// Makes the working folder with the task's starting files.
@@ -193,6 +243,9 @@ mod tests {
                 return Err(Error::NotFound("agente x non trovato".into()));
             }
             Ok(TaskRun { final_text: self.answer.clone(), tokens: 30, turns: 2, run_id: Some("run_1".into()), ..Default::default() })
+        }
+        async fn complete(&self, _profile: Option<&str>, _prompt: &str) -> Result<String> {
+            Ok(r#"{"score": 0.9, "reason": "ok"}"#.into())
         }
     }
 

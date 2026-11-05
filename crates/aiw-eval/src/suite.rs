@@ -12,6 +12,8 @@ pub const DEFAULT_TIMEOUT_S: u64 = 300;
 pub const MAX_TIMEOUT_S: u64 = 3600;
 /// Time given to a `command` grader that does not say otherwise.
 pub const DEFAULT_COMMAND_TIMEOUT_S: u64 = 30;
+/// Score a `judge` grader needs to pass when the suite does not say otherwise.
+pub const DEFAULT_JUDGE_THRESHOLD: f64 = 0.7;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,6 +68,16 @@ pub enum GraderSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_s: Option<u64>,
     },
+    /// A model rates the work against the criteria (prompt, final answer and changed files are
+    /// shown to it) and answers `{"score": 0..1, "reason": "…"}`; it passes from `threshold` up.
+    Judge {
+        criteria: String,
+        /// Inference profile of the judge (default: the `default` profile).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        threshold: Option<f64>,
+    },
 }
 
 impl GraderSpec {
@@ -76,6 +88,7 @@ impl GraderSpec {
             GraderSpec::OutputMatches { .. } => "output_matches",
             GraderSpec::JsonSchema { .. } => "json_schema",
             GraderSpec::Command { .. } => "command",
+            GraderSpec::Judge { .. } => "judge",
         }
     }
 }
@@ -157,6 +170,15 @@ impl GraderSpec {
                     return Err(Error::Invalid("serve il comando da eseguire (`run`)".into()));
                 }
                 timeout_s.map_or(Ok(()), |t| check_timeout("timeout_s", t))
+            }
+            GraderSpec::Judge { criteria, threshold, .. } => {
+                if criteria.trim().is_empty() {
+                    return Err(Error::Invalid("servono i criteri di valutazione (`criteria`)".into()));
+                }
+                match threshold {
+                    Some(t) if !(0.0..=1.0).contains(t) => Err(Error::Invalid("threshold deve essere tra 0 e 1".into())),
+                    _ => Ok(()),
+                }
             }
         }
     }
@@ -281,6 +303,8 @@ tasks:
         assert!(err(&task("    graders: [{kind: command, run: '  '}]")).contains("comando"));
         assert!(err(&task("    graders: [{kind: json_schema, schema: {type: ghost}}]")).contains("tipo `\"ghost\"`"));
         assert!(err(&task("    timeout_s: 0\n    graders: [{kind: file_exists, path: x}]")).contains("timeout_s"));
+        assert!(err(&task("    graders: [{kind: judge, criteria: ' '}]")).contains("criteri"));
+        assert!(err(&task("    graders: [{kind: judge, criteria: ok, threshold: 1.5}]")).contains("threshold"));
         assert!(err(&task("    graders: [{kind: telepatia}]")).contains("suite non valida"));
         assert!(err(&task("    colore: blu\n    graders: [{kind: file_exists, path: x}]")).contains("colore"));
         assert!(err("id: 'a b'\nname: S\ntasks: []").contains("id non valido"));

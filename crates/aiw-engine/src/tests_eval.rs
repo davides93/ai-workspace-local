@@ -163,3 +163,52 @@ async fn only_the_users_folder_brings_suites_in() {
     assert!(ids.contains(&"mia".to_string()) && ids.contains(&"esempio".to_string()), "{ids:?}");
     assert!(!ids.contains(&"cattiva".to_string()), "{ids:?}");
 }
+
+#[tokio::test]
+async fn a_judge_grader_asks_the_model_and_scores_the_work() {
+    let turns = vec![
+        ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "note.md", "content": "Gentile cliente, grazie."})),
+        ScriptedBackend::text_turn("Ho creato note.md"),
+        ScriptedBackend::text_turn("```json\n{\"score\": 0.9, \"reason\": \"tono cortese\"}\n```"),
+    ];
+    let (e, _d, _w) = engine(turns).await;
+    let s = suite(
+        "id: s\nname: S\ntasks:\n  - id: t\n    prompt: crea note.md cortese\n    graders:\n      - { kind: file_exists, path: note.md }\n      - { kind: judge, criteria: La nota è cortese, threshold: 0.8 }",
+    );
+    let report = e.run_eval(&s, &EvalRequest::default(), &mut |_| {}).await.unwrap();
+    let t = &report.tasks[0];
+    assert!(t.passed, "{t:?}");
+    let judge = &t.graders[1];
+    assert_eq!((judge.kind.as_str(), judge.score), ("judge", 0.9));
+    assert!(judge.detail.contains("tono cortese"), "{}", judge.detail);
+    assert!((t.score - 0.95).abs() < 1e-9);
+
+    // A judge profile that does not exist is refused when the suite is saved.
+    let bad = suite("id: s\nname: S\ntasks:\n  - id: t\n    prompt: x\n    graders: [{ kind: judge, criteria: ok, profile: fantasma }]");
+    assert!(matches!(e.save_eval_suite(bad), Err(Error::Invalid(_))));
+}
+
+#[tokio::test]
+async fn two_stored_reports_can_be_compared_by_id_or_file() {
+    let turns = vec![
+        ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "note.md", "content": "ciao"})),
+        ScriptedBackend::text_turn("Ho creato note.md"),
+        ScriptedBackend::text_turn("Non ho scritto nulla"),
+    ];
+    let (e, _d, _w) = engine(turns).await;
+    let s = suite("id: s\nname: S\ntasks:\n  - id: t\n    prompt: crea note.md\n    graders: [{ kind: file_exists, path: note.md }]");
+    let a = e.run_eval(&s, &EvalRequest::default(), &mut |_| {}).await.unwrap();
+    let b = e.run_eval(&s, &EvalRequest::default(), &mut |_| {}).await.unwrap();
+    let c = e.compare_eval_runs(&a.id, &b.id).unwrap();
+    assert_eq!((c.a.id.as_str(), c.b.id.as_str()), (a.id.as_str(), b.id.as_str()));
+    assert_eq!((c.total_a.pass_rate, c.total_b.pass_rate, c.pass_rate_delta), (1.0, 0.0, -1.0));
+    assert_eq!(c.tasks[0].pass_rate_delta, Some(-1.0));
+    // A report written by `--out` works as well.
+    let f = tempfile::tempdir().unwrap();
+    std::fs::write(f.path().join("a.json"), serde_json::to_string(&a).unwrap()).unwrap();
+    let c2 = e.compare_eval_runs(f.path().join("a.json").to_str().unwrap(), &b.id).unwrap();
+    assert_eq!(c2.pass_rate_delta, -1.0);
+    assert!(matches!(e.compare_eval_runs(&a.id, "evr_none"), Err(Error::NotFound(_))));
+    std::fs::write(f.path().join("x.json"), "{}").unwrap();
+    assert!(matches!(e.compare_eval_runs(f.path().join("x.json").to_str().unwrap(), &b.id), Err(Error::Invalid(_))));
+}

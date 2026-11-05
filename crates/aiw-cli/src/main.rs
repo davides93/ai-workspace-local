@@ -94,9 +94,10 @@ enum EvalCmd {
         /// Agente per tutti i task (sostituisce quello della suite)
         #[arg(long)]
         agent: Option<String>,
-        /// Profilo di inferenza per tutti i task (sostituisce quello dell'agente)
+        /// Profilo di inferenza per tutti i task (sostituisce quello dell'agente). Ripetuto, esegue la
+        /// suite con ciascun profilo e confronta gli altri con il primo
         #[arg(long)]
-        profile: Option<String>,
+        profile: Vec<String>,
         /// Quante volte eseguire ogni task
         #[arg(long, default_value_t = 1)]
         repeat: u32,
@@ -106,6 +107,14 @@ enum EvalCmd {
         /// Non cancella le cartelle di lavoro dei task
         #[arg(long)]
         keep: bool,
+    },
+    /// Confronta due report (id salvati o file JSON): le differenze sono B meno A
+    Compare {
+        a: String,
+        b: String,
+        /// Scrive il confronto come JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Elenca le suite salvate
     Suites,
@@ -388,7 +397,6 @@ fn percent(x: f64) -> String {
 
 async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
     use aiw_engine::eval::EvalRequest;
-    use aiw_eval::EvalEvent;
     match cmd {
         EvalCmd::Suites => {
             for s in engine.eval_suites()? {
@@ -410,13 +418,59 @@ async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
                 );
             }
         }
+        EvalCmd::Compare { a, b, json } => {
+            let comparison = engine.compare_eval_runs(&a, &b)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&comparison)?);
+            } else {
+                print!("{}", comparison.to_text());
+            }
+        }
         EvalCmd::Run { suite, agent, profile, repeat, out, keep } => {
             let suite = engine.resolve_eval_suite(&suite)?;
             eprintln!("Suite «{}»: {} task × {} (i grader `command` girano con i tuoi permessi)", suite.name, suite.tasks.len(), repeat);
-            let req = EvalRequest { agent, profile, repeat: Some(repeat), keep };
+            // With several profiles the suite runs once per profile and the others are compared to the first.
+            let profiles: Vec<Option<String>> = if profile.is_empty() { vec![None] } else { profile.iter().cloned().map(Some).collect() };
+            let mut reports = vec![];
+            for p in &profiles {
+                if profiles.len() > 1 {
+                    eprintln!("\n== profilo {} ==", p.as_deref().unwrap_or_default());
+                }
+                let report =
+                    eval_run_one(engine, &suite, EvalRequest { agent: agent.clone(), profile: p.clone(), repeat: Some(repeat), keep })
+                        .await?;
+                if let Some(path) = &out {
+                    let path = match (profiles.len(), p) {
+                        (n, Some(p)) if n > 1 => {
+                            let mut name = path.clone().into_os_string();
+                            name.push(format!(".{p}.json"));
+                            PathBuf::from(name)
+                        }
+                        _ => path.clone(),
+                    };
+                    std::fs::write(&path, serde_json::to_string_pretty(&report)?)
+                        .with_context(|| format!("scrittura di {}", path.display()))?;
+                    println!("Report scritto in {}", path.display());
+                }
+                reports.push(report);
+            }
+            for other in reports.iter().skip(1) {
+                println!("\nConfronto tra i profili:\n{}", aiw_eval::compare(&reports[0], other).to_text());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Runs the suite once, telling how it goes, and prints the summary table.
+async fn eval_run_one(engine: &Engine, suite: &aiw_eval::Suite, req: aiw_engine::eval::EvalRequest) -> Result<aiw_eval::EvalReport> {
+    use aiw_eval::EvalEvent;
+    let repeat = req.repeat.unwrap_or(1);
+    {
+        {
             let mut started = 1;
             let report = engine
-                .run_eval(&suite, &req, &mut |ev| match ev {
+                .run_eval(suite, &req, &mut |ev| match ev {
                     EvalEvent::Started(_) => {}
                     EvalEvent::TaskStarted { task_id, attempt, attempts } => {
                         eprint!(
@@ -464,14 +518,9 @@ async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
             let s = &report.summary;
             println!("\nTotale: {}/{} riusciti (pass rate {}), score medio {:.2}", s.passed, s.total, percent(s.pass_rate), s.score);
             println!("Report: {}", report.id);
-            if let Some(path) = out {
-                std::fs::write(&path, serde_json::to_string_pretty(&report)?)
-                    .with_context(|| format!("scrittura di {}", path.display()))?;
-                println!("Report scritto in {}", path.display());
-            }
+            Ok(report)
         }
     }
-    Ok(())
 }
 
 fn size(bytes: u64) -> String {

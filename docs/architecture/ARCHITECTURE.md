@@ -334,6 +334,7 @@ esporta e la usa per misurare gli agenti:
         - { kind: output_matches, pattern: "note\\.md" }
         - { kind: json_schema, schema: { type: object, required: [ok] } }   # sulla risposta finale
         - { kind: command, run: "test -s note.md", expect_exit: 0, timeout_s: 30 }
+        - { kind: judge, criteria: "La nota è cortese e breve", profile: default, threshold: 0.7 }
   ```
 
   Ogni task gira in una cartella temporanea sotto `~/.aiw/eval-work/` (cancellata alla fine, salvo
@@ -352,6 +353,19 @@ esporta e la usa per misurare gli agenti:
   sconosciuto non deve poter eseguire comandi. Dalla CLI si può comunque lanciare un file qualsiasi,
   sapendo cosa contiene: `aiw eval run <file|id> [--agent] [--profile] [--repeat N] [--out report.json] [--keep]`,
   `aiw eval suites`, `aiw eval list`.
+
+  Il grader `judge` chiede a un modello (il profilo `profile`, altrimenti `default`) di valutare il
+  lavoro rispetto ai `criteria`: gli mostra il prompt del task, la risposta finale e i file che il run
+  ha creato, modificato o eliminato, e si aspetta `{"score": 0..1, "reason": "…"}` (il JSON è letto
+  con tolleranza, anche dentro un blocco di codice). Passa se `score >= threshold` (default 0,7); lo
+  score del grader è quello del giudice. Una risposta senza JSON, senza punteggio o con un punteggio
+  fuori da 0–1 fa fallire il grader con la spiegazione. Il giudice non ha strumenti.
+
+  Confronto A/B: `aiw eval compare <report_a> <report_b>` (id salvati o file scritti da `--out`;
+  `--json` per la struttura) mostra per ogni task riusciti, pass rate e score di A e B e la differenza
+  B − A, più i totali, i token e la durata medi. `aiw eval run <suite> --profile a --profile b` esegue la
+  suite con ciascun profilo e stampa il confronto dei successivi con il primo (con `--out report.json`
+  scrive `report.json.a.json`, `report.json.b.json`). Nel motore: `Engine::compare_eval_runs(a, b)`.
 
 ## 6. Tool (L4)
 

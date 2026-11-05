@@ -66,6 +66,13 @@ impl Engine {
         for p in profiles {
             self.profile(p).map_err(|_| Error::Invalid(format!("il profilo di inferenza `{p}` della suite non esiste")))?;
         }
+        let judges = suite.tasks.iter().flat_map(|t| &t.graders).filter_map(|g| match g {
+            aiw_eval::GraderSpec::Judge { profile, .. } => profile.as_ref(),
+            _ => None,
+        });
+        for p in judges {
+            self.profile(p).map_err(|_| Error::Invalid(format!("il profilo di inferenza `{p}` del giudice non esiste")))?;
+        }
         Ok(())
     }
 
@@ -85,6 +92,19 @@ impl Engine {
     }
     pub fn eval_report(&self, id: &str) -> Result<EvalReport> {
         self.0.store.eval_report(id)?.ok_or_else(|| Error::NotFound(format!("report di valutazione {id} non trovato")))
+    }
+    /// The report of `reference`: a JSON file when one exists at that path, else a stored report by id.
+    pub fn resolve_eval_report(&self, reference: &str) -> Result<EvalReport> {
+        let path = std::path::Path::new(reference);
+        if path.is_file() {
+            let text = std::fs::read_to_string(path)?;
+            return serde_json::from_str(&text).map_err(|e| Error::Invalid(format!("{reference} non è un report di valutazione: {e}")));
+        }
+        self.eval_report(reference)
+    }
+    /// Compares two reports (stored ids or files): the deltas are `b - a`.
+    pub fn compare_eval_runs(&self, a: &str, b: &str) -> Result<aiw_eval::Comparison> {
+        Ok(aiw_eval::compare(&self.resolve_eval_report(a)?, &self.resolve_eval_report(b)?))
     }
     fn save_eval_report(&self, r: &EvalReport) {
         if let Err(e) = self.0.store.save_eval_report(&r.id, &r.suite_id, &r.started_at, r) {
@@ -129,6 +149,16 @@ impl Engine {
 
 #[async_trait]
 impl EvalHost for Engine {
+    /// One answer of the model of `profile` (the fallback profile when `None`), no tools.
+    async fn complete(&self, profile: Option<&str>, prompt: &str) -> Result<String> {
+        use aiw_workflow::WorkflowHost;
+        let id = match profile {
+            Some(p) => p.to_string(),
+            None => self.fallback_profile()?.id,
+        };
+        EngineHost::new(self.clone(), None, None).complete("", &id, prompt).await
+    }
+
     /// The agent works in `req.workdir` as in a workspace of its own: policy mode `auto`, sandbox
     /// `workspace-write`, no confirmations (a run that would need one has it refused), the time of the
     /// task as the budget. The run is not part of any session; its events are stored like the others.

@@ -38,4 +38,8 @@ pub trait EvalHost: Send + Sync {
     /// Runs the task to the end. `Err` is for a host that could not even start it (unknown agent…);
     /// a run that fails comes back as `Ok` with `error` set.
     async fn run_task(&self, req: TaskRequest) -> Result<TaskRun>;
+
+    /// One answer of the model of inference profile `profile` (the default profile when `None`) to a
+    /// prompt, with no tools: what a `judge` grader asks.
+    async fn complete(&self, profile: Option<&str>, prompt: &str) -> Result<String>;
 }
