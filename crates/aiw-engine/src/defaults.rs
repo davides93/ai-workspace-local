@@ -15,6 +15,7 @@ pub fn agents() -> Vec<AgentProfile> {
         sandbox: sandbox.into(),
         max_turns: turns,
         output_schema: None,
+        budget: None,
     };
     vec![
         a(

@@ -1,6 +1,7 @@
 //! Agentic layer (architecture §5): the agent loop and its policy, hooks, skills and helpers.
 
 pub mod a2ui;
+pub mod budget;
 pub mod code;
 pub mod fallback;
 pub mod hooks;
@@ -12,6 +13,7 @@ pub mod schema;
 pub mod skills;
 pub mod think;
 
+pub use budget::RunBudget;
 pub use hooks::HookConfig;
 pub use internal::{internal_tools, InternalTool};
 pub use narrow::{narrow_sandbox, narrow_tools};
@@ -115,6 +117,7 @@ mod tests {
                 sandbox: "workspace-write".into(),
                 max_turns: 8,
                 output_schema: None,
+                budget: None,
             },
             profile: InferenceProfile {
                 id: "p".into(),
@@ -135,6 +138,7 @@ mod tests {
             session_allow: Arc::new(Mutex::new(HashSet::new())),
             subagents: vec![("planner".into(), "pianifica".into())],
             max_parallel_subagents: 3,
+            budget: Arc::new(RunBudget::unlimited()),
         }
     }
 
@@ -752,5 +756,116 @@ mod structured_output_tests {
         let out = AgentRunner::run(tests_support::input(dir.path(), "auto"), host.clone()).await.unwrap();
         assert_eq!((out.final_text.as_str(), out.structured), ("testo libero", None));
         assert!(!custom(&host, "aiw.format_check"));
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use aiw_core::events::AgEvent;
+    use aiw_core::Result;
+    use aiw_runtimes::{ChatBackend, ScriptedBackend};
+    use aiw_tools::ToolRegistry;
+    use async_trait::async_trait;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    /// Like the test host, but a delegated task really runs as a child run that shares the budget.
+    struct NestingHost {
+        inner: Arc<tests_support::TestHost>,
+        dir: std::path::PathBuf,
+    }
+
+    #[async_trait]
+    impl RunHost for NestingHost {
+        fn emit(&self, run_id: &str, ev: AgEvent) {
+            self.inner.emit(run_id, ev)
+        }
+        async fn approve(&self, req: aiw_core::api::ApprovalRequest) -> bool {
+            self.inner.approve(req).await
+        }
+        fn audit(&self, e: aiw_core::api::AuditEntry) {
+            self.inner.audit(e)
+        }
+        async fn backend(&self, p: &aiw_core::api::InferenceProfile) -> Result<Arc<dyn ChatBackend>> {
+            self.inner.backend(p).await
+        }
+        fn tools(&self) -> Arc<ToolRegistry> {
+            self.inner.tools()
+        }
+        fn skills(&self) -> Vec<Skill> {
+            vec![]
+        }
+        async fn subagent(&self, parent: &RunInput, _agent: &str, task: &str) -> Result<String> {
+            let mut child = tests_support::input(&self.dir, "auto");
+            child.run_id = "run_child".into();
+            child.depth = parent.depth + 1;
+            child.user_input = task.into();
+            child.budget = parent.budget.clone();
+            let host: Arc<dyn RunHost> = Arc::new(NestingHost { inner: self.inner.clone(), dir: self.dir.clone() });
+            Ok(AgentRunner::run(child, host).await?.final_text)
+        }
+    }
+
+    fn budget_events(h: &tests_support::TestHost) -> usize {
+        h.events.lock().unwrap().iter().filter(|e| matches!(e, AgEvent::Custom { name, .. } if name == "aiw.budget_exceeded")).count()
+    }
+
+    #[tokio::test]
+    async fn a_child_spends_the_budget_of_its_parent() {
+        // Parent: turn 1 delegates. Child: wants to keep listing for many turns. Two model calls in
+        // total are allowed, so the child stops after one and the parent has nothing left either.
+        let mut turns = vec![ScriptedBackend::tool_turn("p1", "agent", json!({"agent": "planner", "task": "elenca"}))];
+        turns.extend((0..3).map(|i| ScriptedBackend::tool_turn(&format!("c{i}"), "list_dir", json!({"path": "."}))));
+        turns.push(ScriptedBackend::text_turn("mai raggiunto"));
+        let (host, dir) = tests_support::setup(turns, true);
+        let nesting: Arc<NestingHost> = Arc::new(NestingHost { inner: host.clone(), dir: dir.path().to_path_buf() });
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.budget = Arc::new(RunBudget::new(None, Some(2), None));
+        let out = AgentRunner::run(inp, nesting).await.unwrap();
+        assert_eq!(host.backend.requests.lock().unwrap().len(), 2, "no model call past the budget");
+        assert!(out.final_text.contains("Budget del run esaurito") && out.final_text.contains("2 turni"), "{}", out.final_text);
+        let child_result = out.new_messages.iter().find(|m| m.role == "tool").unwrap();
+        assert!(child_result.content.contains("Budget del run esaurito"), "{}", child_result.content);
+        assert_eq!(budget_events(&host), 2, "child and parent both report it");
+        assert!(matches!(host.events.lock().unwrap().last(), Some(AgEvent::RunFinished { .. })), "ends normally, not as an error");
+    }
+
+    #[tokio::test]
+    async fn the_token_budget_counts_prompt_and_completion() {
+        // Every scripted text turn reports 10 + 5 tokens.
+        let turns = vec![
+            ScriptedBackend::tool_turn("a", "list_dir", json!({"path": "."})),
+            ScriptedBackend::text_turn("passo uno"),
+            ScriptedBackend::text_turn("mai raggiunto"),
+        ];
+        // The first (tool) turn reports no usage, so only the second counts; a limit of 15 is
+        // reached right after it and the final answer is kept.
+        let (host, dir) = tests_support::setup(turns, true);
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.budget = Arc::new(RunBudget::new(Some(15), None, None));
+        let budget = inp.budget.clone();
+        let out = AgentRunner::run(inp, host.clone()).await.unwrap();
+        assert_eq!(out.final_text, "passo uno");
+        assert_eq!((budget.used_tokens(), budget.used_turns()), (15, 2));
+        assert_eq!(budget_events(&host), 0, "the run finished by itself before the next turn");
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_budget_keeps_the_last_text() {
+        let turns = vec![
+            vec![
+                aiw_runtimes::ChatDelta::Text("Sto lavorando.".into()),
+                aiw_runtimes::ChatDelta::ToolCall { index: 0, id: Some("a".into()), name: Some("list_dir".into()), arguments: "{}".into() },
+                aiw_runtimes::ChatDelta::Done { finish_reason: Some("tool_calls".into()) },
+            ],
+            ScriptedBackend::text_turn("mai raggiunto"),
+        ];
+        let (host, dir) = tests_support::setup(turns, true);
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.budget = Arc::new(RunBudget::new(None, Some(1), None));
+        let out = AgentRunner::run(inp, host.clone()).await.unwrap();
+        assert!(out.final_text.starts_with("Sto lavorando.") && out.final_text.contains("Budget del run esaurito"), "{}", out.final_text);
+        assert_eq!(budget_events(&host), 1);
     }
 }

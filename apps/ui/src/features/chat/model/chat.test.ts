@@ -112,6 +112,13 @@ describe("structured answers", () => {
   });
 });
 
+describe("aiw.budget_exceeded", () => {
+  it("becomes a note that names the reason", () => {
+    const items = fold([{ type: "CUSTOM", name: "aiw.budget_exceeded", value: { reason: "2 turni del modello usati" } }]);
+    expect(items[0]).toMatchObject({ kind: "note", text: expect.stringContaining("2 turni del modello usati") });
+  });
+});
+
 describe("aiw.image", () => {
   const png = { toolCallId: "c1", mime: "image/png", data: "iVBORw0KGgo=" };
   const tool = (): Item[] => fold([{ type: "TOOL_CALL_START", toolCallId: "c1", toolCallName: "computer_screenshot" }]);

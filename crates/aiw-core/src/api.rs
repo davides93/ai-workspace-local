@@ -451,6 +451,23 @@ pub struct AgentProfile {
     /// must be JSON that conforms to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<serde_json::Value>,
+    /// Limits of one run of this agent, sub-agents included; a missing value falls back to the
+    /// `agents.budget.*` settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetLimits>,
+}
+
+/// Run budget: every limit is optional, and a set one is at least 1.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BudgetLimits {
+    /// Prompt + completion tokens summed over every model call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    /// Model calls, summed over the run and its sub-agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_seconds: Option<u64>,
 }
 
 // ---------------------------------------------------------------- sessions & messages

@@ -243,6 +243,10 @@ sequenceDiagram
 - **Subagenti** (P09): il tool `agent` avvia un run figlio con un profilo diverso e contesto
   isolato; al padre torna solo il risultato. Modalità di approvazione, sandbox e tool del figlio
   non sono mai più ampi di quelli del padre.
+- **Budget del run**: `RunBudget` (token, turni del modello, tempo) è creato dall'engine per il run di primo livello
+  dai limiti dell'agente (`budget`) o dalle impostazioni `agents.budget.*` (0 = nessun limite) ed è condiviso con tutti i
+  subagenti. All'inizio di ogni turno, se è esaurito, il run termina normalmente con l'evento `aiw.budget_exceeded` e
+  una risposta che riporta il motivo; ogni chiamata al modello conta un turno e prompt + completion contano come token.
 - **Output strutturato**: se il profilo dell'agente ha `output_schema` (sottoinsieme di JSON Schema: `type`,
   `properties`, `required`, `items`, `enum`, `additionalProperties: false`, `minItems`/`maxItems`), il prompt di
   sistema lo riporta e la risposta finale viene estratta e validata. Una risposta non conforme torna al modello una

@@ -1,7 +1,7 @@
 // Agent profiles: identity of the seeded agents, ids, defaults, normalization and the checks made
 // before saving. Pure, so it can be tested without a DOM.
 
-import type { AgentProfile } from "../../../shared/api/types";
+import type { AgentProfile, BudgetLimits } from "../../../shared/api/types";
 import { slugify as slug, uniqueSlug } from "../../../shared/lib/slug";
 import { ALL, normalizeTools } from "./tools";
 
@@ -50,11 +50,26 @@ export function duplicateAgent(src: AgentProfile, existing: readonly AgentProfil
   return { ...structuredClone(src), id: "", name: copyName(src.name, existing.map((a) => a.name)) };
 }
 
+export const BUDGET_KEYS = ["max_tokens", "max_turns", "max_seconds"] as const satisfies readonly (keyof BudgetLimits)[];
+
+/** The budget without empty limits (NaN, undefined); `undefined` when none is left. Values are kept as typed so that the checks can flag them. */
+export function cleanBudget(b: BudgetLimits | undefined): BudgetLimits | undefined {
+  const out: BudgetLimits = {};
+  for (const k of BUDGET_KEYS) {
+    const v = b?.[k];
+    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Form values trimmed and clamped the way the backend will keep them. */
 export function normalizeAgent(a: AgentProfile): AgentProfile {
   const turns = Number.isFinite(a.max_turns) ? Math.round(a.max_turns) : 30;
+  const { budget: _budget, ...rest } = a;
+  const budget = cleanBudget(a.budget);
   return {
-    ...a,
+    ...rest,
+    ...(budget ? { budget } : {}),
     name: a.name.trim(),
     description: a.description.trim(),
     system_prompt: a.system_prompt,
@@ -87,7 +102,7 @@ export function parseSchemaText(text: string): { value?: Record<string, unknown>
 /** The text shown in the field for a stored schema. */
 export const schemaToText = (schema: unknown): string => (schema === undefined || schema === null ? "" : JSON.stringify(schema, null, 2));
 
-export type AgentField = "name" | "inference_profile" | "max_turns" | "system_prompt" | "tools" | "mode" | "sandbox";
+export type AgentField = "name" | "inference_profile" | "max_turns" | "system_prompt" | "tools" | "mode" | "sandbox" | "budget";
 
 export interface AgentIssue {
   field: AgentField;
@@ -130,6 +145,13 @@ export function validateAgent(a: AgentProfile, ctx: AgentContext): AgentIssue[] 
   }
   if (!Number.isFinite(a.max_turns) || a.max_turns < 1 || a.max_turns > MAX_TURNS_LIMIT) {
     issues.push({ field: "max_turns", level: "error", message: `I turni massimi vanno da 1 a ${MAX_TURNS_LIMIT}.` });
+  }
+  for (const k of BUDGET_KEYS) {
+    const v = a.budget?.[k];
+    if (v !== undefined && Number.isFinite(v) && (!Number.isInteger(v) || v < 1)) {
+      issues.push({ field: "budget", level: "error", message: "I limiti del budget sono numeri interi da 1 in su: lascia vuoto il campo per nessun limite." });
+      break;
+    }
   }
   const unknown = ctx.knownTools ? unknownTools(a.tools, ctx.knownTools) : [];
   if (unknown.length > 0) {

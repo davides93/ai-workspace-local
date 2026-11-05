@@ -127,6 +127,8 @@ impl RunHost for EngineHost {
         if mode_rank(&input.policy.mode) > mode_rank(&parent.policy.mode) {
             input.policy.mode = parent.policy.mode.clone();
         }
+        // The run budget is shared with the parent: delegating does not buy more.
+        input.budget = parent.budget.clone();
         // Same for the sandbox and the tool list.
         input.tool_ctx.sandbox = narrow_sandbox(parent.tool_ctx.sandbox, input.tool_ctx.sandbox);
         input.agent.tools = narrow_tools(&parent.agent.tools, &input.agent.tools);

@@ -1,6 +1,7 @@
 //! The agent loop (architecture §5.1): stream → tool calls → policy/hooks/approval → tools → repeat,
 //! emitting AG-UI events and returning the messages to persist.
 
+use crate::budget::RunBudget;
 use crate::fallback::extract_text_tool_calls;
 use crate::hooks::{run_hooks, HookConfig};
 use crate::policy::{risk_level, Decision, Policy};
@@ -54,6 +55,8 @@ pub struct RunInput {
     pub subagents: Vec<(String, String)>,
     /// How many `agent` calls of one turn may run at the same time (at least 1).
     pub max_parallel_subagents: usize,
+    /// Tokens, model turns and time of the whole run; sub-agents share the parent's.
+    pub budget: Arc<RunBudget>,
 }
 
 #[derive(Debug, Default)]
@@ -377,11 +380,19 @@ impl AgentRunner {
         let mut unresolved: Vec<(String, String)> = Vec::new();
         let mut self_checks = 0u32;
         let mut format_retried = false;
+        // Text of the previous turn, kept for the answer when the budget runs out.
+        let mut last_text = String::new();
 
         for turn in 0..input.agent.max_turns.max(1) {
             if input.tool_ctx.cancel.is_cancelled() {
                 ev.emit(AgEvent::RunError { message: "Run annullato".into(), code: Some("cancelled".into()) });
                 return Err(Error::Cancelled);
+            }
+            if let Some(reason) = input.budget.exceeded() {
+                ev.emit(AgEvent::Custom { name: "aiw.budget_exceeded".into(), value: json!({"reason": reason}) });
+                outcome.final_text =
+                    format!("{last_text}\n\n(Budget del run esaurito: {reason}. Dimmi se devo continuare.)").trim().to_string();
+                break;
             }
             // Context compaction (P10).
             if estimate_tokens(&messages) as f64 > input.compact_at * ctx_max as f64 && messages.len() > 6 {
@@ -424,6 +435,7 @@ impl AgentRunner {
                     return Err(e);
                 }
             };
+            input.budget.record_turn();
             let (text, reasoning, mut calls, usage, stream_error) = Self::consume(stream, &ev, turn).await;
             if let Some(e) = stream_error {
                 // Keep what the model had said before the stream broke (cancellation included);
@@ -448,6 +460,7 @@ impl AgentRunner {
                 return Err(e);
             }
             if let Some(u) = usage {
+                input.budget.record_tokens(u.prompt_tokens + u.completion_tokens);
                 let mut acc = outcome.usage.clone();
                 acc.prompt_tokens = u.prompt_tokens.max(acc.prompt_tokens);
                 acc.completion_tokens += u.completion_tokens;
@@ -471,6 +484,7 @@ impl AgentRunner {
                     calls.push(PendingCall { id, name, args: args.to_string(), started: true });
                 }
             }
+            last_text.clone_from(&text);
             let tool_calls: Vec<ToolCall> = calls
                 .iter()
                 .map(|c| ToolCall {

@@ -7,6 +7,7 @@ import type { AgentProfile } from "../../../shared/api/types";
 import { useAgents, useAgentTools, useDeleteAgent, useProfiles, useRuntimeList, useSaveAgent } from "../api";
 import { blankAgent, duplicateAgent, hasErrors, idForNew, isBuiltinAgent, NEW_AGENT, normalizeAgent, validateAgent } from "../model/agents";
 import { buildCatalog } from "../model/tools";
+import { BudgetSection } from "./BudgetSection";
 import { IdentitySection } from "./IdentitySection";
 import { ModelSection } from "./ModelSection";
 import { OutputSection } from "./OutputSection";
@@ -112,6 +113,9 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
           </FormSection>
           <FormSection id="output" title="Risposta" hint="Il formato della risposta finale.">
             <OutputSection key={`${agentId}|${from ?? ""}|${schemaKey}`} agent={draft} onChange={change} onError={setSchemaError} />
+          </FormSection>
+          <FormSection id="budget" title="Budget" hint="Quanto può consumare un run.">
+            <BudgetSection agent={draft} issues={shown} onChange={change} />
           </FormSection>
           <FormSection id="security" title="Sicurezza" hint="Che cosa può fare da solo.">
             <SecuritySection agent={draft} issues={shown} onChange={change} />

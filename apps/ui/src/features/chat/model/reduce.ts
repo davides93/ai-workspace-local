@@ -119,6 +119,10 @@ function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
       return [...items, { kind: "note", id: `sc-${items.length}`, text: selfCheckText((value as { failed?: string[] }).failed ?? []) }];
     case FORMAT_CHECK:
       return [...items, { kind: "note", id: `fc-${items.length}`, text: formatCheckText((value as { errors?: string[] }).errors ?? []) }];
+    case "aiw.budget_exceeded": {
+      const reason = (value as { reason?: string }).reason;
+      return [...items, { kind: "note", id: `bx-${items.length}`, text: `Budget del run esaurito${reason ? `: ${reason}` : ""}. L'agente si è fermato.` }];
+    }
     case "aiw.format_error":
       return [...items, { kind: "note", id: `fe-${items.length}`, text: "La risposta non rispetta lo schema richiesto dall'agente: è mostrata così com'è." }];
     case "aiw.approval_request":
