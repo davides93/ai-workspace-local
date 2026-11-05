@@ -8,6 +8,7 @@
 - Workflow: passi `foreach` (un passo inline per ogni voce di un elenco, fino a 8 alla volta e 200 voci, con `{{item}}`, `{{item.campo}}`, `{{index}}`) e `parallel` (più passi insieme, output come oggetto JSON). Creabili e modificabili dall'editor visuale, con il passo inline in JSON.
 - Workflow: passo `workflow` (sotto-workflow) con input, profondità massima 3. Il figlio è un run normale con un riferimento al padre (`parent_run_id`); l'output è quello dell'ultimo suo passo completato. Scelta del workflow dall'editor visuale.
 - Workflow: segnaposto per l'output JSON dei passi (`{{steps.x.json}}`, `{{steps.x.json.a.b}}`, `{{steps.x.json.items.0.nome}}`; vale anche per un blocco ```json nel testo) e `{{steps.x.error}}`; li usano anche le `condition`. Il menu dei segnaposto dell'editor li propone.
+- Checkpoint: rewind dei file di un run. Il checkpoint ricorda anche i file creati dal run (`.aiw-run.json`); `aiw rewind <run_id>` (con `--dry-run`), `GET /api/runs/{id}/checkpoint`, `POST /api/runs/{id}/rewind` e `GET /api/sessions/{id}/checkpoints` rimettono gli originali ed eliminano i file creati, solo dentro il workspace e mai con il run in corso (409); audit `checkpoint.rewind`. Nella chat compare «Ripristina i file» con la conferma che elenca cosa cambia.
 
 ## 0.4.0-rc.2 - release candidate
 

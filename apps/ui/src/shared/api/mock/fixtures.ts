@@ -244,6 +244,9 @@ new file mode 100644
 
 export const appliedWorktrees = new Set<string>();
 
+/** Runs whose files were put back (the demo checkpoint of the coder session is then empty). */
+export const rewoundRuns = new Set<string>();
+
 /**
  * A tiny PNG (256x160) standing for the screenshot of a web page: the scripted browser run sends it as the
  * `aiw.image` event of `browser_screenshot` (`value.data`: base64 without the `data:` prefix).

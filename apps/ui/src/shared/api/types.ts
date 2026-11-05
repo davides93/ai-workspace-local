@@ -428,6 +428,26 @@ export interface WorktreeStatus extends WorktreeInfo {
   truncated: boolean;
 }
 
+/** What a rewind of a run would do (paths relative to the workspace of the run). */
+export interface CheckpointInfo {
+  run_id: string;
+  root?: string;
+  /** Put back to their original content. */
+  restore: string[];
+  /** Created by the run: deleted. */
+  delete: string[];
+  /** Outside the workspace: listed, never touched. */
+  external: string[];
+}
+
+export interface RewindResult {
+  run_id: string;
+  restored: string[];
+  deleted: string[];
+  external: string[];
+  failed: string[];
+}
+
 export type RunStatus = "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled";
 
 export interface ToolCall {

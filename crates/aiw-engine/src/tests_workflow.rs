@@ -275,3 +275,45 @@ async fn a_restart_runs_the_parent_again_from_the_subworkflow_step_and_closes_th
     wait_until("parent succeeded", || e2.workflow_runs().iter().any(|r| r.id == first.id && r.status == "succeeded")).await;
     assert!(e2.0.store.workflow_states().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn rewind_restores_originals_deletes_created_files_and_refuses_a_running_run() {
+    use aiw_tools::fs::tools;
+    use aiw_tools::ToolContext;
+    let data = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let engine = Engine::new(options(data.path(), ws.path())).await.unwrap();
+    std::fs::write(ws.path().join("vecchio.md"), "originale").unwrap();
+
+    let mut ctx = ToolContext::new("run_rw", engine.workspace_root());
+    ctx.checkpoint_dir = Some(engine.0.dirs.checkpoints());
+    let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+    t("write_file").call(json!({"path": "vecchio.md", "content": "cambiato"}), &ctx).await.unwrap();
+    t("write_file").call(json!({"path": "nuovo.md", "content": "creato"}), &ctx).await.unwrap();
+
+    assert!(matches!(engine.checkpoint_info("run_nessuno"), Err(Error::NotFound(_))));
+    assert!(matches!(engine.checkpoint_info("../fuori"), Err(Error::Invalid(_))));
+    let info = engine.checkpoint_info("run_rw").unwrap();
+    assert_eq!(info.restore, vec!["vecchio.md"]);
+    assert_eq!(info.delete, vec!["nuovo.md"]);
+
+    // A run that is still going cannot be rewound.
+    engine
+        .0
+        .runs
+        .lock()
+        .unwrap()
+        .insert("run_rw".into(), RunHandle { session_id: None, cancel: CancellationToken::new(), events: vec![], done: false });
+    assert!(matches!(engine.rewind("run_rw"), Err(Error::Conflict(_))));
+    assert_eq!(std::fs::read_to_string(ws.path().join("vecchio.md")).unwrap(), "cambiato");
+    engine.0.runs.lock().unwrap().get_mut("run_rw").unwrap().done = true;
+
+    let res = engine.rewind("run_rw").unwrap();
+    assert_eq!(res.restored, vec!["vecchio.md"]);
+    assert_eq!(res.deleted, vec!["nuovo.md"]);
+    assert_eq!(std::fs::read_to_string(ws.path().join("vecchio.md")).unwrap(), "originale");
+    assert!(!ws.path().join("nuovo.md").exists());
+    assert!(engine.audit().iter().any(|a| a.action == "checkpoint.rewind" && a.run_id.as_deref() == Some("run_rw")));
+    // Nothing left to rewind.
+    assert!(matches!(engine.rewind("run_rw"), Err(Error::NotFound(_))));
+}

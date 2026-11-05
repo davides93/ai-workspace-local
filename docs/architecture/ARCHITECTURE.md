@@ -248,7 +248,18 @@ sequenceDiagram
   modello le carica su richiesta con il tool `skill`.
 - **Hook** (P08): `SessionStart` (dichiarato, non ancora invocato), `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Un
   hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
-- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in `checkpoints/`.
+- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in
+  `checkpoints/<run_id>/<percorso>` (una volta per run). Accanto, `.aiw-run.json` registra la radice
+  del workspace e i file che il run ha *creato* (`write_file`, `edit_file` con `old_string` vuoto,
+  destinazione di `move_file`, che salva anche l'originale della sorgente); un file creato dal run non
+  ha un originale da salvare. I file fuori dal workspace stanno in `_esterni/`. Il **rewind**
+  (`aiw rewind <run_id> [--dry-run]`, `GET /api/runs/{id}/checkpoint`, `POST /api/runs/{id}/rewind`,
+  «Ripristina i file» nel pannello della chat) rimette gli originali ed elimina i file creati se
+  esistono ancora ed entro la radice registrata; i file esterni e quelli di un checkpoint senza radice
+  (precedente al rewind) sono solo elencati. È rifiutato (409) mentre il run è in corso, scrive in
+  audit `checkpoint.rewind`, e toglie dal checkpoint ciò che ha ripristinato, così un secondo rewind non
+  cancella le modifiche successive. Le cartelle spostate con `move_file` e i run dei sotto-agenti
+  (id propri) non sono coperti.
   Il rewind (ripristino dei file di un run) non è ancora implementato, né dalla UI né dalla CLI.
 
 ### 5.2 Policy, sandbox, audit

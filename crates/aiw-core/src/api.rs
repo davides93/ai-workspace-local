@@ -852,6 +852,34 @@ pub struct WorkflowRun {
     pub steps: Vec<WorkflowStepRun>,
 }
 
+// ---------------------------------------------------------------- checkpoints
+
+/// What a rewind of a run would do: the originals saved before the run overwrote files, and the
+/// files the run created. Paths are relative to `root` (the workspace of the run).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CheckpointInfo {
+    pub run_id: String,
+    /// Workspace root of the run; absent for a checkpoint made before rewind existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// Files that would be put back to their original content.
+    pub restore: Vec<String>,
+    /// Files the run created, that would be deleted.
+    pub delete: Vec<String>,
+    /// Files outside the workspace (or of a checkpoint without a root): listed, never touched.
+    pub external: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RewindResult {
+    pub run_id: String,
+    pub restored: Vec<String>,
+    pub deleted: Vec<String>,
+    pub external: Vec<String>,
+    /// Files that could not be restored or deleted, with the reason.
+    pub failed: Vec<String>,
+}
+
 // ---------------------------------------------------------------- tools & MCP
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -528,3 +528,16 @@ describe("updates (demo)", () => {
     expect(view.effective["update.auto_download"]).toBe(false);
   });
 });
+
+describe("checkpoint rewind", () => {
+  it("lists the demo checkpoint, rewinds it once and then has nothing left", async () => {
+    const api = new MockTransport();
+    expect(await api.sessionCheckpoints("ses_altra")).toEqual([]);
+    const [ck] = await api.sessionCheckpoints("ses_bug");
+    expect(ck).toMatchObject({ run_id: "run_bug", restore: ["crates/aiw-models/src/gguf.rs"], delete: ["crates/aiw-models/tests/header.rs"] });
+    const res = await api.rewindRun(ck.run_id);
+    expect(res).toMatchObject({ restored: ck.restore, deleted: ck.delete, failed: [] });
+    expect(await api.sessionCheckpoints("ses_bug")).toEqual([]);
+    await expect(api.rewindRun(ck.run_id)).rejects.toMatchObject({ status: 404 });
+  });
+});

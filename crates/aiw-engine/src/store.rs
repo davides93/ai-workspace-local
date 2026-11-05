@@ -199,6 +199,13 @@ impl Store {
             .map_err(db)?;
         Ok(())
     }
+    /// Ids of the runs of a session, newest first.
+    pub fn session_run_ids(&self, session_id: &str) -> Result<Vec<String>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT id FROM runs WHERE session_id=?1 ORDER BY started_at DESC").map_err(db)?;
+        let rows = st.query_map(params![session_id], |r| r.get::<_, String>(0)).map_err(db)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
     /// Runs still marked `running` when the process starts were interrupted by a crash or a kill:
     /// mark them failed (and the sessions that were running them), so nothing waits forever.
     pub fn fail_interrupted_runs(&self) -> Result<usize> {

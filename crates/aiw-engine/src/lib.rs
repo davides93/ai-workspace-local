@@ -1415,6 +1415,58 @@ impl Engine {
         self.0.store.audit(500).unwrap_or_default()
     }
 
+    // ------------------------------------------------------------------ checkpoints
+    /// What a rewind of the run would do. `NotFound` when the run saved no checkpoint.
+    pub fn checkpoint_info(&self, run_id: &str) -> Result<CheckpointInfo> {
+        if !aiw_tools::checkpoint::valid_run_id(run_id) {
+            return Err(Error::Invalid("identificativo di run non valido".into()));
+        }
+        aiw_tools::checkpoint::plan(&self.0.dirs.checkpoints(), run_id)
+            .ok_or_else(|| Error::NotFound(format!("nessun checkpoint per il run {run_id}")))
+    }
+
+    /// Checkpoints of the runs of a session, newest run first.
+    pub fn session_checkpoints(&self, session_id: &str) -> Result<Vec<CheckpointInfo>> {
+        let ids = self.0.store.session_run_ids(session_id)?;
+        Ok(ids.iter().filter_map(|id| aiw_tools::checkpoint::plan(&self.0.dirs.checkpoints(), id)).collect())
+    }
+
+    /// Puts back the originals saved by the run and deletes the files it created. Refused while the run is going.
+    pub fn rewind(&self, run_id: &str) -> Result<RewindResult> {
+        let info = self.checkpoint_info(run_id)?;
+        let agent_running = self.0.runs.lock().unwrap().get(run_id).is_some_and(|r| !r.done);
+        let workflow_running = self
+            .0
+            .workflow_runs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.id == run_id && matches!(r.status.as_str(), "running" | "waiting_approval"));
+        if agent_running || workflow_running {
+            return Err(Error::Conflict("il run è ancora in corso: fermalo prima di ripristinare i file".into()));
+        }
+        let res = aiw_tools::checkpoint::rewind(&self.0.dirs.checkpoints(), run_id)?;
+        let _ = self.0.store.add_audit(&AuditEntry {
+            id: new_id("aud"),
+            ts: now_rfc3339(),
+            run_id: Some(run_id.into()),
+            actor: "user".into(),
+            action: "checkpoint.rewind".into(),
+            tool: None,
+            decision: None,
+            detail: format!(
+                "ripristinati {}, eliminati {}, esterni {}, falliti {} (previsti {} + {})",
+                res.restored.len(),
+                res.deleted.len(),
+                res.external.len(),
+                res.failed.len(),
+                info.restore.len(),
+                info.delete.len()
+            ),
+        });
+        Ok(res)
+    }
+
     // ------------------------------------------------------------------ OpenAI-compatible gateway
     /// Model ids exposed on `/v1/models`: inference profiles and local GGUF files.
     pub fn gateway_models(&self) -> Vec<String> {

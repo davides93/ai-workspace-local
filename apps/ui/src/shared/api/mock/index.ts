@@ -5,10 +5,10 @@ import { SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
+  SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
 } from "../types";
 import {
-  agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
+  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
   runtimes, sessionMessages, sessions, sleep, system, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
@@ -440,6 +440,21 @@ export class MockTransport implements Transport {
   async worktreeDiscard(sessionId: string) {
     const s = sessions.find((x) => x.id === sessionId);
     if (s) s.worktree = undefined;
+  }
+  async sessionCheckpoints(sessionId: string): Promise<CheckpointInfo[]> {
+    if (sessionId !== "ses_bug" || rewoundRuns.has("run_bug")) return [];
+    return [{
+      run_id: "run_bug",
+      root: "~/progetto",
+      restore: ["crates/aiw-models/src/gguf.rs"],
+      delete: ["crates/aiw-models/tests/header.rs"],
+      external: [],
+    }];
+  }
+  async rewindRun(runId: string): Promise<RewindResult> {
+    if (runId !== "run_bug" || rewoundRuns.has(runId)) throw new ApiError(404, `nessun checkpoint per il run ${runId}`);
+    rewoundRuns.add(runId);
+    return { run_id: runId, restored: ["crates/aiw-models/src/gguf.rs"], deleted: ["crates/aiw-models/tests/header.rs"], external: [], failed: [] };
   }
   async deleteSession(id: string) {
     const i = sessions.findIndex((s) => s.id === id);

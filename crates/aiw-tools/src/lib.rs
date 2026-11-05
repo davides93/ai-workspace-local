@@ -2,6 +2,7 @@
 //! class used by the policy engine, and the "subject" (path/command/url) that policy rules match.
 
 pub mod browser;
+pub mod checkpoint;
 pub mod computer;
 pub mod fs;
 pub mod mcp;
@@ -139,10 +140,28 @@ impl ToolContext {
         Ok(norm)
     }
 
+    /// Notes that the run created `path`: a rewind deletes it. Call it after the file exists.
+    pub fn record_created(&self, path: &Path) {
+        let Some(dir) = &self.checkpoint_dir else { return };
+        let (_, key) = checkpoint::key_of(&self.workspace_root, path);
+        checkpoint::update_meta(&checkpoint::run_dir(dir, &self.run_id), &self.workspace_root, |m| {
+            if !m.created.contains(&key) {
+                m.created.push(key);
+            }
+        });
+    }
+
+    /// True when this run created `path` (it has no original to save).
+    fn created_by_run(&self, path: &Path) -> bool {
+        let Some(dir) = &self.checkpoint_dir else { return false };
+        let (_, key) = checkpoint::key_of(&self.workspace_root, path);
+        checkpoint::read_meta(&checkpoint::run_dir(dir, &self.run_id)).is_some_and(|m| m.created.contains(&key))
+    }
+
     /// Copies `path` into the checkpoint folder before it is overwritten (once per run).
     pub fn checkpoint(&self, path: &Path) {
         let Some(dir) = &self.checkpoint_dir else { return };
-        if !path.is_file() {
+        if !path.is_file() || self.created_by_run(path) {
             return;
         }
         // Same folder structure as the workspace (files outside it go under `_esterni`), built
@@ -162,7 +181,10 @@ impl ToolContext {
         if let Some(parent) = target.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::copy(path, &target);
+        if std::fs::copy(path, &target).is_ok() {
+            // The rewind needs to know where the paths of the checkpoint start from.
+            checkpoint::update_meta(&checkpoint::run_dir(dir, &self.run_id), &self.workspace_root, |_| {});
+        }
     }
 }
 
