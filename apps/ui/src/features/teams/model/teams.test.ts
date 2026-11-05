@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentProfile, TeamDef } from "../../../shared/api/types";
 import { agents as demoAgents, teams as demoTeams } from "../../../shared/api/mock/fixtures";
 import {
-  blankTeam, duplicateTeam, hasErrors, idForNew, isTeamAgentId, MAX_MEMBERS, normalizeTeam, teamAgentId, teamAsAgent, teamIdOf, validateTeam,
+  blankTeam, duplicateTeam, hasErrors, idForNew, isTeamAgentId, MAX_MEMBERS, normalizeTeam, remoteOptions, teamAgentId, teamAsAgent, teamIdOf, validateTeam,
 } from "./teams";
 
 const ctx = { agentIds: ["a", "b", "c"], agentsLoaded: true, otherNames: [] as string[] };
@@ -104,6 +104,16 @@ describe("teamAsAgent", () => {
   });
   it("has nothing to show when no member is local", () => {
     expect(teamAsAgent(team({ members: [{ agent: "remote:r1", role: "" }] }), all)).toBeNull();
+  });
+});
+
+describe("remoteOptions", () => {
+  it("offers the remote agents as `remote:<id>` choices, flagged as remote", () => {
+    const r = { id: "studio", name: "PC dello studio", url: "http://h", token: "", description: "" };
+    expect(remoteOptions([r, { ...r, id: "peer-x", name: "Telefono", paired: true }])).toEqual([
+      { id: "remote:studio", name: "PC dello studio", remote: true },
+      { id: "remote:peer-x", name: "Telefono", remote: true },
+    ]);
   });
 });
 

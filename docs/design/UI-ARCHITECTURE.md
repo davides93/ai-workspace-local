@@ -101,7 +101,7 @@ Router su hash scritto in casa (nessuna dipendenza). Percorsi:
 | teams | `#/teams`, `#/teams/:teamId` | `new` apre il modulo vuoto, `?from=` una copia; i team compaiono anche nel selettore dell'agente della chat (`team:<id>`) |
 | workflows | `#/workflows`, `#/workflows/:workflowId` | |
 | capabilities | `#/capabilities/:tab?` | `tools` (default), `mcp`, `browser` |
-| integrations | `#/integrations` | |
+| integrations | `#/integrations` | oltre agli endpoint, il registro degli agenti remoti A2A |
 | models | `#/models/:tab?` | `installed` (default), `discover`, `downloads`, `catalog`; query `?provider=&q=&format=` |
 | runtimes | `#/runtimes`, `#/runtimes/:runtimeId` | |
 | devices | `#/devices` | |
@@ -274,6 +274,9 @@ cancelDownload(id: string): Promise<DownloadProgress>;
 clearDownload(id: string): Promise<void>;
 deleteModel(id: string): Promise<void>;
 deleteAgent(id: string): Promise<void>;               // DELETE /api/agents/{id}
+remoteAgents(): Promise<RemoteAgent[]>;              // GET /api/remote-agents (token sempre mascherato)
+saveRemoteAgent(r: RemoteAgent): Promise<RemoteAgent>; // PUT /api/remote-agents/{id}
+deleteRemoteAgent(id: string): Promise<void>;         // DELETE /api/remote-agents/{id} (409 se un team lo usa)
 teams(): Promise<TeamDef[]>;                          // GET /api/teams
 saveTeam(t: TeamDef): Promise<TeamDef>;               // PUT /api/teams/{id}
 deleteTeam(id: string): Promise<void>;                // DELETE /api/teams/{id}

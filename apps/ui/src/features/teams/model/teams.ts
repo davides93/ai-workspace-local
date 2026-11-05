@@ -1,7 +1,7 @@
 // Teams: defaults, ids, normalization and the checks made before saving. Pure, so it can be tested
 // without a DOM. The rules mirror `save_team` (crates/aiw-engine/src/lib.rs).
 
-import { REMOTE_PREFIX, TEAM_PREFIX, type AgentProfile, type TeamDef, type TeamMember, type TeamStrategy } from "../../../shared/api/types";
+import { REMOTE_PREFIX, TEAM_PREFIX, type AgentProfile, type RemoteAgent, type TeamDef, type TeamMember, type TeamStrategy } from "../../../shared/api/types";
 import { slugify as slug, uniqueSlug } from "../../../shared/lib/slug";
 import { cleanBudget } from "../../agents/model/agents";
 
@@ -126,6 +126,10 @@ export interface AgentOption {
 }
 
 export const localOptions = (agents: readonly AgentProfile[]): AgentOption[] => agents.map((a) => ({ id: a.id, name: a.name }));
+
+/** The remote agents (registered ones and paired devices) as `remote:<id>` choices. */
+export const remoteOptions = (remotes: readonly RemoteAgent[]): AgentOption[] =>
+  remotes.map((r) => ({ id: `${REMOTE_PREFIX}${r.id}`, name: r.name, remote: true }));
 
 /** Display name of an agent id of a team: the agent's name, `remote:` ids as they are written. */
 export const agentLabel = (id: string, options: readonly AgentOption[]): string => options.find((o) => o.id === id)?.name ?? id;

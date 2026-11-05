@@ -1,5 +1,6 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
+pub mod a2a_client;
 pub mod defaults;
 mod host;
 mod models;
@@ -259,6 +260,8 @@ impl Engine {
 
     fn seed(&self) -> Result<()> {
         let s = &self.0.store;
+        // Tasks served to other agents expire after a day.
+        let _ = s.a2a_cleanup(&(chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
         // Nothing can be running yet: whatever says so was interrupted by a crash or a kill.
         if s.fail_interrupted_runs()? > 0 {
             for mut session in s.sessions()?.into_iter().filter(|x| x.last_status.as_deref() == Some("running")) {
@@ -1074,7 +1077,14 @@ impl Engine {
             profile.runtime_id,
             profile.model
         );
-        let subagents = self.agents().unwrap_or_default().into_iter().filter(|a| a.id != agent.id).map(|a| (a.id, a.description)).collect();
+        let subagents = self
+            .agents()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.id != agent.id)
+            .map(|a| (a.id, a.description))
+            .chain(self.remote_subagents())
+            .collect();
         let agent_budget = agent.budget.clone().unwrap_or_default();
         RunInput {
             run_id: run_id.into(),

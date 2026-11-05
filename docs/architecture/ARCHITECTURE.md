@@ -264,6 +264,31 @@ sequenceDiagram
 - **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in `checkpoints/`.
   Il rewind (ripristino dei file di un run) non è ancora implementato, né dalla UI né dalla CLI.
 
+### Team
+
+Un **team** (`TeamDef`, documento `team`) raggruppa da 1 a 8 agenti, locali o remoti (`remote:<id>`), e si usa in
+chat come un agente: l'id della sessione è `team:<id>`. Tre strategie:
+
+- `supervisor`: la sessione gira come l'agente supervisore (che non è anche un membro), con il tool `agent` ristretto
+  ai membri; il budget e lo schema di risposta del team hanno la precedenza.
+- `parallel`: tutti i membri lavorano sulla stessa richiesta (al massimo `agents.max_parallel_subagents` alla volta); un
+  aggregatore facoltativo unisce i risultati.
+- `pipeline` (catena): ogni membro riceve la richiesta e il risultato del precedente.
+
+Le strategie senza supervisore sono eseguite da `aiw-agent::team` (nessun modello in testa). Ogni membro gira come un
+subagente: stessi limiti del padre (modalità, sandbox, tool), budget condiviso con il run radice, un run figlio con il
+proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs/{id}/events.json`.
+
+- **Handoff**: il tool `handoff` chiude il run e passa la sessione a un altro agente (nota `aiw.handoff` in chat);
+  al massimo 3 passaggi per messaggio dell'utente, mai verso una modalità più permissiva.
+- **Stato condiviso**: il tool `team_state` (leggi, scrivi, elimina; 64 chiavi, 32 KB) vive nel `RunState.shared` del run
+  radice ed è pubblicato con `STATE_SNAPSHOT`.
+- **Agenti remoti**: il registro (`remote_agent`, API `/api/remote-agents`) e i dispositivi accoppiati. Il client A2A
+  (`aiw-engine/src/a2a_client.rs`) legge l'Agent Card, invia `SendMessage` non bloccante, interroga `GetTask` con
+  attesa crescente fino a `completed`, `failed` o `canceled` (o al timeout `a2a.timeout_seconds`) e invia `CancelTask`
+  se il run viene annullato. Rete solo verso gli URL registrati; ogni delega è nell'audit (`a2a.delegate`, `a2a.result`).
+  Il server A2A (`aiw-server/src/a2a.rs`) tiene i task in SQLite (`a2a_tasks`, scadenza 24 ore, pulizia all'avvio).
+
 ### 5.2 Policy, sandbox, audit
 
 | Elemento | Default | Personalizzabile |
@@ -331,6 +356,7 @@ ripresa dopo un'approvazione.
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
 | GET/POST | `/api/mcp/servers` | Server MCP |
+| GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
 | POST | `/api/kill` | Kill switch |
 | — | `/v1/models`, `/v1/chat/completions` | Gateway OpenAI-compatibile verso i runtime locali |

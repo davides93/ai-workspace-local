@@ -3,7 +3,7 @@ import type { Transport, TransportCapabilities } from "./transport";
 import type {
   AgEvent, AgentProfile, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
-  ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
+  ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice, RemoteAgent,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
 } from "./types";
@@ -109,6 +109,9 @@ export class HttpTransport implements Transport {
   agents = () => this.req<AgentProfile[]>("GET", "/agents");
   saveAgent = (a: AgentProfile) => this.req<AgentProfile>("PUT", `/agents/${enc(a.id)}`, a);
   deleteAgent = (id: string) => this.req<void>("DELETE", `/agents/${enc(id)}`);
+  remoteAgents = () => this.req<RemoteAgent[]>("GET", "/remote-agents");
+  saveRemoteAgent = (r: RemoteAgent) => this.req<RemoteAgent>("PUT", `/remote-agents/${enc(r.id)}`, r);
+  deleteRemoteAgent = (id: string) => this.req<void>("DELETE", `/remote-agents/${enc(id)}`);
   teams = () => this.req<TeamDef[]>("GET", "/teams");
   saveTeam = (t: TeamDef) => this.req<TeamDef>("PUT", `/teams/${enc(t.id)}`, t);
   deleteTeam = (id: string) => this.req<void>("DELETE", `/teams/${enc(id)}`);

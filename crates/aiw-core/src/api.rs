@@ -102,6 +102,26 @@ pub struct PeerDevice {
     pub shared_runtimes: Vec<String>,
 }
 
+/// An agent that runs elsewhere and speaks A2A (another device, an orchestrator, a cloud agent). Teams and
+/// agents delegate to it as `remote:<id>`. The API shows [`SECRET_MASK`] in place of the token.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteAgent {
+    pub id: String,
+    pub name: String,
+    /// A2A base URL (`http://host:7777`) or the URL of its Agent Card.
+    pub url: String,
+    #[serde(default)]
+    pub token: String,
+    /// The skill (agent) to ask for: sent as `metadata.agent`. Empty: the remote default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    /// True for a paired device, which is offered automatically and is managed from the devices list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paired: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub version: String,

@@ -417,6 +417,20 @@ export interface TeamMember {
   role: string;
 }
 
+/** An agent that runs elsewhere and speaks A2A. Teams use it as `remote:<id>`; the token is always `SECRET_MASK`. */
+export interface RemoteAgent {
+  id: string;
+  name: string;
+  /** A2A base URL or the URL of its Agent Card. */
+  url: string;
+  token: string;
+  /** The remote agent to ask for (`metadata.agent`); empty: its default. */
+  skill?: string;
+  description: string;
+  /** A paired device: offered automatically, managed from the devices page. */
+  paired?: boolean;
+}
+
 /** A group of agents used in chat like one agent: the session's agent id is `team:<id>`. */
 export interface TeamDef {
   id: string;

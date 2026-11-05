@@ -5,7 +5,8 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { TeamDef } from "../../shared/api/types";
 import { useAgents } from "../agents/api";
-import { localOptions, type AgentOption } from "./model/teams";
+import { useRemoteAgents } from "../integrations/api";
+import { localOptions, remoteOptions, type AgentOption } from "./model/teams";
 
 export function useTeams() {
   const api = useApi();
@@ -15,7 +16,8 @@ export function useTeams() {
 /** The agents a team can use as supervisor, member or aggregator. */
 export function useAgentOptions(): { options: AgentOption[]; loaded: boolean } {
   const agents = useAgents();
-  const options = useMemo(() => localOptions(agents.data ?? []), [agents.data]);
+  const remotes = useRemoteAgents();
+  const options = useMemo(() => [...localOptions(agents.data ?? []), ...remoteOptions(remotes.data ?? [])], [agents.data, remotes.data]);
   return { options, loaded: !!agents.data };
 }
 

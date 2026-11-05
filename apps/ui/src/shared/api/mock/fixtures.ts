@@ -1,6 +1,6 @@
 import type {
   AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, Fit, HookConfig, InferenceProfile, LocalModel, McpServer,
-  PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, TeamDef, ToolInfo, WorkflowDef, WorkflowRun,
+  PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, RemoteAgent, TeamDef, ToolInfo, WorkflowDef, WorkflowRun,
 } from "../types";
 import { RUN_ERROR_MESSAGE } from "../types";
 
@@ -207,6 +207,11 @@ export const agents: AgentProfile[] = [
 ];
 
 /** Teams of the demo: a supervisor with two members, and a chain. */
+/** Remote agents (A2A). The token of a stored one is kept here and masked by the mock API. */
+export const remoteAgents: RemoteAgent[] = [
+  { id: "studio", name: "PC dello studio", url: "http://192.168.1.20:7777", token: "demo-token", skill: "operator", description: "Il portatile dello studio, con i documenti del cliente." },
+];
+
 export const teams: TeamDef[] = [
   {
     id: "revisione", name: "Revisione del codice", description: "Il Coder implementa, il Pianificatore rivede: il supervisore li coordina.",

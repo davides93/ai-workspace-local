@@ -4,12 +4,12 @@ import { isSecretName } from "../../lib/secrets";
 import { SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, HookConfig, InferenceProfile, McpServer,
-  MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
+  MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
 } from "../types";
 import {
   agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
-  runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
+  remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 
@@ -390,6 +390,28 @@ export class MockTransport implements Transport {
     return structuredClone(this.runLog.get(runId) ?? []);
   }
 
+  async remoteAgents() { return remoteAgents.map((r) => ({ ...r, token: r.token ? SECRET_MASK : "" })); }
+  async saveRemoteAgent(r: RemoteAgent) {
+    // `save_remote_agent` of the engine, with its messages.
+    const id = r.id.trim();
+    if (!/^[A-Za-z0-9_-]{1,48}$/.test(id)) throw new ApiError(400, "id dell'agente remoto non valido (lettere, cifre, - e _, al massimo 48)");
+    if (id.startsWith("peer-")) throw new ApiError(400, "gli id che iniziano con `peer-` sono riservati ai dispositivi accoppiati");
+    if (!r.name.trim()) throw new ApiError(400, "il nome dell'agente remoto è obbligatorio");
+    if (!/^https?:\/\/[^/\s]+/.test(r.url.trim())) throw new ApiError(400, "l'URL dell'agente remoto deve essere http(s)");
+    const old = remoteAgents.find((x) => x.id === id);
+    const saved: RemoteAgent = { ...r, id, name: r.name.trim(), url: r.url.trim(), skill: r.skill?.trim() || undefined, token: r.token === SECRET_MASK ? (old?.token ?? "") : r.token };
+    delete saved.paired;
+    const i = remoteAgents.findIndex((x) => x.id === id);
+    if (i >= 0) remoteAgents[i] = saved; else remoteAgents.push(saved);
+    return { ...saved, token: saved.token ? SECRET_MASK : "" };
+  }
+  async deleteRemoteAgent(id: string) {
+    const r = remoteAgents.find((x) => x.id === id);
+    if (!r) throw new ApiError(404, `agente remoto ${id} non trovato`);
+    const using = teams.filter((t) => t.members.some((m) => m.agent === `remote:${id}`)).map((t) => t.name);
+    if (using.length > 0) throw new ApiError(409, `«${r.name}» è usato dai team: ${using.join(", ")}`);
+    remoteAgents.splice(remoteAgents.indexOf(r), 1);
+  }
   async teams() { return structuredClone(teams); }
   async saveTeam(t: TeamDef) {
     // `save_team` of the engine, with its messages.

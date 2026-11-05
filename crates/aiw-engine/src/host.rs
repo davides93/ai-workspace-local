@@ -108,6 +108,9 @@ impl RunHost for EngineHost {
     }
 
     async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str, run_id: &str) -> Result<String> {
+        if agent_id.starts_with(crate::REMOTE_PREFIX) {
+            return self.engine.delegate_remote(agent_id, task, &parent.tool_ctx.cancel, Some(&parent.run_id)).await;
+        }
         let agent = self.engine.agent(agent_id)?;
         let profile = self.engine.profile(&agent.inference_profile)?;
         let cancel = parent.tool_ctx.cancel.child_token();
@@ -144,6 +147,9 @@ impl RunHost for EngineHost {
     }
 
     fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {
+        if agent_id.starts_with(crate::REMOTE_PREFIX) {
+            return Err(Error::Denied("la conversazione non può passare a un agente remoto: delegagli il lavoro".into()));
+        }
         let target = self.engine.agent(agent_id)?;
         // The conversation never moves to an agent with more freedom than the one that started it.
         if mode_rank(&target.mode) > mode_rank(&from.policy.mode) {

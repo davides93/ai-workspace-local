@@ -31,6 +31,7 @@ export const qk = {
   profiles: () => ["profiles"] as const,
   agents: () => ["agents"] as const,
   teams: () => ["teams"] as const,
+  remoteAgents: () => ["remote-agents"] as const,
 
   sessions: {
     all: () => ["sessions"] as const,

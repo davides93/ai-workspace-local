@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DownloadProgress } from "../types";
+import { SECRET_MASK, type DownloadProgress } from "../types";
 import { MockTransport, urlDest } from "./index";
 
 // Basic contract of the demo transport for the model hub (docs/architecture/model-hub.md §3-§4).
@@ -291,6 +291,27 @@ describe("other v0.4 methods", () => {
     await api.saveWorkflow({ id: "wf-tmp", name: "Tmp", enabled: false, trigger: { kind: "manual" }, inputs: {}, steps: [] });
     await api.deleteWorkflow("wf-tmp");
     expect((await api.workflows()).some((w) => w.id === "wf-tmp")).toBe(false);
+  });
+
+  it("keeps remote agents like the engine: the token is masked and kept, and a team protects the agent", async () => {
+    const demo = await api.remoteAgents();
+    expect(demo[0]).toMatchObject({ id: "studio", token: SECRET_MASK });
+    const base = { id: "tmp", name: "Tmp", url: "http://h:7777", token: "segreto", description: "" };
+    await expect(api.saveRemoteAgent({ ...base, id: "a b" })).rejects.toMatchObject({ status: 400 });
+    await expect(api.saveRemoteAgent({ ...base, id: "peer-x" })).rejects.toMatchObject({ message: expect.stringContaining("riservati") });
+    await expect(api.saveRemoteAgent({ ...base, name: " " })).rejects.toMatchObject({ message: "il nome dell'agente remoto è obbligatorio" });
+    await expect(api.saveRemoteAgent({ ...base, url: "ftp://x" })).rejects.toMatchObject({ message: expect.stringContaining("http(s)") });
+    const saved = await api.saveRemoteAgent(base);
+    expect(saved.token).toBe(SECRET_MASK);
+    // Sending the mask back keeps the stored token: nothing leaks, nothing is lost.
+    await api.saveRemoteAgent({ ...saved, description: "nuova" });
+    expect((await api.remoteAgents()).find((r) => r.id === "tmp")).toMatchObject({ token: SECRET_MASK, description: "nuova" });
+
+    await api.saveTeam({ id: "t-rem", name: "Con remoto", description: "", strategy: "parallel", members: [{ agent: "remote:tmp", role: "" }] });
+    await expect(api.deleteRemoteAgent("tmp")).rejects.toMatchObject({ status: 409, message: expect.stringContaining("Con remoto") });
+    await api.deleteTeam("t-rem");
+    await api.deleteRemoteAgent("tmp");
+    await expect(api.deleteRemoteAgent("tmp")).rejects.toMatchObject({ status: 404 });
   });
 
   it("saves, validates and deletes teams like the engine, and protects the agents they use", async () => {
