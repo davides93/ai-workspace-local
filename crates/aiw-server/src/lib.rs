@@ -133,6 +133,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/sessions/{id}/messages", get(messages))
         .route("/api/sessions/{id}/messages/{mid}/feedback", put(set_feedback).delete(delete_feedback))
         .route("/api/sessions/{id}/feedback", get(session_feedback))
+        .route("/api/sessions/{id}/reflect", post(reflect_session))
+        .route("/api/lessons", get(lessons))
+        .route("/api/lessons/{id}/approve", post(approve_lesson))
+        .route("/api/lessons/{id}/reject", post(reject_lesson))
         .route("/api/sessions/{id}/active-run", get(active_run))
         .route("/api/sessions/{id}/runs", post(start_run))
         .route("/api/runs/{id}/cancel", post(cancel_run))
@@ -498,6 +502,35 @@ async fn delete_feedback(State(s): State<AppState>, Path((id, mid)): Path<(Strin
 }
 async fn session_feedback(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<Feedback>> {
     ok(s.engine.session_feedback(&id)?)
+}
+#[derive(Deserialize)]
+struct LessonsQuery {
+    status: Option<String>,
+}
+async fn lessons(State(s): State<AppState>, Query(q): Query<LessonsQuery>) -> ApiResult<Vec<Lesson>> {
+    ok(s.engine.lessons(q.status.as_deref())?)
+}
+#[derive(Deserialize, Default)]
+struct ApproveLesson {
+    title: Option<String>,
+    content: Option<String>,
+}
+/// Approving writes the lesson (`AGENTS.md` or a new skill); the title and the content can be edited first.
+async fn approve_lesson(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<ApproveLesson>>) -> ApiResult<Lesson> {
+    let b = body.map(|b| b.0).unwrap_or_default();
+    ok(s.engine.approve_lesson(&id, b.title, b.content)?)
+}
+async fn reject_lesson(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Lesson> {
+    ok(s.engine.reject_lesson(&id)?)
+}
+#[derive(Deserialize, Default)]
+struct ReflectBody {
+    run_id: Option<String>,
+}
+/// Asks the agent for a lesson on the conversation now (the answer waits for the model).
+async fn reflect_session(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<ReflectBody>>) -> ApiResult<Lesson> {
+    let b = body.map(|b| b.0).unwrap_or_default();
+    ok(s.engine.reflect(&id, b.run_id.as_deref().filter(|r| !r.is_empty())).await?)
 }
 async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.session(&id)?; // an unknown session is a 404, not "no run"
@@ -958,6 +991,8 @@ mod tests;
 mod tests_errors;
 #[cfg(test)]
 mod tests_eval;
+#[cfg(test)]
+mod tests_learning;
 #[cfg(test)]
 mod tests_models;
 #[cfg(test)]

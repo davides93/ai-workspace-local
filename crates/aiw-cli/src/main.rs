@@ -82,6 +82,33 @@ enum Cmd {
         #[command(subcommand)]
         cmd: EvalCmd,
     },
+    /// Lezioni proposte dagli agenti: le vedi, le approvi (vengono scritte) o le scarti
+    Lessons {
+        #[command(subcommand)]
+        cmd: Option<LessonsCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LessonsCmd {
+    /// Elenca le lezioni (di default quelle in attesa)
+    List {
+        /// pending, approved o rejected; "all" le mostra tutte
+        #[arg(long, default_value = "pending")]
+        status: String,
+    },
+    /// Approva una lezione: una memoria va in ~/.aiw/AGENTS.md, una skill in ~/.aiw/skills
+    Approve {
+        id: String,
+        /// Nuovo titolo
+        #[arg(long)]
+        title: Option<String>,
+        /// Nuovo contenuto
+        #[arg(long)]
+        content: Option<String>,
+    },
+    /// Scarta una lezione
+    Reject { id: String },
 }
 
 #[derive(Subcommand)]
@@ -329,6 +356,7 @@ async fn main() -> Result<()> {
         }
         Cmd::Traces { cmd: TracesCmd::Export { agent, since, until, status, limit, rated, out, no_redact, exclude_path } } => {
             let filter = aiw_engine::traces::TraceFilter {
+                session: None,
                 agent,
                 since,
                 until,
@@ -355,6 +383,7 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Eval { cmd } => eval_cmd(&engine, cmd).await?,
+        Cmd::Lessons { cmd } => lessons_cmd(&engine, cmd.unwrap_or(LessonsCmd::List { status: "pending".into() }))?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Workflow { id } => {
             let first = engine.run_workflow(&id, Default::default(), "user").await?;
@@ -393,6 +422,32 @@ async fn main() -> Result<()> {
 
 fn percent(x: f64) -> String {
     format!("{:.0}%", x * 100.0)
+}
+
+fn lessons_cmd(engine: &Engine, cmd: LessonsCmd) -> Result<()> {
+    match cmd {
+        LessonsCmd::List { status } => {
+            let lessons = engine.lessons((status != "all").then_some(status.as_str()))?;
+            if lessons.is_empty() {
+                println!("Nessuna lezione.");
+            }
+            for l in lessons {
+                println!("{:<24} {:<9} {:<7} {}  ({})", l.id, l.status, l.kind, l.title, l.agent_id);
+                if l.status == "pending" {
+                    println!("    {}", l.reason);
+                }
+            }
+        }
+        LessonsCmd::Approve { id, title, content } => {
+            let l = engine.approve_lesson(&id, title, content)?;
+            println!("Lezione «{}» approvata e scritta ({}).", l.title, if l.kind == "skill" { "nuova skill" } else { "AGENTS.md" });
+        }
+        LessonsCmd::Reject { id } => {
+            let l = engine.reject_lesson(&id)?;
+            println!("Lezione «{}» scartata.", l.title);
+        }
+    }
+    Ok(())
 }
 
 async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {

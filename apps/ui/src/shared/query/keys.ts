@@ -42,6 +42,11 @@ export const qk = {
 
   approvals: () => ["approvals"] as const,
 
+  lessons: {
+    all: () => ["lessons"] as const,
+    list: (status?: string) => ["lessons", "list", status ?? "all"] as const,
+  },
+
   workflows: {
     all: () => ["workflows"] as const,
     list: () => ["workflows", "list"] as const,

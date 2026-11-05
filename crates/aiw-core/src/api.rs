@@ -573,6 +573,29 @@ pub struct Feedback {
     pub created_at: String,
 }
 
+/// A lesson the agent proposes after reflecting on a conversation. Nothing is written anywhere
+/// until the user approves it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Lesson {
+    pub id: String,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    pub agent_id: String,
+    /// memory (a note for `AGENTS.md`) | skill (a new `SKILL.md`)
+    pub kind: String,
+    pub title: String,
+    /// Markdown.
+    pub content: String,
+    /// Why the agent proposes it.
+    pub reason: String,
+    /// pending | approved | rejected
+    pub status: String,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Todo {
     pub content: String,

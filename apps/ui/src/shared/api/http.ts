@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
+  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -223,6 +223,10 @@ export class HttpTransport implements Transport {
     this.req<WorkflowRun>("POST", `/workflows/${enc(id)}/run`, { inputs: inputs ?? {} });
   workflowRuns = () => this.req<WorkflowRun[]>("GET", "/workflows/runs");
 
+  lessons = (status?: LessonStatus) => this.req<Lesson[]>("GET", status ? `/lessons?status=${enc(status)}` : "/lessons");
+  approveLesson = (id: string, edit?: { title?: string; content?: string }) => this.req<Lesson>("POST", `/lessons/${enc(id)}/approve`, edit ?? {});
+  rejectLesson = (id: string) => this.req<Lesson>("POST", `/lessons/${enc(id)}/reject`, {});
+  reflectSession = (sessionId: string) => this.req<Lesson>("POST", `/sessions/${enc(sessionId)}/reflect`, {});
   evalSuites = () => this.req<EvalSuite[]>("GET", "/evals");
   saveEvalSuite = (s: EvalSuite) => this.req<EvalSuite>("PUT", `/evals/${enc(s.id)}`, s);
   deleteEvalSuite = (id: string) => this.req<void>("DELETE", `/evals/${enc(id)}`);

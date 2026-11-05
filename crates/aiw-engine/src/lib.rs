@@ -3,6 +3,7 @@
 pub mod defaults;
 pub mod eval;
 mod host;
+mod learning;
 mod models;
 pub mod pairing;
 pub mod peers;
@@ -116,6 +117,8 @@ pub(crate) struct Inner {
     pub runs: Mutex<HashMap<String, RunHandle>>,
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
     pub session_allow: Mutex<HashMap<String, Arc<Mutex<HashSet<String>>>>>,
+    /// Sessions a reflection is being made for (see `learning`).
+    pub reflecting: Mutex<HashSet<String>>,
     pub bus: broadcast::Sender<RunEventMsg>,
     pub workflow_runs: Mutex<Vec<WorkflowRun>>,
     pub scheduler: Mutex<aiw_workflow::Scheduler>,
@@ -234,6 +237,7 @@ impl Engine {
             runs: Default::default(),
             approvals: Default::default(),
             session_allow: Default::default(),
+            reflecting: Default::default(),
             bus,
             workflow_runs: Default::default(),
             scheduler: Default::default(),
@@ -847,7 +851,7 @@ impl Engine {
             .rev()
             .find(|r| r.started_at <= msg.created_at && r.finished_at.as_ref().is_none_or(|f| msg.created_at <= *f))
             .map(|r| r.id);
-        self.0.store.upsert_feedback(&Feedback {
+        let saved = self.0.store.upsert_feedback(&Feedback {
             id: new_id("fbk"),
             session_id: session_id.into(),
             message_id: message_id.into(),
@@ -855,7 +859,11 @@ impl Engine {
             rating,
             note,
             created_at: now_rfc3339(),
-        })
+        })?;
+        if rating < 0 {
+            self.maybe_reflect(session_id, saved.run_id.clone(), learning::ReflectTrigger::Feedback);
+        }
+        Ok(saved)
     }
     /// Removes the rating of a message (no error when there is none).
     pub fn delete_feedback(&self, session_id: &str, message_id: &str) -> Result<()> {
@@ -1147,6 +1155,13 @@ impl Engine {
                 s.last_status = Some(status.into());
                 s.updated_at = now_rfc3339();
                 let _ = engine.0.store.upsert_session(&s);
+            }
+            let out_of_budget = engine
+                .run_events(&rid)
+                .iter()
+                .any(|e| matches!(&e.event.event, AgEvent::Custom { name, .. } if name == "aiw.budget_exceeded"));
+            if status == "failed" || out_of_budget {
+                engine.maybe_reflect(&session.id, Some(rid.clone()), learning::ReflectTrigger::Failure);
             }
         });
         Ok(run_id)
@@ -1638,6 +1653,8 @@ mod tests_eval;
 mod tests_hardening;
 #[cfg(test)]
 mod tests_inference;
+#[cfg(test)]
+mod tests_learning;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]

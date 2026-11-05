@@ -455,6 +455,31 @@ export interface Feedback {
 /** Longest note the engine accepts with a rating. */
 export const MAX_FEEDBACK_NOTE_CHARS = 2000;
 
+export type LessonKind = "memory" | "skill";
+export type LessonStatus = "pending" | "approved" | "rejected";
+
+/** What the agent learned from a conversation, proposed to the user: nothing is written until it is approved. */
+export interface Lesson {
+  id: string;
+  session_id: string;
+  run_id?: string;
+  agent_id: string;
+  /** memory: a note for AGENTS.md. skill: a new skill. */
+  kind: LessonKind;
+  title: string;
+  /** Markdown. */
+  content: string;
+  /** Why the agent proposes it. */
+  reason: string;
+  status: LessonStatus;
+  created_at: string;
+  decided_at?: string;
+}
+
+/** Limits of the engine on what the user can edit before approving. */
+export const MAX_LESSON_TITLE_CHARS = 120;
+export const MAX_LESSON_CONTENT_CHARS = 6000;
+
 /** One grader of an evaluation task: `kind` plus the fields of that kind (path, pattern, criteria…). */
 export interface EvalGraderSpec {
   kind: "file_exists" | "file_contains" | "output_matches" | "json_schema" | "command" | "judge" | (string & {});

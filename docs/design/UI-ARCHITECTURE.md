@@ -134,7 +134,7 @@ del server, che segue il server finché l'utente non ha toccato nulla) e a `Save
 | Controllo | Sicurezza · Attività · Impostazioni |
 
 - **Panoramica**: device e acceleratori, runtime attivi, modello del profilo predefinito, conferme in
-  attesa, sessioni recenti, download in corso, prossimi workflow, checklist di primo avvio
+  attesa, lezioni proposte dagli agenti da rivedere (approva, modifica, scarta), sessioni recenti, download in corso, prossimi workflow, checklist di primo avvio
   (runtime → modello consigliato → profilo → prima chat; DESIGN §5.1).
 - **Telefono** (≤ 760 px): tabbar con Panoramica, Workspace, Modelli, Runtime, Altro. "Altro" apre
   un foglio con tutte le sezioni, il device e il **kill switch** (sul telefono oggi non è

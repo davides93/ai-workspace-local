@@ -142,6 +142,7 @@
 .ws-note-msg { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-muted); overflow-wrap: anywhere; }
 .ws-note-hint { color: var(--fg-muted); }
 .ws-note-link { display: inline-flex; align-items: center; gap: 2px; margin-top: 2px; font-weight: 500; }
+.ws-lesson { margin: 0 var(--space-4) var(--space-2); }
 .ws-note-warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .ws-note-warn > svg { color: var(--warn); }
 .ws-note-crit { background: var(--crit-soft); border-color: color-mix(in srgb, var(--crit) 40%, transparent); }

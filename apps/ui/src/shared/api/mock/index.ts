@@ -3,7 +3,7 @@ import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
 } from "../types";
@@ -11,6 +11,7 @@ import {
   agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
   runtimes, sessionMessages, sessions, sleep, system, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
+import { demoLesson, lessonProblem, lessons } from "./lessons";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 
@@ -470,11 +471,47 @@ export class MockTransport implements Transport {
     const prev = this.feedback.find((f) => f.session_id === sessionId && f.message_id === messageId);
     const f: Feedback = { id: prev?.id ?? nid("fbk"), session_id: sessionId, message_id: messageId, rating, ...(text ? { note: text } : {}), created_at: now() };
     this.feedback = [...this.feedback.filter((x) => x !== prev), f];
+    // A thumbs down makes the agent propose a lesson (setting `learning.reflect`), one waiting per session.
+    const mode = String(effective()["learning.reflect"] ?? "on_feedback");
+    const session = sessions.find((s) => s.id === sessionId)!;
+    if (rating === -1 && mode !== "off" && !lessons.some((l) => l.session_id === sessionId && l.status === "pending")) {
+      lessons.unshift(demoLesson(session, nid("les")));
+    }
     return structuredClone(f);
   }
   async deleteFeedback(sessionId: string, messageId: string) {
     if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     this.feedback = this.feedback.filter((f) => !(f.session_id === sessionId && f.message_id === messageId));
+  }
+
+  async lessons(status?: LessonStatus) { return structuredClone(lessons.filter((l) => !status || l.status === status)); }
+  private pendingLesson(id: string): Lesson {
+    const l = lessons.find((x) => x.id === id);
+    if (!l) throw new ApiError(404, `lezione ${id} non trovata`);
+    if (l.status !== "pending") throw new ApiError(409, `la lezione è già stata ${l.status === "approved" ? "approvata" : "scartata"}`);
+    return l;
+  }
+  async approveLesson(id: string, edit: { title?: string; content?: string } = {}) {
+    const l = this.pendingLesson(id);
+    const title = edit.title?.trim() ?? l.title;
+    const content = edit.content?.trim() ?? l.content;
+    const problem = lessonProblem(title, content);
+    if (problem) throw new ApiError(400, problem);
+    Object.assign(l, { title, content, status: "approved", decided_at: now() });
+    return structuredClone(l);
+  }
+  async rejectLesson(id: string) {
+    const l = this.pendingLesson(id);
+    Object.assign(l, { status: "rejected", decided_at: now() });
+    return structuredClone(l);
+  }
+  async reflectSession(sessionId: string) {
+    const s = sessions.find((x) => x.id === sessionId);
+    if (!s) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    await sleep(600);
+    const l = demoLesson(s, nid("les"));
+    lessons.unshift(l);
+    return structuredClone(l);
   }
 
   async activeRun(sessionId?: string) {

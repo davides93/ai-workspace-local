@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Button, EmptyState, Icon, IconButton, QueryState, Select } from "../../../shared/ui";
 import type { AgentProfile, Session } from "../../../shared/api/types";
+import { useReflect } from "../../learning/api";
 import { filterSessions, groupSessions } from "../model/sessions";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { SessionItem } from "./SessionItem";
@@ -32,6 +33,7 @@ export function SessionList({ sessions, agents, defaultAgent, activeId, creating
   const [query, setQuery] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Session | null>(null);
+  const reflect = useReflect();
 
   // The agents arrive after the first render: preselect the default once they are known.
   useEffect(() => {
@@ -112,9 +114,11 @@ export function SessionList({ sessions, agents, defaultAgent, activeId, creating
                           agentName={agentName(s.agent_id) ?? s.agent_id}
                           active={s.id === activeId}
                           renaming={renamingId === s.id}
+                          reflecting={reflect.isPending && reflect.variables === s.id}
                           onSelect={() => onSelect(s.id)}
                           onRename={() => setRenamingId(s.id)}
                           onRenamed={() => setRenamingId(null)}
+                          onReflect={() => reflect.mutate(s.id)}
                           onDelete={() => setDeleting(s)}
                         />
                       ))}

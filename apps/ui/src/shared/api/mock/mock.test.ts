@@ -329,6 +329,37 @@ describe("other v0.4 methods", () => {
     await expect(api.deleteEvalSuite("ev-tmp")).rejects.toThrow(/non trovata/);
   });
 
+  it("proposes lessons after a thumbs down and writes them only when approved, like the engine does", async () => {
+    const pending = await api.lessons("pending");
+    expect(pending.length).toBeGreaterThan(0);
+    expect(pending.every((l) => l.status === "pending")).toBe(true);
+    expect((await api.lessons()).length).toBeGreaterThan(pending.length);
+
+    // A thumbs down proposes a lesson (one waiting per session); a thumbs up does not.
+    const before = (await api.lessons("pending")).filter((l) => l.session_id === "ses_ui").length;
+    await api.setFeedback("ses_ui", "m1", 1);
+    expect((await api.lessons("pending")).filter((l) => l.session_id === "ses_ui")).toHaveLength(before);
+    await api.setFeedback("ses_ui", "m1", -1);
+    await api.setFeedback("ses_ui", "m2", -1);
+    const proposed = (await api.lessons("pending")).filter((l) => l.session_id === "ses_ui");
+    expect(proposed).toHaveLength(Math.max(before, 1));
+
+    // Approved with edits; deciding twice or editing to nothing is refused with the reason.
+    const id = proposed[0].id;
+    await expect(api.approveLesson(id, { title: " " })).rejects.toThrow(/vuoti/);
+    const done = await api.approveLesson(id, { title: "Titolo nuovo", content: "Contenuto nuovo" });
+    expect(done).toMatchObject({ status: "approved", title: "Titolo nuovo", content: "Contenuto nuovo" });
+    expect(done.decided_at).toBeTruthy();
+    await expect(api.approveLesson(id)).rejects.toThrow(/già stata approvata/);
+    await expect(api.rejectLesson(id)).rejects.toThrow(/già stata/);
+    expect((await api.lessons("pending")).some((l) => l.id === id)).toBe(false);
+
+    const other = (await api.reflectSession("ses_cv")).id;
+    expect((await api.rejectLesson(other)).status).toBe("rejected");
+    await expect(api.rejectLesson("les_none")).rejects.toThrow(/non trovata/);
+    await expect(api.reflectSession("ses_none")).rejects.toThrow(/non trovata/);
+  });
+
   it("re-detects runtimes", async () => {
     vi.useFakeTimers();
     const p = api.refreshRuntimes();

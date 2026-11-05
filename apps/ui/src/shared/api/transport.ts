@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
+  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -95,6 +95,13 @@ export interface Transport {
   /** Rates an assistant message; rating again replaces the previous rating (and its note). */
   setFeedback(sessionId: string, messageId: string, rating: 1 | -1, note?: string): Promise<Feedback>;
   deleteFeedback(sessionId: string, messageId: string): Promise<void>;
+  /** The lessons the agents proposed, most recent first. */
+  lessons(status?: LessonStatus): Promise<Lesson[]>;
+  /** Approving writes the lesson (AGENTS.md or a new skill); title and content can be changed first. */
+  approveLesson(id: string, edit?: { title?: string; content?: string }): Promise<Lesson>;
+  rejectLesson(id: string): Promise<Lesson>;
+  /** Asks the agent for a lesson on this conversation now (the answer waits for the model). */
+  reflectSession(sessionId: string): Promise<Lesson>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
   startRun(sessionId: string, input: string, kind?: "a2ui.action"): Promise<{ run_id: string }>;
   cancelRun(runId: string): Promise<void>;
