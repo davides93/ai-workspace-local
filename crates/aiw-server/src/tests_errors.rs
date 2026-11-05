@@ -6,7 +6,7 @@ use super::*;
 use aiw_engine::EngineOptions;
 use axum::http::{header, HeaderMap, Method};
 
-async fn fixture(ui: Option<PathBuf>) -> (Router, Engine, tempfile::TempDir) {
+pub(crate) async fn fixture(ui: Option<PathBuf>) -> (Router, Engine, tempfile::TempDir) {
     let data = tempfile::tempdir().unwrap();
     let e = Engine::new(EngineOptions {
         data_dir: Some(data.path().into()),
@@ -21,7 +21,13 @@ async fn fixture(ui: Option<PathBuf>) -> (Router, Engine, tempfile::TempDir) {
 }
 
 /// One request with any method, headers and raw body.
-async fn raw(app: &Router, method: Method, path: &str, content_type: Option<&str>, body: &str) -> (StatusCode, HeaderMap, String) {
+pub(crate) async fn raw(
+    app: &Router,
+    method: Method,
+    path: &str,
+    content_type: Option<&str>,
+    body: &str,
+) -> (StatusCode, HeaderMap, String) {
     let mut b = Request::builder().method(method).uri(path);
     if let Some(ct) = content_type {
         b = b.header(header::CONTENT_TYPE, ct);

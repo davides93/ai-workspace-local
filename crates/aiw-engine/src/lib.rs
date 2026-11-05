@@ -7,6 +7,7 @@ pub mod pairing;
 pub mod peers;
 mod secrets;
 pub mod store;
+pub mod traces;
 pub mod update;
 pub mod voice;
 pub mod webhook;
@@ -1550,5 +1551,7 @@ mod tests;
 mod tests_hardening;
 #[cfg(test)]
 mod tests_inference;
+#[cfg(test)]
+mod tests_traces;
 #[cfg(test)]
 mod tests_validation;

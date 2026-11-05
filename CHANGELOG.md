@@ -7,6 +7,7 @@
 - Subagenti in parallelo: più chiamate `agent` nello stesso turno girano insieme, fino a `agents.max_parallel_subagents` (default 3, impostazione nella sezione Agenti).
 - Output strutturato: un agente può avere uno schema JSON della risposta finale (campo «Risposta» nell'editor); la risposta viene validata, con un tentativo di correzione, e il JSON valido è nel risultato del run.
 - Budget per run: limiti facoltativi di token, turni del modello e secondi, per agente o nelle Impostazioni (`agents.budget.*`), condivisi con i subagenti; a limite esaurito il run si chiude con un avviso invece di fallire.
+- Export delle traiettorie: `aiw traces export` e `GET /api/traces/export` scrivono una riga JSON per sessione (messaggi in formato OpenAI, run, decisioni sulle approvazioni), filtrabili per agente, date, stato e numero; i segreti sono mascherati di default e si possono escludere percorsi.
 
 ## 0.4.0-rc.2 - release candidate
 

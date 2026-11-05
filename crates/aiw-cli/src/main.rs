@@ -72,6 +72,42 @@ enum Cmd {
     },
     /// Esegue un workflow
     Workflow { id: String },
+    /// Esporta le traiettorie delle sessioni (per valutazione e fine-tuning)
+    Traces {
+        #[command(subcommand)]
+        cmd: TracesCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TracesCmd {
+    /// Scrive una riga JSON per sessione (JSONL), con i segreti mascherati
+    Export {
+        /// Solo le sessioni di questo agente
+        #[arg(long)]
+        agent: Option<String>,
+        /// Attività dal giorno (AAAA-MM-GG) o dall'istante (RFC 3339)
+        #[arg(long)]
+        since: Option<String>,
+        /// Attività fino al giorno (AAAA-MM-GG, incluso) o all'istante (RFC 3339)
+        #[arg(long)]
+        until: Option<String>,
+        /// Ultimo stato della sessione: succeeded, failed, cancelled, running
+        #[arg(long)]
+        status: Option<String>,
+        /// Numero massimo di sessioni (le più recenti)
+        #[arg(long)]
+        limit: Option<usize>,
+        /// File di destinazione (default: standard output)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Non maschera i segreti: l'export può contenere chiavi e token
+        #[arg(long)]
+        no_redact: bool,
+        /// Glob dei percorsi da escludere: il contenuto dei messaggi dei tool che li citano diventa [escluso]
+        #[arg(long = "exclude-path")]
+        exclude_path: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -244,6 +280,25 @@ async fn main() -> Result<()> {
                 },
             })?;
             println!("Profilo {} → {} · {}", p.id, p.runtime_id, p.model);
+        }
+        Cmd::Traces { cmd: TracesCmd::Export { agent, since, until, status, limit, out, no_redact, exclude_path } } => {
+            let filter =
+                aiw_engine::traces::TraceFilter { agent, since, until, status, limit, redact: !no_redact, exclude_paths: exclude_path };
+            let records = engine.export_traces(&filter)?;
+            let jsonl = aiw_engine::traces::to_jsonl(&records)?;
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, jsonl).with_context(|| format!("scrittura di {}", path.display()))?;
+                    eprintln!("{} sessioni esportate in {}", records.len(), path.display());
+                }
+                None => {
+                    print!("{jsonl}");
+                    eprintln!("{} sessioni esportate", records.len());
+                }
+            }
+            if no_redact {
+                eprintln!("Attenzione: i segreti non sono stati mascherati.");
+            }
         }
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Workflow { id } => {

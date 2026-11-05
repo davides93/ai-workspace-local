@@ -299,6 +299,19 @@ Tipi di step: `tool`, `agent`, `llm`, `approval`, `condition` (`if`), `foreach`,
 (sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
 ripresa dopo un'approvazione.
 
+### 5.4 Valutazione e tracce
+
+Ogni sessione è già una traiettoria completa (messaggi, eventi AG-UI, run, audit). Il motore la
+esporta e la usa per misurare gli agenti:
+
+- **Export** (`aiw traces export`, `GET /api/traces/export`): una riga JSON (NDJSON) per sessione,
+  con i messaggi in formato OpenAI, i run, le decisioni sulle approvazioni (`signals`) e i
+  feedback. Le note interne (controlli automatici, errori del run, prompt bloccati) restano fuori
+  dai messaggi e sono contate in `notes`. I segreti sono mascherati di default (`[SEGRETO]`: chiavi
+  `sk-…`, token GitHub, `AKIA…`, `xox…`, `Bearer …`, chiavi private e i valori dei segreti MCP
+  salvati); `--no-redact` lo disattiva, `--exclude-path` sostituisce con `[escluso]` il contenuto
+  dei messaggi dei tool che citano i percorsi indicati.
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
@@ -330,6 +343,7 @@ ripresa dopo un'approvazione.
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
+| GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
 | POST | `/api/kill` | Kill switch |

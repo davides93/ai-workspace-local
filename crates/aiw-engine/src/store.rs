@@ -9,6 +9,15 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
 
+/// One row of the `runs` table.
+#[derive(Debug, Clone)]
+pub struct RunRow {
+    pub id: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -138,6 +147,26 @@ impl Store {
             .map_err(db)?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
     }
+    /// Every session, most recently active first (no cap, unlike [`Store::sessions`]): for exports.
+    pub fn all_sessions(&self) -> Result<Vec<Session>> {
+        let c = self.conn.lock().unwrap();
+        let mut st =
+            c.prepare("SELECT id,title,agent_id,created_at,updated_at,last_status FROM sessions ORDER BY updated_at DESC").map_err(db)?;
+        let rows = st
+            .query_map([], |r| {
+                Ok(Session {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    agent_id: r.get(2)?,
+                    created_at: r.get(3)?,
+                    updated_at: r.get(4)?,
+                    last_status: r.get(5)?,
+                    worktree: None,
+                })
+            })
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
     pub fn delete_session(&self, id: &str) -> Result<()> {
         let c = self.conn.lock().unwrap();
         c.execute("DELETE FROM messages WHERE session_id=?1", params![id]).map_err(db)?;
@@ -206,6 +235,18 @@ impl Store {
             .map_err(db)?;
         Ok(n)
     }
+    /// The top-level runs of a session, oldest first.
+    pub fn session_runs(&self, session_id: &str) -> Result<Vec<RunRow>> {
+        let c = self.conn.lock().unwrap();
+        let mut st =
+            c.prepare("SELECT id,status,started_at,finished_at FROM runs WHERE session_id=?1 ORDER BY started_at, rowid").map_err(db)?;
+        let rows = st
+            .query_map(params![session_id], |r| {
+                Ok(RunRow { id: r.get(0)?, status: r.get(1)?, started_at: r.get(2)?, finished_at: r.get(3)? })
+            })
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
     pub fn save_events(&self, run_id: &str, evs: &[SeqEvent]) -> Result<()> {
         let mut c = self.conn.lock().unwrap();
         let tx = c.transaction().map_err(db)?;
@@ -243,6 +284,17 @@ impl Store {
         let c = self.conn.lock().unwrap();
         let mut st = c.prepare("SELECT json FROM audit ORDER BY ts DESC, rowid DESC LIMIT ?1").map_err(db)?;
         let rows = st.query_map(params![limit as i64], |r| r.get::<_, String>(0)).map_err(db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(serde_json::from_str(&r.map_err(db)?)?);
+        }
+        Ok(out)
+    }
+    /// The audit entries of one run, oldest first.
+    pub fn audit_for_run(&self, run_id: &str) -> Result<Vec<AuditEntry>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT json FROM audit WHERE json_extract(json,'$.run_id')=?1 ORDER BY ts, rowid").map_err(db)?;
+        let rows = st.query_map(params![run_id], |r| r.get::<_, String>(0)).map_err(db)?;
         let mut out = Vec::new();
         for r in rows {
             out.push(serde_json::from_str(&r.map_err(db)?)?);

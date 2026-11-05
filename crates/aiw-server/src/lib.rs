@@ -160,6 +160,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/mcp/servers/{id}", delete(remove_mcp))
         .route("/api/config", get(config).put(set_config))
         .route("/api/audit", get(audit))
+        .route("/api/traces/export", get(traces_export))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat_completions))
         .route("/v1/messages", post(anthropic::messages))
@@ -543,6 +544,31 @@ async fn run_events_sse(
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
+/// Trajectories as NDJSON, one session per line. Query: `agent`, `since`, `until`, `status`,
+/// `limit`, `redact=false` (secrets are masked by default), `exclude_path` (repeatable glob).
+async fn traces_export(State(s): State<AppState>, axum::extract::RawQuery(q): axum::extract::RawQuery) -> Result<Response, ApiError> {
+    let mut f = aiw_engine::traces::TraceFilter::default();
+    let url = reqwest::Url::parse(&format!("http://localhost/?{}", q.unwrap_or_default()))
+        .map_err(|_| ApiError(Error::Invalid("query non valida".into())))?;
+    for (k, v) in url.query_pairs() {
+        let v = v.into_owned();
+        match k.as_ref() {
+            "agent" if !v.is_empty() => f.agent = Some(v),
+            "since" if !v.is_empty() => f.since = Some(v),
+            "until" if !v.is_empty() => f.until = Some(v),
+            "status" if !v.is_empty() => f.status = Some(v),
+            "limit" if !v.is_empty() => {
+                f.limit = Some(v.parse().map_err(|_| ApiError(Error::Invalid("limit deve essere un numero intero".into())))?)
+            }
+            "redact" => f.redact = !matches!(v.as_str(), "false" | "0" | "no"),
+            "exclude_path" if !v.is_empty() => f.exclude_paths.push(v),
+            _ => {}
+        }
+    }
+    let body = aiw_engine::traces::to_jsonl(&s.engine.export_traces(&f)?)?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/x-ndjson")], body).into_response())
+}
+
 async fn approvals(State(s): State<AppState>) -> ApiResult<Vec<ApprovalRequest>> {
     ok(s.engine.approvals())
 }
@@ -840,3 +866,5 @@ mod tests_errors;
 mod tests_models;
 #[cfg(test)]
 mod tests_security;
+#[cfg(test)]
+mod tests_traces;
