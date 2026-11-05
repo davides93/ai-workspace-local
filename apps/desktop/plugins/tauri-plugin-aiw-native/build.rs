@@ -7,6 +7,7 @@ fn main() {
     tauri_plugin::Builder::new(COMMANDS).android_path("android").ios_path("ios").build();
     println!("cargo:rerun-if-changed=macos-helper");
     println!("cargo:rerun-if-env-changed=AIW_REQUIRE_APPLE_FM");
+    println!("cargo:rerun-if-env-changed=AIW_APPLE_FM_DEVELOPER_DIR");
     println!("cargo:rustc-check-cfg=cfg(aiw_apple_fm_helper)");
     build_apple_helper();
 }
@@ -17,6 +18,11 @@ fn main() {
 /// Anything that prevents it (not macOS, Intel slice, Xcode older than 26) only skips the helper,
 /// with a warning, unless `AIW_REQUIRE_APPLE_FM=1` (release CI): then the build fails, so a
 /// release cannot silently ship without it.
+///
+/// `AIW_APPLE_FM_DEVELOPER_DIR` points at the `Contents/Developer` folder of an Xcode 26 to use
+/// for this step only. The rest of the build (llama.cpp, the app) keeps the Xcode that is
+/// selected: with Xcode 26's clang the Metal sources of llama.cpp reference
+/// `___isPlatformVersionAtLeast`, which the Rust linker does not provide.
 fn build_apple_helper() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
@@ -33,13 +39,13 @@ fn build_apple_helper() {
     };
 
     // Xcode tools of the host; the environment of an iOS or Tauri build must not redirect them.
+    let developer_dir = std::env::var_os("AIW_APPLE_FM_DEVELOPER_DIR").filter(|d| !d.is_empty());
     let xcrun = |args: &[&str]| {
-        Command::new("xcrun")
-            .args(args)
-            .env_remove("SDKROOT")
-            .env_remove("MACOSX_DEPLOYMENT_TARGET")
-            .env_remove("IPHONEOS_DEPLOYMENT_TARGET")
-            .output()
+        let mut c = Command::new("xcrun");
+        if let Some(d) = &developer_dir {
+            c.env("DEVELOPER_DIR", d);
+        }
+        c.args(args).env_remove("SDKROOT").env_remove("MACOSX_DEPLOYMENT_TARGET").env_remove("IPHONEOS_DEPLOYMENT_TARGET").output()
     };
     let sdk = match xcrun(&["--sdk", "macosx", "--show-sdk-version"]) {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
