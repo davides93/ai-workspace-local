@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, Feedback,
+  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -222,6 +222,14 @@ export class HttpTransport implements Transport {
   runWorkflow = (id: string, inputs?: Record<string, unknown>) =>
     this.req<WorkflowRun>("POST", `/workflows/${enc(id)}/run`, { inputs: inputs ?? {} });
   workflowRuns = () => this.req<WorkflowRun[]>("GET", "/workflows/runs");
+
+  evalSuites = () => this.req<EvalSuite[]>("GET", "/evals");
+  saveEvalSuite = (s: EvalSuite) => this.req<EvalSuite>("PUT", `/evals/${enc(s.id)}`, s);
+  deleteEvalSuite = (id: string) => this.req<void>("DELETE", `/evals/${enc(id)}`);
+  startEval = (suiteId: string, req?: EvalRunRequest) => this.req<EvalReport>("POST", `/evals/${enc(suiteId)}/runs`, req ?? {});
+  evalReports = () => this.req<EvalReport[]>("GET", "/eval-runs");
+  evalReport = (id: string) => this.req<EvalReport>("GET", `/eval-runs/${enc(id)}`);
+  compareEvalReports = (a: string, b: string) => this.req<EvalComparison>("GET", `/eval-runs/compare?a=${enc(a)}&b=${enc(b)}`);
 
   tools = () => this.req<ToolInfo[]>("GET", "/tools");
   setToolEnabled = (name: string, enabled: boolean) => this.req<void>("PUT", `/tools/${enc(name)}`, { enabled });

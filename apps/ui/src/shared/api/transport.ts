@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, Feedback,
+  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -108,6 +108,16 @@ export interface Transport {
   deleteWorkflow(id: string): Promise<void>;
   runWorkflow(id: string, inputs?: Record<string, unknown>): Promise<WorkflowRun>;
   workflowRuns(): Promise<WorkflowRun[]>;
+
+  evalSuites(): Promise<EvalSuite[]>;
+  /** The server checks the suite (tasks, graders, agents and profiles named) and refuses it with the reason. */
+  saveEvalSuite(s: EvalSuite): Promise<EvalSuite>;
+  deleteEvalSuite(id: string): Promise<void>;
+  /** Starts a run in the background: the report comes back as `running` and is polled with `evalReport`. */
+  startEval(suiteId: string, req?: EvalRunRequest): Promise<EvalReport>;
+  evalReports(): Promise<EvalReport[]>;
+  evalReport(id: string): Promise<EvalReport>;
+  compareEvalReports(a: string, b: string): Promise<EvalComparison>;
 
   tools(): Promise<ToolInfo[]>;
   setToolEnabled(name: string, enabled: boolean): Promise<void>;

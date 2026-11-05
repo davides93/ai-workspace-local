@@ -436,9 +436,12 @@ async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
                 if profiles.len() > 1 {
                     eprintln!("\n== profilo {} ==", p.as_deref().unwrap_or_default());
                 }
-                let report =
-                    eval_run_one(engine, &suite, EvalRequest { agent: agent.clone(), profile: p.clone(), repeat: Some(repeat), keep })
-                        .await?;
+                let report = eval_run_one(
+                    engine,
+                    &suite,
+                    EvalRequest { agent: agent.clone(), profile: p.clone(), repeat: Some(repeat), keep, ..Default::default() },
+                )
+                .await?;
                 if let Some(path) = &out {
                     let path = match (profiles.len(), p) {
                         (n, Some(p)) if n > 1 => {

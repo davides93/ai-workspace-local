@@ -293,6 +293,42 @@ describe("other v0.4 methods", () => {
     expect((await api.workflows()).some((w) => w.id === "wf-tmp")).toBe(false);
   });
 
+  it("saves, runs and compares evaluation suites like the engine does", async () => {
+    const suite = { id: "ev-tmp", name: "Tmp", tasks: [{ id: "t", prompt: "crea note.md", graders: [{ kind: "file_exists", path: "note.md" }] }] };
+    expect((await api.evalSuites()).some((s) => s.id === "esempio")).toBe(true);
+    expect((await api.saveEvalSuite(suite)).id).toBe("ev-tmp");
+    // Refused with the reason, as the server does.
+    await expect(api.saveEvalSuite({ ...suite, tasks: [] })).rejects.toThrow(/almeno un task/);
+    await expect(api.saveEvalSuite({ ...suite, tasks: [{ id: "t", prompt: "x", graders: [{ kind: "judge", criteria: " " }] }] })).rejects.toThrow(/criteri/);
+    await expect(api.saveEvalSuite({ ...suite, tasks: [{ id: "t", prompt: "x", graders: [{ kind: "command", run: "ls" }] }] })).rejects.toThrow(/command/);
+    await expect(api.saveEvalSuite({ ...suite, agent: "fantasma" })).rejects.toThrow(/fantasma/);
+
+    vi.useFakeTimers();
+    const started = await api.startEval("ev-tmp", { repeat: 2 });
+    expect(started).toMatchObject({ status: "running", suite_id: "ev-tmp", repeat: 2 });
+    await vi.advanceTimersByTimeAsync(3000);
+    vi.useRealTimers();
+    const done = await api.evalReport(started.id);
+    expect(done.status).toBe("completed");
+    expect(done.tasks).toHaveLength(2);
+    expect(done.summary.total).toBe(2);
+    expect((await api.evalReports())[0].id).toBe(started.id);
+    await expect(api.startEval("ev-tmp", { repeat: 0 })).rejects.toThrow(/repeat/);
+    await expect(api.startEval("ev-tmp", { profile: "fantasma" })).rejects.toThrow(/profilo/);
+    await expect(api.startEval("nessuna")).rejects.toThrow(/non trovata/);
+    await expect(api.evalReport("evr_none")).rejects.toThrow(/non trovato/);
+
+    // B against A: the demo reports differ on one task.
+    const c = await api.compareEvalReports("evr_demo_a", "evr_demo_b");
+    expect(c.tasks.map((t) => t.task_id)).toEqual(["crea-nota", "riassunto", "json"]);
+    expect(c.tasks[1]).toMatchObject({ pass_rate_delta: 1 });
+    expect(c.pass_rate_delta).toBeCloseTo(1 / 3);
+    expect(c.total_a.attempts).toBe(3);
+
+    await api.deleteEvalSuite("ev-tmp");
+    await expect(api.deleteEvalSuite("ev-tmp")).rejects.toThrow(/non trovata/);
+  });
+
   it("re-detects runtimes", async () => {
     vi.useFakeTimers();
     const p = api.refreshRuntimes();

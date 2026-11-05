@@ -281,6 +281,7 @@ impl Engine {
                 s.put_doc("workflow", &w.id, &w)?;
             }
         }
+        self.fail_interrupted_eval_reports()?;
         if s.list_docs::<aiw_eval::Suite>("eval_suite")?.is_empty() {
             for suite in defaults::eval_suites() {
                 s.put_doc("eval_suite", &suite.id, &suite)?;

@@ -48,6 +48,14 @@ export const qk = {
     runs: () => ["workflows", "runs"] as const,
   },
 
+  evals: {
+    all: () => ["evals"] as const,
+    suites: () => ["evals", "suites"] as const,
+    reports: () => ["evals", "reports"] as const,
+    report: (id: string) => ["evals", "reports", id] as const,
+    compare: (a: string, b: string) => ["evals", "compare", a, b] as const,
+  },
+
   tools: () => ["tools"] as const,
   mcp: () => ["mcp", "servers"] as const,
 

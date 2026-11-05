@@ -189,6 +189,30 @@ async fn a_judge_grader_asks_the_model_and_scores_the_work() {
 }
 
 #[tokio::test]
+async fn a_report_left_running_by_a_dead_engine_is_marked_failed() {
+    let (e, _d, _w) = engine(vec![]).await;
+    let mut r = aiw_eval::EvalReport {
+        id: "evr_orfano".into(),
+        suite_id: "s".into(),
+        suite_name: "S".into(),
+        status: "running".into(),
+        started_at: now_rfc3339(),
+        finished_at: None,
+        agent: None,
+        profile: None,
+        repeat: 1,
+        tasks: vec![],
+        summary: Default::default(),
+        error: None,
+    };
+    e.0.store.save_eval_report(&r.id, &r.suite_id, &r.started_at, &r).unwrap();
+    e.fail_interrupted_eval_reports().unwrap();
+    r = e.eval_report("evr_orfano").unwrap();
+    assert_eq!(r.status, "failed");
+    assert!(r.error.unwrap().contains("interrotta") && r.finished_at.is_some());
+}
+
+#[tokio::test]
 async fn two_stored_reports_can_be_compared_by_id_or_file() {
     let turns = vec![
         ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "note.md", "content": "ciao"})),

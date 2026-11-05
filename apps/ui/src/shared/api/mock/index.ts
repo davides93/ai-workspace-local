@@ -3,7 +3,7 @@ import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, Feedback, HookConfig, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
 } from "../types";
@@ -11,6 +11,7 @@ import {
   agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
   runtimes, sessionMessages, sessions, sleep, system, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
+import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 
 /** A simulated download: files transferred one after the other, then verified. */
@@ -780,6 +781,66 @@ export class MockTransport implements Transport {
       run.finished_at = now();
     })();
     return structuredClone(run);
+  }
+
+  async evalSuites() { return structuredClone(evalSuites); }
+  async saveEvalSuite(s: EvalSuite) {
+    const problem = suiteProblem(s);
+    if (problem) throw new ApiError(400, problem);
+    for (const a of [s.agent, ...s.tasks.map((t) => t.agent)]) {
+      if (a && !agents.some((x) => x.id === a)) throw new ApiError(400, `l'agente \`${a}\` della suite non esiste`);
+    }
+    for (const p of [s.profile, ...s.tasks.flatMap((t) => [t.profile, ...t.graders.map((g) => (g.kind === "judge" ? (g.profile as string | undefined) : undefined))])]) {
+      if (p && !profiles.some((x) => x.id === p)) throw new ApiError(400, `il profilo di inferenza \`${p}\` non esiste`);
+    }
+    const i = evalSuites.findIndex((x) => x.id === s.id);
+    const saved = structuredClone(s);
+    if (i >= 0) evalSuites[i] = saved; else evalSuites.push(saved);
+    return structuredClone(saved);
+  }
+  async deleteEvalSuite(id: string) {
+    const i = evalSuites.findIndex((x) => x.id === id);
+    if (i < 0) throw new ApiError(404, `suite di valutazione ${id} non trovata`);
+    evalSuites.splice(i, 1);
+  }
+  async startEval(suiteId: string, req: EvalRunRequest = {}) {
+    const suite = evalSuites.find((x) => x.id === suiteId);
+    if (!suite) throw new ApiError(404, `suite di valutazione ${suiteId} non trovata`);
+    if (req.agent && !agents.some((a) => a.id === req.agent)) throw new ApiError(404, `agente ${req.agent} non trovato`);
+    if (req.profile && !profiles.some((p) => p.id === req.profile)) throw new ApiError(404, `profilo ${req.profile} non trovato`);
+    const repeat = req.repeat ?? 1;
+    if (!Number.isInteger(repeat) || repeat < 1 || repeat > 50) throw new ApiError(400, "repeat deve essere tra 1 e 50");
+    const report: EvalReport = {
+      id: nid("evr"), suite_id: suite.id, suite_name: suite.name, status: "running", started_at: now(), repeat, tasks: [],
+      summary: { passed: 0, total: 0, score: 0, pass_rate: 0 }, ...(req.agent ? { agent: req.agent } : {}), ...(req.profile ? { profile: req.profile } : {}),
+    };
+    evalReports.unshift(report);
+    void (async () => {
+      let n = 0;
+      for (let attempt = 1; attempt <= repeat; attempt++) {
+        for (const t of suite.tasks) {
+          await sleep(700);
+          const passed = n++ % 3 !== 2;
+          report.tasks.push({
+            task_id: t.id, attempt, passed, score: passed ? 1 : 0.5, duration_ms: 8000 + n * 900, tokens: 1500 + n * 120, turns: 3, run_id: nid("run"),
+            graders: t.graders.map((g) => ({ kind: g.kind, passed, score: passed ? 1 : 0, detail: passed ? "come atteso (demo)" : "risultato diverso da quello atteso (demo)" })),
+          });
+          refreshSummary(report);
+        }
+      }
+      report.status = "completed";
+      report.finished_at = now();
+    })();
+    return structuredClone(report);
+  }
+  async evalReports() { return structuredClone(evalReports); }
+  async evalReport(id: string) {
+    const r = evalReports.find((x) => x.id === id);
+    if (!r) throw new ApiError(404, `report di valutazione ${id} non trovato`);
+    return structuredClone(r);
+  }
+  async compareEvalReports(a: string, b: string): Promise<EvalComparison> {
+    return compareReports(await this.evalReport(a), await this.evalReport(b));
   }
 
   async tools() { return structuredClone(tools); }

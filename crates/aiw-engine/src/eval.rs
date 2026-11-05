@@ -29,6 +29,8 @@ pub struct EvalRequest {
     pub repeat: Option<u32>,
     /// Keep the working folders of the tasks.
     pub keep: bool,
+    /// Id of the report, when it was made beforehand (see [`Engine::start_eval`]).
+    pub report_id: Option<String>,
 }
 
 impl Engine {
@@ -93,6 +95,64 @@ impl Engine {
     pub fn eval_report(&self, id: &str) -> Result<EvalReport> {
         self.0.store.eval_report(id)?.ok_or_else(|| Error::NotFound(format!("report di valutazione {id} non trovato")))
     }
+    /// Reports still `running` when the engine starts belong to a run that was cut short.
+    pub(crate) fn fail_interrupted_eval_reports(&self) -> Result<()> {
+        for mut r in self.0.store.eval_reports::<EvalReport>(MAX_REPORTS)?.into_iter().filter(|r| r.status == "running") {
+            r.status = "failed".into();
+            r.error = Some("interrotta: l'applicazione è stata chiusa durante la valutazione".into());
+            r.finished_at = Some(aiw_core::now_rfc3339());
+            self.save_eval_report(&r);
+        }
+        Ok(())
+    }
+
+    /// Starts `suite` in the background and returns its report as it is before the first task
+    /// (`running`): the run goes on and keeps the stored report up to date, so callers poll
+    /// [`Engine::eval_report`].
+    pub fn start_eval(&self, suite: Suite, req: EvalRequest) -> Result<EvalReport> {
+        suite.validate()?;
+        self.check_suite_refs(&suite)?;
+        if let Some(a) = &req.agent {
+            self.agent(a)?;
+        }
+        if let Some(p) = &req.profile {
+            self.profile(p)?;
+        }
+        let repeat = req.repeat.unwrap_or(1);
+        if repeat == 0 || repeat > aiw_eval::MAX_REPEAT {
+            return Err(Error::Invalid(format!("repeat deve essere tra 1 e {}", aiw_eval::MAX_REPEAT)));
+        }
+        let id = new_id("evr");
+        let initial = EvalReport {
+            id: id.clone(),
+            suite_id: suite.id.clone(),
+            suite_name: suite.name.clone(),
+            status: "running".into(),
+            started_at: aiw_core::now_rfc3339(),
+            finished_at: None,
+            agent: req.agent.clone(),
+            profile: req.profile.clone(),
+            repeat,
+            tasks: vec![],
+            summary: Default::default(),
+            error: None,
+        };
+        self.save_eval_report(&initial);
+        let engine = self.clone();
+        let req = EvalRequest { report_id: Some(id.clone()), ..req };
+        tokio::spawn(async move {
+            if let Err(e) = engine.run_eval(&suite, &req, &mut |_| {}).await {
+                if let Ok(mut r) = engine.eval_report(&id) {
+                    r.status = "failed".into();
+                    r.error = Some(e.to_string());
+                    r.finished_at = Some(aiw_core::now_rfc3339());
+                    engine.save_eval_report(&r);
+                }
+            }
+        });
+        Ok(initial)
+    }
+
     /// The report of `reference`: a JSON file when one exists at that path, else a stored report by id.
     pub fn resolve_eval_report(&self, reference: &str) -> Result<EvalReport> {
         let path = std::path::Path::new(reference);
@@ -129,6 +189,7 @@ impl Engine {
         opts.profile = req.profile.clone();
         opts.repeat = req.repeat.unwrap_or(1);
         opts.keep = req.keep;
+        opts.report_id = req.report_id.clone();
         self.audit_user("eval.run", &format!("{} ({} task × {})", suite.name, suite.tasks.len(), opts.repeat));
         let engine = self.clone();
         let result = aiw_eval::run_suite(self, suite, &opts, &mut |ev| {

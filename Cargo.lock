@@ -208,6 +208,7 @@ version = "0.4.0-rc.2"
 dependencies = [
  "aiw-core",
  "aiw-engine",
+ "aiw-eval",
  "aiw-models",
  "aiw-runtimes",
  "aiw-tools",

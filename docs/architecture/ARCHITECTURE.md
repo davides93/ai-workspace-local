@@ -367,6 +367,15 @@ esporta e la usa per misurare gli agenti:
   suite con ciascun profilo e stampa il confronto dei successivi con il primo (con `--out report.json`
   scrive `report.json.a.json`, `report.json.b.json`). Nel motore: `Engine::compare_eval_runs(a, b)`.
 
+  Dall'API (`/api/evals`, `/api/eval-runs`) e dalla pagina **Valutazioni** della UI (`#/evals`: suite,
+  esecuzione, report, confronto) una suite parte in background (`Engine::start_eval`): la risposta è
+  il report `running`, che il motore aggiorna a ogni task e la UI legge a intervalli finché non è
+  `completed` o `failed`. I report ancora `running` all'avvio del motore sono di un run interrotto e
+  diventano `failed`. Poiché il grader `command` esegue comandi con i permessi dell'utente senza
+  alcuna conferma, l'API rifiuta di salvare suite che ne contengono: si scrivono solo nei file di
+  `~/.aiw/evals` (le suite già salvate si possono comunque eseguire) e il confronto via API legge solo
+  report salvati, mai percorsi di file.
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
@@ -399,6 +408,9 @@ esporta e la usa per misurare gli agenti:
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
 | PUT/DELETE | `/api/sessions/{id}/messages/{mid}/feedback` · GET `/api/sessions/{id}/feedback` | Feedback sulle risposte |
+| GET/PUT/DELETE | `/api/evals[/{id}]` | Suite di valutazione (PUT: JSON della suite o `{"text": yaml|json}`; i grader `command` non si scrivono via API) |
+| POST | `/api/evals/{id}/runs` | Avvia la suite in background (`{agent?, profile?, repeat?}`); risponde con il report `running` |
+| GET | `/api/eval-runs` · `/api/eval-runs/{id}` · `/api/eval-runs/compare?a=&b=` | Report (aggiornati a ogni task), confronto A/B tra due report salvati |
 | GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
