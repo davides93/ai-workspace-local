@@ -801,6 +801,56 @@ impl Engine {
         self.0.store.messages(session_id)
     }
 
+    // ------------------------------------------------------------------ feedback
+    /// Rates an assistant message (1 = good, -1 = bad) with an optional note; rating the same
+    /// message again replaces the previous rating.
+    pub fn set_feedback(&self, session_id: &str, message_id: &str, rating: i32, note: Option<String>) -> Result<Feedback> {
+        if rating != 1 && rating != -1 {
+            return Err(Error::Invalid("la valutazione deve essere 1 (utile) o -1 (da migliorare)".into()));
+        }
+        let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        if note.as_ref().is_some_and(|n| n.chars().count() > MAX_FEEDBACK_NOTE_CHARS) {
+            return Err(Error::Invalid(format!("la nota supera i {MAX_FEEDBACK_NOTE_CHARS} caratteri")));
+        }
+        let msg = self
+            .messages(session_id)?
+            .into_iter()
+            .find(|m| m.id == message_id)
+            .ok_or_else(|| Error::NotFound(format!("messaggio {message_id} non trovato")))?;
+        if msg.role != "assistant" {
+            return Err(Error::Invalid("si possono valutare solo le risposte dell'assistente".into()));
+        }
+        // The run that produced the message is the one running when it was written. Run ids and
+        // message times are RFC 3339 with the same precision, so strings compare as instants.
+        let run_id = self
+            .0
+            .store
+            .session_runs(session_id)?
+            .into_iter()
+            .rev()
+            .find(|r| r.started_at <= msg.created_at && r.finished_at.as_ref().is_none_or(|f| msg.created_at <= *f))
+            .map(|r| r.id);
+        self.0.store.upsert_feedback(&Feedback {
+            id: new_id("fbk"),
+            session_id: session_id.into(),
+            message_id: message_id.into(),
+            run_id,
+            rating,
+            note,
+            created_at: now_rfc3339(),
+        })
+    }
+    /// Removes the rating of a message (no error when there is none).
+    pub fn delete_feedback(&self, session_id: &str, message_id: &str) -> Result<()> {
+        self.0.store.session(session_id)?;
+        self.0.store.delete_feedback(session_id, message_id)?;
+        Ok(())
+    }
+    pub fn session_feedback(&self, session_id: &str) -> Result<Vec<Feedback>> {
+        self.0.store.session(session_id)?;
+        self.0.store.session_feedback(session_id)
+    }
+
     pub(crate) fn emit(&self, run_id: &str, ev: AgEvent) {
         let terminal = ev.is_terminal();
         let timed = TimedEvent::now(ev);

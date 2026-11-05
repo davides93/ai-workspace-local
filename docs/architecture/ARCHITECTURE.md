@@ -311,6 +311,10 @@ esporta e la usa per misurare gli agenti:
   `sk-…`, token GitHub, `AKIA…`, `xox…`, `Bearer …`, chiavi private e i valori dei segreti MCP
   salvati); `--no-redact` lo disattiva, `--exclude-path` sostituisce con `[escluso]` il contenuto
   dei messaggi dei tool che citano i percorsi indicati.
+- **Feedback**: pollice su/giù (valore 1 o -1) con nota facoltativa (fino a 2000 caratteri) su un
+  messaggio dell'assistente, uno per messaggio (tabella `feedback`, sostituito a ogni nuova
+  valutazione). Il `run_id` è il run in corso quando il messaggio è stato scritto. Entra nel campo
+  `feedback` dei record dell'export e `--rated up|down|any` seleziona le sessioni valutate.
 
 ## 6. Tool (L4)
 
@@ -343,6 +347,7 @@ esporta e la usa per misurare gli agenti:
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
+| PUT/DELETE | `/api/sessions/{id}/messages/{mid}/feedback` · GET `/api/sessions/{id}/feedback` | Feedback sulle risposte |
 | GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |

@@ -26,6 +26,8 @@ pub struct TraceFilter {
     /// Last status of the session (`succeeded`, `failed`, `cancelled`, `running`).
     pub status: Option<String>,
     pub limit: Option<usize>,
+    /// Only sessions with a thumbs up (`up`), a thumbs down (`down`) or any rating (`any`).
+    pub rated: Option<String>,
     /// Mask API keys, tokens and private keys (on by default).
     pub redact: bool,
     /// Globs: tool messages that cite a matching path lose their content.
@@ -34,7 +36,7 @@ pub struct TraceFilter {
 
 impl Default for TraceFilter {
     fn default() -> Self {
-        Self { agent: None, since: None, until: None, status: None, limit: None, redact: true, exclude_paths: vec![] }
+        Self { agent: None, since: None, until: None, status: None, limit: None, rated: None, redact: true, exclude_paths: vec![] }
     }
 }
 
@@ -240,6 +242,13 @@ impl Engine {
         let since = filter.since.as_deref().map(|s| parse_bound(s, false, "since")).transpose()?;
         let until = filter.until.as_deref().map(|s| parse_bound(s, true, "until")).transpose()?;
         let excluded = globs(&filter.exclude_paths)?;
+        let rated = match filter.rated.as_deref() {
+            None | Some("") => None,
+            Some("up") => Some(1),
+            Some("down") => Some(-1),
+            Some("any") => Some(0),
+            Some(other) => return Err(Error::Invalid(format!("«{other}» non è un filtro valido per rated: usa up, down o any"))),
+        };
         let redactor = filter.redact.then(|| Redactor::new(mcp_secret_values(store)));
         let clean = |s: &str| redactor.as_ref().map(|r| r.apply(s)).unwrap_or_else(|| s.to_string());
         let mut out = Vec::new();
@@ -251,6 +260,10 @@ impl Engine {
                 continue;
             }
             if filter.status.as_deref().is_some_and(|st| s.last_status.as_deref() != Some(st)) {
+                continue;
+            }
+            let ratings = store.session_feedback(&s.id)?;
+            if rated.is_some_and(|want| !ratings.iter().any(|f| want == 0 || f.rating == want)) {
                 continue;
             }
             if since.is_some() || until.is_some() {
@@ -314,7 +327,10 @@ impl Engine {
                     .map(|r| TraceRun { run_id: r.id, status: r.status, started_at: r.started_at, finished_at: r.finished_at })
                     .collect(),
                 signals,
-                feedback: vec![],
+                feedback: ratings
+                    .into_iter()
+                    .map(|f| TraceFeedback { message_id: f.message_id, rating: f.rating, note: f.note.map(|n| clean(&n)) })
+                    .collect(),
             });
         }
         Ok(out)

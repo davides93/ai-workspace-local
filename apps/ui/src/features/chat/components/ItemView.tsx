@@ -2,10 +2,10 @@ import { memo } from "react";
 import { Icon, Led, Markdown } from "../../../shared/ui";
 import { ApprovalCard } from "../../approvals/components/ApprovalCard";
 import { A2uiSurface, type A2uiAction } from "../a2ui";
-import type { ApprovalRequest } from "../../../shared/api/types";
+import type { ApprovalRequest, Feedback } from "../../../shared/api/types";
 import type { Item } from "../model/items";
 import { describeRunError, errorDetail } from "../model/runNotice";
-import { CopyMessage } from "./CopyMessage";
+import { MessageActions } from "./MessageActions";
 import { RunNote } from "./RunNote";
 import { ToolCard } from "./ToolCard";
 
@@ -17,7 +17,15 @@ interface Props {
   busy: boolean;
   /** Id of the confirmation whose answer is on its way. */
   respondingId?: string | null;
+  /** Thumbs up/down: whether this row is a final answer, its rating and the actions on it. */
+  rateable?: boolean;
+  rating?: Feedback;
+  ratePending?: boolean;
+  onRate?: (messageId: string, rating: 1 | -1, note?: string) => void;
+  onClear?: (messageId: string) => void;
 }
+
+const noop = () => {};
 
 const contextText = (ctx: Record<string, unknown>) => Object.entries(ctx).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("  ");
 
@@ -25,7 +33,7 @@ const contextText = (ctx: Record<string, unknown>) => Object.entries(ctx).map(([
  * One row of the conversation. Memoized: the reducer keeps the identity of rows that did not
  * change, so while one message streams every other row is skipped.
  */
-export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, respondingId }: Props) {
+export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, respondingId, rateable, rating, ratePending, onRate, onClear }: Props) {
   switch (it.kind) {
     case "surface":
       return <div className="ws-msg ws-assistant"><A2uiSurface surface={it.surface} onAction={onAction} disabled={busy} /></div>;
@@ -44,7 +52,12 @@ export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, 
       return (
         <div className="ws-msg ws-assistant">
           <div className="ws-bubble"><Markdown text={it.text} streaming={it.streaming} /></div>
-          {!it.streaming && it.text && <div className="ws-msg-tools"><CopyMessage text={it.text} /></div>}
+          {!it.streaming && it.text && (
+            <MessageActions
+              messageId={it.id} text={it.text} rateable={!!rateable && !!onRate && !!onClear} rating={rating} pending={ratePending}
+              onRate={onRate ?? noop} onClear={onClear ?? noop}
+            />
+          )}
         </div>
       );
     case "reasoning":

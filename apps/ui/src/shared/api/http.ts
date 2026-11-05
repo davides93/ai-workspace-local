@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
+  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, Feedback,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -148,6 +148,11 @@ export class HttpTransport implements Transport {
   worktreeApply = (sessionId: string) => this.req<WorktreeStatus>("POST", `/sessions/${enc(sessionId)}/worktree/apply`);
   worktreeDiscard = (sessionId: string) => this.req<void>("DELETE", `/sessions/${enc(sessionId)}/worktree`);
   messages = (sessionId: string) => this.req<ChatMessage[]>("GET", `/sessions/${enc(sessionId)}/messages`);
+  sessionFeedback = (sessionId: string) => this.req<Feedback[]>("GET", `/sessions/${enc(sessionId)}/feedback`);
+  setFeedback = (sessionId: string, messageId: string, rating: 1 | -1, note?: string) =>
+    this.req<Feedback>("PUT", `/sessions/${enc(sessionId)}/messages/${enc(messageId)}/feedback`, note ? { rating, note } : { rating });
+  deleteFeedback = (sessionId: string, messageId: string) =>
+    this.req<void>("DELETE", `/sessions/${enc(sessionId)}/messages/${enc(messageId)}/feedback`);
   startRun = (sessionId: string, input: string, kind?: "a2ui.action") =>
     this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, kind ? { input, kind } : { input });
   cancelRun = (runId: string) => this.req<void>("POST", `/runs/${enc(runId)}/cancel`);

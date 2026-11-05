@@ -439,6 +439,22 @@ export interface WorktreeStatus extends WorktreeInfo {
   truncated: boolean;
 }
 
+/** The user's rating of an assistant message (one per message). */
+export interface Feedback {
+  id: string;
+  session_id: string;
+  message_id: string;
+  /** The run that produced the message, when the engine could tell. */
+  run_id?: string;
+  /** 1 = thumbs up, -1 = thumbs down. */
+  rating: 1 | -1;
+  note?: string;
+  created_at: string;
+}
+
+/** Longest note the engine accepts with a rating. */
+export const MAX_FEEDBACK_NOTE_CHARS = 2000;
+
 export type RunStatus = "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled";
 
 export interface ToolCall {

@@ -98,6 +98,9 @@ enum TracesCmd {
         /// Numero massimo di sessioni (le più recenti)
         #[arg(long)]
         limit: Option<usize>,
+        /// Solo le sessioni con un feedback: up (pollice su), down (pollice giù) o any
+        #[arg(long, value_parser = ["up", "down", "any"])]
+        rated: Option<String>,
         /// File di destinazione (default: standard output)
         #[arg(long)]
         out: Option<PathBuf>,
@@ -281,9 +284,17 @@ async fn main() -> Result<()> {
             })?;
             println!("Profilo {} → {} · {}", p.id, p.runtime_id, p.model);
         }
-        Cmd::Traces { cmd: TracesCmd::Export { agent, since, until, status, limit, out, no_redact, exclude_path } } => {
-            let filter =
-                aiw_engine::traces::TraceFilter { agent, since, until, status, limit, redact: !no_redact, exclude_paths: exclude_path };
+        Cmd::Traces { cmd: TracesCmd::Export { agent, since, until, status, limit, rated, out, no_redact, exclude_path } } => {
+            let filter = aiw_engine::traces::TraceFilter {
+                agent,
+                since,
+                until,
+                status,
+                limit,
+                rated,
+                redact: !no_redact,
+                exclude_paths: exclude_path,
+            };
             let records = engine.export_traces(&filter)?;
             let jsonl = aiw_engine::traces::to_jsonl(&records)?;
             match out {

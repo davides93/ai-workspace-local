@@ -1,9 +1,9 @@
 import type { Transport, TransportCapabilities } from "../transport";
 import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
-import { SECRET_MASK } from "../types";
+import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, HookConfig, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, Feedback, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
 } from "../types";
@@ -445,11 +445,35 @@ export class MockTransport implements Transport {
     const i = sessions.findIndex((s) => s.id === id);
     if (i < 0) throw new ApiError(404, `sessione ${id} non trovata`);
     sessions.splice(i, 1);
+    this.feedback = this.feedback.filter((f) => f.session_id !== id);
   }
   // 404 for a session that is gone, like the backend (the UI leaves a conversation that was deleted elsewhere).
   async messages(sessionId: string) {
     if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     return structuredClone(sessionMessages[sessionId] ?? []);
+  }
+
+  private feedback: Feedback[] = [];
+  async sessionFeedback(sessionId: string) {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    return structuredClone(this.feedback.filter((f) => f.session_id === sessionId));
+  }
+  async setFeedback(sessionId: string, messageId: string, rating: 1 | -1, note?: string) {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    if (rating !== 1 && rating !== -1) throw new ApiError(400, "la valutazione deve essere 1 (utile) o -1 (da migliorare)");
+    const text = note?.trim() || undefined;
+    if (text && [...text].length > MAX_FEEDBACK_NOTE_CHARS) throw new ApiError(400, `la nota supera i ${MAX_FEEDBACK_NOTE_CHARS} caratteri`);
+    // The replies of a run in progress are not stored in the demo: only a stored message can be refused.
+    const stored = (sessionMessages[sessionId] ?? []).find((m) => m.id === messageId);
+    if (stored && stored.role !== "assistant") throw new ApiError(400, "si possono valutare solo le risposte dell'assistente");
+    const prev = this.feedback.find((f) => f.session_id === sessionId && f.message_id === messageId);
+    const f: Feedback = { id: prev?.id ?? nid("fbk"), session_id: sessionId, message_id: messageId, rating, ...(text ? { note: text } : {}), created_at: now() };
+    this.feedback = [...this.feedback.filter((x) => x !== prev), f];
+    return structuredClone(f);
+  }
+  async deleteFeedback(sessionId: string, messageId: string) {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    this.feedback = this.feedback.filter((f) => !(f.session_id === sessionId && f.message_id === messageId));
   }
 
   async activeRun(sessionId?: string) {

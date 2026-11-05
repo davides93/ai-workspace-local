@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress,
+  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, Feedback,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -90,6 +90,11 @@ export interface Transport {
   worktreeApply(sessionId: string): Promise<WorktreeStatus>;
   worktreeDiscard(sessionId: string): Promise<void>;
   messages(sessionId: string): Promise<ChatMessage[]>;
+  /** The ratings of a session (thumbs up/down on assistant messages). */
+  sessionFeedback(sessionId: string): Promise<Feedback[]>;
+  /** Rates an assistant message; rating again replaces the previous rating (and its note). */
+  setFeedback(sessionId: string, messageId: string, rating: 1 | -1, note?: string): Promise<Feedback>;
+  deleteFeedback(sessionId: string, messageId: string): Promise<void>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
   startRun(sessionId: string, input: string, kind?: "a2ui.action"): Promise<{ run_id: string }>;
   cancelRun(runId: string): Promise<void>;

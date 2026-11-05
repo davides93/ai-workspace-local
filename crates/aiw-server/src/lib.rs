@@ -131,6 +131,8 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/sessions/{id}/worktree", get(worktree_status).delete(worktree_discard))
         .route("/api/sessions/{id}/worktree/apply", post(worktree_apply))
         .route("/api/sessions/{id}/messages", get(messages))
+        .route("/api/sessions/{id}/messages/{mid}/feedback", put(set_feedback).delete(delete_feedback))
+        .route("/api/sessions/{id}/feedback", get(session_feedback))
         .route("/api/sessions/{id}/active-run", get(active_run))
         .route("/api/sessions/{id}/runs", post(start_run))
         .route("/api/runs/{id}/cancel", post(cancel_run))
@@ -472,6 +474,25 @@ async fn delete_session(State(s): State<AppState>, Path(id): Path<String>) -> Ap
 async fn messages(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<ChatMessage>> {
     ok(s.engine.messages(&id)?)
 }
+#[derive(Deserialize)]
+struct FeedbackBody {
+    rating: i32,
+    note: Option<String>,
+}
+async fn set_feedback(
+    State(s): State<AppState>,
+    Path((id, mid)): Path<(String, String)>,
+    Json(b): Json<FeedbackBody>,
+) -> ApiResult<Feedback> {
+    ok(s.engine.set_feedback(&id, &mid, b.rating, b.note)?)
+}
+async fn delete_feedback(State(s): State<AppState>, Path((id, mid)): Path<(String, String)>) -> ApiResult<Value> {
+    s.engine.delete_feedback(&id, &mid)?;
+    ok(json!({}))
+}
+async fn session_feedback(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<Feedback>> {
+    ok(s.engine.session_feedback(&id)?)
+}
 async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.session(&id)?; // an unknown session is a 404, not "no run"
     ok(json!({"run_id": s.engine.active_run(&id)}))
@@ -545,7 +566,7 @@ async fn run_events_sse(
 }
 
 /// Trajectories as NDJSON, one session per line. Query: `agent`, `since`, `until`, `status`,
-/// `limit`, `redact=false` (secrets are masked by default), `exclude_path` (repeatable glob).
+/// `limit`, `rated` (up | down | any), `redact=false` (secrets are masked by default), `exclude_path` (repeatable glob).
 async fn traces_export(State(s): State<AppState>, axum::extract::RawQuery(q): axum::extract::RawQuery) -> Result<Response, ApiError> {
     let mut f = aiw_engine::traces::TraceFilter::default();
     let url = reqwest::Url::parse(&format!("http://localhost/?{}", q.unwrap_or_default()))
@@ -557,6 +578,7 @@ async fn traces_export(State(s): State<AppState>, axum::extract::RawQuery(q): ax
             "since" if !v.is_empty() => f.since = Some(v),
             "until" if !v.is_empty() => f.until = Some(v),
             "status" if !v.is_empty() => f.status = Some(v),
+            "rated" if !v.is_empty() => f.rated = Some(v),
             "limit" if !v.is_empty() => {
                 f.limit = Some(v.parse().map_err(|_| ApiError(Error::Invalid("limit deve essere un numero intero".into())))?)
             }

@@ -364,6 +364,26 @@ describe("backend fixes in the demo", () => {
     await expect(api.removeMcpServer("nope")).rejects.toMatchObject({ status: 404 });
   });
 
+  it("keeps one rating per reply, like the engine", async () => {
+    const api = new MockTransport();
+    const msgs = await api.messages("ses_bug");
+    const answer = msgs.find((m) => m.role === "assistant")!;
+    const first = await api.setFeedback("ses_bug", answer.id, -1, "  troppo lunga  ");
+    expect(first).toMatchObject({ session_id: "ses_bug", message_id: answer.id, rating: -1, note: "troppo lunga" });
+    const second = await api.setFeedback("ses_bug", answer.id, 1);
+    expect(second.id).toBe(first.id);
+    expect(second.note).toBeUndefined();
+    expect(await api.sessionFeedback("ses_bug")).toEqual([second]);
+    await expect(api.setFeedback("ses_bug", msgs.find((m) => m.role === "user")!.id, 1)).rejects.toMatchObject({ status: 400 });
+    await expect(api.setFeedback("ses_bug", answer.id, 2 as never)).rejects.toMatchObject({ status: 400 });
+    await expect(api.setFeedback("ses_bug", answer.id, -1, "x".repeat(2001))).rejects.toMatchObject({ status: 400 });
+    await expect(api.setFeedback("ses_none", answer.id, 1)).rejects.toMatchObject({ status: 404 });
+    await api.deleteFeedback("ses_bug", answer.id);
+    await api.deleteFeedback("ses_bug", answer.id);
+    expect(await api.sessionFeedback("ses_bug")).toEqual([]);
+    await expect(api.sessionFeedback("ses_none")).rejects.toMatchObject({ status: 404 });
+  });
+
   it("has a session whose history ends with the persisted run error", async () => {
     const api = new MockTransport();
     const msgs = await api.messages("ses_bug");

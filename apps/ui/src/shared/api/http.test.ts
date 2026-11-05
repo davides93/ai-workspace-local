@@ -61,6 +61,10 @@ describe("HttpTransport", () => {
     await t.setPolicy([{ tool: "shell", action: "ask" }]);
     await t.hooks();
     await t.setHooks([]);
+    await t.sessionFeedback("s");
+    await t.setFeedback("s", "m/1", -1, "troppo lunga");
+    await t.setFeedback("s", "m2", 1);
+    await t.deleteFeedback("s", "m2");
     vi.unstubAllGlobals();
     expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
       "POST /runtimes/refresh",
@@ -81,11 +85,17 @@ describe("HttpTransport", () => {
       "PUT /policy",
       "GET /hooks",
       "PUT /hooks",
+      "GET /sessions/s/feedback",
+      "PUT /sessions/s/messages/m%2F1/feedback",
+      "PUT /sessions/s/messages/m2/feedback",
+      "DELETE /sessions/s/messages/m2/feedback",
     ]);
     expect(JSON.parse(calls[2].body!)).toEqual({ token: "t0k", endpoint: "https://mirror" });
     expect(JSON.parse(calls[5].body!)).toEqual({ id: "some-id" });
     expect(JSON.parse(calls[11].body!)).toEqual({ title: "Titolo" });
     expect(JSON.parse(calls[15].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
+    expect(JSON.parse(calls[19].body!)).toEqual({ rating: -1, note: "troppo lunga" });
+    expect(JSON.parse(calls[20].body!)).toEqual({ rating: 1 });
   });
 });
 

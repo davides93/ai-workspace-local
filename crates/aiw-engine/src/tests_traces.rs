@@ -185,3 +185,55 @@ async fn filters_select_sessions_by_agent_status_date_and_limit() {
     assert_eq!(ids(TraceFilter { limit: Some(1), ..Default::default() }).len(), 1);
     assert!(matches!(e.export_traces(&TraceFilter { since: Some("ieri".into()), ..Default::default() }), Err(Error::Invalid(_))));
 }
+
+#[tokio::test]
+async fn feedback_is_validated_upserted_and_exported() {
+    let turns = vec![ScriptedBackend::text_turn("Ecco la risposta")];
+    let (e, _d, _w) = engine(turns).await;
+    let s = e.create_session("operator", None).unwrap();
+    let run = e.start_run(&s.id, "ciao".into()).await.unwrap();
+    wait_finished(&e, &run).await;
+    let msgs = e.messages(&s.id).unwrap();
+    let (user, answer) = (&msgs[0], &msgs[1]);
+    // The streamed message and the stored one are the same message: the UI rates what it showed live.
+    assert!(e
+        .run_events(&run)
+        .iter()
+        .any(|ev| matches!(&ev.event.event, AgEvent::TextMessageStart { message_id, .. } if *message_id == answer.id)));
+
+    // Only assistant messages can be rated, with 1 or -1 and a note of at most 2000 characters.
+    assert!(matches!(e.set_feedback(&s.id, &user.id, 1, None), Err(Error::Invalid(_))));
+    assert!(matches!(e.set_feedback(&s.id, "msg_none", 1, None), Err(Error::NotFound(_))));
+    assert!(matches!(e.set_feedback("ses_none", &answer.id, 1, None), Err(Error::NotFound(_))));
+    assert!(matches!(e.set_feedback(&s.id, &answer.id, 2, None), Err(Error::Invalid(_))));
+    assert!(matches!(e.set_feedback(&s.id, &answer.id, -1, Some("x".repeat(2001))), Err(Error::Invalid(_))));
+    assert!(e.session_feedback(&s.id).unwrap().is_empty());
+
+    let up = e.set_feedback(&s.id, &answer.id, 1, None).unwrap();
+    assert_eq!((up.rating, up.run_id.as_deref()), (1, Some(run.as_str())), "the run that wrote the answer");
+    // Rating again replaces: one feedback per message, same id, blank note dropped.
+    let down = e.set_feedback(&s.id, &answer.id, -1, Some("  troppo lunga  ".into())).unwrap();
+    assert_eq!((down.id.as_str(), down.rating, down.note.as_deref()), (up.id.as_str(), -1, Some("troppo lunga")));
+    assert_eq!(e.session_feedback(&s.id).unwrap(), vec![down]);
+    assert!(e.set_feedback(&s.id, &answer.id, -1, Some("   ".into())).unwrap().note.is_none());
+    e.set_feedback(&s.id, &answer.id, -1, Some("troppo lunga, chiave sk-abcdefghijklmnop1234567890".into())).unwrap();
+
+    // Exported with the record (the note is masked like the messages) and selectable by rating.
+    let rated = |r: &str| e.export_traces(&TraceFilter { rated: Some(r.into()), ..Default::default() }).unwrap().len();
+    let rec = &e.export_traces(&TraceFilter::default()).unwrap()[0];
+    assert_eq!(rec.feedback.len(), 1);
+    assert_eq!((rec.feedback[0].message_id.as_str(), rec.feedback[0].rating), (answer.id.as_str(), -1));
+    assert_eq!(rec.feedback[0].note.as_deref(), Some(format!("troppo lunga, chiave {REDACTED}").as_str()));
+    assert_eq!((rated("down"), rated("any"), rated("up")), (1, 1, 0));
+    assert!(matches!(e.export_traces(&TraceFilter { rated: Some("boh".into()), ..Default::default() }), Err(Error::Invalid(_))));
+
+    e.delete_feedback(&s.id, &answer.id).unwrap();
+    e.delete_feedback(&s.id, &answer.id).unwrap();
+    assert!(e.session_feedback(&s.id).unwrap().is_empty());
+    assert_eq!(rated("any"), 0);
+
+    // Deleting the session takes its feedback along.
+    e.set_feedback(&s.id, &answer.id, 1, None).unwrap();
+    e.delete_session(&s.id).unwrap();
+    assert!(e.0.store.session_feedback(&s.id).unwrap().is_empty());
+}

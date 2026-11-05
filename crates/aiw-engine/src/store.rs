@@ -1,7 +1,7 @@
 //! SQLite persistence: documents (agents, profiles, workflows, MCP servers, settings), sessions,
 //! messages, run events (replay), audit trail and workflow runs.
 
-use aiw_core::api::{AuditEntry, ChatMessage, Session, WorkflowRun};
+use aiw_core::api::{AuditEntry, ChatMessage, Feedback, Session, WorkflowRun};
 use aiw_core::events::SeqEvent;
 use aiw_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -26,6 +26,18 @@ fn db<E: std::fmt::Display>(e: E) -> Error {
     Error::Other(format!("errore del database: {e}"))
 }
 
+fn feedback_row(r: &rusqlite::Row) -> rusqlite::Result<Feedback> {
+    Ok(Feedback {
+        id: r.get(0)?,
+        session_id: r.get(1)?,
+        message_id: r.get(2)?,
+        run_id: r.get(3)?,
+        rating: r.get(4)?,
+        note: r.get(5)?,
+        created_at: r.get(6)?,
+    })
+}
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).map_err(db)?;
@@ -44,6 +56,8 @@ impl Store {
              CREATE TABLE IF NOT EXISTS events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY(run_id, seq));
              CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, session_id TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT);
              CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, ts TEXT NOT NULL, json TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, run_id TEXT, rating INTEGER NOT NULL, note TEXT, created_at TEXT NOT NULL);
+             CREATE UNIQUE INDEX IF NOT EXISTS feedback_message ON feedback(session_id, message_id);
              CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);",
         )
         .map_err(db)?;
@@ -204,6 +218,43 @@ impl Store {
             out.push(serde_json::from_str(&r.map_err(db)?)?);
         }
         Ok(out)
+    }
+
+    // ---------------- feedback
+    /// Sets the rating of a message; a second call for the same message replaces the first
+    /// (the row keeps its id).
+    pub fn upsert_feedback(&self, f: &Feedback) -> Result<Feedback> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO feedback(id,session_id,message_id,run_id,rating,note,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)
+             ON CONFLICT(session_id,message_id) DO UPDATE SET run_id=excluded.run_id, rating=excluded.rating, note=excluded.note, created_at=excluded.created_at",
+            params![f.id, f.session_id, f.message_id, f.run_id, f.rating, f.note, f.created_at],
+        )
+        .map_err(db)?;
+        c.query_row(
+            "SELECT id,session_id,message_id,run_id,rating,note,created_at FROM feedback WHERE session_id=?1 AND message_id=?2",
+            params![f.session_id, f.message_id],
+            feedback_row,
+        )
+        .map_err(db)
+    }
+    pub fn delete_feedback(&self, session_id: &str, message_id: &str) -> Result<bool> {
+        let n = self
+            .conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM feedback WHERE session_id=?1 AND message_id=?2", params![session_id, message_id])
+            .map_err(db)?;
+        Ok(n > 0)
+    }
+    /// The ratings of a session, in the order they were given.
+    pub fn session_feedback(&self, session_id: &str) -> Result<Vec<Feedback>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c
+            .prepare("SELECT id,session_id,message_id,run_id,rating,note,created_at FROM feedback WHERE session_id=?1 ORDER BY created_at, rowid")
+            .map_err(db)?;
+        let rows = st.query_map(params![session_id], feedback_row).map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
     }
 
     // ---------------- runs & events
