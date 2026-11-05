@@ -17,6 +17,18 @@ describe("conversion", () => {
     }
   });
 
+  it("keeps the retry, timeout and error options of the steps", () => {
+    const def: WorkflowDef = {
+      id: "o", name: "O", enabled: false, trigger: { kind: "manual" }, inputs: {},
+      steps: [{ id: "a", kind: "llm", profile: "p", prompt: "x", retry: 2, timeout_s: 30, on_error: "continue" }, { id: "b", kind: "tool", tool: "list_dir", args: {} }],
+    };
+    const plain = plainFromDef(def);
+    expect(plain.steps[0]).toMatchObject({ opts: { retry: 2, timeout_s: 30, on_error: "continue" } });
+    expect(plain.steps[1]).not.toHaveProperty("opts");
+    expect(defFromPlain(plain)).toEqual(def);
+    expect(find(validateDraft({ ...base(), steps: [{ id: "a", kind: "llm", profile: "fast-local", prompt: "x", opts: { retry: 9 } }] }, ctx), "retry")).toHaveLength(1);
+  });
+
   it("keeps non-string inputs as JSON and string ones as text", () => {
     const def: WorkflowDef = { id: "i", name: "I", enabled: false, trigger: { kind: "manual" }, inputs: { folder: "~/x", n: 3, flags: { a: true } }, steps: [] };
     const plain = plainFromDef(def);

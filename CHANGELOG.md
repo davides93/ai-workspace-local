@@ -1,5 +1,9 @@
 # Changelog
 
+## Non rilasciato
+
+- Workflow: i passi `tool`, `agent` e `llm` accettano `retry` (0–5 nuovi tentativi), `retry_delay_s` (attesa, default 2 s), `timeout_s` (limite per tentativo) e `on_error: continue` (il passo resta fallito ma il run prosegue; l'errore è in `{{steps.<id>.error}}`). Opzioni modificabili dall'editor visuale. Se scade il limite di un passo `agent`, anche il run dell'agente viene annullato.
+
 ## 0.4.0-rc.2 - release candidate
 
 - Aggiornamenti automatici dalle release del repository pubblico su GitHub, con scelta del canale (`auto`, produzione/`stable`, `beta`, `alpha`): controllo all'avvio e ogni 6 ore, download con verifica SHA-256, installazione con l'installer del sistema (dmg, MSI, AppImage). Pannello in Impostazioni e indicatore nella barra laterale.

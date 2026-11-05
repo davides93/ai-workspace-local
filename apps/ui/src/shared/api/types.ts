@@ -501,10 +501,22 @@ export type WorkflowTrigger =
   | { kind: "file"; path: string }
   | { kind: "webhook"; secret?: string };
 
+/** Options of the executable steps; the defaults (0, 2 s, none, `fail`) are left out. */
+export interface StepOptions {
+  /** Extra attempts after a failure, 0..5. */
+  retry?: number;
+  /** Seconds between attempts, 0..300 (default 2). */
+  retry_delay_s?: number;
+  /** Time limit of each attempt in seconds, 1..86400. */
+  timeout_s?: number;
+  /** `continue`: the step stays failed but the run goes on; `{{steps.<id>.error}}` holds the error. */
+  on_error?: "fail" | "continue";
+}
+
 export type WorkflowStep =
-  | { id: string; kind: "tool"; tool: string; args: Record<string, unknown> }
-  | { id: string; kind: "agent"; agent: string; prompt: string }
-  | { id: string; kind: "llm"; profile: string; prompt: string }
+  | ({ id: string; kind: "tool"; tool: string; args: Record<string, unknown> } & StepOptions)
+  | ({ id: string; kind: "agent"; agent: string; prompt: string } & StepOptions)
+  | ({ id: string; kind: "llm"; profile: string; prompt: string } & StepOptions)
   | { id: string; kind: "approval"; message: string }
   | { id: string; kind: "condition"; if: string; then: string[]; else?: string[] };
 
@@ -524,7 +536,7 @@ export interface WorkflowRun {
   status: RunStatus;
   started_at: string;
   finished_at?: string;
-  steps: { id: string; status: "pending" | "running" | "done" | "failed" | "skipped" | "waiting"; output?: string; error?: string }[];
+  steps: { id: string; status: "pending" | "running" | "done" | "failed" | "skipped" | "waiting"; output?: string; error?: string; attempts?: number }[];
 }
 
 // ---------- Tools & MCP ----------

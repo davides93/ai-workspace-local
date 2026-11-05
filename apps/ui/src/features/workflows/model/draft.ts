@@ -5,7 +5,7 @@
 import { keyed, unkeyed, type Keyed } from "../../../shared/lib/keyedList";
 import type { WorkflowDef, WorkflowStep, WorkflowTrigger } from "../../../shared/api/types";
 import { parseCron } from "./cron";
-import { placeholders, STEP_ID, stepRef, stepTexts, type StepDraft } from "./steps";
+import { cleanOptions, hasOptions, optionsOf, optionsProblem, placeholders, STEP_ID, stepRef, stepTexts, type StepDraft } from "./steps";
 import { joinInterval, MIN_INTERVAL_S, splitInterval, type IntervalUnit } from "./triggers";
 
 export type TriggerDraft =
@@ -56,10 +56,12 @@ export function triggerFromDraft(t: TriggerDraft, secret = ""): WorkflowTrigger 
 }
 
 function stepToDraft(s: WorkflowStep): StepDraft {
+  const opts = s.kind === "tool" || s.kind === "agent" || s.kind === "llm" ? optionsOf(s) : undefined;
+  const o = opts ? { opts } : {};
   switch (s.kind) {
-    case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: pretty(s.args ?? {}) };
-    case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt };
-    case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt };
+    case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: pretty(s.args ?? {}), ...o };
+    case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt, ...o };
+    case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt, ...o };
     case "approval": return { id: s.id, kind: "approval", message: s.message };
     case "condition": return { id: s.id, kind: "condition", if: s.if, then: [...s.then], else: [...(s.else ?? [])] };
   }
@@ -77,10 +79,11 @@ export function parseArgs(text: string): Record<string, unknown> | null {
 }
 
 function stepFromDraft(s: StepDraft): WorkflowStep {
+  const o = hasOptions(s) ? cleanOptions(s.opts) ?? {} : {};
   switch (s.kind) {
-    case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: parseArgs(s.args) ?? {} };
-    case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt };
-    case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt };
+    case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: parseArgs(s.args) ?? {}, ...o };
+    case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt, ...o };
+    case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt, ...o };
     case "approval": return { id: s.id, kind: "approval", message: s.message };
     case "condition": return s.else.length ? { id: s.id, kind: "condition", if: s.if, then: s.then, else: s.else } : { id: s.id, kind: "condition", if: s.if, then: s.then };
   }
@@ -291,6 +294,10 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
         }
         if (s.then.length === 0 && s.else.length === 0) w("then", "Nessun passo scelto: la condizione non cambia nulla.");
         break;
+    }
+    if (hasOptions(s)) {
+      const p = optionsProblem(s.opts);
+      if (p) e(p.field, p.message);
     }
     // Placeholders: what the engine would leave empty at run time.
     for (const text of stepTexts(s)) {

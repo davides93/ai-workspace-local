@@ -1412,6 +1412,15 @@ impl Engine {
         };
         let mut rx = self.subscribe();
         let run_id = self.start_run(&session_id, prompt.to_string()).await?;
+        // If the caller stops waiting (a workflow step timeout, a dropped task) the agent run must
+        // not go on in the background.
+        struct CancelOnDrop<'a>(&'a Engine, &'a str);
+        impl Drop for CancelOnDrop<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.cancel_run(self.1);
+            }
+        }
+        let cancel_guard = CancelOnDrop(self, &run_id);
         loop {
             if self.run_done(&run_id) {
                 break;
@@ -1421,6 +1430,7 @@ impl Engine {
                 _ => {}
             }
         }
+        std::mem::forget(cancel_guard);
         // Let the run task persist its messages.
         for _ in 0..50 {
             if self.0.store.session(&session_id).ok().and_then(|s| s.last_status).as_deref() != Some("running") {

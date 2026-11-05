@@ -597,6 +597,61 @@ pub enum WorkflowTrigger {
     },
 }
 
+/// What a workflow does when a step fails (after its retries).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OnError {
+    /// The run fails (default).
+    #[default]
+    Fail,
+    /// The step stays `failed` but the run goes on; `{{steps.<id>.error}}` holds the error.
+    Continue,
+}
+
+impl OnError {
+    fn is_fail(&self) -> bool {
+        *self == OnError::Fail
+    }
+}
+
+pub const MAX_STEP_RETRY: u32 = 5;
+pub const MAX_RETRY_DELAY_S: u64 = 300;
+pub const MAX_STEP_TIMEOUT_S: u64 = 86_400;
+pub const DEFAULT_RETRY_DELAY_S: u64 = 2;
+
+fn default_retry_delay() -> u64 {
+    DEFAULT_RETRY_DELAY_S
+}
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+fn is_default_delay(n: &u64) -> bool {
+    *n == DEFAULT_RETRY_DELAY_S
+}
+
+/// Options shared by the executable steps (`tool`, `agent`, `llm`, ...). Every field is optional
+/// and the defaults reproduce the behaviour of a step without options; defaults are not serialized.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StepOptions {
+    /// Extra attempts after the first failure (0..=5).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retry: u32,
+    /// Seconds to wait between attempts (0..=300).
+    #[serde(default = "default_retry_delay", skip_serializing_if = "is_default_delay")]
+    pub retry_delay_s: u64,
+    /// Time limit of each attempt in seconds (1..=86400).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_s: Option<u64>,
+    #[serde(default, skip_serializing_if = "OnError::is_fail")]
+    pub on_error: OnError,
+}
+
+impl Default for StepOptions {
+    fn default() -> Self {
+        Self { retry: 0, retry_delay_s: DEFAULT_RETRY_DELAY_S, timeout_s: None, on_error: OnError::Fail }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum WorkflowStep {
@@ -605,16 +660,22 @@ pub enum WorkflowStep {
         tool: String,
         #[serde(default)]
         args: Map<String, Value>,
+        #[serde(default, flatten)]
+        opts: StepOptions,
     },
     Agent {
         id: String,
         agent: String,
         prompt: String,
+        #[serde(default, flatten)]
+        opts: StepOptions,
     },
     Llm {
         id: String,
         profile: String,
         prompt: String,
+        #[serde(default, flatten)]
+        opts: StepOptions,
     },
     Approval {
         id: String,
@@ -638,6 +699,14 @@ impl WorkflowStep {
             | WorkflowStep::Llm { id, .. }
             | WorkflowStep::Approval { id, .. }
             | WorkflowStep::Condition { id, .. } => id,
+        }
+    }
+
+    /// The retry/timeout/error options of the steps that have them.
+    pub fn opts(&self) -> Option<&StepOptions> {
+        match self {
+            WorkflowStep::Tool { opts, .. } | WorkflowStep::Agent { opts, .. } | WorkflowStep::Llm { opts, .. } => Some(opts),
+            WorkflowStep::Approval { .. } | WorkflowStep::Condition { .. } => None,
         }
     }
 }
@@ -665,6 +734,9 @@ pub struct WorkflowStepRun {
     pub output: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Attempts made so far, only for steps with `retry`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

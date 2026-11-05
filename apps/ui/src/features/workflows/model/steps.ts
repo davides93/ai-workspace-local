@@ -3,9 +3,10 @@
 //  - `{{inputs.x}}`, `{{steps.id.output}}` and `{{now}}` are replaced in args, prompts, messages and conditions;
 //  - a condition steers the steps named in `then` / `else`: those steps run only when chosen, and a step
 //    that comes before its condition is always skipped;
-//  - an approval that is refused ends the run as cancelled.
+//  - an approval that is refused ends the run as cancelled;
+//  - tool, agent and llm steps take `retry`, `retry_delay_s`, `timeout_s` and `on_error` (see `StepOptions`).
 
-import type { WorkflowStep } from "../../../shared/api/types";
+import type { StepOptions, WorkflowStep } from "../../../shared/api/types";
 
 export type StepKind = WorkflowStep["kind"];
 
@@ -21,9 +22,9 @@ export const stepMeta = (kind: StepKind) => STEP_KINDS.find((k) => k.kind === ki
 
 /** A step with its tool arguments as text, so a half-typed JSON is not lost while it is invalid. */
 export type StepDraft =
-  | { id: string; kind: "tool"; tool: string; args: string }
-  | { id: string; kind: "agent"; agent: string; prompt: string }
-  | { id: string; kind: "llm"; profile: string; prompt: string }
+  | { id: string; kind: "tool"; tool: string; args: string; opts?: StepOptions }
+  | { id: string; kind: "agent"; agent: string; prompt: string; opts?: StepOptions }
+  | { id: string; kind: "llm"; profile: string; prompt: string; opts?: StepOptions }
   | { id: string; kind: "approval"; message: string }
   | { id: string; kind: "condition"; if: string; then: string[]; else: string[] };
 
@@ -53,11 +54,58 @@ export function newStep(kind: StepKind, steps: readonly StepDraft[], d: StepDefa
   }
 }
 
-/** Same id, another kind: the fields of the new kind start empty, nothing else is kept. */
+/** Same id, another kind: the fields of the new kind start empty; the options carry over between kinds that have them. */
 export function changeKind(step: StepDraft, kind: StepKind, steps: readonly StepDraft[], d: StepDefaults = {}): StepDraft {
   if (step.kind === kind) return step;
   const fresh = newStep(kind, steps, d);
-  return { ...fresh, id: step.id } as StepDraft;
+  const opts = hasOptions(step) && hasOptions(fresh) ? step.opts : undefined;
+  return { ...fresh, id: step.id, ...(opts ? { opts } : {}) } as StepDraft;
+}
+
+// ---------------------------------------------------------------- retry / timeout / on_error
+
+export const OPTION_LIMITS = { retry: 5, retryDelay: 300, timeout: 86_400 } as const;
+export const DEFAULT_RETRY_DELAY_S = 2;
+
+/** The steps that take `StepOptions`. */
+export const hasOptions = (s: StepDraft): s is Extract<StepDraft, { kind: "tool" | "agent" | "llm" }> =>
+  s.kind === "tool" || s.kind === "agent" || s.kind === "llm";
+
+/** Options without the defaults (what the backend does not serialize either); `undefined` when nothing is left. */
+export function cleanOptions(o: StepOptions | undefined): StepOptions | undefined {
+  if (!o) return undefined;
+  const out: StepOptions = {};
+  if (o.retry) out.retry = o.retry;
+  if (o.retry_delay_s !== undefined && o.retry_delay_s !== DEFAULT_RETRY_DELAY_S) out.retry_delay_s = o.retry_delay_s;
+  if (o.timeout_s) out.timeout_s = o.timeout_s;
+  if (o.on_error === "continue") out.on_error = "continue";
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** The options of a wire-form step. */
+export function optionsOf(s: StepOptions): StepOptions | undefined {
+  return cleanOptions({ retry: s.retry, retry_delay_s: s.retry_delay_s, timeout_s: s.timeout_s, on_error: s.on_error });
+}
+
+/** First problem with the option values, or null. */
+export function optionsProblem(o: StepOptions | undefined): { field: string; message: string } | null {
+  if (!o) return null;
+  const bad = (n: number | undefined, min: number, max: number) => n !== undefined && (!Number.isInteger(n) || n < min || n > max);
+  if (bad(o.retry, 0, OPTION_LIMITS.retry)) return { field: "retry", message: `I tentativi extra vanno da 0 a ${OPTION_LIMITS.retry}.` };
+  if (bad(o.retry_delay_s, 0, OPTION_LIMITS.retryDelay)) return { field: "retry_delay_s", message: `L'attesa tra i tentativi va da 0 a ${OPTION_LIMITS.retryDelay} secondi.` };
+  if (bad(o.timeout_s, 1, OPTION_LIMITS.timeout)) return { field: "timeout_s", message: `Il limite di tempo va da 1 a ${OPTION_LIMITS.timeout} secondi.` };
+  return null;
+}
+
+/** Short text for the options, empty when there are none. */
+export function optionsSummary(o: StepOptions | undefined): string {
+  const c = cleanOptions(o);
+  if (!c) return "";
+  const parts: string[] = [];
+  if (c.retry) parts.push(`${c.retry} ${c.retry === 1 ? "nuovo tentativo" : "nuovi tentativi"}`);
+  if (c.timeout_s) parts.push(`limite ${c.timeout_s} s`);
+  if (c.on_error === "continue") parts.push("prosegue se fallisce");
+  return parts.join(" · ");
 }
 
 const PLACEHOLDER = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;

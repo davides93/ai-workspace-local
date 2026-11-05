@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  changeKind, dropReferences, schemaParams, freshStepId, gatedIds, newStep, placeholders, renameReferences, stepRef, stepSummary, STEP_ID,
+  changeKind, cleanOptions, optionsOf, optionsProblem, optionsSummary, dropReferences, schemaParams, freshStepId, gatedIds, newStep, placeholders, renameReferences, stepRef, stepSummary, STEP_ID,
   type StepDraft,
 } from "./steps";
 
@@ -99,5 +99,29 @@ describe("summary", () => {
     expect(stepSummary(steps[1])).toBe("se {{steps.scan.output}} contains pdf → act altrimenti skip");
     expect(stepSummary({ id: "t", kind: "tool", tool: "", args: "{}" })).toBe("tool da scegliere {}");
     expect(stepSummary({ id: "c", kind: "condition", if: "", then: [], else: [] })).toBe("se … → nessun passo");
+  });
+});
+
+describe("step options", () => {
+  it("drop the defaults and keep what was set", () => {
+    expect(cleanOptions({ retry: 0, retry_delay_s: 2, on_error: "fail" })).toBeUndefined();
+    expect(cleanOptions({ retry: 2, retry_delay_s: 5, timeout_s: 30, on_error: "continue" })).toEqual({ retry: 2, retry_delay_s: 5, timeout_s: 30, on_error: "continue" });
+    expect(optionsOf({ retry: 1 })).toEqual({ retry: 1 });
+  });
+
+  it("check the limits of the backend", () => {
+    expect(optionsProblem({ retry: 5, retry_delay_s: 300, timeout_s: 86_400 })).toBeNull();
+    expect(optionsProblem({ retry: 6 })?.field).toBe("retry");
+    expect(optionsProblem({ retry_delay_s: 301 })?.field).toBe("retry_delay_s");
+    expect(optionsProblem({ timeout_s: 0 })?.field).toBe("timeout_s");
+    expect(optionsProblem({ retry: 1.5 })?.field).toBe("retry");
+  });
+
+  it("are summarised and carried over when the kind changes between steps that have them", () => {
+    expect(optionsSummary({ retry: 2, timeout_s: 30, on_error: "continue" })).toBe("2 nuovi tentativi · limite 30 s · prosegue se fallisce");
+    expect(optionsSummary(undefined)).toBe("");
+    const s: StepDraft = { id: "a", kind: "tool", tool: "x", args: "{}", opts: { retry: 1 } };
+    expect(changeKind(s, "llm", [s], { profile: "p" })).toMatchObject({ kind: "llm", opts: { retry: 1 } });
+    expect(changeKind(s, "approval", [s])).not.toHaveProperty("opts");
   });
 });

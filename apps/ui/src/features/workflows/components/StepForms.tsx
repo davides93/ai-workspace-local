@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import { Chip, Field, Input, Select, Textarea } from "../../../shared/ui";
 import type { AgentProfile, InferenceProfile, ToolInfo } from "../../../shared/api/types";
 import type { Issue } from "../model/draft";
-import { schemaParams, type StepDraft } from "../model/steps";
+import { cleanOptions, DEFAULT_RETRY_DELAY_S, OPTION_LIMITS, schemaParams, type StepDraft } from "../model/steps";
+import type { StepOptions } from "../../../shared/api/types";
 import { PlaceholderInsert } from "./PlaceholderInsert";
 
 export interface StepCatalog {
@@ -149,5 +150,35 @@ export function ConditionFields({ step, uid, issues, before, inputKeys, others, 
       <p className="faint text-xs">I passi non scelti vengono saltati. Un passo scelto deve venire dopo la condizione, altrimenti non parte mai.</p>
       {t.map((i) => <p key={i.message} className={i.level === "error" ? "field-error" : "row-warn"}>{i.message}</p>)}
     </>
+  );
+}
+
+/** Retry, time limit and what to do when the step fails; closed unless something is set. */
+export function OptionsFields({ opts, uid, issues, onChange }: { opts?: StepOptions; uid: number; issues: Issue[]; onChange: (next?: StepOptions) => void }) {
+  const o = opts ?? {};
+  const set = (patch: StepOptions) => onChange({ ...o, ...patch });
+  const num = (v: string): number | undefined => (v.trim() === "" ? undefined : Number(v));
+  const err = (field: string) => note(issues, field).error;
+  return (
+    <details className="step-options" open={!!cleanOptions(opts) || undefined}>
+      <summary className="muted text-sm">Tentativi, limite di tempo ed errori</summary>
+      <div className="step-options-grid">
+        <Field label="Nuovi tentativi" htmlFor={`st-${uid}-retry`} error={err("retry")} hint={`0–${OPTION_LIMITS.retry}`}>
+          <Input id={`st-${uid}-retry`} type="number" min={0} max={OPTION_LIMITS.retry} value={o.retry ?? ""} placeholder="0" onChange={(e) => set({ retry: num(e.target.value) })} aria-invalid={!!err("retry")} />
+        </Field>
+        <Field label="Attesa tra i tentativi (s)" htmlFor={`st-${uid}-delay`} error={err("retry_delay_s")} hint={`0–${OPTION_LIMITS.retryDelay}`}>
+          <Input id={`st-${uid}-delay`} type="number" min={0} max={OPTION_LIMITS.retryDelay} value={o.retry_delay_s ?? ""} placeholder={String(DEFAULT_RETRY_DELAY_S)} onChange={(e) => set({ retry_delay_s: num(e.target.value) })} aria-invalid={!!err("retry_delay_s")} />
+        </Field>
+        <Field label="Limite di tempo (s)" htmlFor={`st-${uid}-timeout`} error={err("timeout_s")} hint="Per ogni tentativo; vuoto = nessun limite">
+          <Input id={`st-${uid}-timeout`} type="number" min={1} max={OPTION_LIMITS.timeout} value={o.timeout_s ?? ""} onChange={(e) => set({ timeout_s: num(e.target.value) })} aria-invalid={!!err("timeout_s")} />
+        </Field>
+        <Field label="Se il passo fallisce" htmlFor={`st-${uid}-onerror`} hint="Con «prosegui» l'errore è in {{steps.<id>.error}}">
+          <Select id={`st-${uid}-onerror`} value={o.on_error ?? "fail"} onChange={(e) => set({ on_error: e.target.value === "continue" ? "continue" : "fail" })}>
+            <option value="fail">Ferma il workflow</option>
+            <option value="continue">Prosegui con i passi successivi</option>
+          </Select>
+        </Field>
+      </div>
+    </details>
   );
 }
