@@ -643,6 +643,8 @@ pub const MAX_RETRY_DELAY_S: u64 = 300;
 pub const MAX_STEP_TIMEOUT_S: u64 = 86_400;
 pub const DEFAULT_RETRY_DELAY_S: u64 = 2;
 
+/// How many sub-workflows can be nested (a top-level run is depth 0).
+pub const MAX_SUBWORKFLOW_DEPTH: u32 = 3;
 pub const MAX_FOREACH_PARALLEL: u32 = 8;
 pub const MAX_FOREACH_ITEMS: usize = 200;
 
@@ -733,6 +735,19 @@ pub enum WorkflowStep {
         #[serde(default, flatten)]
         opts: StepOptions,
     },
+    /// Starts another workflow and waits for it. The output is the output of the last step of the
+    /// child that finished (`done`); a failed or cancelled child is an error of this step. The child
+    /// can be a disabled workflow (enabling only concerns the triggers) and runs at most 3 levels deep.
+    Workflow {
+        id: String,
+        /// Id of the workflow to run.
+        workflow: String,
+        /// Inputs of the child; the values can use placeholders.
+        #[serde(default)]
+        inputs: Map<String, Value>,
+        #[serde(default, flatten)]
+        opts: StepOptions,
+    },
     Approval {
         id: String,
         message: String,
@@ -761,6 +776,7 @@ impl WorkflowStep {
             | WorkflowStep::Llm { id, .. }
             | WorkflowStep::Foreach { id, .. }
             | WorkflowStep::Parallel { id, .. }
+            | WorkflowStep::Workflow { id, .. }
             | WorkflowStep::Approval { id, .. }
             | WorkflowStep::Condition { id, .. } => id,
         }
@@ -787,7 +803,8 @@ impl WorkflowStep {
             | WorkflowStep::Agent { opts, .. }
             | WorkflowStep::Llm { opts, .. }
             | WorkflowStep::Foreach { opts, .. }
-            | WorkflowStep::Parallel { opts, .. } => Some(opts),
+            | WorkflowStep::Parallel { opts, .. }
+            | WorkflowStep::Workflow { opts, .. } => Some(opts),
             WorkflowStep::Approval { .. } | WorkflowStep::Condition { .. } => None,
         }
     }
@@ -829,6 +846,9 @@ pub struct WorkflowRun {
     pub started_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
+    /// The run of the workflow that started this one as a sub-workflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
     pub steps: Vec<WorkflowStepRun>,
 }
 

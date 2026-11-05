@@ -302,6 +302,15 @@ interni possono essere solo `tool`, `agent` o `llm` (niente annidamento, `approv
 i loro id contano nell'unicità degli id del workflow. Gli agenti eseguiti insieme usano sessioni
 diverse. Durante l'esecuzione il passo mostra «3/5 completati».
 
+**Sotto-workflow.** `{kind: workflow, workflow: <id>, inputs: {…}}` avvia il workflow figlio (i
+valori di `inputs` accettano i segnaposto) e ne aspetta la fine. L'output del passo è l'output
+dell'ultimo passo `done` del figlio che non sia una `condition`; un figlio fallito o annullato è un
+errore del passo. Il figlio è un run normale, con `parent_run_id` che punta al padre, e può essere
+un workflow disattivato (l'attivazione riguarda solo i trigger). Profondità massima 3: un
+workflow che richiama se stesso è rifiutato dalla validazione, i cicli indiretti si fermano al
+limite. Se il padre smette di aspettare (timeout del passo) il figlio risulta annullato; dopo un
+riavvio un figlio non riprende da solo: il padre riparte dal passo e ne avvia uno nuovo.
+
 **Approvazioni con scadenza.** Il passo `approval` accetta `timeout_s` e `default` (`deny` o `allow`,
 default `deny`): allo scadere vale il default, l'output è «scaduto: approvato» oppure il passo
 fallisce con «scaduto: rifiutato» (e il run risulta annullato), l'audit registra `decision: "timeout"`.

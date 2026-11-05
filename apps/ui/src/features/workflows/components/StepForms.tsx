@@ -7,6 +7,8 @@ import type { StepOptions } from "../../../shared/api/types";
 import { PlaceholderInsert } from "./PlaceholderInsert";
 
 export interface StepCatalog {
+  /** Workflows a sub-workflow step can start (not the one being edited). */
+  workflows: { id: string; name: string }[];
   agents: AgentProfile[];
   profiles: InferenceProfile[];
   tools: ToolInfo[];
@@ -137,6 +139,27 @@ export function ParallelFields({ step, uid, issues, onChange }: Props<"parallel"
       id={`st-${uid}-steps`} label="Passi da eseguire insieme (JSON)" value={step.steps} rows={10} issues={issues} field="steps" onChange={(steps) => onChange({ ...step, steps })}
       hint={<>Un elenco di passi <code>tool</code>, <code>agent</code> o <code>llm</code>. L'output di ognuno è anche <code>{"{{steps.<id>.output}}"}</code>.</>}
     />
+  );
+}
+
+export function WorkflowFields({ step, uid, issues, catalog, before, inputKeys, onChange }: Props<"workflow">) {
+  const known = catalog.workflows.some((w) => w.id === step.workflow);
+  const n = note(issues, "workflow");
+  const i = note(issues, "inputs");
+  return (
+    <>
+      <Field label="Workflow da avviare" htmlFor={`st-${uid}-workflow`} error={n.error} hint={n.hint ?? "Anche un workflow disattivato: l'attivazione riguarda solo i suoi trigger."}>
+        <Select id={`st-${uid}-workflow`} value={step.workflow} onChange={(e) => onChange({ ...step, workflow: e.target.value })} aria-invalid={!!n.error}>
+          {!step.workflow && <option value="">Scegli un workflow…</option>}
+          {step.workflow && !known && <option value={step.workflow}>{step.workflow} (non esiste)</option>}
+          {catalog.workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </Select>
+      </Field>
+      <Field label="Input (JSON)" htmlFor={`st-${uid}-inputs`} error={i.error} hint={i.hint ?? "Un oggetto JSON; i valori possono usare i segnaposto. Il risultato è l'output dell'ultimo passo del workflow avviato."}>
+        <Textarea id={`st-${uid}-inputs`} rows={4} className="mono" spellCheck={false} value={step.inputs} onChange={(e) => onChange({ ...step, inputs: e.target.value })} aria-invalid={!!i.error} />
+        <PlaceholderInsert targetId={`st-${uid}-inputs`} value={step.inputs} onChange={(v) => onChange({ ...step, inputs: v })} before={before} inputKeys={inputKeys} quoted />
+      </Field>
+    </>
   );
 }
 

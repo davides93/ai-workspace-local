@@ -1218,6 +1218,26 @@ impl Engine {
         rx.await.map_err(|_| Error::Runtime("il workflow non è partito".into()))
     }
 
+    /// Ends a run that nobody is going to finish: the steps that were going are `failed`, the run
+    /// `cancelled`, its saved state is dropped.
+    pub(crate) fn abandon_workflow_run(&self, run_id: &str, reason: &str) {
+        let known = self.0.workflow_runs.lock().unwrap().iter().find(|r| r.id == run_id).cloned();
+        let run = known.or_else(|| self.0.store.workflow_run(run_id).ok().flatten());
+        if let Some(mut run) = run.filter(|r| matches!(r.status.as_str(), "running" | "waiting_approval")) {
+            for s in run.steps.iter_mut().filter(|s| matches!(s.status.as_str(), "running" | "waiting")) {
+                s.status = "failed".into();
+                s.error = Some(reason.into());
+            }
+            run.status = "cancelled".into();
+            run.finished_at = Some(now_rfc3339());
+            let _ = self.0.store.save_workflow_run(&run);
+            if let Some(m) = self.0.workflow_runs.lock().unwrap().iter_mut().find(|r| r.id == run_id) {
+                *m = run;
+            }
+        }
+        let _ = self.0.store.clear_workflow_state(run_id);
+    }
+
     /// Goes on with the workflow runs that were interrupted by a restart (state saved at every
     /// step). The step that was running starts again from the beginning, so a step can run more
     /// than once (at-least-once): a step with side effects should be safe to repeat. An approval
@@ -1226,6 +1246,12 @@ impl Engine {
         let states = self.0.store.workflow_states().unwrap_or_default();
         for mut st in states {
             let run_id = st.run.id.clone();
+            // A sub-workflow is never resumed on its own: its parent starts it again from the step
+            // that was waiting for it.
+            if st.run.parent_run_id.is_some() {
+                self.abandon_workflow_run(&run_id, "interrotto dal riavvio: il workflow padre lo riavvia");
+                continue;
+            }
             let live = matches!(st.run.status.as_str(), "running" | "waiting_approval");
             let finished = self
                 .0

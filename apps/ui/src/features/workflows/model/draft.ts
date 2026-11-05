@@ -56,7 +56,7 @@ export function triggerFromDraft(t: TriggerDraft, secret = ""): WorkflowTrigger 
 }
 
 function stepToDraft(s: WorkflowStep): StepDraft {
-  const opts = s.kind === "tool" || s.kind === "agent" || s.kind === "llm" || s.kind === "foreach" || s.kind === "parallel" ? optionsOf(s) : undefined;
+  const opts = s.kind === "tool" || s.kind === "agent" || s.kind === "llm" || s.kind === "foreach" || s.kind === "parallel" || s.kind === "workflow" ? optionsOf(s) : undefined;
   const o = opts ? { opts } : {};
   switch (s.kind) {
     case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: pretty(s.args ?? {}), ...o };
@@ -64,6 +64,7 @@ function stepToDraft(s: WorkflowStep): StepDraft {
     case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt, ...o };
     case "foreach": return { id: s.id, kind: "foreach", items: s.items, body: inlineJson(s.do), ...(s.parallel !== undefined && s.parallel !== 1 ? { parallel: s.parallel } : {}), ...o };
     case "parallel": return { id: s.id, kind: "parallel", steps: inlineJson(s.steps), ...o };
+    case "workflow": return { id: s.id, kind: "workflow", workflow: s.workflow, inputs: pretty(s.inputs ?? {}), ...o };
     case "approval": return { id: s.id, kind: "approval", message: s.message, ...(s.timeout_s ? { timeout_s: s.timeout_s } : {}), ...(s.timeout_s && s.default === "allow" ? { default: "allow" as const } : {}) };
     case "condition": return { id: s.id, kind: "condition", if: s.if, then: [...s.then], else: [...(s.else ?? [])] };
   }
@@ -89,6 +90,10 @@ function stepFromDraft(s: StepDraft): WorkflowStep {
     case "foreach": {
       const inner = parseInline(s.body, false);
       return { id: s.id, kind: "foreach", items: s.items, do: inner.ok ? inner.steps[0] : { id: "", kind: "llm", profile: "", prompt: "" }, ...(s.parallel !== undefined && s.parallel !== 1 ? { parallel: s.parallel } : {}), ...o };
+    }
+    case "workflow": {
+      const inputs = parseArgs(s.inputs) ?? {};
+      return { id: s.id, kind: "workflow", workflow: s.workflow, ...(Object.keys(inputs).length ? { inputs } : {}), ...o };
     }
     case "parallel": {
       const inner = parseInline(s.steps, true);
@@ -173,7 +178,7 @@ export function previewJson(d: PlainDraft): string {
   return JSON.stringify(shown, null, 2);
 }
 
-const KINDS = ["tool", "agent", "llm", "foreach", "parallel", "approval", "condition"];
+const KINDS = ["tool", "agent", "llm", "foreach", "parallel", "workflow", "approval", "condition"];
 const TRIGGERS = ["manual", "interval", "cron", "file", "webhook"];
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 const isStr = (v: unknown): v is string => typeof v === "string";
@@ -206,6 +211,7 @@ export function parseWorkflowJson(text: string, id: string): { ok: true; draft: 
       : s.kind === "llm" ? need("profile", isStr(s.profile)) ?? need("prompt", isStr(s.prompt))
       : s.kind === "foreach" ? need("items", isStr(s.items)) ?? need("do", isObj(s.do))
       : s.kind === "parallel" ? need("steps", Array.isArray(s.steps))
+      : s.kind === "workflow" ? need("workflow", isStr(s.workflow)) ?? need("inputs", s.inputs === undefined || isObj(s.inputs))
       : s.kind === "approval" ? need("message", isStr(s.message))
       : need("if", isStr(s.if)) ?? need("then", isStrList(s.then)) ?? need("else", s.else === undefined || isStrList(s.else));
     if (err) return { ok: false, error: err };
@@ -230,6 +236,10 @@ export interface ValidationContext {
   agents: readonly string[];
   profiles: readonly string[];
   tools: readonly string[];
+  /** Ids of the workflows a `workflow` step can start; empty or absent = not known. */
+  workflows?: readonly string[];
+  /** Id of the workflow being edited: it cannot start itself. */
+  selfId?: string;
 }
 
 export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
@@ -311,6 +321,12 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
         if (!r.ok) e("steps", r.error);
         break;
       }
+      case "workflow":
+        if (!s.workflow.trim()) e("workflow", "Scegli il workflow da avviare.");
+        else if (ctx.selfId !== undefined && s.workflow === ctx.selfId) e("workflow", "Un workflow non può avviare se stesso.");
+        else if (ctx.workflows && ctx.workflows.length > 0 && !ctx.workflows.includes(s.workflow)) w("workflow", `Il workflow «${s.workflow}» non esiste: il passo fallirà.`);
+        if (parseArgs(s.inputs) === null) e("inputs", "Gli input devono essere un oggetto JSON, per esempio {\"cartella\": \"{{inputs.folder}}\"}.");
+        break;
       case "approval":
         if (!s.message.trim()) e("message", "Scrivi la domanda da porre.");
         {

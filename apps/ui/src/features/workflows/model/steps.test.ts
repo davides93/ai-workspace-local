@@ -163,3 +163,16 @@ describe("foreach and parallel", () => {
     expect((out as { body: string }).body).toContain("{{steps.list.output}} {{item}}");
   });
 });
+
+describe("sub-workflow steps", () => {
+  it("start empty or with the default workflow, and say what they start", () => {
+    expect(newStep("workflow", [], { workflow: "figlio" })).toEqual({ id: "workflow1", kind: "workflow", workflow: "figlio", inputs: "{}" });
+    expect(stepSummary({ id: "w", kind: "workflow", workflow: "figlio", inputs: '{\n "a": "{{inputs.x}}"\n}' })).toBe('figlio { "a": "{{inputs.x}}" }');
+    expect(stepSummary({ id: "w", kind: "workflow", workflow: "", inputs: "{}" })).toBe("workflow da scegliere {}");
+  });
+
+  it("follow a renamed step in their inputs", () => {
+    const w: StepDraft = { id: "sub", kind: "workflow", workflow: "figlio", inputs: '{"dir": "{{steps.scan.output}}"}' };
+    expect(renameReferences([steps[0], w], "scan", "list")[1]).toMatchObject({ inputs: '{"dir": "{{steps.list.output}}"}' });
+  });
+});

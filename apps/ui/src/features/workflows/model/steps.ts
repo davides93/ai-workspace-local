@@ -6,7 +6,8 @@
 //  - an approval that is refused ends the run as cancelled; with `timeout_s` it takes `default` (deny or allow) when nobody answers;
 //  - `foreach` runs one inline step for every entry of a list (`{{item}}`, `{{item.field}}`, `{{index}}`, up to 8 at a time),
 //    `parallel` runs several inline steps together; the inline steps are tool, agent or llm only and are edited as JSON;
-//  - tool, agent, llm, foreach and parallel steps take `retry`, `retry_delay_s`, `timeout_s` and `on_error` (see `StepOptions`).
+//  - `workflow` starts another workflow with inputs and waits for it (3 levels at most);
+//  - tool, agent, llm, foreach, parallel and workflow steps take `retry`, `retry_delay_s`, `timeout_s` and `on_error` (see `StepOptions`).
 
 import type { StepOptions, WorkflowStep } from "../../../shared/api/types";
 
@@ -18,6 +19,7 @@ export const STEP_KINDS: { kind: StepKind; label: string; icon: string; hint: st
   { kind: "llm", label: "LLM", icon: "sparkle", hint: "Una sola risposta del modello di un profilo, senza tool." },
   { kind: "foreach", label: "Per ogni voce", icon: "flow", hint: "Ripete un passo per ogni voce di un elenco, anche più voci alla volta." },
   { kind: "parallel", label: "In parallelo", icon: "flow", hint: "Esegue più passi insieme e aspetta che finiscano tutti." },
+  { kind: "workflow", label: "Sotto-workflow", icon: "flow", hint: "Avvia un altro workflow con degli input e ne aspetta la fine." },
   { kind: "approval", label: "Conferma", icon: "shield", hint: "Si ferma e chiede il tuo consenso: se lo neghi il workflow finisce." },
   { kind: "condition", label: "Condizione", icon: "flow", hint: "Sceglie quali passi eseguire in base a un'espressione." },
 ];
@@ -33,11 +35,14 @@ export type StepDraft =
   | { id: string; kind: "foreach"; items: string; body: string; parallel?: number; opts?: StepOptions }
   /** `steps` is the JSON array of the inline steps. */
   | { id: string; kind: "parallel"; steps: string; opts?: StepOptions }
+  /** `inputs` is the JSON object of the inputs given to the workflow. */
+  | { id: string; kind: "workflow"; workflow: string; inputs: string; opts?: StepOptions }
   /** `timeout_s`: seconds to wait for the answer; `default` is the answer taken when the time is up (deny when absent). */
   | { id: string; kind: "approval"; message: string; timeout_s?: number; default?: "allow" }
   | { id: string; kind: "condition"; if: string; then: string[]; else: string[] };
 
 export interface StepDefaults {
+  workflow?: string;
   agent?: string;
   profile?: string;
   tool?: string;
@@ -92,6 +97,7 @@ export function newStep(kind: StepKind, steps: readonly StepDraft[], d: StepDefa
     case "llm": return { id, kind, profile: d.profile ?? "", prompt: "" };
     case "foreach": return { id, kind, items: "", body: inlineJson({ id: `${id}-step`, kind: "llm", profile: d.profile ?? "", prompt: "{{item}}" }) };
     case "parallel": return { id, kind, steps: JSON.stringify([{ id: `${id}-a`, kind: "llm", profile: d.profile ?? "", prompt: "" }], null, 2) };
+    case "workflow": return { id, kind, workflow: d.workflow ?? "", inputs: "{}" };
     case "approval": return { id, kind, message: "Procedo?" };
     case "condition": return { id, kind, if: "", then: [], else: [] };
   }
@@ -111,8 +117,8 @@ export const OPTION_LIMITS = { retry: 5, retryDelay: 300, timeout: 86_400 } as c
 export const DEFAULT_RETRY_DELAY_S = 2;
 
 /** The steps that take `StepOptions`. */
-export const hasOptions = (s: StepDraft): s is Extract<StepDraft, { kind: "tool" | "agent" | "llm" | "foreach" | "parallel" }> =>
-  s.kind === "tool" || s.kind === "agent" || s.kind === "llm" || s.kind === "foreach" || s.kind === "parallel";
+export const hasOptions = (s: StepDraft): s is Extract<StepDraft, { kind: "tool" | "agent" | "llm" | "foreach" | "parallel" | "workflow" }> =>
+  s.kind === "tool" || s.kind === "agent" || s.kind === "llm" || s.kind === "foreach" || s.kind === "parallel" || s.kind === "workflow";
 
 /** Options without the defaults (what the backend does not serialize either); `undefined` when nothing is left. */
 export function cleanOptions(o: StepOptions | undefined): StepOptions | undefined {
@@ -183,6 +189,7 @@ export function stepTexts(s: StepDraft): string[] {
     case "llm": return [s.prompt];
     case "foreach": return [s.items, s.body];
     case "parallel": return [s.steps];
+    case "workflow": return [s.inputs];
     case "approval": return [s.message];
     case "condition": return [s.if];
   }
@@ -195,6 +202,7 @@ function mapTexts(s: StepDraft, fn: (t: string) => string): StepDraft {
     case "llm": return { ...s, prompt: fn(s.prompt) };
     case "foreach": return { ...s, items: fn(s.items), body: fn(s.body) };
     case "parallel": return { ...s, steps: fn(s.steps) };
+    case "workflow": return { ...s, inputs: fn(s.inputs) };
     case "approval": return { ...s, message: fn(s.message) };
     case "condition": return { ...s, if: fn(s.if) };
   }
@@ -233,6 +241,7 @@ export function stepSummary(s: StepDraft): string {
       const ids = innerIds(s);
       return ids.length ? `in parallelo: ${ids.join(", ")}` : "in parallelo (passi da correggere)";
     }
+    case "workflow": return `${s.workflow || "workflow da scegliere"} ${s.inputs.replace(/\s+/g, " ").trim()}`.trim();
     case "approval": return s.timeout_s ? `${s.message} (dopo ${s.timeout_s} s: ${s.default === "allow" ? "approva" : "rifiuta"})` : s.message;
     case "condition": return `se ${s.if || "…"} → ${s.then.join(", ") || "nessun passo"}${s.else.length ? ` altrimenti ${s.else.join(", ")}` : ""}`;
   }

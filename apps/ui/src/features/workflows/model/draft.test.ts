@@ -73,6 +73,26 @@ describe("conversion", () => {
     expect(find(run([{ id: "a", kind: "agent", agent: "operator", prompt: "{{item}}" }]), "placeholder")).toHaveLength(1);
   });
 
+  it("round-trips sub-workflow steps and leaves out empty inputs", () => {
+    const def: WorkflowDef = {
+      id: "p", name: "P", enabled: false, trigger: { kind: "manual" }, inputs: {},
+      steps: [{ id: "sub", kind: "workflow", workflow: "figlio", inputs: { dir: "{{inputs.folder}}", n: 2 }, timeout_s: 60 }, { id: "bare", kind: "workflow", workflow: "altro" }],
+    };
+    const plain = plainFromDef(def);
+    expect(plain.steps[1]).toMatchObject({ kind: "workflow", inputs: "{}" });
+    expect(defFromPlain(plain)).toEqual(def);
+    expect(parseWorkflowJson(previewJson(plain), "p")).toMatchObject({ ok: true });
+  });
+
+  it("checks the workflow a step starts", () => {
+    const run = (workflow: string, inputs = "{}") => validateDraft({ ...base(), steps: [{ id: "s", kind: "workflow", workflow, inputs }] }, { ...ctx, workflows: ["figlio", "wf-x"], selfId: "wf-x" });
+    expect(run("figlio")).toEqual([]);
+    expect(find(run(""), "workflow")).toHaveLength(1);
+    expect(find(run("wf-x"), "workflow")[0].message).toContain("se stesso");
+    expect(find(run("sparito"), "workflow")[0].level).toBe("warn");
+    expect(find(run("figlio", "[1]"), "inputs")).toHaveLength(1);
+  });
+
   it("keeps non-string inputs as JSON and string ones as text", () => {
     const def: WorkflowDef = { id: "i", name: "I", enabled: false, trigger: { kind: "manual" }, inputs: { folder: "~/x", n: 3, flags: { a: true } }, steps: [] };
     const plain = plainFromDef(def);

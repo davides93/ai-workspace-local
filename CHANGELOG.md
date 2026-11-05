@@ -6,6 +6,7 @@
 - Workflow durevoli: lo stato del run è salvato a ogni passo (tabella `workflow_state`) e all'avvio i run interrotti da un riavvio riprendono dal passo in corso, che ricomincia da capo (almeno una volta); un'approvazione in attesa viene richiesta di nuovo. Se il workflow è stato eliminato il run risulta `failed`. Audit `workflow.resume`.
 - Approvazioni con scadenza: il passo `approval` accetta `timeout_s` e `default` (`deny`/`allow`) e l'impostazione `approvals.timeout_s` (0 = nessun limite) rifiuta le richieste dei tool degli agenti rimaste senza risposta, spiegando il timeout all'agente. L'audit registra `decision: "timeout"`. Modificabili dall'editor visuale.
 - Workflow: passi `foreach` (un passo inline per ogni voce di un elenco, fino a 8 alla volta e 200 voci, con `{{item}}`, `{{item.campo}}`, `{{index}}`) e `parallel` (più passi insieme, output come oggetto JSON). Creabili e modificabili dall'editor visuale, con il passo inline in JSON.
+- Workflow: passo `workflow` (sotto-workflow) con input, profondità massima 3. Il figlio è un run normale con un riferimento al padre (`parent_run_id`); l'output è quello dell'ultimo suo passo completato. Scelta del workflow dall'editor visuale.
 
 ## 0.4.0-rc.2 - release candidate
 

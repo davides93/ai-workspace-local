@@ -2,15 +2,15 @@
 
 use crate::Engine;
 use aiw_agent::{AgentRunner, RunHost, RunInput, Skill};
-use aiw_core::api::{ApprovalOutcome, ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun};
+use aiw_core::api::{ApprovalOutcome, ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun, WorkflowStep};
 use aiw_core::events::AgEvent;
-use aiw_core::{ids::new_id, Error, Result};
+use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use aiw_runtimes::{ChatBackend, ChatDelta, ChatRequest, Msg};
 use aiw_tools::ToolRegistry;
 use aiw_workflow::WorkflowState;
 use async_trait::async_trait;
 use futures::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -193,6 +193,58 @@ impl aiw_workflow::WorkflowHost for EngineHost {
             ..Default::default()
         };
         Self::collect_text(backend, req, CancellationToken::new()).await
+    }
+
+    async fn run_subworkflow(&self, parent_run_id: &str, workflow_id: &str, inputs: Map<String, Value>, depth: u32) -> Result<String> {
+        /// A child that stops being waited for (the parent step timed out or was dropped) must not
+        /// stay `running` in the list of the runs.
+        struct Abandon<'a>(&'a Engine, String, bool);
+        impl Drop for Abandon<'_> {
+            fn drop(&mut self) {
+                if self.2 {
+                    self.0.abandon_workflow_run(&self.1, "annullato: il workflow padre non lo aspetta più");
+                }
+            }
+        }
+        let wf: WorkflowDef = self
+            .engine
+            .0
+            .store
+            .get_doc("workflow", workflow_id)?
+            .ok_or_else(|| Error::NotFound(format!("il sotto-workflow {workflow_id} non esiste")))?;
+        let state = WorkflowState::new(&wf, inputs).child_of(parent_run_id, depth);
+        let _ = self.engine.0.store.add_audit(&AuditEntry {
+            id: new_id("aud"),
+            ts: now_rfc3339(),
+            run_id: Some(state.run.id.clone()),
+            actor: "workflow".into(),
+            action: "workflow.run".into(),
+            tool: None,
+            decision: None,
+            detail: format!("{} (sotto-workflow di {parent_run_id})", wf.name),
+        });
+        let mut guard = Abandon(&self.engine, state.run.id.clone(), true);
+        let host = EngineHost::for_workflow(self.engine.clone(), wf.clone(), None);
+        let done = aiw_workflow::run_state(state, &host).await;
+        guard.2 = false;
+        match done.run.status.as_str() {
+            "succeeded" => {
+                // The output of the last step that produced one: a condition only says which way it went.
+                let last = done
+                    .run
+                    .steps
+                    .iter()
+                    .zip(&wf.steps)
+                    .rev()
+                    .find(|(r, s)| r.status == "done" && !matches!(s, WorkflowStep::Condition { .. }));
+                Ok(last.and_then(|(r, _)| done.outputs.get(&r.id).cloned()).unwrap_or_default())
+            }
+            "cancelled" => Err(Error::Runtime(format!("il sotto-workflow «{}» è stato annullato", wf.name))),
+            _ => {
+                let why = done.run.steps.iter().find_map(|s| s.error.clone()).unwrap_or_else(|| "errore sconosciuto".into());
+                Err(Error::Runtime(format!("il sotto-workflow «{}» è fallito: {why}", wf.name)))
+            }
+        }
     }
 
     async fn approval(&self, run_id: &str, message: &str, timeout_s: Option<u64>) -> ApprovalOutcome {

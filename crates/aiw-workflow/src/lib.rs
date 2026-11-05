@@ -4,7 +4,8 @@ pub mod engine;
 pub mod schedule;
 
 pub use engine::{
-    evaluate_condition, render, render_ctx, render_value, render_value_ctx, run_from, run_workflow, RenderCtx, WorkflowHost, WorkflowState,
+    evaluate_condition, render, render_ctx, render_value, render_value_ctx, run_from, run_state, run_workflow, RenderCtx, WorkflowHost,
+    WorkflowState,
 };
 pub use schedule::{cron_to_six_fields, Scheduler};
 
@@ -53,6 +54,12 @@ pub fn validate(wf: &WorkflowDef) -> Result<()> {
             }
         }
         match s {
+            WorkflowStep::Workflow { workflow, .. } if workflow.trim().is_empty() => {
+                return Err(Error::Invalid(format!("il passo {}: indica il workflow da avviare", s.id())));
+            }
+            WorkflowStep::Workflow { workflow, .. } if *workflow == wf.id => {
+                return Err(Error::Invalid(format!("il passo {}: un workflow non può richiamare se stesso", s.id())));
+            }
             WorkflowStep::Foreach { parallel, .. } if *parallel == 0 || *parallel > MAX_FOREACH_PARALLEL => {
                 return Err(Error::Invalid(format!("il passo {}: parallel deve essere tra 1 e {MAX_FOREACH_PARALLEL}", s.id())));
             }
@@ -202,5 +209,14 @@ steps:
             "  - { id: p, kind: parallel, steps: [ { id: a, kind: tool, tool: t } ] }\n  - { id: c, kind: condition, if: x, then: [a] }\n"
         )
         .contains("passo interno"));
+    }
+
+    #[test]
+    fn validates_subworkflow_steps() {
+        let mk = |step: &str| load_str_for_test(step);
+        assert!(validate(&mk("{ id: s, kind: workflow, workflow: altro, inputs: { a: '{{inputs.x}}' }, retry: 1 }")).is_ok());
+        assert!(validate(&mk("{ id: s, kind: workflow, workflow: w }")).unwrap_err().to_string().contains("se stesso"));
+        assert!(validate(&mk("{ id: s, kind: workflow, workflow: ' ' }")).unwrap_err().to_string().contains("indica il workflow"));
+        assert!(validate(&mk("{ id: s, kind: workflow, workflow: altro, retry: 9 }")).is_err());
     }
 }

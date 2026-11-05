@@ -1,6 +1,6 @@
 use aiw_core::api::{
     ApprovalDefault, ApprovalOutcome, OnError, StepOptions, WorkflowDef, WorkflowRun, WorkflowStep, WorkflowStepRun, MAX_FOREACH_ITEMS,
-    MAX_FOREACH_PARALLEL,
+    MAX_FOREACH_PARALLEL, MAX_SUBWORKFLOW_DEPTH,
 };
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use async_trait::async_trait;
@@ -21,6 +21,11 @@ pub trait WorkflowHost: Send + Sync {
     /// Asks the user and waits for the answer, at most `timeout_s` seconds when given.
     async fn approval(&self, run_id: &str, message: &str, timeout_s: Option<u64>) -> ApprovalOutcome;
     fn update(&self, run: &WorkflowRun);
+    /// Runs the workflow `workflow_id` as a child of the run `parent_run_id` (at nesting level
+    /// `depth`) and waits for it; returns the output of the child.
+    async fn run_subworkflow(&self, _parent_run_id: &str, workflow_id: &str, _inputs: Map<String, Value>, _depth: u32) -> Result<String> {
+        Err(Error::Invalid(format!("il sotto-workflow {workflow_id} non si può avviare qui")))
+    }
     /// Called after every change of a run that has not finished: the state is enough to go on with
     /// [`run_from`] after a restart.
     fn save_state(&self, _state: &WorkflowState) {}
@@ -159,6 +164,13 @@ pub struct WorkflowState {
 }
 
 impl WorkflowState {
+    /// Marks the run as a sub-workflow of `parent_run_id`, `depth` levels down.
+    pub fn child_of(mut self, parent_run_id: &str, depth: u32) -> Self {
+        self.run.parent_run_id = Some(parent_run_id.to_string());
+        self.depth = depth;
+        self
+    }
+
     pub fn new(wf: &WorkflowDef, inputs: Map<String, Value>) -> Self {
         let mut merged = wf.inputs.clone();
         merged.extend(inputs);
@@ -169,6 +181,7 @@ impl WorkflowState {
                 status: "running".into(),
                 started_at: now_rfc3339(),
                 finished_at: None,
+                parent_run_id: None,
                 steps: wf
                     .steps
                     .iter()
@@ -259,6 +272,16 @@ async fn exec_body(sh: &Shared<'_>, i: usize, step: &WorkflowStep, run_id: &str,
     match step {
         WorkflowStep::Foreach { items, body, parallel, .. } => exec_foreach(sh, i, items, body, *parallel, run_id, ctx).await,
         WorkflowStep::Parallel { steps, .. } => exec_parallel(sh, i, steps, run_id, ctx).await,
+        WorkflowStep::Workflow { workflow, inputs, .. } => {
+            let depth = sh.st.lock().unwrap().depth + 1;
+            if depth > MAX_SUBWORKFLOW_DEPTH {
+                return Err(Error::Invalid(format!("troppi sotto-workflow annidati: il massimo è {MAX_SUBWORKFLOW_DEPTH} livelli")));
+            }
+            let Value::Object(inputs) = render_value_ctx(&Value::Object(inputs.clone()), ctx) else {
+                unreachable!("an object stays an object")
+            };
+            sh.host.run_subworkflow(run_id, workflow, inputs, depth).await
+        }
         other => exec_leaf(other, run_id, ctx, sh.host).await,
     }
 }
@@ -385,6 +408,11 @@ pub async fn run_workflow(wf: &WorkflowDef, inputs: Map<String, Value>, host: &d
 
 /// Runs (or goes on with) a workflow from `state`.
 pub async fn run_from(state: WorkflowState, host: &dyn WorkflowHost) -> WorkflowRun {
+    run_state(state, host).await.run
+}
+
+/// Like [`run_from`], but returns the whole final state (the outputs in full, not cut for display).
+pub async fn run_state(state: WorkflowState, host: &dyn WorkflowHost) -> WorkflowState {
     let sh = Shared { host, st: Mutex::new(state) };
     sh.publish(|_| {});
     let (def, run_id, first) = {
@@ -435,7 +463,8 @@ pub async fn run_from(state: WorkflowState, host: &dyn WorkflowHost) -> Workflow
             | WorkflowStep::Agent { .. }
             | WorkflowStep::Llm { .. }
             | WorkflowStep::Foreach { .. }
-            | WorkflowStep::Parallel { .. } => {
+            | WorkflowStep::Parallel { .. }
+            | WorkflowStep::Workflow { .. } => {
                 let opts = step.opts().cloned().unwrap_or_default();
                 run_with_options(&opts, |n| sh.publish(|st| st.run.steps[i].attempts = Some(n)), || exec_body(&sh, i, step, &run_id, &ctx))
                     .await
@@ -459,7 +488,7 @@ pub async fn run_from(state: WorkflowState, host: &dyn WorkflowHost) -> Workflow
                         st.run.status = "cancelled".into();
                         st.run.finished_at = Some(now_rfc3339());
                     });
-                    return sh.st.into_inner().unwrap().run;
+                    return sh.st.into_inner().unwrap();
                 }
             }
             WorkflowStep::Condition { condition, then, otherwise, .. } => {
@@ -497,7 +526,7 @@ pub async fn run_from(state: WorkflowState, host: &dyn WorkflowHost) -> Workflow
                     st.run.status = "failed".into();
                     st.run.finished_at = Some(now_rfc3339());
                 });
-                return sh.st.into_inner().unwrap().run;
+                return sh.st.into_inner().unwrap();
             }
         }
     }
@@ -505,7 +534,7 @@ pub async fn run_from(state: WorkflowState, host: &dyn WorkflowHost) -> Workflow
         st.run.status = "succeeded".into();
         st.run.finished_at = Some(now_rfc3339());
     });
-    sh.st.into_inner().unwrap().run
+    sh.st.into_inner().unwrap()
 }
 
 #[cfg(test)]
@@ -935,5 +964,118 @@ mod tests {
         assert_eq!(run.status, "succeeded");
         assert_eq!(run.steps[0].output.as_deref(), Some(r#"{"x":"echo:slow","y":null}"#));
         assert!(run.steps[1].output.as_deref().unwrap().contains("rifiutato: bad"));
+    }
+
+    /// A host that knows a set of workflows and runs them as children.
+    struct Tree {
+        defs: HashMap<String, WorkflowDef>,
+        children: Mutex<Vec<WorkflowRun>>,
+    }
+    #[async_trait]
+    impl WorkflowHost for Tree {
+        async fn call_tool(&self, _r: &str, tool: &str, args: Value) -> Result<String> {
+            if tool == "boom" {
+                return Err(Error::Runtime("esploso".into()));
+            }
+            Ok(format!("{tool}:{}", args.get("x").and_then(Value::as_str).unwrap_or("-")))
+        }
+        async fn run_agent(&self, _r: &str, _a: &str, _p: &str) -> Result<String> {
+            Ok("agent".into())
+        }
+        async fn complete(&self, _r: &str, _p: &str, prompt: &str) -> Result<String> {
+            Ok(format!("llm:{prompt}"))
+        }
+        async fn approval(&self, _r: &str, _m: &str, _t: Option<u64>) -> ApprovalOutcome {
+            ApprovalOutcome::Allowed
+        }
+        fn update(&self, _run: &WorkflowRun) {}
+        async fn run_subworkflow(&self, parent: &str, id: &str, inputs: Map<String, Value>, depth: u32) -> Result<String> {
+            let def = self.defs.get(id).ok_or_else(|| Error::NotFound(format!("il sotto-workflow {id} non esiste")))?;
+            let done = run_state(WorkflowState::new(def, inputs).child_of(parent, depth), self).await;
+            self.children.lock().unwrap().push(done.run.clone());
+            match done.run.status.as_str() {
+                "succeeded" => Ok(done.outputs.get("last").cloned().unwrap_or_default()),
+                _ => Err(Error::Runtime(format!("fallito: {}", done.run.steps.iter().find_map(|s| s.error.clone()).unwrap_or_default()))),
+            }
+        }
+    }
+
+    fn tree(defs: Value) -> Tree {
+        let defs: Vec<WorkflowDef> = serde_json::from_value(defs).unwrap();
+        Tree { defs: defs.into_iter().map(|d| (d.id.clone(), d)).collect(), children: Mutex::new(vec![]) }
+    }
+
+    fn def(id: &str, steps: Value) -> Value {
+        json!({"id": id, "name": id, "enabled": false, "trigger": {"kind": "manual"}, "steps": steps})
+    }
+
+    #[tokio::test]
+    async fn a_subworkflow_gets_its_inputs_and_hands_back_its_output() {
+        let host = tree(json!([
+            def(
+                "parent",
+                json!([
+                    {"id": "first", "kind": "tool", "tool": "scan", "args": {"x": "uno"}},
+                    {"id": "sub", "kind": "workflow", "workflow": "child", "inputs": {"n": "{{steps.first.output}}", "fisso": 3}},
+                    {"id": "after", "kind": "llm", "profile": "p", "prompt": "ricevuto {{steps.sub.output}}"}
+                ])
+            ),
+            def(
+                "child",
+                json!([
+                    {"id": "mid", "kind": "tool", "tool": "work", "args": {"x": "{{inputs.n}}"}},
+                    {"id": "last", "kind": "llm", "profile": "p", "prompt": "{{steps.mid.output}} {{inputs.fisso}}"},
+                    {"id": "c", "kind": "condition", "if": "x", "then": []}
+                ])
+            ),
+        ]));
+        let run = run_workflow(&host.defs["parent"], Map::new(), &host).await;
+        assert_eq!(run.status, "succeeded", "{run:?}");
+        assert_eq!(run.steps[2].output.as_deref(), Some("llm:ricevuto llm:work:scan:uno 3"));
+        let children = host.children.lock().unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].parent_run_id.as_deref(), Some(run.id.as_str()));
+        assert!(run.parent_run_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_failing_subworkflow_fails_the_step_unless_it_continues() {
+        let defs = |on_error: &str| {
+            tree(json!([
+                def(
+                    "parent",
+                    json!([
+                        {"id": "sub", "kind": "workflow", "workflow": "child", "on_error": on_error},
+                        {"id": "after", "kind": "llm", "profile": "p", "prompt": "[{{steps.sub.error}}]"}
+                    ])
+                ),
+                def("child", json!([{"id": "bad", "kind": "tool", "tool": "boom"}])),
+            ]))
+        };
+        let host = defs("fail");
+        let run = run_workflow(&host.defs["parent"], Map::new(), &host).await;
+        assert_eq!(run.status, "failed");
+        assert!(run.steps[0].error.as_deref().unwrap().contains("esploso"));
+        let host = defs("continue");
+        let run = run_workflow(&host.defs["parent"], Map::new(), &host).await;
+        assert_eq!(run.status, "succeeded");
+        assert!(run.steps[1].output.as_deref().unwrap().contains("esploso"));
+        // A workflow that does not exist is an error of the step as well.
+        let host = tree(json!([def("parent", json!([{"id": "sub", "kind": "workflow", "workflow": "nessuno"}]))]));
+        let run = run_workflow(&host.defs["parent"], Map::new(), &host).await;
+        assert!(run.steps[0].error.as_deref().unwrap().contains("non esiste"));
+    }
+
+    #[tokio::test]
+    async fn indirect_cycles_stop_at_the_depth_limit() {
+        let host = tree(json!([
+            def("a", json!([{"id": "go", "kind": "workflow", "workflow": "b"}])),
+            def("b", json!([{"id": "go", "kind": "workflow", "workflow": "a"}])),
+        ]));
+        let run = run_workflow(&host.defs["a"], Map::new(), &host).await;
+        assert_eq!(run.status, "failed");
+        assert!(run.steps[0].error.as_deref().unwrap().contains("troppi sotto-workflow"), "{run:?}");
+        // Levels 1, 2 and 3 were started; the fourth was refused.
+        assert_eq!(host.children.lock().unwrap().len(), 3);
     }
 }

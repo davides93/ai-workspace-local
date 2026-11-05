@@ -521,6 +521,8 @@ export type WorkflowStep =
   | ({ id: string; kind: "foreach"; items: string; do: WorkflowStep; parallel?: number } & StepOptions)
   /** Inline tool/agent/llm steps that run together; the output is the JSON object `{inner_id: output}`. */
   | ({ id: string; kind: "parallel"; steps: WorkflowStep[] } & StepOptions)
+  /** Starts another workflow (it can be disabled) and waits for it; the output is the one of its last step. */
+  | ({ id: string; kind: "workflow"; workflow: string; inputs?: Record<string, unknown> } & StepOptions)
   | { id: string; kind: "approval"; message: string; timeout_s?: number; default?: "deny" | "allow" }
   | { id: string; kind: "condition"; if: string; then: string[]; else?: string[] };
 
@@ -540,6 +542,8 @@ export interface WorkflowRun {
   status: RunStatus;
   started_at: string;
   finished_at?: string;
+  /** The run of the workflow that started this one as a sub-workflow. */
+  parent_run_id?: string;
   steps: { id: string; status: "pending" | "running" | "done" | "failed" | "skipped" | "waiting"; output?: string; error?: string; attempts?: number }[];
 }
 

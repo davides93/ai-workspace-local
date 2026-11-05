@@ -214,3 +214,64 @@ async fn agents_running_together_in_a_workflow_get_their_own_sessions() {
     assert_eq!(run.steps[0].output.as_deref(), Some(r#"{"a":"risposta","b":"risposta"}"#));
     assert!(e.sessions().unwrap().iter().filter(|s| s.title.starts_with("⚙ Par")).count() >= 2);
 }
+
+fn simple_workflow(id: &str, steps: serde_json::Value) -> WorkflowDef {
+    serde_json::from_value(json!({"id": id, "name": id, "enabled": false, "trigger": {"kind": "manual"}, "inputs": {}, "steps": steps}))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_subworkflow_is_a_normal_run_that_points_at_its_parent() {
+    let data = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    std::fs::write(ws.path().join("a.txt"), "x").unwrap();
+    let e = Engine::new(options(data.path(), ws.path())).await.unwrap();
+    // The child is disabled: that only concerns its triggers.
+    e.save_workflow(simple_workflow(
+        "figlio",
+        json!([{"id": "scan", "kind": "tool", "tool": "list_dir", "args": {"path": "{{inputs.dir}}"}}]),
+    ))
+    .unwrap();
+    e.save_workflow(simple_workflow(
+        "padre",
+        json!([
+            {"id": "sub", "kind": "workflow", "workflow": "figlio", "inputs": {"dir": "."}},
+            {"id": "glob", "kind": "tool", "tool": "glob", "args": {"pattern": "*.txt", "note": "{{steps.sub.output}}"}}
+        ]),
+    ))
+    .unwrap();
+    let first = e.run_workflow("padre", Map::new(), "test").await.unwrap();
+    wait_until("parent succeeded", || e.workflow_runs().iter().any(|r| r.id == first.id && r.status == "succeeded")).await;
+    let runs = e.workflow_runs();
+    let child = runs.iter().find(|r| r.workflow_id == "figlio").expect("child run listed");
+    assert_eq!(child.parent_run_id.as_deref(), Some(first.id.as_str()));
+    assert_eq!(child.status, "succeeded");
+    let parent = runs.iter().find(|r| r.id == first.id).unwrap();
+    assert!(parent.steps[0].output.as_deref().unwrap().contains("a.txt"));
+    assert!(e.0.store.workflow_states().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_restart_runs_the_parent_again_from_the_subworkflow_step_and_closes_the_old_child() {
+    let data = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let e1 = Engine::new(options(data.path(), ws.path())).await.unwrap();
+    e1.save_workflow(simple_workflow("figlio", json!([{"id": "ok", "kind": "approval", "message": "Procedo?"}, {"id": "end", "kind": "tool", "tool": "list_dir", "args": {"path": "."}}]))).unwrap();
+    e1.save_workflow(simple_workflow("padre", json!([{"id": "sub", "kind": "workflow", "workflow": "figlio"}]))).unwrap();
+    let first = e1.run_workflow("padre", Map::new(), "test").await.unwrap();
+    wait_until("child waiting", || !e1.approvals().is_empty()).await;
+    let old_child = e1.workflow_runs().into_iter().find(|r| r.workflow_id == "figlio").unwrap();
+
+    let e2 = Engine::new(options(data.path(), ws.path())).await.unwrap();
+    // The parent asks again, through a new child.
+    wait_until("new child waiting", || !e2.approvals().is_empty()).await;
+    let runs = e2.workflow_runs();
+    let old = runs.iter().find(|r| r.id == old_child.id).unwrap();
+    assert_eq!(old.status, "cancelled");
+    let new_child = runs.iter().find(|r| r.workflow_id == "figlio" && r.id != old_child.id).expect("a new child");
+    assert_eq!(new_child.parent_run_id.as_deref(), Some(first.id.as_str()));
+    let req = e2.approvals().remove(0);
+    e2.respond_approval(&req.id, true, false).unwrap();
+    wait_until("parent succeeded", || e2.workflow_runs().iter().any(|r| r.id == first.id && r.status == "succeeded")).await;
+    assert!(e2.0.store.workflow_states().unwrap().is_empty());
+}
