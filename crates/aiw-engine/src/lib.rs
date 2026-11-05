@@ -246,6 +246,7 @@ impl Engine {
             engine.0.runtimes.refresh().await;
         }
         engine.seed()?;
+        engine.resume_workflows();
         if !opts.offline {
             engine.start_background();
             engine.start_update_checks();
@@ -1160,7 +1161,7 @@ impl Engine {
     pub async fn run_workflow(&self, id: &str, inputs: Map<String, Value>, actor: &str) -> Result<WorkflowRun> {
         let wf: WorkflowDef = self.0.store.get_doc("workflow", id)?.ok_or_else(|| Error::NotFound(format!("workflow {id} non trovato")))?;
         let (tx, rx) = oneshot::channel();
-        let host = EngineHost::for_workflow(self.clone(), wf.clone(), tx);
+        let host = EngineHost::for_workflow(self.clone(), wf.clone(), Some(tx));
         let _ = self.0.store.add_audit(&AuditEntry {
             id: new_id("aud"),
             ts: now_rfc3339(),
@@ -1175,6 +1176,57 @@ impl Engine {
             aiw_workflow::run_workflow(&wf, inputs, &host).await;
         });
         rx.await.map_err(|_| Error::Runtime("il workflow non è partito".into()))
+    }
+
+    /// Goes on with the workflow runs that were interrupted by a restart (state saved at every
+    /// step). The step that was running starts again from the beginning, so a step can run more
+    /// than once (at-least-once): a step with side effects should be safe to repeat. An approval
+    /// that was pending is asked again. A run whose workflow no longer exists is marked failed.
+    fn resume_workflows(&self) {
+        let states = self.0.store.workflow_states().unwrap_or_default();
+        for mut st in states {
+            let run_id = st.run.id.clone();
+            let live = matches!(st.run.status.as_str(), "running" | "waiting_approval");
+            let finished = self
+                .0
+                .store
+                .workflow_run(&run_id)
+                .ok()
+                .flatten()
+                .is_some_and(|r| !matches!(r.status.as_str(), "running" | "waiting_approval"));
+            if !live || finished {
+                let _ = self.0.store.clear_workflow_state(&run_id);
+                continue;
+            }
+            let wf: Option<WorkflowDef> = self.0.store.get_doc("workflow", &st.run.workflow_id).ok().flatten();
+            let Some(wf) = wf else {
+                let at = st.next.min(st.run.steps.len().saturating_sub(1));
+                if let Some(step) = st.run.steps.get_mut(at) {
+                    step.status = "failed".into();
+                    step.error = Some(format!("il workflow «{}» non esiste più: run interrotto dal riavvio", st.run.workflow_id));
+                }
+                st.run.status = "failed".into();
+                st.run.finished_at = Some(now_rfc3339());
+                let _ = self.0.store.save_workflow_run(&st.run);
+                let _ = self.0.store.clear_workflow_state(&run_id);
+                continue;
+            };
+            let _ = self.0.store.add_audit(&AuditEntry {
+                id: new_id("aud"),
+                ts: now_rfc3339(),
+                run_id: Some(run_id.clone()),
+                actor: "workflow".into(),
+                action: "workflow.resume".into(),
+                tool: None,
+                decision: None,
+                detail: format!("{} (dal passo {})", wf.name, st.next + 1),
+            });
+            st.run.status = "running".into();
+            let host = EngineHost::for_workflow(self.clone(), wf, None);
+            tokio::spawn(async move {
+                aiw_workflow::run_from(st, &host).await;
+            });
+        }
     }
 
     // ------------------------------------------------------------------ tools & MCP
@@ -1537,3 +1589,5 @@ mod tests_hardening;
 mod tests_inference;
 #[cfg(test)]
 mod tests_validation;
+#[cfg(test)]
+mod tests_workflow;

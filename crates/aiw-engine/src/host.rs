@@ -7,6 +7,7 @@ use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, Error, Result};
 use aiw_runtimes::{ChatBackend, ChatDelta, ChatRequest, Msg};
 use aiw_tools::ToolRegistry;
+use aiw_workflow::WorkflowState;
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{json, Value};
@@ -28,13 +29,14 @@ impl EngineHost {
     pub fn new(engine: Engine, session_id: Option<String>, parent_run: Option<String>) -> Self {
         Self { engine, session_id, parent_run, workflow: None, first_update: Mutex::new(None), workflow_session: Mutex::new(None) }
     }
-    pub fn for_workflow(engine: Engine, wf: WorkflowDef, first: oneshot::Sender<WorkflowRun>) -> Self {
+    /// `first` receives the first state of the run (a resumed run has no one waiting for it).
+    pub fn for_workflow(engine: Engine, wf: WorkflowDef, first: Option<oneshot::Sender<WorkflowRun>>) -> Self {
         Self {
             engine,
             session_id: None,
             parent_run: None,
             workflow: Some(wf),
-            first_update: Mutex::new(Some(first)),
+            first_update: Mutex::new(first),
             workflow_session: Mutex::new(None),
         }
     }
@@ -199,11 +201,17 @@ impl aiw_workflow::WorkflowHost for EngineHost {
             }
             runs.truncate(100);
         }
-        if run.status != "running" && run.status != "waiting_approval" || run.steps.iter().all(|s| s.status == "pending") {
-            let _ = self.engine.0.store.save_workflow_run(run);
-        }
+        let _ = self.engine.0.store.save_workflow_run(run);
         if let Some(tx) = self.first_update.lock().unwrap().take() {
             let _ = tx.send(run.clone());
         }
+    }
+
+    fn save_state(&self, state: &WorkflowState) {
+        let _ = self.engine.0.store.save_workflow_state(state);
+    }
+
+    fn clear_state(&self, run_id: &str) {
+        let _ = self.engine.0.store.clear_workflow_state(run_id);
     }
 }

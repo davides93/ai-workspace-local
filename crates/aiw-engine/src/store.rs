@@ -4,6 +4,7 @@
 use aiw_core::api::{AuditEntry, ChatMessage, Session, WorkflowRun};
 use aiw_core::events::SeqEvent;
 use aiw_core::{Error, Result};
+use aiw_workflow::WorkflowState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
@@ -35,7 +36,8 @@ impl Store {
              CREATE TABLE IF NOT EXISTS events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY(run_id, seq));
              CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, session_id TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT);
              CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, ts TEXT NOT NULL, json TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS workflow_state (run_id TEXT PRIMARY KEY, json TEXT NOT NULL);",
         )
         .map_err(db)?;
         Ok(Self { conn: Mutex::new(conn) })
@@ -259,6 +261,42 @@ impl Store {
             )
             .map_err(db)?;
         Ok(())
+    }
+    pub fn workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
+        let s: Option<String> = self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT json FROM workflow_runs WHERE id=?1", params![id], |r| r.get(0))
+            .optional()
+            .map_err(db)?;
+        Ok(s.map(|j| serde_json::from_str(&j)).transpose()?)
+    }
+    /// The resumable state of a workflow run that has not finished.
+    pub fn save_workflow_state(&self, st: &WorkflowState) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("INSERT OR REPLACE INTO workflow_state(run_id,json) VALUES(?1,?2)", params![st.run.id, serde_json::to_string(st)?])
+            .map_err(db)?;
+        Ok(())
+    }
+    pub fn clear_workflow_state(&self, run_id: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute("DELETE FROM workflow_state WHERE run_id=?1", params![run_id]).map_err(db)?;
+        Ok(())
+    }
+    /// States that cannot be read (a format from another version) are skipped.
+    pub fn workflow_states(&self) -> Result<Vec<WorkflowState>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT json FROM workflow_state").map_err(db)?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0)).map_err(db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            if let Ok(s) = serde_json::from_str(&r.map_err(db)?) {
+                out.push(s);
+            }
+        }
+        Ok(out)
     }
     pub fn workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
         let c = self.conn.lock().unwrap();

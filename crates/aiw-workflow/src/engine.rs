@@ -1,6 +1,7 @@
 use aiw_core::api::{OnError, StepOptions, WorkflowDef, WorkflowRun, WorkflowStep, WorkflowStepRun};
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -15,6 +16,11 @@ pub trait WorkflowHost: Send + Sync {
     async fn complete(&self, run_id: &str, profile: &str, prompt: &str) -> Result<String>;
     async fn approval(&self, run_id: &str, message: &str) -> bool;
     fn update(&self, run: &WorkflowRun);
+    /// Called after every change of a run that has not finished: the state is enough to go on with
+    /// [`run_from`] after a restart.
+    fn save_state(&self, _state: &WorkflowState) {}
+    /// Called once the run has finished (any outcome).
+    fn clear_state(&self, _run_id: &str) {}
 }
 
 /// What the placeholders of a template can see.
@@ -88,7 +94,7 @@ pub fn evaluate_condition(expr: &str) -> bool {
 }
 
 /// Everything a run needs to go on: the run itself plus what the placeholders and the branches use.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowState {
     pub run: WorkflowRun,
     pub def: WorkflowDef,
@@ -151,6 +157,11 @@ impl Shared<'_> {
             g.clone()
         };
         self.host.update(&snapshot.run);
+        if matches!(snapshot.run.status.as_str(), "running" | "waiting_approval") {
+            self.host.save_state(&snapshot);
+        } else {
+            self.host.clear_state(&snapshot.run.id);
+        }
     }
 }
 
@@ -477,5 +488,81 @@ mod tests {
         assert_eq!(run.status, "failed");
         assert!(run.steps[0].error.as_deref().unwrap().contains("tempo scaduto dopo 5 s"));
         assert_eq!(*host.calls.lock().unwrap(), 2);
+    }
+
+    /// A host that remembers the saved state and can hang in an agent step, like a process that dies.
+    struct Durable {
+        hang_agent: bool,
+        calls: Mutex<Vec<String>>,
+        state: Mutex<Option<WorkflowState>>,
+        cleared: Mutex<Vec<String>>,
+    }
+    impl Durable {
+        fn new(hang_agent: bool) -> Self {
+            Self { hang_agent, calls: Mutex::new(vec![]), state: Mutex::new(None), cleared: Mutex::new(vec![]) }
+        }
+    }
+    #[async_trait]
+    impl WorkflowHost for Durable {
+        async fn call_tool(&self, _r: &str, tool: &str, _a: Value) -> Result<String> {
+            self.calls.lock().unwrap().push(format!("tool:{tool}"));
+            Ok(format!("risultato di {tool}"))
+        }
+        async fn run_agent(&self, _r: &str, agent: &str, prompt: &str) -> Result<String> {
+            self.calls.lock().unwrap().push(format!("agent:{agent}:{prompt}"));
+            if self.hang_agent {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+            }
+            Ok("fatto".into())
+        }
+        async fn complete(&self, _r: &str, _p: &str, _prompt: &str) -> Result<String> {
+            Ok("llm".into())
+        }
+        async fn approval(&self, _r: &str, _m: &str) -> bool {
+            true
+        }
+        fn update(&self, _run: &WorkflowRun) {}
+        fn save_state(&self, state: &WorkflowState) {
+            *self.state.lock().unwrap() = Some(state.clone());
+        }
+        fn clear_state(&self, run_id: &str) {
+            self.cleared.lock().unwrap().push(run_id.to_string());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resumes_from_the_saved_state_without_repeating_finished_steps() {
+        let def: WorkflowDef = serde_json::from_value(json!({
+            "id": "w", "name": "W", "trigger": {"kind": "manual"},
+            "steps": [
+                {"id": "scan", "kind": "tool", "tool": "list_dir"},
+                {"id": "plan", "kind": "llm", "profile": "p", "prompt": "x"},
+                {"id": "act", "kind": "agent", "agent": "op", "prompt": "Esegui {{steps.scan.output}}"},
+                {"id": "last", "kind": "tool", "tool": "notify"}
+            ]
+        }))
+        .unwrap();
+        // First process: the agent step never ends and the future is dropped, like a crash.
+        let first = Durable::new(true);
+        let crashed = tokio::time::timeout(Duration::from_secs(60), run_workflow(&def, Map::new(), &first)).await;
+        assert!(crashed.is_err());
+        assert!(first.cleared.lock().unwrap().is_empty(), "an unfinished run keeps its state");
+        let saved = first.state.lock().unwrap().clone().expect("state saved");
+        assert_eq!(saved.next, 2);
+        assert_eq!(saved.run.steps[2].status, "running");
+        assert_eq!(saved.run.steps[1].status, "done");
+
+        // The state goes through JSON, as in the database.
+        let saved: WorkflowState = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let run_id = saved.run.id.clone();
+
+        // Second process: resumes from `act`, which runs again (at least once), and finishes.
+        let second = Durable::new(false);
+        let run = run_from(saved, &second).await;
+        assert_eq!(run.id, run_id);
+        assert_eq!(run.status, "succeeded");
+        assert!(run.steps.iter().all(|s| s.status == "done"));
+        assert_eq!(*second.calls.lock().unwrap(), vec!["agent:op:Esegui risultato di list_dir".to_string(), "tool:notify".to_string()]);
+        assert_eq!(*second.cleared.lock().unwrap(), vec![run_id]);
     }
 }

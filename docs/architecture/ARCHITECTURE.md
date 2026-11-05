@@ -286,6 +286,19 @@ Tipi di step: `tool`, `agent`, `llm`, `approval`, `condition` (`if`), `foreach`,
 (sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
 ripresa dopo un'approvazione.
 
+**Opzioni dei passi.** `tool`, `agent` e `llm` accettano `retry` (0–5 nuovi tentativi),
+`retry_delay_s` (attesa, default 2 s), `timeout_s` (limite per tentativo) e `on_error: continue`
+(il passo resta `failed`, il run prosegue e l'errore è in `{{steps.<id>.error}}`). Il timeout di un
+passo `agent` annulla anche il run dell'agente.
+
+**Durabilità.** Il motore tiene lo stato del run (`WorkflowState`: run, definizione, input, output,
+rami abilitati, passo corrente) e lo salva a ogni cambiamento nella tabella `workflow_state`; il run
+stesso è aggiornato in `workflow_runs`. All'avvio l'engine riprende i run `running` e
+`waiting_approval` dal passo salvato: quel passo ricomincia da capo (semantica *almeno una volta*,
+quindi un passo con effetti collaterali dovrebbe poter essere ripetuto), un'approvazione in attesa
+viene richiesta di nuovo, un run il cui workflow non esiste più diventa `failed`. L'audit registra
+`workflow.resume`.
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
