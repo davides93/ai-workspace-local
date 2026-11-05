@@ -7,7 +7,7 @@ use aiw_core::api::{ChatMessage, RunState, TeamDef};
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use futures::StreamExt;
-use serde_json::json;
+use serde_json::{json, Map, Value};
 use std::sync::Arc;
 
 /// Does the strategy run without a model orchestrating it?
@@ -31,6 +31,45 @@ pub fn supervisor_section(team: &TeamDef, members: &[(String, String)]) -> Strin
         s.push_str(&format!("- {id}: {role}\n"));
     }
     s
+}
+
+/// Most keys, and most bytes of JSON, the shared state of a team run can hold.
+pub const MAX_STATE_KEYS: usize = 64;
+pub const MAX_STATE_BYTES: usize = 32 * 1024;
+
+/// Applies one `team_state` call to the shared map. Returns the text for the model and whether the
+/// map changed; a call that would go over the limits changes nothing.
+pub fn apply_state_op(map: &mut Map<String, Value>, args: &Value) -> std::result::Result<(String, bool), String> {
+    let key = args.get("key").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty());
+    let op = args.get("op").and_then(Value::as_str).unwrap_or_default();
+    match op {
+        "get" => match key {
+            None => Ok((Value::Object(map.clone()).to_string(), false)),
+            Some(k) => map.get(k).map(|v| (v.to_string(), false)).ok_or_else(|| format!("la chiave `{k}` non esiste")),
+        },
+        "set" | "append" => {
+            let key = key.ok_or("`key` mancante")?;
+            let value = args.get("value").cloned().ok_or("`value` mancante")?;
+            let mut next = map.clone();
+            if op == "set" {
+                next.insert(key.to_string(), value);
+            } else {
+                match next.entry(key.to_string()).or_insert_with(|| Value::Array(vec![])) {
+                    Value::Array(items) => items.push(value),
+                    _ => return Err(format!("la chiave `{key}` non contiene una lista: usa set per sostituirla")),
+                }
+            }
+            if next.len() > MAX_STATE_KEYS {
+                return Err(format!("lo stato condiviso ha già {MAX_STATE_KEYS} chiavi: riusane una"));
+            }
+            if Value::Object(next.clone()).to_string().len() > MAX_STATE_BYTES {
+                return Err(format!("lo stato condiviso supererebbe {} KB: salva riassunti, non testi interi", MAX_STATE_BYTES / 1024));
+            }
+            *map = next;
+            Ok((format!("Stato condiviso aggiornato: `{key}`."), true))
+        }
+        other => Err(format!("operazione `{other}` sconosciuta: usa get, set o append")),
+    }
 }
 
 fn emit(host: &dyn RunHost, input: &RunInput, ev: AgEvent) {
@@ -270,6 +309,88 @@ mod tests {
         let s = supervisor_section(&t, &[("a".into(), "analizza".into()), ("b".into(), "scrive".into())]);
         assert!(s.starts_with("# Team «Squadra»") && s.contains("- a: analizza") && s.contains("- b: scrive"), "{s}");
         assert!(s.contains("nello stesso turno"));
+    }
+
+    #[test]
+    fn team_state_ops_respect_the_limits() {
+        let mut m = Map::new();
+        let run = |m: &mut Map<String, Value>, a: Value| apply_state_op(m, &a);
+        assert_eq!(run(&mut m, json!({"op": "get"})).unwrap(), ("{}".to_string(), false));
+        assert!(run(&mut m, json!({"op": "get", "key": "x"})).unwrap_err().contains("non esiste"));
+        run(&mut m, json!({"op": "set", "key": "piano", "value": {"a": 1}})).unwrap();
+        run(&mut m, json!({"op": "append", "key": "note", "value": "uno"})).unwrap();
+        run(&mut m, json!({"op": "append", "key": "note", "value": "due"})).unwrap();
+        assert_eq!(run(&mut m, json!({"op": "get", "key": "note"})).unwrap().0, r#"["uno","due"]"#);
+        assert_eq!(run(&mut m, json!({"op": "get"})).unwrap().0, r#"{"note":["uno","due"],"piano":{"a":1}}"#);
+        assert!(run(&mut m, json!({"op": "append", "key": "piano", "value": 1})).unwrap_err().contains("non contiene una lista"));
+        assert!(run(&mut m, json!({"op": "set", "value": 1})).unwrap_err().contains("`key` mancante"));
+        assert!(run(&mut m, json!({"op": "set", "key": "k"})).unwrap_err().contains("`value` mancante"));
+        assert!(run(&mut m, json!({"op": "boh"})).unwrap_err().contains("sconosciuta"));
+        // Size: a refused call leaves the state as it was.
+        let before = m.clone();
+        let big = "x".repeat(MAX_STATE_BYTES);
+        assert!(run(&mut m, json!({"op": "set", "key": "grande", "value": big})).unwrap_err().contains("KB"));
+        assert_eq!(m, before);
+        // Keys: the 65th is refused, an existing one can still be rewritten.
+        for i in m.len()..MAX_STATE_KEYS {
+            run(&mut m, json!({"op": "set", "key": format!("k{i}"), "value": i})).unwrap();
+        }
+        assert_eq!(m.len(), MAX_STATE_KEYS);
+        assert!(run(&mut m, json!({"op": "set", "key": "una-in-piu", "value": 1})).unwrap_err().contains("64 chiavi"));
+        run(&mut m, json!({"op": "set", "key": "k5", "value": "nuovo"})).unwrap();
+    }
+
+    #[tokio::test]
+    async fn members_of_a_team_share_state_and_the_root_run_gets_the_snapshots() {
+        use crate::runner::AgentRunner;
+        let call = |id: &str, args: Value| ScriptedBackend::tool_turn(id, "team_state", args);
+        let (host, dir) = setup(
+            vec![
+                call("w", json!({"op": "set", "key": "scoperta", "value": "il file è in /srv"})),
+                ScriptedBackend::text_turn("scritto"),
+                call("r", json!({"op": "get", "key": "scoperta"})),
+                ScriptedBackend::text_turn("letto"),
+            ],
+            true,
+        );
+        // Two "members" are two runs of the same host sharing the map and the root run id.
+        let mut writer = input(dir.path(), "auto");
+        writer.in_team = true;
+        let mut reader = input(dir.path(), "auto");
+        reader.in_team = true;
+        reader.run_id = "run_child".into();
+        reader.shared = writer.shared.clone();
+        reader.root_run = writer.run_id.clone();
+        AgentRunner::run(writer, host.clone()).await.unwrap();
+        let out = AgentRunner::run(reader, host.clone()).await.unwrap();
+        let tool = out.new_messages.iter().find(|m| m.role == "tool").unwrap();
+        assert_eq!(tool.content, "\"il file è in /srv\"");
+        // Every change is a STATE_SNAPSHOT with the whole shared object.
+        let shared: Vec<Value> = host
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                AgEvent::StateSnapshot { snapshot } => snapshot.shared.clone(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shared, vec![json!({"scoperta": "il file è in /srv"})]);
+    }
+
+    #[tokio::test]
+    async fn team_state_is_offered_only_in_team_runs() {
+        let offered = |in_team: bool| async move {
+            let (host, dir) = setup(vec![ScriptedBackend::text_turn("ok")], true);
+            let mut inp = input(dir.path(), "auto");
+            inp.in_team = in_team;
+            crate::AgentRunner::run(inp, host.clone()).await.unwrap();
+            let reqs = host.backend.requests.lock().unwrap();
+            reqs[0].tools.iter().any(|t| t.function.name == crate::internal::TEAM_STATE)
+        };
+        assert!(offered(true).await);
+        assert!(!offered(false).await);
     }
 
     #[tokio::test]

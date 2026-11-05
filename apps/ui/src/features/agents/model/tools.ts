@@ -2,7 +2,7 @@
 //
 // Rules of the backend this mirrors (crates/aiw-agent/src/runner.rs):
 //  - `tools` is a list of names, and `"*"` means every tool that is enabled;
-//  - six tools are internal to the agent loop (todo, agent, skill, render_ui, code, handoff): the catalogue
+//  - seven tools are internal to the agent loop (todo, agent, skill, render_ui, code, handoff, team_state): the catalogue
 //    (`GET /api/tools`) lists them with `source: "internal"` and the backend accepts them by name, or by `"*"`,
 //    like any other. Dropping them while editing a list would silently take the plan, sub-agents, skills and
 //    code mode away from the agent. `INTERNAL_TOOLS` is the fallback for a catalogue that does not list them
@@ -24,6 +24,8 @@ export const INTERNAL_TOOLS: InternalTool[] = [
   { name: "skill", risk: "read", description: "Carica le istruzioni di una skill elencata nel prompt di sistema." },
   { name: "render_ui", risk: "read", description: "Mostra un'interfaccia interattiva (A2UI) nella chat: moduli, scelte, riepiloghi." },
   { name: "code", risk: "read", description: "Orchestra più tool con uno script in un solo passo. Ogni chiamata dello script passa da policy, conferme e hook come una diretta." },
+  { name: "handoff", risk: "read", description: "Passa la conversazione a un altro agente: il tuo run termina e prosegue lui con il tuo riassunto." },
+  { name: "team_state", risk: "read", description: "Legge e scrive lo stato condiviso tra gli agenti di un team: serve solo dentro un team." },
 ];
 
 export const INTERNAL_NAMES: ReadonlySet<string> = new Set(INTERNAL_TOOLS.map((t) => t.name));

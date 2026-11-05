@@ -658,8 +658,10 @@ impl Engine {
         let mut agent = match (team.strategy.as_str(), &team.supervisor) {
             ("supervisor", Some(sup)) => {
                 let mut a = self.agent(sup)?;
-                if !a.tools.iter().any(|t| t == "*" || t == "agent") {
-                    a.tools.push("agent".into());
+                for tool in ["agent", aiw_agent::internal::TEAM_STATE] {
+                    if !a.tools.iter().any(|t| t == "*" || t == tool) {
+                        a.tools.push(tool.into());
+                    }
                 }
                 a
             }
@@ -693,6 +695,7 @@ impl Engine {
     /// Adds what a supervisor team needs to a run input: only the members as sub-agents and the
     /// `# Team` section of the system prompt.
     fn apply_team(&self, input: &mut RunInput, team: &TeamDef) {
+        input.in_team = true;
         if team.strategy != "supervisor" {
             return;
         }
@@ -1095,6 +1098,9 @@ impl Engine {
             budget: Arc::new(if depth == 0 { self.run_budget(&agent_budget) } else { RunBudget::unlimited() }),
             max_parallel_subagents: self.0.config.get("agents.max_parallel_subagents").and_then(|v| v.as_u64()).unwrap_or(3).max(1)
                 as usize,
+            in_team: false,
+            shared: Default::default(),
+            root_run: run_id.into(),
         }
     }
 

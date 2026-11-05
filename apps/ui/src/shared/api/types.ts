@@ -493,6 +493,8 @@ export interface RunState {
   usage?: { prompt_tokens: number; completion_tokens: number; tokens_per_s?: number; context_used?: number; context_max?: number };
   runtime?: string;
   model?: string;
+  /** State shared by the agents of a team run (the `team_state` tool). */
+  shared?: Record<string, unknown>;
 }
 
 export interface ApprovalRequest {

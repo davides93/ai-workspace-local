@@ -18,8 +18,11 @@ pub struct InternalTool {
 /// Name of the tool that hands the conversation over to another agent.
 pub const HANDOFF: &str = "handoff";
 
+/// Name of the tool that reads and writes the state shared by the agents of a team run.
+pub const TEAM_STATE: &str = "team_state";
+
 /// Names of the internal tools.
-pub const NAMES: [&str; 6] = ["todo", "agent", "skill", crate::a2ui::TOOL, crate::code::TOOL, HANDOFF];
+pub const NAMES: [&str; 7] = ["todo", "agent", "skill", crate::a2ui::TOOL, crate::code::TOOL, HANDOFF, TEAM_STATE];
 
 /// Is `name` an internal tool?
 pub fn is_internal(name: &str) -> bool {
@@ -37,6 +40,15 @@ pub fn handoff_spec(agents: &[(String, String)]) -> aiw_runtimes::ToolSpec {
             desc.join("; ")
         ),
         json!({"type":"object","properties":{"agent":{"type":"string","enum":names},"summary":{"type":"string","description":"Cosa è stato fatto e cosa deve fare l'agente successivo"}},"required":["agent","summary"]}),
+    )
+}
+
+/// The `team_state` spec (the same in every run).
+pub fn team_state_spec() -> aiw_runtimes::ToolSpec {
+    aiw_runtimes::ToolSpec::function(
+        TEAM_STATE,
+        "Stato condiviso del team: tutti gli agenti di questo lavoro leggono e scrivono le stesse chiavi (get senza chiave restituisce tutto, set sostituisce, append aggiunge a una lista). Usalo per scambiare risultati e decisioni senza ripeterli nei compiti.",
+        json!({"type":"object","properties":{"op":{"type":"string","enum":["get","set","append"]},"key":{"type":"string"},"value":{"description":"Qualsiasi valore JSON (set e append)"}},"required":["op"]}),
     )
 }
 
@@ -76,6 +88,11 @@ pub fn internal_tools() -> Vec<InternalTool> {
             name: HANDOFF,
             description: "Passa la conversazione a un altro agente: il run termina e il nuovo agente prosegue con il tuo riassunto.",
             parameters: parameters_of(handoff_spec(&[])),
+        },
+        InternalTool {
+            name: TEAM_STATE,
+            description: "Legge e scrive lo stato condiviso tra gli agenti di un team (solo nei run di team).",
+            parameters: parameters_of(team_state_spec()),
         },
     ]
 }

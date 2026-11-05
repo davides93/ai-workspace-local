@@ -372,3 +372,52 @@ async fn handoffs_stop_after_three_per_user_message() {
     assert_eq!(msgs.iter().filter(|m| m.role == "user" && m.name.as_deref() == Some(HANDOFF_MESSAGE)).count(), 3);
     assert_eq!(e.session(&s.id).unwrap().agent_id, "secondo", "primo → secondo → primo → secondo, the fourth is refused");
 }
+
+#[tokio::test]
+async fn pipeline_members_share_the_team_state_and_the_root_run_streams_it() {
+    let backend = ScriptedBackend::new(vec![
+        ScriptedBackend::tool_turn("w", "team_state", json!({"op": "set", "key": "esito", "value": "trovato in /srv"})),
+        ScriptedBackend::text_turn("ho scritto"),
+        ScriptedBackend::tool_turn("r", "team_state", json!({"op": "get", "key": "esito"})),
+        ScriptedBackend::text_turn("ho letto"),
+    ]);
+    let (e, _d, _w) = engine(vec![]).await;
+    e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+    for id in ["primo", "secondo"] {
+        copy_agent(&e, "planner", id);
+        // The members list their tools by name: the team still gives them the shared state.
+        let mut a = e.agent(id).unwrap();
+        a.tools = vec!["read_file".into()];
+        e.save_agent(a).unwrap();
+    }
+    e.save_team(team_def("pipeline", None, &["primo", "secondo"])).unwrap();
+    let s = e.create_session("team:squadra", None).unwrap();
+    let run = e.start_run(&s.id, "Procedi".into()).await.unwrap();
+    wait_finished(&e, &run).await;
+
+    // The second member's tool result carries what the first one wrote.
+    let reqs = backend.requests.lock().unwrap();
+    let result = reqs[3].messages.iter().rev().find(|m| m.role == "tool").unwrap().text();
+    assert_eq!(result, "\"trovato in /srv\"");
+    // The root run got a snapshot with the shared object (the members' own runs did not).
+    let snapshots: Vec<serde_json::Value> = e
+        .run_events(&run)
+        .iter()
+        .filter_map(|x| match &x.event.event {
+            AgEvent::StateSnapshot { snapshot } => snapshot.shared.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(snapshots, vec![json!({"esito": "trovato in /srv"})]);
+}
+
+#[tokio::test]
+async fn team_state_is_not_offered_outside_teams() {
+    let backend = ScriptedBackend::new(vec![ScriptedBackend::text_turn("ok")]);
+    let (e, _d, _w) = engine(vec![]).await;
+    e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+    let s = e.create_session("planner", None).unwrap();
+    let run = e.start_run(&s.id, "ciao".into()).await.unwrap();
+    wait_finished(&e, &run).await;
+    assert!(!backend.requests.lock().unwrap()[0].tools.iter().any(|t| t.function.name == "team_state"));
+}

@@ -140,6 +140,9 @@ mod tests {
             subagents: vec![("planner".into(), "pianifica".into())],
             max_parallel_subagents: 3,
             budget: Arc::new(RunBudget::unlimited()),
+            in_team: false,
+            shared: Default::default(),
+            root_run: "run_1".into(),
         }
     }
 

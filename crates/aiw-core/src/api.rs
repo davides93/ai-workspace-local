@@ -618,6 +618,9 @@ pub struct RunState {
     pub runtime: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// State shared by the agents of a team run (the `team_state` tool): a JSON object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

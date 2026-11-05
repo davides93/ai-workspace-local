@@ -63,6 +63,13 @@ pub struct RunInput {
     pub max_parallel_subagents: usize,
     /// Tokens, model turns and time of the whole run; sub-agents share the parent's.
     pub budget: Arc<RunBudget>,
+    /// Is this run part of a team run (the team's own run, or a member of it)? Only then the
+    /// `team_state` tool is offered.
+    pub in_team: bool,
+    /// State shared with the sub-agents like the budget: the `team_state` tool reads and writes it.
+    pub shared: Arc<Mutex<serde_json::Map<String, Value>>>,
+    /// The run at the top of the delegation chain: where the state snapshots of the shared state go.
+    pub root_run: String,
 }
 
 #[derive(Debug, Default)]
@@ -134,6 +141,9 @@ fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
     }
     if allowed(crate::internal::HANDOFF) && input.depth == 0 && !input.subagents.is_empty() {
         v.push(crate::internal::handoff_spec(&input.subagents));
+    }
+    if input.in_team && allowed(crate::internal::TEAM_STATE) {
+        v.push(crate::internal::team_state_spec());
     }
     if allowed(crate::a2ui::TOOL) {
         v.push(crate::a2ui::spec());
@@ -384,6 +394,7 @@ impl AgentRunner {
             model: Some(input.profile.model.clone()),
             todos: None,
             usage: None,
+            shared: None,
         };
         ev.emit(AgEvent::RunStarted { thread_id: input.thread_id.clone(), run_id: input.run_id.clone() });
         ev.emit(AgEvent::StateSnapshot { snapshot: state.clone() });
@@ -1058,6 +1069,28 @@ impl AgentRunner {
                         (ToolOutput::text(skills::load(s)), None)
                     }
                     None => (ToolOutput::error(format!("skill `{name}` non trovata")), None),
+                };
+            }
+            crate::internal::TEAM_STATE => {
+                if !input.in_team {
+                    return (ToolOutput::error("lo stato condiviso esiste solo nei run di un team"), None);
+                }
+                let (res, snapshot) = {
+                    let mut map = input.shared.lock().unwrap();
+                    let res = crate::team::apply_state_op(&mut map, &args);
+                    let changed = matches!(res, Ok((_, true)));
+                    (res, changed.then(|| Value::Object(map.clone())))
+                };
+                return match res {
+                    Ok((text, _)) => {
+                        if let Some(shared) = snapshot {
+                            // The root run carries its own state; a member only adds the shared object.
+                            let base = if input.root_run == input.run_id { state.clone() } else { RunState::default() };
+                            host.emit(&input.root_run, AgEvent::StateSnapshot { snapshot: RunState { shared: Some(shared), ..base } });
+                        }
+                        (ToolOutput::text(text), None)
+                    }
+                    Err(e) => (ToolOutput::error(e), None),
                 };
             }
             crate::internal::HANDOFF => {

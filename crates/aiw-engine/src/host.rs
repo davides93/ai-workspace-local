@@ -132,6 +132,13 @@ impl RunHost for EngineHost {
         // Same for the sandbox and the tool list.
         input.tool_ctx.sandbox = narrow_sandbox(parent.tool_ctx.sandbox, input.tool_ctx.sandbox);
         input.agent.tools = narrow_tools(&parent.agent.tools, &input.agent.tools);
+        // The members of a team share its state (the tool is harmless: it touches nothing outside the run).
+        input.in_team = parent.in_team;
+        input.shared = parent.shared.clone();
+        input.root_run = parent.root_run.clone();
+        if input.in_team && !input.agent.tools.iter().any(|t| t == "*" || t == aiw_agent::internal::TEAM_STATE) {
+            input.agent.tools.push(aiw_agent::internal::TEAM_STATE.into());
+        }
         let host = Arc::new(EngineHost::new(self.engine.clone(), self.session_id.clone(), Some(parent.run_id.clone())));
         let out = AgentRunner::run(input, host).await?;
         Ok(if out.final_text.is_empty() { "(nessuna risposta)".into() } else { out.final_text })

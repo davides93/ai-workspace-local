@@ -51,7 +51,8 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
       // An event of a subscription that was dropped while it was being delivered.
       if (current.current !== forSession) return;
       if (e.type === "RUN_STARTED") rememberRun(e.runId, forSession);
-      if (e.type === "STATE_SNAPSHOT") setRunState(e.snapshot);
+      // A member of a team sends a snapshot with only the shared state: merge, so the plan and usage stay.
+      if (e.type === "STATE_SNAPSHOT") setRunState((prev) => ({ ...prev, ...e.snapshot }));
       if (e.type === "CUSTOM" && e.name === HANDOFF) handoffSeen.current = true;
       if (e.type === "CUSTOM" && e.name === "aiw.image") {
         const img = parseImageEvent(e.value);
