@@ -32,7 +32,8 @@ pub trait RunHost: Send + Sync {
     fn tools(&self) -> Arc<ToolRegistry>;
     fn skills(&self) -> Vec<Skill>;
     /// Runs `task` with another agent profile in an isolated context; returns its final answer.
-    async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str) -> Result<String>;
+    /// `run_id` is the id the sub-agent's run must use (announced in SUBAGENT_STARTED).
+    async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str, run_id: &str) -> Result<String>;
     /// Checks that the conversation may be handed over to `agent_id` (the `handoff` tool) and
     /// returns the name to show for it.
     fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {
@@ -335,9 +336,13 @@ pub(crate) async fn delegate(input: &RunInput, host: &Arc<dyn RunHost>, agent_id
         task.push_str(&format!("\n\n[contesto aggiunto da un hook]\n{c}"));
     }
     let sub_id = new_id("sub");
-    host.emit(&input.run_id, AgEvent::SubagentStarted { subagent_id: sub_id.clone(), name: agent_id.to_string() });
+    let sub_run = new_id("run");
+    host.emit(
+        &input.run_id,
+        AgEvent::SubagentStarted { subagent_id: sub_id.clone(), name: agent_id.to_string(), run_id: Some(sub_run.clone()) },
+    );
     audit("allow", format!("subagente {agent_id}: {}", task.chars().take(120).collect::<String>()));
-    let r = host.subagent(input, agent_id, &task).await;
+    let r = host.subagent(input, agent_id, &task, &sub_run).await;
     let (mut out, res) = match r {
         Ok(t) => (ToolOutput::text(t.clone()), Some(t)),
         Err(e) => (ToolOutput::error(format!("subagente fallito: {e}")), None),

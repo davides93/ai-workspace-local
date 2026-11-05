@@ -5,6 +5,7 @@ import { historyToItems } from "./history";
 import { lastRunNotice } from "./runNotice";
 import type { Item, ToolItem } from "./items";
 import { parseImageEvent, reduce, settle } from "./reduce";
+import { traceItems } from "./trace";
 
 const fold = (events: AgEvent[], from: Item[] = []): Item[] => events.reduce<Item[]>((items, e) => reduce(items, e), from);
 
@@ -116,6 +117,32 @@ describe("aiw.budget_exceeded", () => {
   it("becomes a note that names the reason", () => {
     const items = fold([{ type: "CUSTOM", name: "aiw.budget_exceeded", value: { reason: "2 turni del modello usati" } }]);
     expect(items[0]).toMatchObject({ kind: "note", text: expect.stringContaining("2 turni del modello usati") });
+  });
+});
+
+describe("sub-agent traces", () => {
+  it("keeps the id of the sub-agent's run on its row", () => {
+    const items = fold([
+      { type: "SUBAGENT_STARTED", subagentId: "s1", name: "Lettore", runId: "run_x" },
+      { type: "SUBAGENT_STARTED", subagentId: "s2", name: "Vecchio" },
+    ]);
+    expect(items[0]).toMatchObject({ kind: "subagent", runId: "run_x" });
+    expect(items[1]).not.toHaveProperty("runId");
+  });
+  it("rebuilds the rows of a child run, without confirmations or its own error", () => {
+    const rows = traceItems([
+      { type: "RUN_STARTED", threadId: "t", runId: "run_x" },
+      { type: "TEXT_MESSAGE_START", messageId: "m", role: "assistant" },
+      { type: "TEXT_MESSAGE_CONTENT", messageId: "m", delta: "Leggo il file" },
+      { type: "TEXT_MESSAGE_END", messageId: "m" },
+      { type: "TOOL_CALL_START", toolCallId: "c", toolCallName: "read_file" },
+      { type: "TOOL_CALL_ARGS", toolCallId: "c", delta: '{"path":"a"}' },
+      { type: "TOOL_CALL_RESULT", messageId: "r", toolCallId: "c", content: "contenuto" },
+      { type: "CUSTOM", name: "aiw.approval_request", value: { id: "a1", run_id: "run_x", tool: "shell", args: {}, reason: "x", risk: "high" } },
+      { type: "RUN_ERROR", message: "Run annullato", code: "cancelled" },
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["text", "tool"]);
+    expect(rows[1]).toMatchObject({ name: "read_file", result: "contenuto", status: "done" });
   });
 });
 

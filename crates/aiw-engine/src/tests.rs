@@ -257,7 +257,20 @@ async fn a_team_session_runs_the_supervisor_with_only_the_members_as_subagents()
     let spec = first.tools.iter().find(|t| t.function.name == "agent").unwrap();
     assert_eq!(spec.function.parameters["properties"]["agent"]["enum"], json!(["membro-a", "membro-b"]));
     let evs = e.run_events(&run);
-    assert_eq!(evs.iter().filter(|x| matches!(x.event.event, AgEvent::SubagentStarted { .. })).count(), 2);
+    let child_runs: Vec<String> = evs
+        .iter()
+        .filter_map(|x| match &x.event.event {
+            AgEvent::SubagentStarted { run_id, .. } => run_id.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(child_runs.len(), 2);
+    // The UI opens a member's trace from the id in SUBAGENT_STARTED: its events are stored under it.
+    for id in &child_runs {
+        let child = e.run_events(id);
+        assert!(matches!(child.first().unwrap().event.event, AgEvent::RunStarted { .. }), "{id}");
+        assert!(matches!(child.last().unwrap().event.event, AgEvent::RunFinished { .. }), "{id}");
+    }
 }
 
 #[tokio::test]

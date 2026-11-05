@@ -293,6 +293,26 @@ describe("other v0.4 methods", () => {
     expect((await api.workflows()).some((w) => w.id === "wf-tmp")).toBe(false);
   });
 
+  it("saves, validates and deletes teams like the engine, and protects the agents they use", async () => {
+    const demo = await api.teams();
+    expect(demo.map((t) => t.id)).toContain("revisione");
+    const base = { id: "t-tmp", name: "Tmp", description: "", strategy: "pipeline" as const, members: [{ agent: "coder", role: "scrive" }] };
+    await expect(api.saveTeam({ ...base, strategy: "coro" as never })).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strategia non valida") });
+    await expect(api.saveTeam({ ...base, members: [] })).rejects.toMatchObject({ message: "un team ha da 1 a 8 membri" });
+    await expect(api.saveTeam({ ...base, members: [base.members[0], base.members[0]] })).rejects.toMatchObject({ message: expect.stringContaining("compare più volte") });
+    await expect(api.saveTeam({ ...base, members: [{ agent: "ghost", role: "" }] })).rejects.toMatchObject({ message: "l'agente `ghost` non esiste" });
+    await expect(api.saveTeam({ ...base, strategy: "supervisor" })).rejects.toMatchObject({ message: expect.stringContaining("richiede un supervisore") });
+    await expect(api.saveTeam({ ...base, strategy: "supervisor", supervisor: "coder" })).rejects.toMatchObject({ message: expect.stringContaining("non può essere anche un membro") });
+    await expect(api.saveTeam({ ...base, budget: { max_tokens: 0 } })).rejects.toMatchObject({ message: expect.stringContaining("budget.max_tokens") });
+    await expect(api.saveTeam({ ...base, members: [{ agent: "remote:r1", role: "" }] })).resolves.toBeDefined();
+
+    await api.saveTeam({ ...base, members: [{ agent: "browser", role: "" }] });
+    await expect(api.deleteAgent("browser")).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/usato dai team: .*Tmp/) });
+    await api.deleteTeam("t-tmp");
+    await expect(api.deleteTeam("t-tmp")).rejects.toMatchObject({ status: 404 });
+    expect((await api.teams()).some((t) => t.id === "t-tmp")).toBe(false);
+  });
+
   it("re-detects runtimes", async () => {
     vi.useFakeTimers();
     const p = api.refreshRuntimes();

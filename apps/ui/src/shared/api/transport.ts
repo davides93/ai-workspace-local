@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress,
+  AgEvent, AgentProfile, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -80,6 +80,10 @@ export interface Transport {
   agents(): Promise<AgentProfile[]>;
   saveAgent(a: AgentProfile): Promise<AgentProfile>;
   deleteAgent(id: string): Promise<void>;
+  teams(): Promise<TeamDef[]>;
+  saveTeam(t: TeamDef): Promise<TeamDef>;
+  /** A team can always be deleted; the sessions that use it can no longer continue. */
+  deleteTeam(id: string): Promise<void>;
 
   sessions(): Promise<Session[]>;
   getSession(id: string): Promise<Session>;
@@ -95,6 +99,8 @@ export interface Transport {
   cancelRun(runId: string): Promise<void>;
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void): () => void;
   activeRun(sessionId: string): Promise<string | null>;
+  /** The events of a run so far (a sub-agent's run included), in order: the trace of a card. */
+  runEvents(runId: string): Promise<AgEvent[]>;
   approvals(): Promise<ApprovalRequest[]>;
   respondApproval(id: string, decision: "allow" | "deny", remember?: boolean): Promise<void>;
 

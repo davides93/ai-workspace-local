@@ -107,13 +107,12 @@ impl RunHost for EngineHost {
         self.engine.skills()
     }
 
-    async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str) -> Result<String> {
+    async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str, run_id: &str) -> Result<String> {
         let agent = self.engine.agent(agent_id)?;
         let profile = self.engine.profile(&agent.inference_profile)?;
-        let run_id = new_id("run");
         let cancel = parent.tool_ctx.cancel.child_token();
         let mut input = self.engine.build_input(
-            &run_id,
+            run_id,
             &parent.thread_id,
             agent,
             profile,

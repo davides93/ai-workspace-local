@@ -17,7 +17,7 @@ export type Item =
   | { kind: "reasoning"; id: string; text: string; streaming: boolean }
   | { kind: "tool"; id: string; name: string; args: string; result?: string; status: ToolStatus; images?: ToolImage[]; startedAt?: number; endedAt?: number }
   | { kind: "approval"; req: ApprovalRequest; resolved?: boolean }
-  | { kind: "subagent"; id: string; name: string; result?: string; interrupted?: boolean }
+  | { kind: "subagent"; id: string; name: string; /** Run of the sub-agent, when the backend named it: its events are its trace. */ runId?: string; result?: string; interrupted?: boolean }
   | { kind: "note"; id: string; text: string }
   | { kind: "surface"; id: string; surface: SurfaceState }
   | { kind: "action"; id: string; name: string; context: Record<string, unknown> }

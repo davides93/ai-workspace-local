@@ -42,6 +42,7 @@ const THEMES = ["light", "dark"];
 const SAMPLES = {
   "chat/sessionId": ["ses_pdf", "ses_bug"],
   "agents/agentId": ["coder"],
+  "teams/teamId": ["revisione"],
   "workflows/workflowId": ["inbox-digest"],
   "capabilities/tab": ["tools", "mcp", "browser"],
   "models/tab": ["installed", "discover", "downloads", "catalog"],

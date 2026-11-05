@@ -1,6 +1,6 @@
 import type {
   AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, Fit, HookConfig, InferenceProfile, LocalModel, McpServer,
-  PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, ToolInfo, WorkflowDef, WorkflowRun,
+  PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, TeamDef, ToolInfo, WorkflowDef, WorkflowRun,
 } from "../types";
 import { RUN_ERROR_MESSAGE } from "../types";
 
@@ -204,6 +204,20 @@ export const agents: AgentProfile[] = [
   { id: "browser", name: "Navigatore", description: "Ricerca e azioni nel browser via CDP.", inference_profile: "fast-local", system_prompt: "Usi il browser per raccogliere informazioni e completare form.", tools: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot", "web_fetch", "todo"], mode: "ask", sandbox: "read-only", max_turns: 40 },
   { id: "desktop", name: "Pilota desktop", description: "Computer-use: vede lo schermo e usa mouse e tastiera.", inference_profile: "vision-cu", system_prompt: "Controlli il desktop tramite screenshot e azioni. Chiedi conferma prima di inviare, pagare o cancellare.", tools: ["computer_screenshot", "computer_click", "computer_type", "computer_key", "computer_scroll", "todo"], mode: "ask", sandbox: "read-only", max_turns: 50 },
   { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "todo"], mode: "plan", sandbox: "read-only", max_turns: 20 },
+];
+
+/** Teams of the demo: a supervisor with two members, and a chain. */
+export const teams: TeamDef[] = [
+  {
+    id: "revisione", name: "Revisione del codice", description: "Il Coder implementa, il Pianificatore rivede: il supervisore li coordina.",
+    strategy: "supervisor", supervisor: "operator",
+    members: [{ agent: "coder", role: "Scrive e verifica le modifiche" }, { agent: "planner", role: "Rivede il piano e i rischi, senza modificare" }],
+    budget: { max_turns: 40 },
+  },
+  {
+    id: "ricerca", name: "Ricerca e sintesi", description: "Il Navigatore raccoglie, il Pianificatore riassume.",
+    strategy: "pipeline", members: [{ agent: "browser", role: "Raccoglie le fonti" }, { agent: "planner", role: "Riassume in un piano" }],
+  },
 ];
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();

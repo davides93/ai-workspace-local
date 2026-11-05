@@ -30,6 +30,7 @@ export const qk = {
 
   profiles: () => ["profiles"] as const,
   agents: () => ["agents"] as const,
+  teams: () => ["teams"] as const,
 
   sessions: {
     all: () => ["sessions"] as const,
@@ -40,6 +41,7 @@ export const qk = {
   },
 
   approvals: () => ["approvals"] as const,
+  runEvents: (runId: string) => ["runs", "events", runId] as const,
 
   workflows: {
     all: () => ["workflows"] as const,

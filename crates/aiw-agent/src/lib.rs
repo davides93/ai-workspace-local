@@ -47,6 +47,8 @@ mod tests {
         pub(crate) events: Mutex<Vec<AgEvent>>,
         /// Pause inside `subagent`, to tell parallel runs from sequential ones.
         pub(crate) subagent_delay_ms: std::sync::atomic::AtomicU64,
+        /// The run ids the runner gave to the sub-agents.
+        pub(crate) sub_runs: Mutex<Vec<String>>,
         approve: bool,
         audits: Mutex<Vec<AuditEntry>>,
         /// Tests that need a backend which can fail put it here instead of the scripted one.
@@ -76,7 +78,8 @@ mod tests {
         fn skills(&self) -> Vec<Skill> {
             vec![]
         }
-        async fn subagent(&self, _p: &RunInput, agent: &str, task: &str) -> Result<String> {
+        async fn subagent(&self, _p: &RunInput, agent: &str, task: &str, run_id: &str) -> Result<String> {
+            self.sub_runs.lock().unwrap().push(run_id.to_string());
             let delay = self.subagent_delay_ms.load(std::sync::atomic::Ordering::Relaxed);
             if delay > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
@@ -96,6 +99,7 @@ mod tests {
             tools: Arc::new(reg),
             events: Mutex::new(vec![]),
             subagent_delay_ms: Default::default(),
+            sub_runs: Default::default(),
             approve,
             audits: Mutex::new(vec![]),
             replacement: Mutex::new(None),
@@ -592,6 +596,26 @@ mod hook_event_tests {
     }
 
     #[tokio::test]
+    async fn the_subagent_announces_the_id_of_its_run() {
+        let (host, dir) = tests_support::setup(delegate_turns(), true);
+        AgentRunner::run(tests_support::input(dir.path(), "auto"), host.clone()).await.unwrap();
+        let announced: Vec<Option<String>> = host
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                AgEvent::SubagentStarted { run_id, .. } => Some(run_id.clone()),
+                _ => None,
+            })
+            .collect();
+        let used = host.sub_runs.lock().unwrap().clone();
+        assert_eq!(used.len(), 1);
+        assert!(used[0].starts_with("run_"), "{used:?}");
+        assert_eq!(announced, vec![Some(used[0].clone())], "SUBAGENT_STARTED carries the id the host was told to use");
+    }
+
+    #[tokio::test]
     async fn blocking_subagent_start_keeps_the_subagent_from_running() {
         let (host, dir) = tests_support::setup(delegate_turns(), true);
         let log = dir.path().join("events.log");
@@ -800,9 +824,9 @@ mod budget_tests {
         fn skills(&self) -> Vec<Skill> {
             vec![]
         }
-        async fn subagent(&self, parent: &RunInput, _agent: &str, task: &str) -> Result<String> {
+        async fn subagent(&self, parent: &RunInput, _agent: &str, task: &str, run_id: &str) -> Result<String> {
             let mut child = tests_support::input(&self.dir, "auto");
-            child.run_id = "run_child".into();
+            child.run_id = run_id.into();
             child.depth = parent.depth + 1;
             child.user_input = task.into();
             child.budget = parent.budget.clone();

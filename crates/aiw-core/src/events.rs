@@ -74,6 +74,9 @@ pub enum AgEvent {
     SubagentStarted {
         subagent_id: String,
         name: String,
+        /// Id of the run of the sub-agent: its events are at `/api/runs/{id}/events.json`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
     },
     SubagentFinished {
         subagent_id: String,

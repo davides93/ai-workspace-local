@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
+  AgEvent, AgentProfile, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -109,6 +109,9 @@ export class HttpTransport implements Transport {
   agents = () => this.req<AgentProfile[]>("GET", "/agents");
   saveAgent = (a: AgentProfile) => this.req<AgentProfile>("PUT", `/agents/${enc(a.id)}`, a);
   deleteAgent = (id: string) => this.req<void>("DELETE", `/agents/${enc(id)}`);
+  teams = () => this.req<TeamDef[]>("GET", "/teams");
+  saveTeam = (t: TeamDef) => this.req<TeamDef>("PUT", `/teams/${enc(t.id)}`, t);
+  deleteTeam = (id: string) => this.req<void>("DELETE", `/teams/${enc(id)}`);
 
   sessions = () => this.req<Session[]>("GET", "/sessions");
   getSession = (id: string) => this.req<Session>("GET", `/sessions/${enc(id)}`);
@@ -152,6 +155,8 @@ export class HttpTransport implements Transport {
     this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, kind ? { input, kind } : { input });
   cancelRun = (runId: string) => this.req<void>("POST", `/runs/${enc(runId)}/cancel`);
   activeRun = async (sessionId: string) => (await this.req<{ run_id: string | null }>("GET", `/sessions/${enc(sessionId)}/active-run`)).run_id;
+  runEvents = async (runId: string) =>
+    (await this.req<{ seq: number; event: AgEvent }[]>("GET", `/runs/${enc(runId)}/events.json`)).map((e) => e.event);
   approvals = () => this.req<ApprovalRequest[]>("GET", "/approvals");
   respondApproval = (id: string, decision: "allow" | "deny", remember?: boolean) =>
     this.req<void>("POST", `/approvals/${enc(id)}`, { decision, remember: !!remember });

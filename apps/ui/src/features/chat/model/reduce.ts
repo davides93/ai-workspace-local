@@ -85,7 +85,7 @@ export function reduce(items: Item[], e: AgEvent): Item[] {
     case "TOOL_CALL_RESULT":
       return update(items, "tool", e.toolCallId, (it) => ({ ...it, result: e.content, status: resultStatus(e.content), endedAt: e.timestamp }));
     case "SUBAGENT_STARTED":
-      return [...items, { kind: "subagent", id: e.subagentId, name: e.name }];
+      return [...items, { kind: "subagent", id: e.subagentId, name: e.name, ...(e.runId ? { runId: e.runId } : {}) }];
     case "SUBAGENT_FINISHED":
       return update(items, "subagent", e.subagentId, (it) => ({ ...it, result: e.result ?? "completato" }));
     case "CUSTOM":

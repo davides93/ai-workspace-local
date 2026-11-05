@@ -54,6 +54,9 @@ describe("HttpTransport", () => {
     await t.deleteModel("ollama:qwen3:4b");
     await t.deleteAgent("a");
     await t.deleteProfile("p");
+    await t.teams();
+    await t.saveTeam({ id: "t 1", name: "T", description: "", strategy: "pipeline", members: [{ agent: "a", role: "" }] });
+    await t.deleteTeam("t 1");
     await t.renameSession("s", "Titolo");
     await t.getSession("s");
     await t.deleteWorkflow("w");
@@ -74,6 +77,9 @@ describe("HttpTransport", () => {
       "DELETE /models/ollama%3Aqwen3%3A4b",
       "DELETE /agents/a",
       "DELETE /profiles/p",
+      "GET /teams",
+      "PUT /teams/t%201",
+      "DELETE /teams/t%201",
       "PATCH /sessions/s",
       "GET /sessions/s",
       "DELETE /workflows/w",
@@ -84,8 +90,9 @@ describe("HttpTransport", () => {
     ]);
     expect(JSON.parse(calls[2].body!)).toEqual({ token: "t0k", endpoint: "https://mirror" });
     expect(JSON.parse(calls[5].body!)).toEqual({ id: "some-id" });
-    expect(JSON.parse(calls[11].body!)).toEqual({ title: "Titolo" });
-    expect(JSON.parse(calls[15].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
+    expect(JSON.parse(calls[12].body!)).toMatchObject({ id: "t 1", strategy: "pipeline" });
+    expect(JSON.parse(calls[14].body!)).toEqual({ title: "Titolo" });
+    expect(JSON.parse(calls[18].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
   });
 });
 

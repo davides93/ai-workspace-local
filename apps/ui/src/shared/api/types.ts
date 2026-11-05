@@ -407,6 +407,37 @@ export interface BudgetLimits {
   max_seconds?: number;
 }
 
+// ---------- Teams ----------
+export type TeamStrategy = "supervisor" | "parallel" | "pipeline";
+
+export interface TeamMember {
+  /** A local agent id, or `remote:<id>` for a remote agent. */
+  agent: string;
+  /** What the member is for (the description the supervisor sees). */
+  role: string;
+}
+
+/** A group of agents used in chat like one agent: the session's agent id is `team:<id>`. */
+export interface TeamDef {
+  id: string;
+  name: string;
+  description: string;
+  strategy: TeamStrategy;
+  /** Agent that orchestrates the members; required for `supervisor`. */
+  supervisor?: string;
+  members: TeamMember[];
+  /** Agent that merges the member results of a `parallel` team (optional). */
+  aggregator?: string;
+  budget?: BudgetLimits;
+  /** JSON Schema of the final answer (same subset as the agents'). */
+  output_schema?: unknown;
+}
+
+/** Prefix of a session's agent id that names a team. */
+export const TEAM_PREFIX = "team:";
+/** Prefix of the id of a remote agent in a team. */
+export const REMOTE_PREFIX = "remote:";
+
 // ---------- Sessions, messages, runs ----------
 export interface Session {
   id: string;
@@ -483,7 +514,7 @@ export type AgEvent = { timestamp?: number } & (
   | { type: "TOOL_CALL_END"; toolCallId: string }
   | { type: "TOOL_CALL_RESULT"; messageId: string; toolCallId: string; content: string }
   | { type: "STATE_SNAPSHOT"; snapshot: RunState }
-  | { type: "SUBAGENT_STARTED"; subagentId: string; name: string }
+  | { type: "SUBAGENT_STARTED"; subagentId: string; name: string; /** Run of the sub-agent: its events are at `runEvents(runId)`. */ runId?: string }
   | { type: "SUBAGENT_FINISHED"; subagentId: string; result?: string }
   | { type: "CUSTOM"; name: string; value: unknown }
 );
