@@ -470,6 +470,38 @@ pub struct BudgetLimits {
     pub max_seconds: Option<u64>,
 }
 
+/// A team of agents used in chat like a single agent (session agent id `team:<id>`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TeamDef {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// supervisor | parallel | pipeline
+    pub strategy: String,
+    /// Agent id that orchestrates the members; required for the `supervisor` strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor: Option<String>,
+    pub members: Vec<TeamMember>,
+    /// Agent that merges the member results for the `parallel` strategy (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetLimits>,
+    /// Schema of the final answer, same subset as [`AgentProfile::output_schema`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TeamMember {
+    /// A local agent id, or `remote:<id>` for a remote agent.
+    pub agent: String,
+    /// What this member is for; shown to the supervisor as the sub-agent description.
+    #[serde(default)]
+    pub role: String,
+}
+
 // ---------------------------------------------------------------- sessions & messages
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

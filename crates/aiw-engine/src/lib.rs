@@ -130,6 +130,10 @@ pub struct Engine(pub(crate) Arc<Inner>);
 
 /// Longest session title accepted by [`Engine::rename_session`].
 pub const MAX_TITLE_CHARS: usize = 200;
+/// Prefix of the ids of remote agents (`remote:<id>`) in teams and sub-agent lists.
+pub const REMOTE_PREFIX: &str = "remote:";
+/// Prefix of a session's agent id that points at a team (`team:<id>`).
+pub const TEAM_PREFIX: &str = "team:";
 
 fn random_digits(n: usize) -> String {
     let u = uuid::Uuid::new_v4().as_u128();
@@ -623,9 +627,100 @@ impl Engine {
                 used_by.join(", ")
             )));
         }
+        let teams = self.teams_using_agent(id)?;
+        if !teams.is_empty() {
+            return Err(Error::Conflict(format!(
+                "L'agente «{}» è usato dai team: {}. Modificali prima di eliminarlo.",
+                agent.name,
+                teams.join(", ")
+            )));
+        }
         self.0.store.delete_doc("agent", id)?;
         self.audit_user("agent.delete", &format!("{} ({id})", agent.name));
         Ok(())
+    }
+    // ------------------------------------------------------------------ teams
+    pub fn teams(&self) -> Result<Vec<TeamDef>> {
+        self.0.store.list_docs("team")
+    }
+    pub fn team(&self, id: &str) -> Result<TeamDef> {
+        self.0.store.get_doc("team", id)?.ok_or_else(|| Error::NotFound(format!("team {id} non trovato")))
+    }
+    pub fn save_team(&self, t: TeamDef) -> Result<TeamDef> {
+        if t.id.trim().is_empty() || t.name.trim().is_empty() {
+            return Err(Error::Invalid("il team ha bisogno di un id e di un nome".into()));
+        }
+        if !["supervisor", "parallel", "pipeline"].contains(&t.strategy.as_str()) {
+            return Err(Error::Invalid(format!("strategia non valida: {} (supervisor, parallel o pipeline)", t.strategy)));
+        }
+        if t.members.is_empty() || t.members.len() > 8 {
+            return Err(Error::Invalid("un team ha da 1 a 8 membri".into()));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for m in &t.members {
+            if !seen.insert(m.agent.as_str()) {
+                return Err(Error::Invalid(format!("il membro `{}` compare più volte", m.agent)));
+            }
+            self.check_team_agent(&m.agent)?;
+        }
+        match (t.strategy.as_str(), &t.supervisor) {
+            ("supervisor", None) => return Err(Error::Invalid("la strategia supervisor richiede un supervisore".into())),
+            (_, Some(sup)) => {
+                self.check_team_agent(sup)?;
+                if sup.starts_with(REMOTE_PREFIX) {
+                    return Err(Error::Invalid("il supervisore deve essere un agente locale".into()));
+                }
+                if seen.contains(sup.as_str()) {
+                    return Err(Error::Invalid(format!("il supervisore `{sup}` non può essere anche un membro")));
+                }
+            }
+            _ => {}
+        }
+        if let Some(agg) = &t.aggregator {
+            self.check_team_agent(agg)?;
+            if agg.starts_with(REMOTE_PREFIX) {
+                return Err(Error::Invalid("l'aggregatore deve essere un agente locale".into()));
+            }
+        }
+        if let Some(b) = &t.budget {
+            for (name, v) in [("max_tokens", b.max_tokens), ("max_turns", b.max_turns.map(u64::from)), ("max_seconds", b.max_seconds)] {
+                if v == Some(0) {
+                    return Err(Error::Invalid(format!("budget.{name} deve essere almeno 1 (ometti il campo per nessun limite)")));
+                }
+            }
+        }
+        if let Some(schema) = &t.output_schema {
+            aiw_agent::schema::check_schema(schema).map_err(|e| Error::Invalid(format!("output_schema non valido: {e}")))?;
+        }
+        self.0.store.put_doc("team", &t.id, &t)?;
+        Ok(t)
+    }
+    /// A team member, supervisor or aggregator: an existing local agent or `remote:<id>`.
+    fn check_team_agent(&self, id: &str) -> Result<()> {
+        if id.starts_with(REMOTE_PREFIX) {
+            return Ok(());
+        }
+        if self.0.store.get_doc::<AgentProfile>("agent", id)?.is_none() {
+            return Err(Error::Invalid(format!("l'agente `{id}` non esiste")));
+        }
+        Ok(())
+    }
+    pub fn delete_team(&self, id: &str) -> Result<()> {
+        let team = self.team(id)?;
+        self.0.store.delete_doc("team", id)?;
+        self.audit_user("team.delete", &format!("{} ({id})", team.name));
+        Ok(())
+    }
+    /// Names of the teams that use the agent as supervisor, member or aggregator.
+    fn teams_using_agent(&self, id: &str) -> Result<Vec<String>> {
+        Ok(self
+            .teams()?
+            .into_iter()
+            .filter(|t| {
+                t.supervisor.as_deref() == Some(id) || t.aggregator.as_deref() == Some(id) || t.members.iter().any(|m| m.agent == id)
+            })
+            .map(|t| t.name)
+            .collect())
     }
     /// Deletes an inference profile that no agent (or workflow step) uses any more.
     pub fn delete_profile(&self, id: &str) -> Result<()> {
