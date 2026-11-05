@@ -96,6 +96,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-aiw-native",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -5428,8 +5429,10 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-plugin",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]

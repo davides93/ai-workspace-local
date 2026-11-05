@@ -80,7 +80,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Ollama | `ollama` | ✅ **v0.4** elenco dei modelli installati da `/api/tags`, `OLLAMA_CONTEXT_LENGTH` e `OLLAMA_KEEP_ALIVE` |
 | Distribuito | llama.cpp RPC worker, exo | ✅ |
 | Embedded in-process | llama.cpp (FFI), ONNX Runtime GenAI (dlopen) | ✅ **v0.4** llama.cpp ora registrato anche con Metal/CUDA/Vulkan; ORT GenAI richiede la libreria installata |
-| Di sistema | Apple Foundation Models (iOS), Gemini Nano e LiteRT-LM (Android) | 🟡 plugin Swift e Kotlin reali ma minimi; Foundation Models non collegato su macOS desktop |
+| Di sistema | Apple Foundation Models (iOS e macOS), Gemini Nano e LiteRT-LM (Android) | 🟡 plugin Swift e Kotlin reali ma minimi; **macOS desktop** tramite il helper Swift `aiw-apple-fm` (processo, JSON per riga), da provare su un Mac con macOS 26 e Apple Intelligence |
 | Solo manifest | Windows ML, MLX Swift, Core AI, ExecuTorch, MLC LLM, Phi Silica | 📄 la UI li mostra come "non ancora implementato" |
 | Voce | whisper-server | ✅ trascrizione (sidecar `whisper-server` o già avviato, modelli ggml) |
 | Remoti | OpenAI-compatibile, peer AIW | ✅ |
@@ -178,7 +178,8 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
    rigenerare l'indice Ollama da CI. Le build GPU e i percorsi nativi Apple e Android vanno
    provati su hardware reale (vedi §2.9).
 3. Selezionare Xcode 26 nella CI iOS, così il ramo Foundation Models viene compilato davvero.
-   Collegare Foundation Models anche su macOS desktop.
+   Il build macOS desktop usa già Xcode 26 e fallisce se il helper Swift non si compila
+   (`AIW_REQUIRE_APPLE_FM=1`): provare `aiw-apple-fm` su un Mac con macOS 26 e Apple Intelligence attiva.
 
 **P1 · Inferenza**
 4. Router automatico modello → runtime → acceleratore (oggi il profilo è statico) con fallback tra

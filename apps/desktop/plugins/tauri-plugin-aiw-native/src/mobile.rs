@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::plugin::{PluginApi, PluginHandle};
 use tauri::{AppHandle, Runtime};
+use tokio_util::sync::CancellationToken;
 
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_aiw_native);
@@ -41,7 +42,7 @@ impl<R: Runtime> NativeLlm<R> {
 }
 
 impl<R: Runtime> NativeGenerate for NativeLlm<R> {
-    fn generate(&self, args: GenerateArgs, on_event: Box<dyn Fn(NativeEvent) + Send + Sync>) -> Result<()> {
+    fn generate(&self, args: GenerateArgs, _cancel: CancellationToken, on_event: Box<dyn Fn(NativeEvent) + Send + Sync>) -> Result<()> {
         let channel = Channel::new(move |body: InvokeResponseBody| {
             let value: serde_json::Value = match body {
                 InvokeResponseBody::Json(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
