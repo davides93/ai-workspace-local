@@ -101,6 +101,8 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/runtimes/refresh", post(runtimes_refresh))
         .route("/api/runtimes/{id}/settings", put(runtime_settings))
         .route("/api/runtimes/{id}/logs", get(runtime_logs))
+        .route("/api/runtimes/{id}/install-plan", get(runtime_install_plan))
+        .route("/api/runtimes/{id}/install", get(runtime_install_status).post(runtime_install_start))
         .route("/api/runtimes/{id}/{action}", post(runtime_action))
         .route("/api/models", get(models))
         .route("/api/models/catalog", get(catalog))
@@ -289,6 +291,15 @@ async fn runtime_action(
 }
 async fn runtime_settings(State(s): State<AppState>, Path(id): Path<String>, Json(v): Json<Map<String, Value>>) -> ApiResult<RuntimeInfo> {
     ok(s.engine.update_runtime_settings(&id, v)?)
+}
+async fn runtime_install_plan(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallPlan> {
+    ok(s.engine.runtime_install_plan(&id).await?)
+}
+async fn runtime_install_start(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallJob> {
+    ok(s.engine.runtime_install_start(&id).await?)
+}
+async fn runtime_install_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Option<aiw_runtimes::install::InstallJob>> {
+    ok(s.engine.runtime_install_status(&id))
 }
 async fn runtime_logs(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<String>> {
     ok(s.engine.runtime_logs(&id).await)

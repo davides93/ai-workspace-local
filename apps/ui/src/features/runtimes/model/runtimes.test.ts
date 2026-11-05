@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LocalModel, RuntimeInfo, SettingsSchema } from "../../../shared/api/types";
-import { apiLabel, compatibleModels, defaultSettings, filterRuntimes, groupByKind, logTail, matchesRuntime, runtimeCounts, settingsDirty } from "./runtimes";
+import { apiLabel, compatibleModels, defaultSettings, filterRuntimes, groupByKind, installProgress, logTail, matchesRuntime, runtimeCounts, settingsDirty } from "./runtimes";
 
 const rt = (id: string, over: Partial<RuntimeInfo> = {}): RuntimeInfo => ({
   id, name: id, kind: "sidecar", description: `runtime ${id}`, platforms: ["linux"], accelerators: ["cpu"], formats: ["gguf"], api: "openai",
@@ -92,5 +92,16 @@ describe("apiLabel", () => {
     expect(apiLabel("openai")).toBe("API openai");
     expect(apiLabel("native")).toBe("API native");
     expect(apiLabel("none")).toBe("senza API");
+  });
+});
+
+describe("installProgress", () => {
+  it("counts the running step as half done and a finished install as complete", () => {
+    expect(installProgress({ state: "running", step: 1, steps: 2 })).toEqual({ value: 0.5, max: 2 });
+    expect(installProgress({ state: "running", step: 2, steps: 2 })).toEqual({ value: 1.5, max: 2 });
+    expect(installProgress({ state: "done", step: 2, steps: 2 })).toEqual({ value: 2, max: 2 });
+    // A failed install keeps the steps that did finish, not the one that broke.
+    expect(installProgress({ state: "failed", step: 2, steps: 3 })).toEqual({ value: 1, max: 3 });
+    expect(installProgress({ state: "running", step: 0, steps: 0 })).toEqual({ value: 0.5, max: 1 });
   });
 });
