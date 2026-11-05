@@ -170,17 +170,38 @@ pub const BREW_PYTHON: &str = "python@3.12";
 /// The plan for `manifest` on `os`. `python_ok` / `brew` describe the machine (probed by the
 /// caller, so this stays a pure function).
 pub fn plan(manifest: &RuntimeManifest, os: &str, python_ok: bool, brew: bool) -> InstallPlan {
+    plan_for(
+        &manifest.id,
+        &manifest.name,
+        manifest.installer_for(os),
+        manifest.install_hint(os),
+        manifest.homepage.clone(),
+        python_ok,
+        brew,
+    )
+}
+
+/// [`plan`] for anything that carries an installer recipe (a runtime, a trainer).
+pub fn plan_for(
+    id: &str,
+    name: &str,
+    installer: Option<&Installer>,
+    hint: Option<String>,
+    homepage: Option<String>,
+    python_ok: bool,
+    brew: bool,
+) -> InstallPlan {
     let mut p = InstallPlan {
-        runtime_id: manifest.id.clone(),
-        runtime_name: manifest.name.clone(),
+        runtime_id: id.to_string(),
+        runtime_name: name.to_string(),
         automatic: false,
         steps: vec![],
         prerequisites: vec![],
-        hint: manifest.install_hint(os),
-        homepage: manifest.homepage.clone(),
+        hint,
+        homepage,
         note: String::new(),
     };
-    let Some(inst) = manifest.installer_for(os) else { return p };
+    let Some(inst) = installer else { return p };
     let valid = match inst {
         Installer::Pip { packages } => !packages.is_empty() && packages.iter().all(|n| valid_package(n)),
         Installer::Brew { formula } => valid_package(formula),

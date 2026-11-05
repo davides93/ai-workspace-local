@@ -100,6 +100,23 @@ pub struct PeerDevice {
     pub address: String,
     pub status: String,
     pub shared_runtimes: Vec<String>,
+    /// What the other device reported about itself at pairing (class, memory, accelerators), so that
+    /// training can be pointed at the one that can do it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<PeerHardware>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PeerHardware {
+    pub arch: String,
+    /// xs | s | m | l | xl
+    pub tier: String,
+    pub memory_mb: u64,
+    pub vram_mb: u64,
+    /// Accelerator kinds (`cuda`, `metal`…).
+    pub accelerators: Vec<String>,
+    #[serde(default)]
+    pub unified_memory: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

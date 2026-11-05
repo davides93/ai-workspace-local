@@ -376,6 +376,24 @@ esporta e la usa per misurare gli agenti:
   `~/.aiw/evals` (le suite già salvate si possono comunque eseguire) e il confronto via API legge solo
   report salvati, mai percorsi di file.
 
+### 5.5 Addestramento
+
+AIW orchestra il fine-tuning, non lo esegue: i **trainer** sono programmi Python esterni
+(mlx-lm su Apple Silicon, TRL/PEFT e Unsloth su CUDA) descritti da manifest propri
+(`crates/aiw-runtimes/manifests/trainers.json`, `kind: "trainer"`, modulo `aiw_runtimes::trainer`):
+piattaforme, architetture, acceleratori, metodi (`sft`, `dpo`, `grpo`), moduli Python da rilevare,
+ricetta `pip`, memoria necessaria per taglia del modello. Stanno in un catalogo separato da quello
+dei runtime, quindi non compaiono nelle liste dei runtime né nei profili di inferenza.
+
+`Engine::trainers()` dà a ciascun trainer uno stato sul dispositivo: `ready` (idoneo e installato),
+`missing` (idoneo, da installare) o `unsupported` con il motivo (piattaforma, acceleratore,
+memoria). L'idoneità dipende da piattaforma, architettura, acceleratori e memoria utile
+(memoria unificata su Apple Silicon, VRAM altrove); DPO richiede 1,5 volte la memoria dell'SFT e GRPO
+2 volte più la classe L (`min_tier`). `Engine::train_doctor()` (CLI `aiw train doctor`) riassume tutto
+e, se il dispositivo non può addestrare, cerca fra i dispositivi accoppiati quelli che potrebbero
+(il pairing salva classe, memoria e acceleratori in `PeerDevice.hardware`). L'installazione riusa
+`aiw_runtimes::install` (`pip` nel venv `~/.aiw/pyenv`).
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
@@ -412,6 +430,7 @@ esporta e la usa per misurare gli agenti:
 | POST | `/api/evals/{id}/runs` | Avvia la suite in background (`{agent?, profile?, repeat?}`); risponde con il report `running` |
 | GET | `/api/eval-runs` · `/api/eval-runs/{id}` · `/api/eval-runs/compare?a=&b=` | Report (aggiornati a ogni task), confronto A/B tra due report salvati |
 | GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
+| GET | `/api/trainers` · `/api/train/doctor` · `/api/trainers/{id}/install-plan` · GET/POST `/api/trainers/{id}/install` | Trainer, idoneità del dispositivo, installazione |
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
 | POST | `/api/kill` | Kill switch |

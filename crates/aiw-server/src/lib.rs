@@ -169,6 +169,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/eval-runs", get(eval_runs))
         .route("/api/eval-runs/compare", get(compare_eval_runs))
         .route("/api/eval-runs/{id}", get(eval_run))
+        .route("/api/trainers", get(trainers))
+        .route("/api/trainers/{id}/install-plan", get(trainer_install_plan))
+        .route("/api/trainers/{id}/install", get(trainer_install_status).post(trainer_install_start))
+        .route("/api/train/doctor", get(train_doctor))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat_completions))
         .route("/v1/messages", post(anthropic::messages))
@@ -875,6 +879,21 @@ async fn compare_eval_runs(State(s): State<AppState>, Query(q): Query<CompareQue
     // Only stored reports by id: a path from the network is not read.
     ok(aiw_eval::compare(&s.engine.eval_report(&q.a)?, &s.engine.eval_report(&q.b)?))
 }
+async fn trainers(State(s): State<AppState>) -> ApiResult<Vec<aiw_runtimes::trainer::TrainerInfo>> {
+    ok(s.engine.trainers().await)
+}
+async fn trainer_install_plan(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallPlan> {
+    ok(s.engine.trainer_install_plan(&id).await?)
+}
+async fn trainer_install_start(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallJob> {
+    ok(s.engine.trainer_install_start(&id).await?)
+}
+async fn trainer_install_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Option<aiw_runtimes::install::InstallJob>> {
+    ok(s.engine.trainer_install_status(&id))
+}
+async fn train_doctor(State(s): State<AppState>) -> ApiResult<aiw_engine::train::TrainDoctor> {
+    ok(s.engine.train_doctor().await)
+}
 async fn tools(State(s): State<AppState>) -> ApiResult<Vec<ToolInfo>> {
     ok(s.engine.tools())
 }
@@ -964,3 +983,5 @@ mod tests_models;
 mod tests_security;
 #[cfg(test)]
 mod tests_traces;
+#[cfg(test)]
+mod tests_train;

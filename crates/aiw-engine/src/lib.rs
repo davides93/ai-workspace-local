@@ -9,6 +9,7 @@ pub mod peers;
 mod secrets;
 pub mod store;
 pub mod traces;
+pub mod train;
 pub mod update;
 pub mod voice;
 pub mod webhook;
@@ -1640,5 +1641,7 @@ mod tests_hardening;
 mod tests_inference;
 #[cfg(test)]
 mod tests_traces;
+#[cfg(test)]
+mod tests_train;
 #[cfg(test)]
 mod tests_validation;

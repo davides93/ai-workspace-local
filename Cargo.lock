@@ -60,6 +60,7 @@ dependencies = [
  "aiw-engine",
  "aiw-eval",
  "aiw-models",
+ "aiw-runtimes",
  "aiw-server",
  "anyhow",
  "clap",

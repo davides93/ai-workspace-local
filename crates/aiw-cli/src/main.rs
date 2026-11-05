@@ -82,6 +82,19 @@ enum Cmd {
         #[command(subcommand)]
         cmd: EvalCmd,
     },
+    /// Fine-tuning locale con trainer esterni (mlx-lm, TRL)
+    Train {
+        #[command(subcommand)]
+        cmd: TrainCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TrainCmd {
+    /// Mostra cosa si può addestrare su questo dispositivo e quali trainer sono installati
+    Doctor,
+    /// Installa un trainer nell'ambiente Python di AIW (~/.aiw/pyenv)
+    Install { id: String },
 }
 
 #[derive(Subcommand)]
@@ -355,6 +368,7 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Eval { cmd } => eval_cmd(&engine, cmd).await?,
+        Cmd::Train { cmd } => train_cmd(&engine, cmd).await?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Workflow { id } => {
             let first = engine.run_workflow(&id, Default::default(), "user").await?;
@@ -384,6 +398,65 @@ async fn main() -> Result<()> {
                         println!("Esito: {}", r.status);
                         break;
                     }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn train_cmd(engine: &Engine, cmd: TrainCmd) -> Result<()> {
+    match cmd {
+        TrainCmd::Doctor => {
+            let d = engine.train_doctor().await;
+            let dev = &d.device;
+            println!("Dispositivo: {} · {} {} · classe {}", dev.name, dev.os, dev.arch, dev.tier.to_uppercase());
+            let mem = if dev.unified_memory { "memoria unificata" } else { "RAM" };
+            print!("Memoria: {:.1} GB di {mem}", dev.memory_mb as f64 / 1024.0);
+            if dev.vram_mb > 0 && !dev.unified_memory {
+                print!(" · VRAM {:.1} GB", dev.vram_mb as f64 / 1024.0);
+            }
+            println!(" · acceleratori: {}", dev.accelerators.join(", "));
+            println!("\nTrainer:");
+            for t in &d.trainers {
+                println!("  {:<12} {:<12} {}", t.id, t.state, t.reason.clone().unwrap_or_default());
+                for m in &t.methods {
+                    match (&m.max_params_b, &m.blocked) {
+                        (Some(b), _) => println!("      {:<5} fino a ~{b}B", m.method),
+                        (None, Some(why)) => println!("      {:<5} no: {why}", m.method),
+                        _ => {}
+                    }
+                }
+            }
+            if d.can_train.is_empty() {
+                println!("\nQui non si può addestrare.");
+            } else {
+                println!("\nSi può addestrare:");
+                for c in &d.can_train {
+                    println!("  · {c}");
+                }
+            }
+            for r in &d.remote {
+                println!("  · {r}");
+            }
+            for a in &d.advice {
+                println!("\n{a}");
+            }
+        }
+        TrainCmd::Install { id } => {
+            engine.trainer_install_start(&id).await?;
+            let mut shown = 0;
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let Some(job) = engine.trainer_install_status(&id) else { bail!("installazione non avviata") };
+                for l in job.log.iter().skip(shown) {
+                    println!("{l}");
+                }
+                shown = job.log.len();
+                match job.state {
+                    aiw_runtimes::install::InstallState::Running => {}
+                    aiw_runtimes::install::InstallState::Done => break,
+                    aiw_runtimes::install::InstallState::Failed => bail!("{}", job.error.unwrap_or_else(|| "installazione fallita".into())),
                 }
             }
         }
