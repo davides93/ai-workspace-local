@@ -41,6 +41,8 @@ mod tests {
         pub(crate) backend: ScriptedBackend,
         tools: Arc<ToolRegistry>,
         pub(crate) events: Mutex<Vec<AgEvent>>,
+        /// Pause inside `subagent`, to tell parallel runs from sequential ones.
+        pub(crate) subagent_delay_ms: std::sync::atomic::AtomicU64,
         approve: bool,
         audits: Mutex<Vec<AuditEntry>>,
         /// Tests that need a backend which can fail put it here instead of the scripted one.
@@ -71,6 +73,10 @@ mod tests {
             vec![]
         }
         async fn subagent(&self, _p: &RunInput, agent: &str, task: &str) -> Result<String> {
+            let delay = self.subagent_delay_ms.load(std::sync::atomic::Ordering::Relaxed);
+            if delay > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
             Ok(format!("{agent} ha svolto: {task}"))
         }
     }
@@ -85,6 +91,7 @@ mod tests {
             backend: ScriptedBackend::new(turns),
             tools: Arc::new(reg),
             events: Mutex::new(vec![]),
+            subagent_delay_ms: Default::default(),
             approve,
             audits: Mutex::new(vec![]),
             replacement: Mutex::new(None),
@@ -125,6 +132,7 @@ mod tests {
             depth: 0,
             session_allow: Arc::new(Mutex::new(HashSet::new())),
             subagents: vec![("planner".into(), "pianifica".into())],
+            max_parallel_subagents: 3,
         }
     }
 
@@ -634,5 +642,51 @@ mod hook_event_tests {
         let out = AgentRunner::run(inp, host.clone()).await.unwrap();
         assert_eq!(out.final_text, "ok");
         assert!(!has(&host));
+    }
+}
+
+#[cfg(test)]
+mod parallel_subagent_tests {
+    use super::*;
+    use aiw_runtimes::{ChatDelta, ScriptedBackend};
+    use serde_json::json;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    fn two_agents() -> Vec<ChatDelta> {
+        let call = |index: usize, id: &str, task: &str| ChatDelta::ToolCall {
+            index,
+            id: Some(id.into()),
+            name: Some("agent".into()),
+            arguments: json!({"agent": "planner", "task": task}).to_string(),
+        };
+        vec![call(0, "a", "primo"), call(1, "b", "secondo"), ChatDelta::Done { finish_reason: Some("tool_calls".into()) }]
+    }
+
+    const DELAY_MS: u64 = 400;
+
+    async fn run_with_limit(limit: usize) -> (Duration, Vec<String>) {
+        let (host, dir) = tests_support::setup(vec![two_agents(), ScriptedBackend::text_turn("Fatto")], true);
+        host.subagent_delay_ms.store(DELAY_MS, Ordering::Relaxed);
+        let mut inp = tests_support::input(dir.path(), "auto");
+        inp.max_parallel_subagents = limit;
+        let start = Instant::now();
+        let out = AgentRunner::run(inp, host).await.unwrap();
+        let tools = out.new_messages.iter().filter(|m| m.role == "tool").map(|m| m.content.clone()).collect();
+        (start.elapsed(), tools)
+    }
+
+    #[tokio::test]
+    async fn consecutive_agent_calls_run_in_parallel_and_keep_their_order() {
+        let (elapsed, results) = run_with_limit(3).await;
+        assert!(elapsed < Duration::from_millis(DELAY_MS * 8 / 5), "{elapsed:?}");
+        assert_eq!(results, vec!["planner ha svolto: primo", "planner ha svolto: secondo"]);
+    }
+
+    #[tokio::test]
+    async fn the_limit_serialises_subagents() {
+        let (elapsed, results) = run_with_limit(1).await;
+        assert!(elapsed >= Duration::from_millis(DELAY_MS * 2), "{elapsed:?}");
+        assert_eq!(results, vec!["planner ha svolto: primo", "planner ha svolto: secondo"]);
     }
 }

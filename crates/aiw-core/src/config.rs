@@ -44,6 +44,7 @@ pub fn app_schema() -> SettingsSchema {
             "policy.mode": {"type": "string", "title": "Modalità di approvazione (default)", "enum": ["plan", "ask", "auto-edit", "auto", "yolo"], "default": "ask"},
             "sandbox.mode": {"type": "string", "title": "Sandbox (default)", "enum": ["read-only", "workspace-write", "off"], "default": "workspace-write"},
             "context.compact_at": {"type": "number", "title": "Compatta il contesto al", "default": 0.8, "minimum": 0.3, "maximum": 0.95, "step": 0.05},
+            "agents.max_parallel_subagents": {"type": "integer", "title": "Subagenti in parallelo", "default": 3, "minimum": 1, "maximum": 8},
             "network.allow_domains": {"type": "array", "title": "Domini consentiti a web/browser (vuoto = tutti i pubblici)", "items": {"type": "string"}, "default": []},
             "server.lan": {"type": "boolean", "title": "Accesso dalla LAN (richiede pairing)", "default": false},
             "server.port": {"type": "integer", "title": "Porta API", "default": 7777, "minimum": 1024, "maximum": 65535},

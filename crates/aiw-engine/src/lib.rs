@@ -916,6 +916,8 @@ impl Engine {
             depth,
             session_allow,
             subagents,
+            max_parallel_subagents: self.0.config.get("agents.max_parallel_subagents").and_then(|v| v.as_u64()).unwrap_or(3).max(1)
+                as usize,
         }
     }
 

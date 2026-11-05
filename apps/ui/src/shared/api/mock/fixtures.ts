@@ -380,6 +380,7 @@ export const configSchema: SettingsSchema = {
     "agent.default": { type: "string", title: "Agente predefinito", default: "operator" },
     "policy.mode": { type: "string", title: "Modalità di approvazione", enum: ["plan", "ask", "auto-edit", "auto", "yolo"], default: "ask" },
     "sandbox.mode": { type: "string", title: "Sandbox", enum: ["read-only", "workspace-write", "off"], default: "workspace-write" },
+    "agents.max_parallel_subagents": { type: "integer", title: "Subagenti in parallelo", default: 3, minimum: 1, maximum: 8 },
     "context.compact_at": { type: "number", title: "Compatta il contesto al", default: 0.8, minimum: 0.3, maximum: 0.95, step: 0.05 },
     "network.allow_domains": { type: "array", title: "Domini consentiti a web/browser (vuoto = tutti i pubblici)", items: { type: "string" }, default: [] },
     "server.lan": { type: "boolean", title: "Accesso dalla LAN (richiede pairing)", default: false },

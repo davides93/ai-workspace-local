@@ -63,7 +63,7 @@ export interface SettingsSection {
 
 export const SECTIONS: SettingsSection[] = [
   { id: "ui", title: "Interfaccia", description: "Tema e lingua.", prefixes: ["ui"] },
-  { id: "agents", title: "Agenti", description: "Agente predefinito e gestione del contesto.", prefixes: ["agent", "context"] },
+  { id: "agents", title: "Agenti", description: "Agente predefinito e gestione del contesto.", prefixes: ["agent", "agents", "context"] },
   { id: "security", title: "Sicurezza e rete", description: "Conferme, sandbox e siti raggiungibili da web e browser.", prefixes: ["policy", "sandbox", "network"] },
   { id: "server", title: "Server e accesso", description: "Come altri dispositivi e programmi raggiungono il workspace.", prefixes: ["server"] },
   { id: "folders", title: "Cartelle", description: "Dove stanno i modelli e dove lavorano gli agenti.", prefixes: ["models", "workspace"] },
@@ -94,6 +94,7 @@ const FIELD_HINT: Record<string, string> = {
   "models.dir": "Cartella in cui si scaricano i modelli. Vuoto usa quella predefinita.",
   "workspace.root": "Cartella su cui lavorano gli agenti. Cambiandola si sposta anche il file dello strato workspace.",
   "telemetry.otlp": "Indirizzo OTLP (per esempio http://localhost:4318). Vuoto lo disattiva.",
+  "agents.max_parallel_subagents": "Quanti subagenti possono lavorare insieme quando l'agente ne delega più di uno nello stesso turno.",
   "context.compact_at": "Quota di contesto occupato oltre la quale la conversazione viene compattata.",
 };
 

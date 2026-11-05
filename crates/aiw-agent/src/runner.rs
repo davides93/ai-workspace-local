@@ -52,6 +52,8 @@ pub struct RunInput {
     pub session_allow: Arc<Mutex<HashSet<String>>>,
     /// Other agents that can be delegated to (id → description).
     pub subagents: Vec<(String, String)>,
+    /// How many `agent` calls of one turn may run at the same time (at least 1).
+    pub max_parallel_subagents: usize,
 }
 
 #[derive(Debug, Default)]
@@ -110,7 +112,7 @@ fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
         let desc: Vec<String> = input.subagents.iter().map(|(id, d)| format!("{id}: {d}")).collect();
         v.push(ToolSpec::function(
             "agent",
-            format!("Delega un sotto-compito a un altro agente con contesto separato; restituisce solo la sua risposta finale. Agenti: {}", desc.join("; ")),
+            format!("Delega un sotto-compito a un altro agente con contesto separato; restituisce solo la sua risposta finale. Puoi chiamarlo più volte nello stesso turno per lavori indipendenti: girano in parallelo. Agenti: {}", desc.join("; ")),
             json!({"type":"object","properties":{"agent":{"type":"string","enum":names},"task":{"type":"string","description":"Istruzioni complete e autosufficienti"}},"required":["agent","task"]}),
         ));
     }
@@ -187,6 +189,17 @@ struct PendingCall {
     name: String,
     args: String,
     started: bool,
+}
+
+/// How the tool calls of one turn are grouped for execution.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BatchKind {
+    /// Runs alone, in order (anything with side effects, and the other internal tools).
+    Single,
+    /// Consecutive read-only registry tools run concurrently.
+    Reads,
+    /// Consecutive `agent` calls run concurrently, up to `max_parallel_subagents`.
+    Subagents,
 }
 
 /// Name of the AG-UI CUSTOM event that carries a tool's image (screenshot) to the UI.
@@ -519,17 +532,23 @@ impl AgentRunner {
             // run concurrently as one batch; anything with side effects (and internal tools such
             // as todo/agent/skill) runs alone, so a later read sees the effect of an earlier write.
             let mut results: BTreeMap<usize, (ToolCall, ToolOutput)> = BTreeMap::new();
-            let mut batches: Vec<Vec<(usize, ToolCall)>> = Vec::new();
-            let mut last_parallel = false;
+            // Consecutive `agent` calls form a batch of their own (independent jobs), run with
+            // limited concurrency.
+            let mut batches: Vec<(BatchKind, Vec<(usize, ToolCall)>)> = Vec::new();
             for (i, tc) in tool_calls.iter().enumerate() {
-                let parallel = registry.get(&tc.name).map(|t| t.risk() == Risk::Read).unwrap_or(false);
+                let kind = if tc.name == "agent" {
+                    BatchKind::Subagents
+                } else if registry.get(&tc.name).map(|t| t.risk() == Risk::Read).unwrap_or(false) {
+                    BatchKind::Reads
+                } else {
+                    BatchKind::Single
+                };
                 match batches.last_mut() {
-                    Some(b) if parallel && last_parallel => b.push((i, tc.clone())),
-                    _ => batches.push(vec![(i, tc.clone())]),
+                    Some((k, b)) if kind != BatchKind::Single && *k == kind => b.push((i, tc.clone())),
+                    _ => batches.push((kind, vec![(i, tc.clone())])),
                 }
-                last_parallel = parallel;
             }
-            'batches: for batch in batches {
+            'batches: for (kind, batch) in batches {
                 let futs = batch.into_iter().map(|(i, tc)| {
                     let host = host.clone();
                     let skills = &skills;
@@ -539,7 +558,12 @@ impl AgentRunner {
                         (i, tc, out)
                     }
                 });
-                for (i, tc, (out, new_todos)) in futures::future::join_all(futs).await {
+                let done: Vec<_> = if kind == BatchKind::Subagents {
+                    futures::stream::iter(futs).buffer_unordered(input.max_parallel_subagents.max(1)).collect().await
+                } else {
+                    futures::future::join_all(futs).await
+                };
+                for (i, tc, (out, new_todos)) in done {
                     if let Some(t) = new_todos {
                         state.todos = Some(t);
                         ev.emit(AgEvent::StateSnapshot { snapshot: state.clone() });

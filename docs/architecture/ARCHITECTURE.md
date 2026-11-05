@@ -238,7 +238,8 @@ sequenceDiagram
   `STATE_SNAPSHOT`, `SUBAGENT_*`, `RUN_FINISHED`/`RUN_ERROR`) più `CUSTOM` con nome
   `aiw.approval_request`, `aiw.todo`, `aiw.usage`. Ogni evento viene salvato (P17), così i run
   sono riproducibili.
-- **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo.
+- **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo; le chiamate `agent`
+  consecutive formano un gruppo a sé, eseguito in parallelo fino a `agents.max_parallel_subagents` (default 3).
 - **Subagenti** (P09): il tool `agent` avvia un run figlio con un profilo diverso e contesto
   isolato; al padre torna solo il risultato. Modalità di approvazione, sandbox e tool del figlio
   non sono mai più ampi di quelli del padre.
