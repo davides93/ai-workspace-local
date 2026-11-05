@@ -31,7 +31,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.4.0-beta.1"
+version = "0.4.0-rc.1"
 edition = "2021"
 rust-version = "1.85"
 repository = "https://github.com/davides93/ai-workspace-local"
