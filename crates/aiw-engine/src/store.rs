@@ -58,6 +58,7 @@ impl Store {
              CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, ts TEXT NOT NULL, json TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, run_id TEXT, rating INTEGER NOT NULL, note TEXT, created_at TEXT NOT NULL);
              CREATE UNIQUE INDEX IF NOT EXISTS feedback_message ON feedback(session_id, message_id);
+             CREATE TABLE IF NOT EXISTS eval_runs (id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);",
         )
         .map_err(db)?;
@@ -346,6 +347,39 @@ impl Store {
         let c = self.conn.lock().unwrap();
         let mut st = c.prepare("SELECT json FROM audit WHERE json_extract(json,'$.run_id')=?1 ORDER BY ts, rowid").map_err(db)?;
         let rows = st.query_map(params![run_id], |r| r.get::<_, String>(0)).map_err(db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(serde_json::from_str(&r.map_err(db)?)?);
+        }
+        Ok(out)
+    }
+    // ---------------- evaluation reports
+    pub fn save_eval_report<T: Serialize>(&self, id: &str, suite_id: &str, started_at: &str, report: &T) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT OR REPLACE INTO eval_runs(id,suite_id,started_at,json) VALUES(?1,?2,?3,?4)",
+                params![id, suite_id, started_at, serde_json::to_string(report)?],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+    pub fn eval_report<T: DeserializeOwned>(&self, id: &str) -> Result<Option<T>> {
+        let s: Option<String> = self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT json FROM eval_runs WHERE id=?1", params![id], |r| r.get(0))
+            .optional()
+            .map_err(db)?;
+        s.map(|s| serde_json::from_str(&s).map_err(Error::from)).transpose()
+    }
+    /// The most recent reports first.
+    pub fn eval_reports<T: DeserializeOwned>(&self, limit: usize) -> Result<Vec<T>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT json FROM eval_runs ORDER BY started_at DESC, rowid DESC LIMIT ?1").map_err(db)?;
+        let rows = st.query_map(params![limit as i64], |r| r.get::<_, String>(0)).map_err(db)?;
         let mut out = Vec::new();
         for r in rows {
             out.push(serde_json::from_str(&r.map_err(db)?)?);

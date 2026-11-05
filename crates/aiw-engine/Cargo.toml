@@ -27,6 +27,7 @@ aiw-models.workspace = true
 aiw-tools.workspace = true
 aiw-agent.workspace = true
 aiw-workflow.workspace = true
+aiw-eval.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 futures.workspace = true

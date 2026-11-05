@@ -22,6 +22,7 @@ llama-vulkan = ["llama-embedded", "aiw-engine/llama-vulkan"]
 [dependencies]
 aiw-core.workspace = true
 aiw-engine.workspace = true
+aiw-eval.workspace = true
 aiw-models.workspace = true
 aiw-server.workspace = true
 anyhow.workspace = true

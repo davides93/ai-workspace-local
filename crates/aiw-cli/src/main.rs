@@ -77,6 +77,40 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TracesCmd,
     },
+    /// Valuta gli agenti con suite di task e grader
+    Eval {
+        #[command(subcommand)]
+        cmd: EvalCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvalCmd {
+    /// Esegue una suite (file YAML/JSON o id di una suite salvata) e mostra il riepilogo.
+    /// I grader `command` eseguono comandi della suite con i tuoi permessi: lancia solo suite di cui ti fidi.
+    Run {
+        /// File della suite oppure id di una suite salvata
+        suite: String,
+        /// Agente per tutti i task (sostituisce quello della suite)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Profilo di inferenza per tutti i task (sostituisce quello dell'agente)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Quante volte eseguire ogni task
+        #[arg(long, default_value_t = 1)]
+        repeat: u32,
+        /// Scrive il report in questo file (JSON)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Non cancella le cartelle di lavoro dei task
+        #[arg(long)]
+        keep: bool,
+    },
+    /// Elenca le suite salvate
+    Suites,
+    /// Elenca i report salvati
+    List,
 }
 
 #[derive(Subcommand)]
@@ -311,6 +345,7 @@ async fn main() -> Result<()> {
                 eprintln!("Attenzione: i segreti non sono stati mascherati.");
             }
         }
+        Cmd::Eval { cmd } => eval_cmd(&engine, cmd).await?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Workflow { id } => {
             let first = engine.run_workflow(&id, Default::default(), "user").await?;
@@ -341,6 +376,98 @@ async fn main() -> Result<()> {
                         break;
                     }
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn percent(x: f64) -> String {
+    format!("{:.0}%", x * 100.0)
+}
+
+async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
+    use aiw_engine::eval::EvalRequest;
+    use aiw_eval::EvalEvent;
+    match cmd {
+        EvalCmd::Suites => {
+            for s in engine.eval_suites()? {
+                println!("{:<24} {:>3} task  {}", s.id, s.tasks.len(), s.name);
+            }
+        }
+        EvalCmd::List => {
+            for r in engine.eval_reports()? {
+                println!(
+                    "{:<26} {:<20} {:<10} {:>3}/{:<3} pass rate {:>4}  score {:.2}  {}",
+                    r.id,
+                    r.suite_id,
+                    r.status,
+                    r.summary.passed,
+                    r.summary.total,
+                    percent(r.summary.pass_rate),
+                    r.summary.score,
+                    r.started_at
+                );
+            }
+        }
+        EvalCmd::Run { suite, agent, profile, repeat, out, keep } => {
+            let suite = engine.resolve_eval_suite(&suite)?;
+            eprintln!("Suite «{}»: {} task × {} (i grader `command` girano con i tuoi permessi)", suite.name, suite.tasks.len(), repeat);
+            let req = EvalRequest { agent, profile, repeat: Some(repeat), keep };
+            let mut started = 1;
+            let report = engine
+                .run_eval(&suite, &req, &mut |ev| match ev {
+                    EvalEvent::Started(_) => {}
+                    EvalEvent::TaskStarted { task_id, attempt, attempts } => {
+                        eprint!(
+                            "[{}/{attempts}] {task_id}{} … ",
+                            started,
+                            if repeat > 1 { format!(" (tentativo {attempt})") } else { String::new() }
+                        );
+                        started += 1;
+                    }
+                    EvalEvent::TaskFinished { result, .. } => {
+                        eprintln!(
+                            "{} ({:.1} s, {} token, {} turni)",
+                            if result.passed { "ok" } else { "FALLITO" },
+                            result.duration_ms as f64 / 1000.0,
+                            result.tokens,
+                            result.turns
+                        );
+                        if let Some(e) = &result.error {
+                            eprintln!("    errore: {e}");
+                        }
+                        for g in result.graders.iter().filter(|g| !g.passed) {
+                            eprintln!("    ✗ {}: {}", g.kind, g.detail);
+                        }
+                        if let Some(dir) = &result.workdir {
+                            eprintln!("    cartella: {dir}");
+                        }
+                    }
+                })
+                .await?;
+            println!("\n{:<24} {:>8} {:>7} {:>7} {:>8}", "TASK", "RIUSCITI", "SCORE", "TOKEN", "SECONDI");
+            for t in &suite.tasks {
+                let runs: Vec<_> = report.tasks.iter().filter(|r| r.task_id == t.id).collect();
+                let ok = runs.iter().filter(|r| r.passed).count();
+                let n = runs.len().max(1) as f64;
+                println!(
+                    "{:<24} {:>5}/{:<2} {:>7.2} {:>7} {:>8.1}",
+                    t.id,
+                    ok,
+                    runs.len(),
+                    runs.iter().map(|r| r.score).sum::<f64>() / n,
+                    runs.iter().map(|r| r.tokens).sum::<u64>() / runs.len().max(1) as u64,
+                    runs.iter().map(|r| r.duration_ms).sum::<u64>() as f64 / 1000.0 / n
+                );
+            }
+            let s = &report.summary;
+            println!("\nTotale: {}/{} riusciti (pass rate {}), score medio {:.2}", s.passed, s.total, percent(s.pass_rate), s.score);
+            println!("Report: {}", report.id);
+            if let Some(path) = out {
+                std::fs::write(&path, serde_json::to_string_pretty(&report)?)
+                    .with_context(|| format!("scrittura di {}", path.display()))?;
+                println!("Report scritto in {}", path.display());
             }
         }
     }

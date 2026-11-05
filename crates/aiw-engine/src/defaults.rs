@@ -242,6 +242,11 @@ pub fn default_profile(models: &[LocalModel], device: &DeviceProfile, avail: &Av
     profile("Scarica un modello da Modelli per iniziare".into(), runtime, "", 8192)
 }
 
+/// The example suite (`docs/evals/esempio.yaml`), stored on first run.
+pub fn eval_suites() -> Vec<aiw_eval::Suite> {
+    vec![aiw_eval::Suite::parse(include_str!("../../../docs/evals/esempio.yaml")).expect("the example suite is valid")]
+}
+
 pub fn workflows() -> Vec<WorkflowDef> {
     vec![serde_json::from_value(json!({
         "id": "riordino-download",

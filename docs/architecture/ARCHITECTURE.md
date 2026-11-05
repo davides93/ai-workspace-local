@@ -315,6 +315,43 @@ esporta e la usa per misurare gli agenti:
   messaggio dell'assistente, uno per messaggio (tabella `feedback`, sostituito a ogni nuova
   valutazione). Il `run_id` è il run in corso quando il messaggio è stato scritto. Entra nel campo
   `feedback` dei record dell'export e `--rated up|down|any` seleziona le sessioni valutate.
+- **Suite di valutazione** (crate `aiw-eval`, esempio in `docs/evals/esempio.yaml`): un file YAML o
+  JSON con i task da dare a un agente e i grader che dicono se ciascuno è riuscito.
+
+  ```yaml
+  id: base
+  name: Suite di base
+  agent: operator            # facoltativo, anche per task
+  profile: default           # facoltativo, sostituisce il profilo dell'agente
+  tasks:
+    - id: crea-nota
+      prompt: "Crea note.md con scritto ciao"
+      files: { "input.txt": "contenuto iniziale" }   # scritti nella cartella di lavoro prima del run
+      timeout_s: 300
+      graders:
+        - { kind: file_exists, path: note.md }
+        - { kind: file_contains, path: note.md, pattern: "(?i)ciao" }
+        - { kind: output_matches, pattern: "note\\.md" }
+        - { kind: json_schema, schema: { type: object, required: [ok] } }   # sulla risposta finale
+        - { kind: command, run: "test -s note.md", expect_exit: 0, timeout_s: 30 }
+  ```
+
+  Ogni task gira in una cartella temporanea sotto `~/.aiw/eval-work/` (cancellata alla fine, salvo
+  `--keep`) che è la radice del workspace dell'agente: modalità di policy `auto`, sandbox
+  `workspace-write`, nessuna conferma possibile (se il run ne chiedesse una, viene rifiutata), il
+  timeout del task come budget di tempo. Il run non appartiene a nessuna sessione; i suoi eventi
+  sono salvati come gli altri. Il punteggio di un task è la media dei suoi grader, e il task riesce
+  solo se tutti passano e il run non è finito in errore (o per limite di tempo). Con `--repeat N`
+  ogni task gira N volte; il report ha `summary` con riusciti, totale, score medio e pass rate.
+  I report sono nella tabella `eval_runs` e si aggiornano a ogni task.
+
+  Il grader `command` esegue un comando con `sh -c` (PowerShell su Windows) nella cartella del
+  task, con timeout, **fuori dalla sandbox dell'agente e con i permessi dell'utente**: la suite la
+  scrive sempre l'utente. Per questo le suite si leggono solo da `~/.aiw/evals` (e dal database);
+  quelle della cartella del workspace (`.aiw/evals`) **non** vengono caricate, perché un repository
+  sconosciuto non deve poter eseguire comandi. Dalla CLI si può comunque lanciare un file qualsiasi,
+  sapendo cosa contiene: `aiw eval run <file|id> [--agent] [--profile] [--repeat N] [--out report.json] [--keep]`,
+  `aiw eval suites`, `aiw eval list`.
 
 ## 6. Tool (L4)
 
@@ -372,8 +409,9 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
 ## 9. Storage
 
 - `~/.aiw/` (desktop) o la sandbox dell'app (mobile): `config.json`, `aiw.db` (SQLite:
-  sessioni, messaggi, eventi, run, workflow, audit), `models/`, `runtimes/` (manifest utente),
-  `skills/`, `checkpoints/`.
+  sessioni, messaggi, eventi, run, workflow, audit, feedback, report di valutazione), `models/`,
+  `runtimes/` (manifest utente), `skills/`, `checkpoints/`, `evals/` (suite di valutazione),
+  `eval-work/` (cartelle temporanee dei task).
 - Workspace utente: `AGENTS.md`, `.aiw/config.json`, `.aiw/skills/`, `.aiw/workflows/`.
 
 ## 10. Piattaforme: cosa gira dove

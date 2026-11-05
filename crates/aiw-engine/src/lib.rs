@@ -1,6 +1,7 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
 pub mod defaults;
+pub mod eval;
 mod host;
 mod models;
 pub mod pairing;
@@ -278,6 +279,21 @@ impl Engine {
         if s.list_docs::<WorkflowDef>("workflow")?.is_empty() {
             for w in defaults::workflows() {
                 s.put_doc("workflow", &w.id, &w)?;
+            }
+        }
+        if s.list_docs::<aiw_eval::Suite>("eval_suite")?.is_empty() {
+            for suite in defaults::eval_suites() {
+                s.put_doc("eval_suite", &suite.id, &suite)?;
+            }
+        }
+        // Evaluation suites dropped in ~/.aiw/evals. Only that folder, the user's own: a suite can run
+        // commands (`command` graders), so one that comes with a checked-out project is never picked up.
+        if let Ok(rd) = std::fs::read_dir(self.0.dirs.evals()) {
+            for e in rd.flatten().filter(|e| matches!(e.path().extension().and_then(|x| x.to_str()), Some("yaml" | "yml" | "json"))) {
+                match aiw_eval::Suite::load_file(&e.path()) {
+                    Ok(suite) => s.put_doc("eval_suite", &suite.id, &suite)?,
+                    Err(err) => tracing::warn!("suite di valutazione {}: {err}", e.path().display()),
+                }
             }
         }
         // Workflows dropped in ~/.aiw/workflows (the user's own folder) or
@@ -932,9 +948,27 @@ impl Engine {
         depth: u32,
         session_allow: Arc<Mutex<HashSet<String>>>,
     ) -> RunInput {
+        self.build_input_at(run_id, thread_id, agent, profile, history, user_input, cancel, depth, session_allow, None)
+    }
+
+    /// [`Engine::build_input`] with an explicit working folder (`root`) instead of the one of the session.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_input_at(
+        &self,
+        run_id: &str,
+        thread_id: &str,
+        agent: AgentProfile,
+        profile: InferenceProfile,
+        history: Vec<aiw_runtimes::Msg>,
+        user_input: String,
+        cancel: CancellationToken,
+        depth: u32,
+        session_allow: Arc<Mutex<HashSet<String>>>,
+        root: Option<PathBuf>,
+    ) -> RunInput {
         // Chat runs and their sub-agents use the session id as thread id: an isolated session
         // works in its worktree.
-        let ws = self.session_root(thread_id);
+        let ws = root.unwrap_or_else(|| self.session_root(thread_id));
         let isolated =
             self.worktree_info(thread_id).map(|wt| format!(" (git worktree isolato, branch `{}`)", wt.branch)).unwrap_or_default();
         let device = self.device();
@@ -978,20 +1012,20 @@ impl Engine {
             depth,
             session_allow,
             subagents,
-            budget: Arc::new(if depth == 0 { self.run_budget(&agent_budget) } else { RunBudget::unlimited() }),
+            budget: Arc::new(if depth == 0 { self.run_budget(&agent_budget, None) } else { RunBudget::unlimited() }),
             max_parallel_subagents: self.0.config.get("agents.max_parallel_subagents").and_then(|v| v.as_u64()).unwrap_or(3).max(1)
                 as usize,
         }
     }
 
     /// The budget of a new top-level run: the agent's own limits, else the `agents.budget.*` settings
-    /// (0 there means no limit).
-    fn run_budget(&self, own: &aiw_core::api::BudgetLimits) -> RunBudget {
+    /// (0 there means no limit). `cap_seconds` is a time limit that no setting can raise.
+    fn run_budget(&self, own: &aiw_core::api::BudgetLimits, cap_seconds: Option<u64>) -> RunBudget {
         let setting = |key: &str| self.0.config.get(key).and_then(|v| v.as_u64()).filter(|n| *n > 0);
         RunBudget::new(
             own.max_tokens.or_else(|| setting("agents.budget.max_tokens")),
             own.max_turns.or_else(|| setting("agents.budget.max_turns").map(|n| n.min(u32::MAX as u64) as u32)),
-            own.max_seconds.or_else(|| setting("agents.budget.max_seconds")),
+            own.max_seconds.or_else(|| setting("agents.budget.max_seconds")).map(|s| cap_seconds.map_or(s, |c| s.min(c))).or(cap_seconds),
         )
     }
 
@@ -1597,6 +1631,8 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_eval;
 #[cfg(test)]
 mod tests_hardening;
 #[cfg(test)]

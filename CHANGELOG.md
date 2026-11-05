@@ -9,6 +9,7 @@
 - Budget per run: limiti facoltativi di token, turni del modello e secondi, per agente o nelle Impostazioni (`agents.budget.*`), condivisi con i subagenti; a limite esaurito il run si chiude con un avviso invece di fallire.
 - Export delle traiettorie: `aiw traces export` e `GET /api/traces/export` scrivono una riga JSON per sessione (messaggi in formato OpenAI, run, decisioni sulle approvazioni), filtrabili per agente, date, stato e numero; i segreti sono mascherati di default e si possono escludere percorsi.
 - Feedback sulle risposte: pollice su/giù (con nota facoltativa dopo un pollice giù) sotto la risposta finale dell'assistente, salvato per messaggio (`PUT/DELETE /api/sessions/{id}/messages/{mid}/feedback`, `GET /api/sessions/{id}/feedback`) ed esportato con le traiettorie (`feedback`, filtro `--rated up|down|any`). Il messaggio salvato dell'assistente ha ora lo stesso id del messaggio trasmesso in diretta.
+- Valutazione degli agenti: nuovo crate `aiw-eval` con suite YAML/JSON (task, file iniziali, grader `file_exists`, `file_contains`, `output_matches`, `json_schema`, `command`), `aiw eval run <file|id>` con `--repeat`, `--keep` e `--out`, report salvati (`aiw eval list`) e una suite di esempio in `docs/evals/esempio.yaml`. Ogni task gira in una cartella temporanea, senza conferme; le suite si leggono da `~/.aiw/evals`, mai dalla cartella del workspace.
 
 ## 0.4.0-rc.2 - release candidate
 
