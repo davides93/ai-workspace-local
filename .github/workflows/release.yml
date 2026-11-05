@@ -58,6 +58,21 @@ jobs:
           fi
           echo "Xcode 26: $dev"
           echo "AIW_APPLE_FM_DEVELOPER_DIR=$dev/Contents/Developer" >> "$GITHUB_ENV"
+      # llama.cpp's Metal sources use `@available`, which the clang of Xcode 16+ compiles to calls to
+      # `___isPlatformVersionAtLeast`. That function lives in the clang runtime library, which Rust
+      # does not link (`-nodefaultlibs`): without it `aiw-desktop` fails at link time. Linking the
+      # runtime of the selected toolchain explicitly is the usual fix (the archive is universal).
+      - name: Link the clang runtime (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          rt="$(clang --print-resource-dir)/lib/darwin/libclang_rt.osx.a"
+          if [ ! -f "$rt" ]; then
+            echo "::error::libclang_rt.osx.a non trovata in $rt"
+            exit 1
+          fi
+          echo "clang runtime: $rt"
+          echo "RUSTFLAGS=-C link-arg=$rt" >> "$GITHUB_ENV"
       - run: npm ci --prefix apps/ui
       - run: npm ci --prefix apps/desktop
       - name: Build bundles
