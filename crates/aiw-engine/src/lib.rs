@@ -494,8 +494,9 @@ impl Engine {
                     ps.into_iter().find(|p| p.runtime_id == id && !p.model.is_empty() && model.as_deref().is_none_or(|m| m == p.model))
                 });
                 let ctx = profile.as_ref().and_then(|p| p.params.context);
+                let adapters = profile.as_ref().map(|p| p.params.adapters.clone()).unwrap_or_default();
                 let model = model.or_else(|| profile.map(|p| p.model));
-                self.0.runtimes.start_with(id, model, ctx).await
+                self.0.runtimes.start_for(id, model, ctx, &adapters).await
             }
             "stop" => self.0.runtimes.stop(id).await,
             "refresh" => self.0.runtimes.refresh_one(id).await,
@@ -571,7 +572,9 @@ impl Engine {
         if p.id.trim().is_empty() || p.runtime_id.trim().is_empty() {
             return Err(Error::Invalid("profilo senza id o runtime".into()));
         }
-        self.0.runtimes.manifest(&p.runtime_id)?;
+        let manifest = self.0.runtimes.manifest(&p.runtime_id)?;
+        // A runtime that cannot load an adapter says so now, not at the first message.
+        aiw_runtimes::adapters::validate(&manifest, &p.params.adapters)?;
         self.0.store.put_doc("profile", &p.id, &p)?;
         Ok(p)
     }
@@ -1419,7 +1422,7 @@ impl Engine {
     /// Resolves a gateway model name to a backend and the model to send to it.
     pub async fn gateway_backend(&self, model: &str) -> Result<(Arc<dyn ChatBackend>, String)> {
         if let Ok(p) = self.profile(model) {
-            return Ok((self.0.runtimes.backend_with(&p.runtime_id, Some(&p.model), p.params.context).await?, p.model));
+            return Ok((self.0.runtimes.backend_for(&p.runtime_id, Some(&p.model), p.params.context, &p.params.adapters).await?, p.model));
         }
         if self.0.models.read().unwrap().iter().any(|m| m.id == model) {
             // A bare local GGUF: llama-server when it is there, else the in-process engine.
@@ -1433,7 +1436,7 @@ impl Engine {
             }
         }
         let p = self.fallback_profile()?;
-        Ok((self.0.runtimes.backend_with(&p.runtime_id, Some(&p.model), p.params.context).await?, p.model))
+        Ok((self.0.runtimes.backend_for(&p.runtime_id, Some(&p.model), p.params.context, &p.params.adapters).await?, p.model))
     }
 
     /// Profile used when a gateway client names no known model: `default`, else the profile of the

@@ -1,5 +1,6 @@
 //! Inference layer (architecture §4): manifests, detection, adapters, sidecar supervisor.
 
+pub mod adapters;
 #[cfg(feature = "llama-embedded")]
 pub mod embedded;
 pub mod install;

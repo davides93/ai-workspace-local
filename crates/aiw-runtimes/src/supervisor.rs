@@ -2,6 +2,7 @@
 //! keeps a ring buffer of logs and stops everything on shutdown or kill switch.
 
 use crate::manifest::{expand_args, expand_env, Launch, RuntimeManifest};
+use aiw_core::api::AdapterRef;
 use aiw_core::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -21,6 +22,8 @@ pub struct SidecarHandle {
     /// Context window the process was launched with (profile context or the runtime setting),
     /// `None` when the runtime has no context setting.
     pub ctx: Option<u32>,
+    /// LoRA adapters the process was launched with.
+    pub adapters: Vec<AdapterRef>,
     pub started_at: Instant,
     pub logs: Arc<Mutex<VecDeque<String>>>,
     /// Local path the process was launched with (`{model}` / `{model_path}`), when the model
@@ -92,6 +95,9 @@ pub struct LaunchSpec<'a> {
     /// runtime's own context setting (`-c`, `--max-model-len`, `--contextsize`,
     /// `OLLAMA_CONTEXT_LENGTH`…), see [`RuntimeManifest::apply_ctx`].
     pub ctx: Option<u32>,
+    /// LoRA adapters of the inference profile, loaded at launch for runtimes that declare
+    /// `adapters` in their manifest (see [`crate::adapters`]).
+    pub adapters: &'a [AdapterRef],
 }
 
 /// What [`Supervisor::start`] executes, as plain data so the expansion of a launch recipe can be
@@ -135,7 +141,9 @@ pub fn plan_launch(spec: &LaunchSpec<'_>, launch: &Launch, port: u16) -> LaunchP
     vars.insert("model".into(), model_path.clone().unwrap_or_else(|| model_id.clone()));
     vars.insert("model_id".into(), model_id);
     vars.insert("model_path".into(), model_path.unwrap_or_default());
-    LaunchPlan { args: expand_args(launch, &settings, &vars), env: expand_env(launch, &vars), ctx }
+    let mut args = expand_args(launch, &settings, &vars);
+    args.extend(crate::adapters::launch_args(spec.manifest.adapters.as_ref(), spec.adapters));
+    LaunchPlan { args, env: expand_env(launch, &vars), ctx }
 }
 
 fn free_port() -> Result<u16> {
@@ -179,6 +187,11 @@ impl Supervisor {
     /// runtime has no context setting).
     pub async fn served_ctx(&self, id: &str) -> Option<u32> {
         self.running.lock().await.get(id).and_then(|h| h.ctx)
+    }
+
+    /// LoRA adapters the running sidecar was launched with (empty: none, or not running).
+    pub async fn served_adapters(&self, id: &str) -> Vec<AdapterRef> {
+        self.running.lock().await.get(id).map(|h| h.adapters.clone()).unwrap_or_default()
     }
 
     pub async fn logs(&self, id: &str) -> Vec<String> {
@@ -299,6 +312,7 @@ impl Supervisor {
             port,
             model: spec.model.clone(),
             ctx: plan.ctx,
+            adapters: spec.adapters.to_vec(),
             started_at: Instant::now(),
             logs,
             model_path: spec.model_path.clone(),
@@ -405,6 +419,7 @@ mod tests {
             model_path: model_path.map(PathBuf::from),
             models_dir: PathBuf::from("/data/models"),
             ctx,
+            adapters: &[],
         };
         let p = plan_launch(&spec, m.launch.as_ref().unwrap(), 9100);
         let joined = p.args.join(" ");
@@ -413,6 +428,37 @@ mod tests {
 
     fn env(p: &LaunchPlan, k: &str) -> Option<String> {
         p.env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
+    }
+
+    /// [`plan`] for a profile that names adapters.
+    fn plan_with_adapters(id: &str, model_path: &str, adapters: &[AdapterRef]) -> String {
+        let m = manifest(id);
+        let settings = m.settings.resolve(json!({}).as_object().unwrap()).unwrap();
+        let spec = LaunchSpec {
+            manifest: &m,
+            settings: &settings,
+            binary: PathBuf::from("/usr/bin/runtime"),
+            model: Some("q".into()),
+            model_path: Some(PathBuf::from(model_path)),
+            models_dir: PathBuf::from("/data/models"),
+            ctx: None,
+            adapters,
+        };
+        plan_launch(&spec, m.launch.as_ref().unwrap(), 9100).args.join(" ")
+    }
+
+    #[test]
+    fn adapters_of_the_profile_reach_the_launch_arguments() {
+        let a = |path: &str, scale| AdapterRef { path: path.into(), scale };
+        let args = plan_with_adapters("llama-server", "/m/q.gguf", &[a("/a/sft.gguf", None), a("/a/style.gguf", Some(0.5))]);
+        assert!(args.contains("-m /m/q.gguf"), "{args}");
+        assert!(args.contains("--lora /a/sft.gguf"), "{args}");
+        assert!(args.contains("--lora-scaled /a/style.gguf 0.5"), "{args}");
+        let args = plan_with_adapters("mlx-lm", "/m/mlx-q", &[a("/a/mlx-adapter", None)]);
+        assert!(args.contains("--model /m/mlx-q") && args.contains("--adapter-path /a/mlx-adapter"), "{args}");
+        // No adapters, no arguments; a runtime without support ignores them (the profile is refused before).
+        assert!(!plan_with_adapters("llama-server", "/m/q.gguf", &[]).contains("--lora"));
+        assert!(!plan_with_adapters("vllm", "/m/q", &[a("/a/x", None)]).contains("/a/x"));
     }
 
     #[test]

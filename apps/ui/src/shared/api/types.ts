@@ -145,6 +145,8 @@ export interface RuntimeInfo {
   /** AIW can install this runtime by itself on this device (pip into its own environment, Homebrew). */
   install_auto?: boolean;
   homepage?: string;
+  /** Format of the LoRA adapters a profile can name (`gguf` file, `mlx`/`peft` folder); missing: the runtime cannot load them. */
+  adapter_format?: "gguf" | "mlx" | "peft";
 }
 
 /** What installing a runtime takes here (GET /api/runtimes/:id/install-plan). */
@@ -378,7 +380,14 @@ export interface InferenceProfile {
   description?: string;
   runtime_id: string;
   model: string;
-  params: { temperature?: number; top_p?: number; max_tokens?: number; context?: number };
+  params: { temperature?: number; top_p?: number; max_tokens?: number; context?: number; adapters?: AdapterRef[] };
+}
+
+/** A LoRA adapter on disk: a GGUF file for llama.cpp, a folder for MLX and PEFT. */
+export interface AdapterRef {
+  path: string;
+  /** Strength of the adapter (1 = as trained); the runtime default when missing. */
+  scale?: number;
 }
 
 export type PolicyMode = "plan" | "ask" | "auto-edit" | "auto" | "yolo";

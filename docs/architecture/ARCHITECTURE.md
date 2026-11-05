@@ -394,6 +394,13 @@ e, se il dispositivo non può addestrare, cerca fra i dispositivi accoppiati que
 (il pairing salva classe, memoria e acceleratori in `PeerDevice.hardware`). L'installazione riusa
 `aiw_runtimes::install` (`pip` nel venv `~/.aiw/pyenv`).
 
+**Adapter nei profili.** `InferenceParams.adapters` (lista di `AdapterRef { path, scale? }`) è la forma
+scelta per usare un adapter: per percorso. Il manifest di un runtime dichiara come li carica
+(`adapters: { format, args, scaled_args, max }`: llama-server `--lora`/`--lora-scaled` con GGUF, mlx-lm
+`--adapter-path` con una cartella); `Engine::save_profile` valida i percorsi e il formato
+(`aiw_runtimes::adapters`) e rifiuta i runtime senza supporto. Il supervisor aggiunge gli argomenti al
+lancio e ricorda gli adapter con cui il sidecar è partito: un set diverso lo riavvia.
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |

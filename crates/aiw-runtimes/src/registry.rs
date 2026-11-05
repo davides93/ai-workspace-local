@@ -5,7 +5,7 @@ use crate::openai::OpenAiBackend;
 use crate::supervisor::{find_binary, LaunchSpec, Supervisor};
 use crate::trainer::{self, TrainerManifest};
 use crate::types::ChatBackend;
-use aiw_core::api::RuntimeInfo;
+use aiw_core::api::{AdapterRef, RuntimeInfo};
 use aiw_core::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -360,6 +360,7 @@ impl RuntimeRegistry {
             install_hint: m.install_hint(&self.os),
             install_auto: m.installer_for(&self.os).is_some(),
             homepage: m.homepage.clone(),
+            adapter_format: m.adapters.as_ref().map(|a| a.format.clone()),
         })
     }
 
@@ -377,6 +378,12 @@ impl RuntimeRegistry {
     /// `OLLAMA_CONTEXT_LENGTH`…) for the process that is launched. A server that is already
     /// answering (started outside AIW) is reused as it is.
     pub async fn start_with(&self, id: &str, model: Option<String>, ctx: Option<u32>) -> Result<RuntimeInfo> {
+        self.start_for(id, model, ctx, &[]).await
+    }
+
+    /// [`start_with`](Self::start_with) with the LoRA adapters of the profile: a sidecar that
+    /// runs with other adapters is restarted.
+    pub async fn start_for(&self, id: &str, model: Option<String>, ctx: Option<u32>, adapters: &[AdapterRef]) -> Result<RuntimeInfo> {
         let lock = self.start_lock(id);
         let _guard = lock.lock().await;
         // A healthy sidecar that already serves this model with enough context is reused: a
@@ -386,12 +393,15 @@ impl RuntimeRegistry {
                 let (_, served) = self.supervisor.endpoint(id).await.unwrap_or_default();
                 let served_ctx = self.supervisor.served_ctx(id).await;
                 let single = m.launch.as_ref().map(launch_uses_model).unwrap_or(false);
-                if !needs_restart(single, m.ctx_setting().is_some(), model.as_deref(), served.as_deref(), ctx, served_ctx) {
+                let adapters_changed = m.adapters.is_some() && self.supervisor.served_adapters(id).await != adapters;
+                if !adapters_changed
+                    && !needs_restart(single, m.ctx_setting().is_some(), model.as_deref(), served.as_deref(), ctx, served_ctx)
+                {
                     return self.refresh_one(id).await;
                 }
             }
         }
-        self.start_unlocked(id, model, ctx).await
+        self.start_unlocked(id, model, ctx, adapters).await
     }
 
     fn start_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -403,8 +413,9 @@ impl RuntimeRegistry {
     }
 
     /// The body of [`start_with`](Self::start_with); the caller holds the runtime's start lock.
-    async fn start_unlocked(&self, id: &str, model: Option<String>, ctx: Option<u32>) -> Result<RuntimeInfo> {
+    async fn start_unlocked(&self, id: &str, model: Option<String>, ctx: Option<u32>, adapters: &[AdapterRef]) -> Result<RuntimeInfo> {
         let m = self.manifest(id)?;
+        crate::adapters::validate(&m, adapters)?;
         if !self.supports(&m) {
             return Err(Error::Unsupported(if m.supports_platform(&self.os) {
                 format!("{} {}", m.name, self.unsupported_detail(&m))
@@ -454,6 +465,7 @@ impl RuntimeRegistry {
                             model_path,
                             models_dir: self.models_dir.clone(),
                             ctx,
+                            adapters,
                         },
                         &self.http,
                     )
@@ -639,11 +651,25 @@ impl RuntimeRegistry {
     ///   [`needs_restart`]);
     /// - an in-process engine runs its generations with it ([`ChatBackend::with_context`]).
     pub async fn backend_with(&self, id: &str, model: Option<&str>, ctx: Option<u32>) -> Result<Arc<dyn ChatBackend>> {
+        self.backend_for(id, model, ctx, &[]).await
+    }
+
+    /// [`backend_with`](Self::backend_with) for a profile that names LoRA adapters: a sidecar
+    /// started now loads them, one that runs with other adapters is restarted, and a runtime that
+    /// cannot load adapters refuses (see [`crate::adapters::validate`]).
+    pub async fn backend_for(
+        &self,
+        id: &str,
+        model: Option<&str>,
+        ctx: Option<u32>,
+        adapters: &[AdapterRef],
+    ) -> Result<Arc<dyn ChatBackend>> {
         let bridge = self.bridges.read().unwrap().get(id).cloned();
         if let Some(b) = bridge {
             return Ok(ctx.and_then(|c| b.with_context(c)).unwrap_or(b));
         }
         let m = self.manifest(id)?;
+        crate::adapters::validate(&m, adapters)?;
         let settings = self.settings(id)?;
         let timeout = Duration::from_secs(settings.get("timeout_s").and_then(|v| v.as_u64()).unwrap_or(900));
         let api_key = settings.get("api_key").and_then(|v| v.as_str()).map(String::from);
@@ -658,7 +684,10 @@ impl RuntimeRegistry {
             let single_model = m.launch.as_ref().map(launch_uses_model).unwrap_or(false);
             let supports_ctx = m.ctx_setting().is_some();
             let mut restart = needs_restart(single_model, supports_ctx, model, served.as_deref(), ctx, served_ctx);
-            if restart && !needs_restart(single_model, supports_ctx, model, served.as_deref(), None, served_ctx) {
+            // A different set of adapters is a different model: restart whatever is in flight.
+            let adapters_changed = m.adapters.is_some() && self.supervisor.served_adapters(id).await != adapters;
+            restart |= adapters_changed;
+            if restart && !adapters_changed && !needs_restart(single_model, supports_ctx, model, served.as_deref(), None, served_ctx) {
                 // Only the context grew. Restarting would cut the streams of the requests that
                 // are running right now: serve with the current context and say so.
                 let busy = self.inflight_counter(id).load(Ordering::SeqCst);
@@ -686,10 +715,16 @@ impl RuntimeRegistry {
             "sidecar" => {
                 if let Some(ep) = self.external_endpoint(&m, &settings) {
                     if self.probe_models(&ep, api_key.as_deref()).await.is_some() {
+                        if !adapters.is_empty() {
+                            return Err(Error::Unsupported(format!(
+                                "{} è già attivo fuori da AIW ({ep}): gli adapter si caricano all'avvio, ferma quel server e lascia che lo avvii AIW",
+                                m.name
+                            )));
+                        }
                         return Ok(make_backend(&m, ep, api_key, timeout, None));
                     }
                 }
-                self.start_unlocked(id, model_to_start, ctx).await?;
+                self.start_unlocked(id, model_to_start, ctx, adapters).await?;
                 let (ep, _) = self.supervisor.endpoint(id).await.ok_or_else(|| Error::Runtime(format!("{} non è partito", m.name)))?;
                 Ok(self.sidecar_backend(id, &m, ep, api_key, timeout).await)
             }

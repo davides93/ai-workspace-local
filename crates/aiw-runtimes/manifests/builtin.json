@@ -178,6 +178,7 @@
    "linux": "brew install llama.cpp · oppure release ggml-org/llama.cpp"
   },
   "homepage": "https://github.com/ggml-org/llama.cpp",
+  "adapters": { "format": "gguf", "args": ["--lora", "{path}"], "scaled_args": ["--lora-scaled", "{path}", "{scale}"], "max": 8 },
   "api": "openai",
   "installer": {
    "macos": {
@@ -276,6 +277,7 @@
    "any": "https://ollama.com/download"
   },
   "homepage": "https://ollama.com",
+  "adapter_hint": "Ollama carica gli adapter dal Modelfile: crea un modello con `ADAPTER <percorso>` (ollama create) e usa quel modello nel profilo.",
   "installer": {
    "macos": {
     "kind": "brew",
@@ -758,6 +760,7 @@
    "macos": "pip install mlx-lm"
   },
   "homepage": "https://github.com/ml-explore/mlx-lm",
+  "adapters": { "format": "mlx", "args": ["--adapter-path", "{path}"], "max": 1 },
   "api": "openai",
   "installer": {
    "macos": {

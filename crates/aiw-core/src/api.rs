@@ -166,6 +166,10 @@ pub struct RuntimeInfo {
     pub install_auto: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    /// Format of the LoRA adapters a profile of this runtime can name (`gguf`, `mlx`, `peft`);
+    /// missing when the runtime cannot load them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_format: Option<String>,
 }
 
 // ---------------------------------------------------------------- models
@@ -434,6 +438,19 @@ pub struct InferenceParams {
     pub max_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<u32>,
+    /// LoRA adapters applied to the model of the profile, by path (an adapter of the registry
+    /// has its path in `AdapterInfo.path`). Only runtimes that declare `adapters` accept them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adapters: Vec<AdapterRef>,
+}
+
+/// A LoRA adapter on disk: a GGUF file for llama.cpp, a folder for MLX and PEFT.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdapterRef {
+    pub path: String,
+    /// Strength of the adapter (1.0 = as trained); the runtime default when missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -2,7 +2,7 @@
 
 use super::tests::engine;
 use super::*;
-use aiw_core::api::{Accelerator, CpuInfo};
+use aiw_core::api::{Accelerator, AdapterRef, CpuInfo};
 
 fn device(os: &str, arch: &str, tier: &str, mem_gb: u64, accel: Vec<(&str, Option<u64>)>) -> DeviceProfile {
     DeviceProfile {
@@ -117,4 +117,41 @@ async fn a_weak_device_is_told_what_a_paired_one_could_do() {
         doc.remote
     );
     assert!(!doc.advice.iter().any(|a| a.contains("Accoppia")));
+}
+
+fn profile_with(runtime: &str, adapters: Vec<AdapterRef>) -> InferenceProfile {
+    InferenceProfile {
+        id: "ft".into(),
+        name: "Fine-tuned".into(),
+        description: None,
+        runtime_id: runtime.into(),
+        model: "base".into(),
+        params: InferenceParams { adapters, ..Default::default() },
+    }
+}
+
+#[tokio::test]
+async fn profiles_with_adapters_are_checked_when_they_are_saved() {
+    let (e, d, _w) = engine(vec![]).await;
+    let gguf = d.path().join("lora.gguf");
+    std::fs::write(&gguf, b"x").unwrap();
+    let adapter = |p: &std::path::Path, scale| AdapterRef { path: p.display().to_string(), scale };
+
+    // llama-server takes a GGUF adapter, with or without a scale, and the profile keeps it.
+    let saved = e.save_profile(profile_with("llama-server", vec![adapter(&gguf, Some(0.7))])).unwrap();
+    assert_eq!(e.profile(&saved.id).unwrap().params.adapters, vec![adapter(&gguf, Some(0.7))]);
+    // A profile without adapters stores nothing about them.
+    assert!(!serde_json::to_string(&InferenceParams::default()).unwrap().contains("adapters"));
+
+    // Ollama and the in-process engine cannot load it at launch: refused now, with what to do.
+    let err = e.save_profile(profile_with("ollama", vec![adapter(&gguf, None)])).unwrap_err();
+    assert!(matches!(err, Error::Unsupported(_)) && err.to_string().contains("ADAPTER"), "{err}");
+    assert!(matches!(e.save_profile(profile_with("llama-embedded", vec![adapter(&gguf, None)])), Err(Error::Unsupported(_))));
+    // A path that is not there, or not the right kind of file, is refused too.
+    let err = e.save_profile(profile_with("llama-server", vec![adapter(&d.path().join("none.gguf"), None)])).unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("non esiste"), "{err}");
+    let err = e.save_profile(profile_with("mlx-lm", vec![adapter(&gguf, None)])).unwrap_err();
+    assert!(err.to_string().contains("serve la cartella"), "{err}");
+    // Ollama without adapters is fine.
+    assert!(e.save_profile(profile_with("ollama", vec![])).is_ok());
 }

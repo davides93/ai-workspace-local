@@ -57,6 +57,9 @@ enum Cmd {
         model: String,
         #[arg(long)]
         context: Option<u32>,
+        /// Adapter LoRA da applicare al modello (GGUF per llama.cpp, cartella per mlx-lm); ripetibile
+        #[arg(long)]
+        adapter: Vec<String>,
     },
     /// Esegue un compito con un agente e mostra la risposta in streaming
     Run {
@@ -324,7 +327,7 @@ async fn main() -> Result<()> {
             }
         },
         Cmd::Models { cmd } => models_cmd(&engine, cmd.unwrap_or(ModelCmd::List)).await?,
-        Cmd::Profile { id, runtime, model, context } => {
+        Cmd::Profile { id, runtime, model, context, adapter } => {
             let p = engine.save_profile(InferenceProfile {
                 id: id.clone(),
                 name: if id == "default" { "Predefinito".into() } else { id.clone() },
@@ -336,6 +339,7 @@ async fn main() -> Result<()> {
                     top_p: Some(0.95),
                     max_tokens: Some(4096),
                     context: Some(context.unwrap_or(8192)),
+                    adapters: adapter.into_iter().map(|path| aiw_core::api::AdapterRef { path, scale: None }).collect(),
                 },
             })?;
             println!("Profilo {} → {} · {}", p.id, p.runtime_id, p.model);

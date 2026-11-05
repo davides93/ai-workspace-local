@@ -40,3 +40,27 @@ aiw train install mlx-lm-lora     # pip nell'ambiente di AIW, con l'output in di
 
 API: `GET /api/trainers`, `GET /api/train/doctor`, `GET /api/trainers/{id}/install-plan`,
 `POST /api/trainers/{id}/install` (avvia) e `GET /api/trainers/{id}/install` (avanzamento).
+
+## Adapter LoRA in un profilo di inferenza
+
+Un profilo può nominare uno o più adapter con `params.adapters`, una lista di
+`{ "path": "…", "scale": 0.8 }` (`scale` facoltativa; il campo non viene scritto se la lista è vuota).
+La forma scelta è il **percorso**: l'adapter registrato da AIW (registro degli adapter) espone il suo
+`path` e si incolla qui. Il campo «Adapter LoRA» dell'editor dei profili e `aiw profile --adapter <percorso>`
+(ripetibile) fanno lo stesso.
+
+| Runtime | Come viene caricato | Formato |
+|---|---|---|
+| llama.cpp server | `--lora <file>` (`--lora-scaled <file> <scala>` con la scala), fino a 8 adapter | un file `.gguf` |
+| MLX LM | `--adapter-path <cartella>`, un solo adapter, senza scala | cartella con `adapters.safetensors` e `adapter_config.json` |
+| Ollama | non supportato dal profilo: crea un modello con `ADAPTER <percorso>` nel Modelfile (`ollama create`) e usa quello | — |
+| Gli altri runtime e i motori in-process | non supportato | — |
+
+- Un runtime che non carica adapter rifiuta il profilo **quando lo salvi** (errore con cosa fare),
+  non al primo messaggio. Lo stesso per un percorso che non esiste o non ha il formato atteso (un adapter
+  PEFT dato a llama.cpp: il messaggio indica `convert_lora_to_gguf.py` di llama.cpp).
+- Gli adapter si caricano all'avvio del sidecar: se il profilo cambia adapter (o li toglie), AIW riavvia il
+  sidecar, come già fa per il contesto. Se il server è già attivo fuori da AIW non si può cambiare adapter:
+  fermalo e lascia che lo avvii AIW.
+- vLLM (`--enable-lora --lora-modules`) non è collegato: richiede di scegliere l'adapter per nome a ogni
+  richiesta, cosa che i profili non esprimono.
