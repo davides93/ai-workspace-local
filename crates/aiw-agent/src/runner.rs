@@ -61,11 +61,15 @@ pub struct RunOutcome {
     pub final_text: String,
     pub new_messages: Vec<ChatMessage>,
     pub usage: Usage,
+    /// The final answer parsed and validated against the agent's `output_schema`.
+    pub structured: Option<Value>,
 }
 
 const MAX_SELF_CHECKS: u32 = 2;
 /// `name` of the stored user messages written by the self-check (the UI shows them as notes).
 pub const SELF_CHECK_NAME: &str = "aiw.self_check";
+/// `name` of the stored user messages that hand a malformed structured answer back to the model.
+pub const FORMAT_CHECK_NAME: &str = "aiw.format_check";
 
 fn self_check_note(failed: &[(String, String)]) -> String {
     let list = failed.iter().map(|(n, e)| format!("- {n}: {e}")).collect::<Vec<_>>().join("\n");
@@ -152,6 +156,12 @@ fn system_prompt(input: &RunInput, skills: &[Skill]) -> String {
     if input.agent.tools.iter().any(|t| t == "*" || t == crate::a2ui::TOOL) {
         s.push('\n');
         s.push_str(crate::a2ui::prompt_hint());
+    }
+    if let Some(schema) = &input.agent.output_schema {
+        s.push_str(&format!(
+            "\n# Formato della risposta finale\nLa risposta finale deve essere solo un JSON conforme a questo JSON Schema, senza testo prima o dopo:\n{}\n",
+            serde_json::to_string_pretty(schema).unwrap_or_default()
+        ));
     }
     if !skills.is_empty() {
         s.push_str("\n# Skill disponibili (caricale con il tool `skill` quando servono)\n");
@@ -366,6 +376,7 @@ impl AgentRunner {
         // Tool errors of the latest batch that the model has not retried yet (self-check, below).
         let mut unresolved: Vec<(String, String)> = Vec::new();
         let mut self_checks = 0u32;
+        let mut format_retried = false;
 
         for turn in 0..input.agent.max_turns.max(1) {
             if input.tool_ctx.cancel.is_cancelled() {
@@ -524,6 +535,41 @@ impl AgentRunner {
                     unresolved.clear();
                     continue;
                 }
+                // Structured output: the answer must be JSON that conforms to the schema. The model
+                // gets one chance to fix it; after that the text is kept as it is.
+                if let Some(schema) = &input.agent.output_schema {
+                    let checked = crate::schema::extract_json(&text)
+                        .ok_or_else(|| vec!["la risposta non contiene un JSON valido".to_string()])
+                        .and_then(|v| crate::schema::validate(schema, &v).map(|()| v));
+                    match checked {
+                        Ok(v) => {
+                            outcome.final_text = v.to_string();
+                            outcome.structured = Some(v);
+                            break;
+                        }
+                        Err(errors) if !format_retried && turn + 1 < input.agent.max_turns => {
+                            format_retried = true;
+                            let note = format!(
+                                "[Controllo del formato] La risposta non rispetta lo schema richiesto:\n{}\nRispondi di nuovo solo con il JSON corretto.",
+                                errors.iter().map(|e| format!("- {e}")).collect::<Vec<_>>().join("\n")
+                            );
+                            ev.emit(AgEvent::Custom { name: FORMAT_CHECK_NAME.into(), value: json!({"errors": errors}) });
+                            messages.push(Msg::user(note.clone()));
+                            outcome.new_messages.push(ChatMessage {
+                                id: new_id("msg"),
+                                role: "user".into(),
+                                content: note,
+                                reasoning: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                                name: Some(FORMAT_CHECK_NAME.into()),
+                                created_at: now_rfc3339(),
+                            });
+                            continue;
+                        }
+                        Err(errors) => ev.emit(AgEvent::Custom { name: "aiw.format_error".into(), value: json!({"errors": errors}) }),
+                    }
+                }
                 outcome.final_text = text;
                 break;
             }
@@ -629,7 +675,10 @@ impl AgentRunner {
         ev.emit(AgEvent::RunFinished {
             thread_id: input.thread_id.clone(),
             run_id: input.run_id.clone(),
-            result: Some(json!({"text": outcome.final_text})),
+            result: Some(match &outcome.structured {
+                Some(j) => json!({"text": outcome.final_text, "json": j}),
+                None => json!({"text": outcome.final_text}),
+            }),
         });
         Ok(())
     }

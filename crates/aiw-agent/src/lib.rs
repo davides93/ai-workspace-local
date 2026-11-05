@@ -8,6 +8,7 @@ pub mod internal;
 pub mod narrow;
 pub mod policy;
 pub mod runner;
+pub mod schema;
 pub mod skills;
 pub mod think;
 
@@ -113,6 +114,7 @@ mod tests {
                 mode: mode.into(),
                 sandbox: "workspace-write".into(),
                 max_turns: 8,
+                output_schema: None,
             },
             profile: InferenceProfile {
                 id: "p".into(),
@@ -688,5 +690,67 @@ mod parallel_subagent_tests {
         let (elapsed, results) = run_with_limit(1).await;
         assert!(elapsed >= Duration::from_millis(DELAY_MS * 2), "{elapsed:?}");
         assert_eq!(results, vec!["planner ha svolto: primo", "planner ha svolto: secondo"]);
+    }
+}
+
+#[cfg(test)]
+mod structured_output_tests {
+    use super::*;
+    use aiw_core::events::AgEvent;
+    use aiw_runtimes::ScriptedBackend;
+    use serde_json::json;
+
+    fn with_schema(dir: &std::path::Path) -> RunInput {
+        let mut inp = tests_support::input(dir, "auto");
+        inp.agent.output_schema = Some(json!({"type": "object", "properties": {"totale": {"type": "integer"}}, "required": ["totale"]}));
+        inp
+    }
+
+    fn custom(host: &tests_support::TestHost, wanted: &str) -> bool {
+        host.events.lock().unwrap().iter().any(|e| matches!(e, AgEvent::Custom { name, .. } if name == wanted))
+    }
+
+    #[tokio::test]
+    async fn a_valid_answer_becomes_structured_output() {
+        let (host, dir) = tests_support::setup(vec![ScriptedBackend::text_turn("Ecco:\n```json\n{\"totale\": 3}\n```")], true);
+        let out = AgentRunner::run(with_schema(dir.path()), host.clone()).await.unwrap();
+        assert_eq!(out.structured, Some(json!({"totale": 3})));
+        assert_eq!(out.final_text, r#"{"totale":3}"#);
+        let finished = host.events.lock().unwrap().iter().find_map(|e| match e {
+            AgEvent::RunFinished { result, .. } => result.clone(),
+            _ => None,
+        });
+        assert_eq!(finished, Some(json!({"text": r#"{"totale":3}"#, "json": {"totale": 3}})));
+        assert!(host.backend.requests.lock().unwrap()[0].messages[0].text().contains("# Formato della risposta finale"));
+    }
+
+    #[tokio::test]
+    async fn an_invalid_answer_is_handed_back_once() {
+        let (host, dir) = tests_support::setup(
+            vec![ScriptedBackend::text_turn("{\"totale\": \"tre\"}"), ScriptedBackend::text_turn("{\"totale\": 3}")],
+            true,
+        );
+        let out = AgentRunner::run(with_schema(dir.path()), host.clone()).await.unwrap();
+        assert_eq!(out.structured, Some(json!({"totale": 3})));
+        let note = out.new_messages.iter().find(|m| m.name.as_deref() == Some(runner::FORMAT_CHECK_NAME)).expect("format-check note");
+        assert!(note.role == "user" && note.content.contains("$.totale"), "{}", note.content);
+        assert!(custom(&host, "aiw.format_check") && !custom(&host, "aiw.format_error"));
+    }
+
+    #[tokio::test]
+    async fn a_second_failure_keeps_the_text_and_reports_the_error() {
+        let (host, dir) =
+            tests_support::setup(vec![ScriptedBackend::text_turn("non è json"), ScriptedBackend::text_turn("ancora no")], true);
+        let out = AgentRunner::run(with_schema(dir.path()), host.clone()).await.unwrap();
+        assert_eq!((out.final_text.as_str(), out.structured), ("ancora no", None));
+        assert!(custom(&host, "aiw.format_check") && custom(&host, "aiw.format_error"));
+    }
+
+    #[tokio::test]
+    async fn without_a_schema_nothing_changes() {
+        let (host, dir) = tests_support::setup(vec![ScriptedBackend::text_turn("testo libero")], true);
+        let out = AgentRunner::run(tests_support::input(dir.path(), "auto"), host.clone()).await.unwrap();
+        assert_eq!((out.final_text.as_str(), out.structured), ("testo libero", None));
+        assert!(!custom(&host, "aiw.format_check"));
     }
 }

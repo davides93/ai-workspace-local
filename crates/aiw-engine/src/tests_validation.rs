@@ -97,6 +97,14 @@ async fn an_agent_needs_an_existing_profile_turns_and_known_tools() {
     let msg = invalid(e.save_agent(AgentProfile { max_turns: 0, ..ok.clone() }));
     assert!(msg.contains("max_turns"), "{msg}");
 
+    // The output schema must be usable; a good one is stored as given.
+    let msg = invalid(e.save_agent(AgentProfile { output_schema: Some(serde_json::json!({"type": "stringa"})), ..ok.clone() }));
+    assert!(msg.contains("output_schema"), "{msg}");
+    invalid(e.save_agent(AgentProfile { output_schema: Some(serde_json::json!("object")), ..ok.clone() }));
+    let schema = serde_json::json!({"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]});
+    assert_eq!(e.save_agent(AgentProfile { output_schema: Some(schema.clone()), ..ok.clone() }).unwrap().output_schema, Some(schema));
+    e.save_agent(ok.clone()).unwrap();
+
     // Unknown tools are all listed.
     let msg =
         invalid(e.save_agent(AgentProfile { tools: vec!["read_file".into(), "volare".into(), "teletrasporto".into()], ..ok.clone() }));

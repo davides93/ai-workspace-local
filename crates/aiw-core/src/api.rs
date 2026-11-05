@@ -447,6 +447,10 @@ pub struct AgentProfile {
     /// read-only | workspace-write | off
     pub sandbox: String,
     pub max_turns: u32,
+    /// JSON Schema (a subset, see `aiw_agent::schema`) of the final answer: when set, the answer
+    /// must be JSON that conforms to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------- sessions & messages

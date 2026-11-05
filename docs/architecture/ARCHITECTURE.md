@@ -243,6 +243,11 @@ sequenceDiagram
 - **Subagenti** (P09): il tool `agent` avvia un run figlio con un profilo diverso e contesto
   isolato; al padre torna solo il risultato. Modalità di approvazione, sandbox e tool del figlio
   non sono mai più ampi di quelli del padre.
+- **Output strutturato**: se il profilo dell'agente ha `output_schema` (sottoinsieme di JSON Schema: `type`,
+  `properties`, `required`, `items`, `enum`, `additionalProperties: false`, `minItems`/`maxItems`), il prompt di
+  sistema lo riporta e la risposta finale viene estratta e validata. Una risposta non conforme torna al modello una
+  sola volta (nota `aiw.format_check`); se resta errata il testo si conserva e si emette `aiw.format_error`. Il JSON
+  valido finisce in `RunFinished.result.json`. Lo schema non viene passato ai runtime come `response_format`.
 - **Contesto** (P10): un budget di token per profilo; oltre la soglia i turni più vecchi vengono
   riassunti con il modello attivo o con uno dedicato.
 - **Memoria e skill** (P11): `AGENTS.md` del workspace entra nel system prompt; le skill

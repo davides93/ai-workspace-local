@@ -394,6 +394,8 @@ export interface AgentProfile {
   mode: PolicyMode;
   sandbox: SandboxMode;
   max_turns: number;
+  /** JSON Schema of the final answer (subset: type, properties, required, items, enum, additionalProperties, minItems, maxItems). */
+  output_schema?: unknown;
 }
 
 // ---------- Sessions, messages, runs ----------

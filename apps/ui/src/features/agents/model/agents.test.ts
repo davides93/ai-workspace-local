@@ -3,7 +3,7 @@ import { agents, profiles } from "../../../shared/api/mock/fixtures";
 import type { AgentProfile } from "../../../shared/api/types";
 import {
   BUILTIN_AGENT_IDS, NEW_AGENT, agentsUsingProfile, blankAgent, copyName, duplicateAgent, estimateTokens, hasErrors, idForNew, isBuiltinAgent,
-  normalizeAgent, slugify, uniqueId, unknownTools, validateAgent,
+  normalizeAgent, parseSchemaText, schemaToText, slugify, uniqueId, unknownTools, validateAgent,
 } from "./agents";
 
 const ctx = { profileIds: profiles.map((p) => p.id), otherNames: [] as string[] };
@@ -120,5 +120,18 @@ describe("helpers", () => {
   it("finds the agents on a profile", () => {
     expect(agentsUsingProfile(agents, "balanced").map((a) => a.id)).toEqual(["operator", "coder"]);
     expect(agentsUsingProfile(agents, "nope")).toEqual([]);
+  });
+});
+
+describe("response schema text", () => {
+  it("is empty when there is no schema, and an object otherwise", () => {
+    expect(parseSchemaText("  ")).toEqual({});
+    expect(parseSchemaText('{"type":"object"}')).toEqual({ value: { type: "object" } });
+    expect(schemaToText(undefined)).toBe("");
+    expect(parseSchemaText(schemaToText({ type: "array" })).value).toEqual({ type: "array" });
+  });
+  it("refuses text that is not a JSON object", () => {
+    expect(parseSchemaText("{type:").error).toMatch(/^JSON non valido/);
+    for (const text of ["[]", '"x"', "3", "null"]) expect(parseSchemaText(text).error, text).toMatch(/oggetto JSON/);
   });
 });

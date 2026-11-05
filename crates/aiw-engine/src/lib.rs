@@ -572,6 +572,9 @@ impl Engine {
         if a.max_turns < 1 {
             return Err(Error::Invalid("max_turns deve essere almeno 1".into()));
         }
+        if let Some(schema) = &a.output_schema {
+            aiw_agent::schema::check_schema(schema).map_err(|e| Error::Invalid(format!("output_schema non valido: {e}")))?;
+        }
         if self.0.store.get_doc::<InferenceProfile>("profile", &a.inference_profile)?.is_none() {
             return Err(Error::Invalid(format!("il profilo di inferenza `{}` non esiste", a.inference_profile)));
         }

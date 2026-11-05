@@ -32,5 +32,11 @@ export const itemKey = (it: Item, index: number): string => `${it.kind}-${it.kin
 /** Stored user messages written by the agent loop's self-check (not typed by the user). */
 export const SELF_CHECK = "aiw.self_check";
 
+/** Stored user messages written when a structured answer did not match the agent's schema. */
+export const FORMAT_CHECK = "aiw.format_check";
+
+export const formatCheckText = (errors: string[]) =>
+  `Controllo del formato: la risposta non rispettava lo schema richiesto (${errors.slice(0, 3).join("; ")}${errors.length > 3 ? "; …" : ""}). L'agente la corregge.`;
+
 export const selfCheckText = (failed: string[]) =>
   `Controllo automatico: ${failed.length === 1 ? "un'azione era fallita" : "alcune azioni erano fallite"} (${failed.join(", ")}). L'agente le riprende prima di concludere.`;

@@ -1,6 +1,6 @@
 import type { AgEvent, AiwImage, ApprovalRequest } from "../../../shared/api/types";
 import { applyA2ui, type A2uiMessage } from "../a2ui";
-import { SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
+import { FORMAT_CHECK, formatCheckText, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
 import { resultStatus } from "./tools";
 
 type Of<K extends Item["kind"]> = Extract<Item, { kind: K }>;
@@ -117,6 +117,10 @@ function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
     }
     case SELF_CHECK:
       return [...items, { kind: "note", id: `sc-${items.length}`, text: selfCheckText((value as { failed?: string[] }).failed ?? []) }];
+    case FORMAT_CHECK:
+      return [...items, { kind: "note", id: `fc-${items.length}`, text: formatCheckText((value as { errors?: string[] }).errors ?? []) }];
+    case "aiw.format_error":
+      return [...items, { kind: "note", id: `fe-${items.length}`, text: "La risposta non rispetta lo schema richiesto dall'agente: è mostrata così com'è." }];
     case "aiw.approval_request":
       return [...items, { kind: "approval", req: value as ApprovalRequest }];
     case "aiw.approval_resolved": {

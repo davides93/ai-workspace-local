@@ -9,10 +9,11 @@ import { blankAgent, duplicateAgent, hasErrors, idForNew, isBuiltinAgent, NEW_AG
 import { buildCatalog } from "../model/tools";
 import { IdentitySection } from "./IdentitySection";
 import { ModelSection } from "./ModelSection";
+import { OutputSection } from "./OutputSection";
 import { SecuritySection } from "./SecuritySection";
 import { ToolPicker } from "./ToolPicker";
 
-/** The detail of `#/agents/:agentId`: a form in four sections (identity, model, tools, security). */
+/** The detail of `#/agents/:agentId`: a form in sections (identity, model, tools, response, security). */
 export function AgentEditor({ agentId, from }: { agentId: string; from?: string }) {
   const agents = useAgents();
   const profiles = useProfiles();
@@ -36,7 +37,12 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
   const { draft, setDraft, dirty, reset } = useDraft<AgentProfile, AgentProfile>({
     saved, fromSaved: (a) => structuredClone(a), toSaved: (a) => a, normalize: normalizeAgent, scope: `${agentId}|${from ?? ""}`,
   });
-  const guard = useUnsavedGuard(dirty, { onDiscard: reset });
+  // The response-schema text can be invalid JSON, which the draft never holds: its error blocks saving, and a
+  // discard remounts the field so that it shows the saved schema again.
+  const [schemaError, setSchemaError] = useState<string | null>(null);
+  const [schemaKey, setSchemaKey] = useState(0);
+  const discard = () => { reset(); setSchemaError(null); setSchemaKey((k) => k + 1); };
+  const guard = useUnsavedGuard(dirty, { onDiscard: discard });
   const catalog = useMemo(() => buildCatalog(tools.data ?? []), [tools.data]);
   const issues = useMemo(
     () => (draft
@@ -54,7 +60,7 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
   const shown = isNew && !dirty ? [] : issues;
 
   const submit = async (): Promise<boolean> => {
-    if (!draft || hasErrors(issues)) return false;
+    if (!draft || hasErrors(issues) || schemaError) return false;
     try {
       const out = await save.mutateAsync(normalizeAgent(isNew ? { ...draft, id: idForNew(draft.name, list) } : draft));
       if (isNew) guard.go(`/agents/${encodeURIComponent(out.id)}`);
@@ -104,6 +110,9 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
               {() => <ToolPicker value={draft.tools} onChange={(t) => change({ tools: t })} catalog={catalog} mode={draft.mode} sandbox={draft.sandbox} />}
             </QueryState>
           </FormSection>
+          <FormSection id="output" title="Risposta" hint="Il formato della risposta finale.">
+            <OutputSection key={`${agentId}|${from ?? ""}|${schemaKey}`} agent={draft} onChange={change} onError={setSchemaError} />
+          </FormSection>
           <FormSection id="security" title="Sicurezza" hint="Che cosa può fare da solo.">
             <SecuritySection agent={draft} issues={shown} onChange={change} />
           </FormSection>
@@ -111,11 +120,11 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
       </Panel>
 
       <SaveBar
-        dirty={dirty} isNew={isNew} saving={save.isPending} canSave={!hasErrors(issues)} blocker="Correggi i campi evidenziati"
-        saveLabel={isNew ? "Crea agente" : "Salva"} onSave={() => void submit()} onDiscard={reset}
+        dirty={dirty} isNew={isNew} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} blocker="Correggi i campi evidenziati"
+        saveLabel={isNew ? "Crea agente" : "Salva"} onSave={() => void submit()} onDiscard={discard}
       />
 
-      <UnsavedChangesDialog guard={guard} subject={`l'agente «${draft.name.trim() || "senza nome"}»`} onSave={submit} saving={save.isPending} canSave={!hasErrors(issues)} />
+      <UnsavedChangesDialog guard={guard} subject={`l'agente «${draft.name.trim() || "senza nome"}»`} onSave={submit} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} />
       {confirmDelete && (
         <DecisionDialog
           title="Elimina l'agente" confirmLabel="Elimina" icon="trash" pending={del.isPending} error={del.error}

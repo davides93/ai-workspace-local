@@ -68,6 +68,25 @@ export function idForNew(name: string, existing: readonly AgentProfile[]): strin
   return uniqueId(slugify(name), existing.map((a) => a.id));
 }
 
+/**
+ * Reads the text of the "response schema" field: empty means no schema; anything else must be a JSON object
+ * (the backend refuses other shapes and unknown `type` names with a 400 of its own).
+ */
+export function parseSchemaText(text: string): { value?: Record<string, unknown>; error?: string } {
+  if (!text.trim()) return {};
+  let v: unknown;
+  try {
+    v = JSON.parse(text);
+  } catch (e) {
+    return { error: `JSON non valido: ${(e as Error).message}` };
+  }
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return { error: "Lo schema deve essere un oggetto JSON, per esempio {\"type\": \"object\"}." };
+  return { value: v as Record<string, unknown> };
+}
+
+/** The text shown in the field for a stored schema. */
+export const schemaToText = (schema: unknown): string => (schema === undefined || schema === null ? "" : JSON.stringify(schema, null, 2));
+
 export type AgentField = "name" | "inference_profile" | "max_turns" | "system_prompt" | "tools" | "mode" | "sandbox";
 
 export interface AgentIssue {
