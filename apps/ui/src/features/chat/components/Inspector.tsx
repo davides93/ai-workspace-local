@@ -6,6 +6,7 @@ import type { AgentProfile, ApprovalRequest, InferenceProfile, RunState, Session
 import type { ApprovalItem } from "../model/items";
 import { modeInfo, sandboxInfo } from "../model/labels";
 import { WorktreePanel } from "./WorktreePanel";
+import { CheckpointPanel } from "./CheckpointPanel";
 
 const tokens = (n: number) => (n >= 1000 ? `${formatNumber(n / 1000, 1)}k` : String(n));
 
@@ -97,6 +98,7 @@ export function InspectorBody({ runState, agent, profile, session, pending, runn
       </Section>
 
       {session?.worktree && <WorktreePanel key={session.id} session={session} running={running} />}
+      {session && <CheckpointPanel key={`ck-${session.id}`} sessionId={session.id} running={running} />}
     </div>
   );
 }

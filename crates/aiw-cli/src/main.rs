@@ -72,6 +72,13 @@ enum Cmd {
     },
     /// Esegue un workflow
     Workflow { id: String },
+    /// Ripristina i file di un run: rimette gli originali salvati ed elimina i file che il run ha creato
+    Rewind {
+        run_id: String,
+        /// Mostra cosa cambierebbe senza toccare nulla
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Esporta le traiettorie delle sessioni (per valutazione e fine-tuning)
     Traces {
         #[command(subcommand)]
@@ -356,6 +363,26 @@ async fn main() -> Result<()> {
         }
         Cmd::Eval { cmd } => eval_cmd(&engine, cmd).await?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
+        Cmd::Rewind { run_id, dry_run } => {
+            let info = engine.checkpoint_info(&run_id)?;
+            let show = |label: &str, files: &[String]| files.iter().for_each(|f| println!("{label:<12} {f}"));
+            if dry_run {
+                println!("Il ripristino del run {run_id} cambierebbe:");
+                show("ripristina", &info.restore);
+                show("elimina", &info.delete);
+                show("non toccato", &info.external);
+            } else {
+                let r = engine.rewind(&run_id)?;
+                show("ripristinato", &r.restored);
+                show("eliminato", &r.deleted);
+                show("non toccato", &r.external);
+                show("FALLITO", &r.failed);
+                println!("Fatto: {} ripristinati, {} eliminati, {} falliti.", r.restored.len(), r.deleted.len(), r.failed.len());
+                if !r.failed.is_empty() {
+                    std::process::exit(1);
+                }
+            }
+        }
         Cmd::Workflow { id } => {
             let first = engine.run_workflow(&id, Default::default(), "user").await?;
             loop {

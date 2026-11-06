@@ -35,6 +35,8 @@ export function PlaceholderInsert({ targetId, value, onChange, before, inputKeys
         <option value="">Inserisci segnaposto…</option>
         {inputKeys.length > 0 && <optgroup label="Input del workflow">{inputKeys.map((k) => <option key={k} value={`{{inputs.${k}}}`}>{`{{inputs.${k}}}`}</option>)}</optgroup>}
         {before.length > 0 && <optgroup label="Risultato dei passi precedenti">{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.output}}`}>{`{{steps.${s.id}.output}}`}</option>)}</optgroup>}
+        {before.length > 0 && <optgroup label="Risultato come JSON (aggiungi .campo o .0 per scendere)">{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.json}}`}>{`{{steps.${s.id}.json}}`}</option>)}</optgroup>}
+        {before.length > 0 && <optgroup label="Errore di un passo che prosegue (on_error: continue)">{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.error}}`}>{`{{steps.${s.id}.error}}`}</option>)}</optgroup>}
         <optgroup label="Altro">
           <option value="{{now}}">{"{{now}}"} · data e ora</option>
           <option value="{{inputs.payload}}">{"{{inputs.payload}}"} · corpo del webhook</option>

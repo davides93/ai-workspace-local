@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Icon, IconButton, Input, Select, StatusPill, RowControls } from "../../../shared/ui";
 import type { Issue } from "../model/draft";
-import { STEP_ID, STEP_KINDS, stepMeta, stepSummary, type StepDraft, type StepKind } from "../model/steps";
-import { AgentFields, ApprovalFields, ConditionFields, LlmFields, ToolFields, type StepCatalog } from "./StepForms";
+import { hasOptions, optionsSummary, STEP_ID, STEP_KINDS, stepMeta, stepSummary, type StepDraft, type StepKind } from "../model/steps";
+import { AgentFields, ApprovalFields, ConditionFields, ForeachFields, LlmFields, OptionsFields, ParallelFields, ToolFields, WorkflowFields, type StepCatalog } from "./StepForms";
 
 /** Id of a step: edited as text, applied on blur so that references only follow a valid, free id. */
 function IdField({ uid, index, value, taken, onCommit }: { uid: number; index: number; value: string; taken: string[]; onCommit: (id: string) => void }) {
@@ -68,14 +68,18 @@ export function StepCard({ uid, index, steps, catalog, inputKeys, issues, runSta
         </div>
         {idIssue && <p className={idIssue.level === "error" ? "field-error" : "row-warn"}>{idIssue.message}</p>}
         {collapsed ? (
-          <p className="step-summary mono muted text-xs"><Icon name={meta.icon} size={13} /> {stepSummary(step)}</p>
+          <p className="step-summary mono muted text-xs"><Icon name={meta.icon} size={13} /> {stepSummary(step)}{hasOptions(step) && optionsSummary(step.opts) ? ` (${optionsSummary(step.opts)})` : ""}</p>
         ) : (
           <div className="step-fields">
             {step.kind === "tool" && <ToolFields {...common} step={step} />}
             {step.kind === "agent" && <AgentFields {...common} step={step} />}
             {step.kind === "llm" && <LlmFields {...common} step={step} />}
+            {step.kind === "foreach" && <ForeachFields {...common} step={step} />}
+            {step.kind === "parallel" && <ParallelFields {...common} step={step} />}
+            {step.kind === "workflow" && <WorkflowFields {...common} step={step} />}
             {step.kind === "approval" && <ApprovalFields {...common} step={step} />}
             {step.kind === "condition" && <ConditionFields {...common} step={step} />}
+            {hasOptions(step) && <OptionsFields uid={uid} issues={issues} opts={step.opts} onChange={(opts) => onChange({ ...step, opts })} />}
           </div>
         )}
       </div>

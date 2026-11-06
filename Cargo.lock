@@ -275,6 +275,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "cron",
+ "futures",
  "regex",
  "serde",
  "serde_json",

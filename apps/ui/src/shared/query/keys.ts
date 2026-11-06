@@ -38,6 +38,7 @@ export const qk = {
     messages: (id: string) => ["sessions", "messages", id] as const,
     feedback: (id: string) => ["sessions", "feedback", id] as const,
     worktree: (id: string) => ["sessions", "worktree", id] as const,
+    checkpoints: (id: string) => ["sessions", "checkpoints", id] as const,
   },
 
   approvals: () => ["approvals"] as const,

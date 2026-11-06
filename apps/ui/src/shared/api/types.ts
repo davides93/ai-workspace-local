@@ -439,6 +439,26 @@ export interface WorktreeStatus extends WorktreeInfo {
   truncated: boolean;
 }
 
+/** What a rewind of a run would do (paths relative to the workspace of the run). */
+export interface CheckpointInfo {
+  run_id: string;
+  root?: string;
+  /** Put back to their original content. */
+  restore: string[];
+  /** Created by the run: deleted. */
+  delete: string[];
+  /** Outside the workspace: listed, never touched. */
+  external: string[];
+}
+
+export interface RewindResult {
+  run_id: string;
+  restored: string[];
+  deleted: string[];
+  external: string[];
+  failed: string[];
+}
+
 /** The user's rating of an assistant message (one per message). */
 export interface Feedback {
   id: string;
@@ -644,11 +664,29 @@ export type WorkflowTrigger =
   | { kind: "file"; path: string }
   | { kind: "webhook"; secret?: string };
 
+/** Options of the executable steps; the defaults (0, 2 s, none, `fail`) are left out. */
+export interface StepOptions {
+  /** Extra attempts after a failure, 0..5. */
+  retry?: number;
+  /** Seconds between attempts, 0..300 (default 2). */
+  retry_delay_s?: number;
+  /** Time limit of each attempt in seconds, 1..86400. */
+  timeout_s?: number;
+  /** `continue`: the step stays failed but the run goes on; `{{steps.<id>.error}}` holds the error. */
+  on_error?: "fail" | "continue";
+}
+
 export type WorkflowStep =
-  | { id: string; kind: "tool"; tool: string; args: Record<string, unknown> }
-  | { id: string; kind: "agent"; agent: string; prompt: string }
-  | { id: string; kind: "llm"; profile: string; prompt: string }
-  | { id: string; kind: "approval"; message: string }
+  | ({ id: string; kind: "tool"; tool: string; args: Record<string, unknown> } & StepOptions)
+  | ({ id: string; kind: "agent"; agent: string; prompt: string } & StepOptions)
+  | ({ id: string; kind: "llm"; profile: string; prompt: string } & StepOptions)
+  /** `do` is one inline tool/agent/llm step that can use `{{item}}`, `{{item.field}}` and `{{index}}`; the output is the JSON array of its outputs. */
+  | ({ id: string; kind: "foreach"; items: string; do: WorkflowStep; parallel?: number } & StepOptions)
+  /** Inline tool/agent/llm steps that run together; the output is the JSON object `{inner_id: output}`. */
+  | ({ id: string; kind: "parallel"; steps: WorkflowStep[] } & StepOptions)
+  /** Starts another workflow (it can be disabled) and waits for it; the output is the one of its last step. */
+  | ({ id: string; kind: "workflow"; workflow: string; inputs?: Record<string, unknown> } & StepOptions)
+  | { id: string; kind: "approval"; message: string; timeout_s?: number; default?: "deny" | "allow" }
   | { id: string; kind: "condition"; if: string; then: string[]; else?: string[] };
 
 export interface WorkflowDef {
@@ -667,7 +705,9 @@ export interface WorkflowRun {
   status: RunStatus;
   started_at: string;
   finished_at?: string;
-  steps: { id: string; status: "pending" | "running" | "done" | "failed" | "skipped" | "waiting"; output?: string; error?: string }[];
+  /** The run of the workflow that started this one as a sub-workflow. */
+  parent_run_id?: string;
+  steps: { id: string; status: "pending" | "running" | "done" | "failed" | "skipped" | "waiting"; output?: string; error?: string; attempts?: number }[];
 }
 
 // ---------- Tools & MCP ----------

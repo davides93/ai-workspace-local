@@ -122,6 +122,30 @@ export function useWorktree(sessionId: string, enabled: boolean) {
   });
 }
 
+/** Checkpoints of the runs of a session: what each run changed, so it can be put back. */
+export function useCheckpoints(sessionId: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: qk.sessions.checkpoints(sessionId),
+    queryFn: () => api.sessionCheckpoints(sessionId),
+    enabled,
+    staleTime: 0,
+  });
+}
+
+export function useRewind(sessionId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) => api.rewindRun(runId),
+    onSuccess: (r) => {
+      toast(r.failed.length > 0 ? `Ripristino incompleto: ${r.failed.length} file non ripristinati` : `File ripristinati: ${r.restored.length}, eliminati: ${r.deleted.length}`);
+      void qc.invalidateQueries({ queryKey: qk.sessions.checkpoints(sessionId) });
+      void qc.invalidateQueries({ queryKey: qk.sessions.worktree(sessionId) });
+    },
+  });
+}
+
 export function useWorktreeApply() {
   const api = useApi();
   const qc = useQueryClient();

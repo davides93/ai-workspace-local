@@ -2,7 +2,7 @@ import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
   AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
-  WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
+  WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
 } from "./types";
@@ -89,6 +89,10 @@ export interface Transport {
   worktreeStatus(sessionId: string): Promise<WorktreeStatus>;
   worktreeApply(sessionId: string): Promise<WorktreeStatus>;
   worktreeDiscard(sessionId: string): Promise<void>;
+  /** Checkpoints of the runs of a session, newest first (only runs that saved or created files). */
+  sessionCheckpoints(sessionId: string): Promise<CheckpointInfo[]>;
+  /** Restores the originals saved by a run and deletes the files it created. */
+  rewindRun(runId: string): Promise<RewindResult>;
   messages(sessionId: string): Promise<ChatMessage[]>;
   /** The ratings of a session (thumbs up/down on assistant messages). */
   sessionFeedback(sessionId: string): Promise<Feedback[]>;

@@ -40,6 +40,7 @@ export function RunsPanel({ runs, selectedId, onOpen, onRun, runDisabled }: {
               <StatusPill status={r.status} />
               <span className="run-meta">
                 <span className="mono text-xs">{r.id}</span>
+                {r.parent_run_id && <span className="faint text-xs">sotto-workflow di <span className="mono">{r.parent_run_id}</span></span>}
                 <span className="faint text-xs" title={formatDateTime(r.started_at)}>{relTime(r.started_at)}{secs !== null ? ` · ${formatDuration(secs)}` : ""}</span>
               </span>
               <span className="run-steps text-xs num">{p.done}/{p.total} passi{p.failed ? <span className="run-failed"> · «{p.failed}» non riuscito</span> : null}</span>

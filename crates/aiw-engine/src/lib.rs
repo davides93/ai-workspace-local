@@ -248,6 +248,7 @@ impl Engine {
             engine.0.runtimes.refresh().await;
         }
         engine.seed()?;
+        engine.resume_workflows();
         if !opts.offline {
             engine.start_background();
             engine.start_update_checks();
@@ -631,7 +632,7 @@ impl Engine {
         let used_by: Vec<String> = self
             .workflows()?
             .into_iter()
-            .filter(|w| w.steps.iter().any(|s| matches!(s, WorkflowStep::Agent { agent: a, .. } if a == id)))
+            .filter(|w| w.steps.iter().flat_map(|s| s.with_inner()).any(|s| matches!(s, WorkflowStep::Agent { agent: a, .. } if a == id)))
             .map(|w| w.name)
             .collect();
         if !used_by.is_empty() {
@@ -652,7 +653,9 @@ impl Engine {
         used_by.extend(
             self.workflows()?
                 .into_iter()
-                .filter(|w| w.steps.iter().any(|s| matches!(s, WorkflowStep::Llm { profile: p, .. } if p == id)))
+                .filter(|w| {
+                    w.steps.iter().flat_map(|s| s.with_inner()).any(|s| matches!(s, WorkflowStep::Llm { profile: p, .. } if p == id))
+                })
                 .map(|w| format!("workflow {}", w.name)),
         );
         if !used_by.is_empty() {
@@ -1163,7 +1166,21 @@ impl Engine {
     pub fn approvals(&self) -> Vec<ApprovalRequest> {
         self.0.approvals.lock().unwrap().values().map(|p| p.req.clone()).collect()
     }
+    /// Seconds after which an approval request of an agent is refused (`approvals.timeout_s`, 0 = never).
+    fn approval_timeout(&self) -> Option<Duration> {
+        self.0.config.get("approvals.timeout_s").and_then(|v| v.as_u64()).filter(|s| *s > 0).map(Duration::from_secs)
+    }
     pub(crate) async fn wait_approval(&self, req: ApprovalRequest, session_id: Option<String>) -> bool {
+        self.wait_approval_outcome(req, session_id, self.approval_timeout()).await == ApprovalOutcome::Allowed
+    }
+    /// Waits for the user's answer for at most `timeout`. The request is withdrawn when the wait
+    /// ends for any reason, and a timeout is written to the audit trail as `decision: "timeout"`.
+    pub(crate) async fn wait_approval_outcome(
+        &self,
+        req: ApprovalRequest,
+        session_id: Option<String>,
+        timeout: Option<Duration>,
+    ) -> ApprovalOutcome {
         /// Withdraws the request when the run stops waiting (answered, cancelled, dropped): a stale
         /// request must not stay in the inbox, where a later "allow" would record a decision
         /// that nobody was waiting for.
@@ -1175,8 +1192,32 @@ impl Engine {
         }
         let (tx, rx) = oneshot::channel();
         let _withdraw = Withdraw(self, req.id.clone());
+        let (run_id, tool, reason) = (req.run_id.clone(), req.tool.clone(), req.reason.clone());
         self.0.approvals.lock().unwrap().insert(req.id.clone(), PendingApproval { req, tx, session_id });
-        rx.await.unwrap_or(false)
+        let answer = match timeout {
+            Some(limit) => match tokio::time::timeout(limit, rx).await {
+                Ok(a) => a,
+                Err(_) => {
+                    let _ = self.0.store.add_audit(&AuditEntry {
+                        id: new_id("aud"),
+                        ts: now_rfc3339(),
+                        run_id: Some(run_id),
+                        actor: "system".into(),
+                        action: "approval".into(),
+                        tool: Some(tool),
+                        decision: Some("timeout".into()),
+                        detail: format!("nessuna risposta entro {} s: {reason}", limit.as_secs()),
+                    });
+                    return ApprovalOutcome::TimedOut;
+                }
+            },
+            None => rx.await,
+        };
+        if answer.unwrap_or(false) {
+            ApprovalOutcome::Allowed
+        } else {
+            ApprovalOutcome::Denied
+        }
     }
     pub fn respond_approval(&self, id: &str, allow: bool, remember: bool) -> Result<()> {
         let p = self
@@ -1271,7 +1312,7 @@ impl Engine {
     pub async fn run_workflow(&self, id: &str, inputs: Map<String, Value>, actor: &str) -> Result<WorkflowRun> {
         let wf: WorkflowDef = self.0.store.get_doc("workflow", id)?.ok_or_else(|| Error::NotFound(format!("workflow {id} non trovato")))?;
         let (tx, rx) = oneshot::channel();
-        let host = EngineHost::for_workflow(self.clone(), wf.clone(), tx);
+        let host = EngineHost::for_workflow(self.clone(), wf.clone(), Some(tx));
         let _ = self.0.store.add_audit(&AuditEntry {
             id: new_id("aud"),
             ts: now_rfc3339(),
@@ -1286,6 +1327,83 @@ impl Engine {
             aiw_workflow::run_workflow(&wf, inputs, &host).await;
         });
         rx.await.map_err(|_| Error::Runtime("il workflow non è partito".into()))
+    }
+
+    /// Ends a run that nobody is going to finish: the steps that were going are `failed`, the run
+    /// `cancelled`, its saved state is dropped.
+    pub(crate) fn abandon_workflow_run(&self, run_id: &str, reason: &str) {
+        let known = self.0.workflow_runs.lock().unwrap().iter().find(|r| r.id == run_id).cloned();
+        let run = known.or_else(|| self.0.store.workflow_run(run_id).ok().flatten());
+        if let Some(mut run) = run.filter(|r| matches!(r.status.as_str(), "running" | "waiting_approval")) {
+            for s in run.steps.iter_mut().filter(|s| matches!(s.status.as_str(), "running" | "waiting")) {
+                s.status = "failed".into();
+                s.error = Some(reason.into());
+            }
+            run.status = "cancelled".into();
+            run.finished_at = Some(now_rfc3339());
+            let _ = self.0.store.save_workflow_run(&run);
+            if let Some(m) = self.0.workflow_runs.lock().unwrap().iter_mut().find(|r| r.id == run_id) {
+                *m = run;
+            }
+        }
+        let _ = self.0.store.clear_workflow_state(run_id);
+    }
+
+    /// Goes on with the workflow runs that were interrupted by a restart (state saved at every
+    /// step). The step that was running starts again from the beginning, so a step can run more
+    /// than once (at-least-once): a step with side effects should be safe to repeat. An approval
+    /// that was pending is asked again. A run whose workflow no longer exists is marked failed.
+    fn resume_workflows(&self) {
+        let states = self.0.store.workflow_states().unwrap_or_default();
+        for mut st in states {
+            let run_id = st.run.id.clone();
+            // A sub-workflow is never resumed on its own: its parent starts it again from the step
+            // that was waiting for it.
+            if st.run.parent_run_id.is_some() {
+                self.abandon_workflow_run(&run_id, "interrotto dal riavvio: il workflow padre lo riavvia");
+                continue;
+            }
+            let live = matches!(st.run.status.as_str(), "running" | "waiting_approval");
+            let finished = self
+                .0
+                .store
+                .workflow_run(&run_id)
+                .ok()
+                .flatten()
+                .is_some_and(|r| !matches!(r.status.as_str(), "running" | "waiting_approval"));
+            if !live || finished {
+                let _ = self.0.store.clear_workflow_state(&run_id);
+                continue;
+            }
+            let wf: Option<WorkflowDef> = self.0.store.get_doc("workflow", &st.run.workflow_id).ok().flatten();
+            let Some(wf) = wf else {
+                let at = st.next.min(st.run.steps.len().saturating_sub(1));
+                if let Some(step) = st.run.steps.get_mut(at) {
+                    step.status = "failed".into();
+                    step.error = Some(format!("il workflow «{}» non esiste più: run interrotto dal riavvio", st.run.workflow_id));
+                }
+                st.run.status = "failed".into();
+                st.run.finished_at = Some(now_rfc3339());
+                let _ = self.0.store.save_workflow_run(&st.run);
+                let _ = self.0.store.clear_workflow_state(&run_id);
+                continue;
+            };
+            let _ = self.0.store.add_audit(&AuditEntry {
+                id: new_id("aud"),
+                ts: now_rfc3339(),
+                run_id: Some(run_id.clone()),
+                actor: "workflow".into(),
+                action: "workflow.resume".into(),
+                tool: None,
+                decision: None,
+                detail: format!("{} (dal passo {})", wf.name, st.next + 1),
+            });
+            st.run.status = "running".into();
+            let host = EngineHost::for_workflow(self.clone(), wf, None);
+            tokio::spawn(async move {
+                aiw_workflow::run_from(st, &host).await;
+            });
+        }
     }
 
     // ------------------------------------------------------------------ tools & MCP
@@ -1408,6 +1526,58 @@ impl Engine {
         self.0.store.audit(500).unwrap_or_default()
     }
 
+    // ------------------------------------------------------------------ checkpoints
+    /// What a rewind of the run would do. `NotFound` when the run saved no checkpoint.
+    pub fn checkpoint_info(&self, run_id: &str) -> Result<CheckpointInfo> {
+        if !aiw_tools::checkpoint::valid_run_id(run_id) {
+            return Err(Error::Invalid("identificativo di run non valido".into()));
+        }
+        aiw_tools::checkpoint::plan(&self.0.dirs.checkpoints(), run_id)
+            .ok_or_else(|| Error::NotFound(format!("nessun checkpoint per il run {run_id}")))
+    }
+
+    /// Checkpoints of the runs of a session, newest run first.
+    pub fn session_checkpoints(&self, session_id: &str) -> Result<Vec<CheckpointInfo>> {
+        let ids = self.0.store.session_run_ids(session_id)?;
+        Ok(ids.iter().filter_map(|id| aiw_tools::checkpoint::plan(&self.0.dirs.checkpoints(), id)).collect())
+    }
+
+    /// Puts back the originals saved by the run and deletes the files it created. Refused while the run is going.
+    pub fn rewind(&self, run_id: &str) -> Result<RewindResult> {
+        let info = self.checkpoint_info(run_id)?;
+        let agent_running = self.0.runs.lock().unwrap().get(run_id).is_some_and(|r| !r.done);
+        let workflow_running = self
+            .0
+            .workflow_runs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.id == run_id && matches!(r.status.as_str(), "running" | "waiting_approval"));
+        if agent_running || workflow_running {
+            return Err(Error::Conflict("il run è ancora in corso: fermalo prima di ripristinare i file".into()));
+        }
+        let res = aiw_tools::checkpoint::rewind(&self.0.dirs.checkpoints(), run_id)?;
+        let _ = self.0.store.add_audit(&AuditEntry {
+            id: new_id("aud"),
+            ts: now_rfc3339(),
+            run_id: Some(run_id.into()),
+            actor: "user".into(),
+            action: "checkpoint.rewind".into(),
+            tool: None,
+            decision: None,
+            detail: format!(
+                "ripristinati {}, eliminati {}, esterni {}, falliti {} (previsti {} + {})",
+                res.restored.len(),
+                res.deleted.len(),
+                res.external.len(),
+                res.failed.len(),
+                info.restore.len(),
+                info.delete.len()
+            ),
+        });
+        Ok(res)
+    }
+
     // ------------------------------------------------------------------ OpenAI-compatible gateway
     /// Model ids exposed on `/v1/models`: inference profiles and local GGUF files.
     pub fn gateway_models(&self) -> Vec<String> {
@@ -1500,9 +1670,18 @@ impl Engine {
                     reason: format!("{actor}: {reason}"),
                     risk: aiw_agent::policy::risk_level(t.risk()).into(),
                 };
-                if !self.wait_approval(req, None).await {
-                    audit("rejected");
-                    return Err(Error::Denied("rifiutato dall'utente".into()));
+                match self.wait_approval_outcome(req, None, self.approval_timeout()).await {
+                    ApprovalOutcome::Allowed => {}
+                    ApprovalOutcome::Denied => {
+                        audit("rejected");
+                        return Err(Error::Denied("rifiutato dall'utente".into()));
+                    }
+                    ApprovalOutcome::TimedOut => {
+                        audit("timeout");
+                        return Err(Error::Denied(
+                            "nessuna risposta entro il tempo limite (approvals.timeout_s): richiesta rifiutata".into(),
+                        ));
+                    }
                 }
                 audit("approved");
             }
@@ -1523,6 +1702,15 @@ impl Engine {
         };
         let mut rx = self.subscribe();
         let run_id = self.start_run(&session_id, prompt.to_string()).await?;
+        // If the caller stops waiting (a workflow step timeout, a dropped task) the agent run must
+        // not go on in the background.
+        struct CancelOnDrop<'a>(&'a Engine, &'a str);
+        impl Drop for CancelOnDrop<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.cancel_run(self.1);
+            }
+        }
+        let cancel_guard = CancelOnDrop(self, &run_id);
         loop {
             if self.run_done(&run_id) {
                 break;
@@ -1532,6 +1720,7 @@ impl Engine {
                 _ => {}
             }
         }
+        std::mem::forget(cancel_guard);
         // Let the run task persist its messages.
         for _ in 0..50 {
             if self.0.store.session(&session_id).ok().and_then(|s| s.last_status).as_deref() != Some("running") {
@@ -1642,3 +1831,5 @@ mod tests_inference;
 mod tests_traces;
 #[cfg(test)]
 mod tests_validation;
+#[cfg(test)]
+mod tests_workflow;

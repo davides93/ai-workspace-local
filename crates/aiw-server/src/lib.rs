@@ -135,7 +135,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/sessions/{id}/feedback", get(session_feedback))
         .route("/api/sessions/{id}/active-run", get(active_run))
         .route("/api/sessions/{id}/runs", post(start_run))
+        .route("/api/sessions/{id}/checkpoints", get(session_checkpoints))
         .route("/api/runs/{id}/cancel", post(cancel_run))
+        .route("/api/runs/{id}/checkpoint", get(run_checkpoint))
+        .route("/api/runs/{id}/rewind", post(run_rewind))
         .route("/api/runs/{id}/events", get(run_events_sse))
         .route("/api/runs/{id}/events.json", get(run_events_json))
         .route("/api/approvals", get(approvals))
@@ -472,6 +475,15 @@ async fn worktree_apply(State(s): State<AppState>, Path(id): Path<String>) -> Ap
 async fn worktree_discard(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.worktree_discard(&id)?;
     ok(json!({}))
+}
+async fn session_checkpoints(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<aiw_core::api::CheckpointInfo>> {
+    ok(s.engine.session_checkpoints(&id)?)
+}
+async fn run_checkpoint(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::CheckpointInfo> {
+    ok(s.engine.checkpoint_info(&id)?)
+}
+async fn run_rewind(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::RewindResult> {
+    ok(s.engine.rewind(&id)?)
 }
 async fn delete_session(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.delete_session(&id)?;

@@ -587,3 +587,33 @@ mod updates {
         assert_eq!(e.config().effective["update.auto_download"], json!(false));
     }
 }
+
+// ------------------------------------------------------------------ checkpoints
+
+#[tokio::test]
+async fn a_checkpoint_is_read_and_rewound_over_http() {
+    let (app, e, data) = fixture(None).await;
+    let ws = e.workspace_root();
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("a.md"), "cambiato").unwrap();
+    std::fs::write(ws.join("nuovo.md"), "creato").unwrap();
+    let run = data.path().join("checkpoints/run_http");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(run.join("a.md"), "originale").unwrap();
+    std::fs::write(run.join(".aiw-run.json"), json!({"root": ws.display().to_string(), "created": ["nuovo.md"]}).to_string()).unwrap();
+
+    let (st, v) = dispatch(app.clone(), "GET", "/api/runs/run_http/checkpoint", None).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["restore"], json!(["a.md"]));
+    assert_eq!(v["delete"], json!(["nuovo.md"]));
+    assert_eq!(failure(&app, "GET", "/api/runs/run_assente/checkpoint", None).await.0, 404);
+    assert_eq!(failure(&app, "POST", "/api/runs/run_assente/rewind", None).await.0, 404);
+
+    let (st, v) = dispatch(app.clone(), "POST", "/api/runs/run_http/rewind", None).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["restored"], json!(["a.md"]));
+    assert_eq!(v["deleted"], json!(["nuovo.md"]));
+    assert_eq!(std::fs::read_to_string(ws.join("a.md")).unwrap(), "originale");
+    assert!(!ws.join("nuovo.md").exists());
+    assert_eq!(failure(&app, "POST", "/api/runs/run_http/rewind", None).await.0, 404);
+}
