@@ -1,6 +1,6 @@
 use aiw_core::api::{
     ApprovalDefault, ApprovalOutcome, OnError, StepOptions, WorkflowDef, WorkflowRun, WorkflowStep, WorkflowStepRun, MAX_FOREACH_ITEMS,
-    MAX_FOREACH_PARALLEL, MAX_SUBWORKFLOW_DEPTH,
+    MAX_FOREACH_PARALLEL, MAX_SUBWORKFLOW_DEPTH, TEAM_AGENT_PREFIX,
 };
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use async_trait::async_trait;
@@ -270,11 +270,15 @@ where
     }
 }
 
-/// Executes one `tool`, `agent` or `llm` step.
+/// Executes one `tool`, `agent`, `team` or `llm` step.
 async fn exec_leaf(step: &WorkflowStep, run_id: &str, ctx: &RenderCtx<'_>, host: &dyn WorkflowHost) -> Result<String> {
     match step {
         WorkflowStep::Tool { tool, args, .. } => host.call_tool(run_id, tool, render_value_ctx(&Value::Object(args.clone()), ctx)).await,
         WorkflowStep::Agent { agent, prompt, .. } => host.run_agent(run_id, agent, &render_ctx(prompt, ctx)).await,
+        // A team is addressed like an agent whose id is `team:<id>`.
+        WorkflowStep::Team { team, prompt, .. } => {
+            host.run_agent(run_id, &format!("{TEAM_AGENT_PREFIX}{team}"), &render_ctx(prompt, ctx)).await
+        }
         WorkflowStep::Llm { profile, prompt, .. } => host.complete(run_id, profile, &render_ctx(prompt, ctx)).await,
         other => Err(Error::Invalid(format!("il passo {} non si può eseguire qui", other.id()))),
     }
@@ -474,6 +478,7 @@ pub async fn run_state(state: WorkflowState, host: &dyn WorkflowHost) -> Workflo
         let result: Result<String> = match step {
             WorkflowStep::Tool { .. }
             | WorkflowStep::Agent { .. }
+            | WorkflowStep::Team { .. }
             | WorkflowStep::Llm { .. }
             | WorkflowStep::Foreach { .. }
             | WorkflowStep::Parallel { .. }
@@ -629,6 +634,28 @@ mod tests {
         assert!(calls[0].contains("\"path\":\"/tmp\""));
         assert_eq!(calls.last().unwrap(), "agent:op:Agisci su notifica");
         assert!(matches!(wf().trigger, WorkflowTrigger::Manual));
+    }
+
+    #[tokio::test]
+    async fn a_team_step_runs_the_team_like_an_agent_and_feeds_the_next_step() {
+        let host = Host { approve: true, timed_out: false, calls: Mutex::new(vec![]) };
+        let wf: WorkflowDef = serde_json::from_value(json!({
+            "id": "t", "name": "T", "enabled": true, "trigger": {"kind": "manual"}, "inputs": {"topic": "AI"},
+            "steps": [
+                {"id": "squad", "kind": "team", "team": "squadra", "prompt": "Studia {{inputs.topic}}"},
+                {"id": "after", "kind": "llm", "profile": "fast", "prompt": "Riassumi: {{steps.squad.output}}"},
+                {"id": "each", "kind": "foreach", "items": "[1, 2]", "do": {"id": "one", "kind": "team", "team": "squadra", "prompt": "n{{item}}"}}
+            ]
+        }))
+        .unwrap();
+        let run = run_workflow(&wf, Map::new(), &host).await;
+        assert_eq!(run.status, "succeeded", "{run:?}");
+        // The team is addressed as the agent `team:<id>`, and its answer is the output of the step.
+        assert_eq!(
+            *host.calls.lock().unwrap(),
+            ["agent:team:squadra:Studia AI", "llm:Riassumi: fatto", "agent:team:squadra:n1", "agent:team:squadra:n2"]
+        );
+        assert_eq!(run.steps[0].output.as_deref(), Some("fatto"));
     }
 
     #[tokio::test]

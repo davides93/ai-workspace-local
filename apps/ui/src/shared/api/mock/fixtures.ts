@@ -382,6 +382,10 @@ export const workflows: WorkflowDef[] = [
       { id: "test", kind: "tool", tool: "shell", args: { command: "cargo test --workspace", cwd: "{{inputs.path}}" } },
       { id: "report", kind: "agent", agent: "coder", prompt: "Riassumi l'esito e proponi correzioni:\n{{steps.test.output}}" },
     ] },
+  { id: "rassegna-settimanale", name: "Rassegna settimanale", description: "Ogni lunedì alle 7 il team di ricerca raccoglie le fonti e scrive la sintesi.", enabled: false, trigger: { kind: "cron", expr: "0 7 * * 1" }, inputs: { tema: "agenti AI locali" },
+    steps: [
+      { id: "ricerca", kind: "team", team: "ricerca", prompt: "Raccogli le novità della settimana su {{inputs.tema}} e scrivi la sintesi.", retry: 1, timeout_s: 1800 },
+    ] },
 ];
 
 export const workflowRuns: WorkflowRun[] = [

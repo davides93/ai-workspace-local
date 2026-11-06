@@ -192,6 +192,21 @@ describe("validateDraft", () => {
     expect(errors).toEqual(["0:args", "0:tool", "1:agent", "1:prompt", "2:profile", "2:prompt", "3:message", "4:if"]);
   });
 
+  it("checks a team step: a team and a task are needed, an unknown team only warns", () => {
+    const teams = ["ricerca"];
+    const issues = validateDraft(base({ steps: [{ id: "a", kind: "team", team: "", prompt: "" }] }), { ...ctx, teams });
+    expect(issues.filter((i) => i.level === "error").map((i) => i.field).sort()).toEqual(["prompt", "team"]);
+    const ghost = validateDraft(base({ steps: [{ id: "a", kind: "team", team: "ghost", prompt: "x" }] }), { ...ctx, teams });
+    expect(hasErrors(ghost)).toBe(false);
+    expect(find(ghost, "team").map((i) => i.level)).toEqual(["warn"]);
+    // The teams are not known yet (still loading): no warning.
+    expect(find(validateDraft(base({ steps: [{ id: "a", kind: "team", team: "ghost", prompt: "x" }] }), ctx), "team")).toHaveLength(0);
+    // A team can be the inline step of a foreach, and it is checked there too.
+    const each = (team: string): PlainDraft => base({ steps: [{ id: "f", kind: "foreach", items: "[1]", body: JSON.stringify({ id: "in", kind: "team", team, prompt: "{{item}}" }) }] });
+    expect(validateDraft(each("ricerca"), { ...ctx, teams })).toEqual([]);
+    expect(find(validateDraft(each("ghost"), { ...ctx, teams }), "body").map((i) => i.level)).toEqual(["warn"]);
+  });
+
   it("only warns about things that do not exist yet", () => {
     const issues = validateDraft(base({ steps: [{ id: "t", kind: "tool", tool: "ghost", args: "{}" }, { id: "g", kind: "agent", agent: "ghost", prompt: "x" }, { id: "l", kind: "llm", profile: "ghost", prompt: "x" }] }), ctx);
     expect(hasErrors(issues)).toBe(false);

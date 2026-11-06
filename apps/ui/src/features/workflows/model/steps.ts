@@ -6,9 +6,10 @@
 //    that comes before its condition is always skipped;
 //  - an approval that is refused ends the run as cancelled; with `timeout_s` it takes `default` (deny or allow) when nobody answers;
 //  - `foreach` runs one inline step for every entry of a list (`{{item}}`, `{{item.field}}`, `{{index}}`, up to 8 at a time),
-//    `parallel` runs several inline steps together; the inline steps are tool, agent or llm only and are edited as JSON;
+//    `parallel` runs several inline steps together; the inline steps are tool, agent, team or llm only and are edited as JSON;
 //  - `workflow` starts another workflow with inputs and waits for it (3 levels at most);
-//  - tool, agent, llm, foreach, parallel and workflow steps take `retry`, `retry_delay_s`, `timeout_s` and `on_error` (see `StepOptions`).
+//  - `team` hands the prompt to a team and waits for its final answer (like `agent`);
+//  - tool, agent, team, llm, foreach, parallel and workflow steps take `retry`, `retry_delay_s`, `timeout_s` and `on_error` (see `StepOptions`).
 
 import type { StepOptions, WorkflowStep } from "../../../shared/api/types";
 
@@ -17,6 +18,7 @@ export type StepKind = WorkflowStep["kind"];
 export const STEP_KINDS: { kind: StepKind; label: string; icon: string; hint: string }[] = [
   { kind: "tool", label: "Tool", icon: "tool", hint: "Chiama un tool con argomenti fissi, senza il modello." },
   { kind: "agent", label: "Agente", icon: "agent", hint: "Affida un compito a un agente, che può usare i suoi tool." },
+  { kind: "team", label: "Team", icon: "agent", hint: "Affida un compito a un team di agenti e ne usa la risposta finale." },
   { kind: "llm", label: "LLM", icon: "sparkle", hint: "Una sola risposta del modello di un profilo, senza tool." },
   { kind: "foreach", label: "Per ogni voce", icon: "flow", hint: "Ripete un passo per ogni voce di un elenco, anche più voci alla volta." },
   { kind: "parallel", label: "In parallelo", icon: "flow", hint: "Esegue più passi insieme e aspetta che finiscano tutti." },
@@ -31,6 +33,7 @@ export const stepMeta = (kind: StepKind) => STEP_KINDS.find((k) => k.kind === ki
 export type StepDraft =
   | { id: string; kind: "tool"; tool: string; args: string; opts?: StepOptions }
   | { id: string; kind: "agent"; agent: string; prompt: string; opts?: StepOptions }
+  | { id: string; kind: "team"; team: string; prompt: string; opts?: StepOptions }
   | { id: string; kind: "llm"; profile: string; prompt: string; opts?: StepOptions }
   /** `body` is the JSON of the inline step; `parallel` (1..8) how many entries run together, 1 when absent. */
   | { id: string; kind: "foreach"; items: string; body: string; parallel?: number; opts?: StepOptions }
@@ -45,6 +48,7 @@ export type StepDraft =
 export interface StepDefaults {
   workflow?: string;
   agent?: string;
+  team?: string;
   profile?: string;
   tool?: string;
 }
@@ -62,7 +66,7 @@ export function freshStepId(kind: StepKind, steps: readonly Pick<StepDraft, "id"
 export const inlineJson = (v: unknown): string => JSON.stringify(v, null, 2);
 
 export const FOREACH_MAX_PARALLEL = 8;
-export const INLINE_KINDS = ["tool", "agent", "llm"];
+export const INLINE_KINDS = ["tool", "agent", "team", "llm"];
 
 /** The inline steps in the JSON of a `foreach` (`one`) or `parallel` (a list), or what is wrong with it. */
 export function parseInline(text: string, many: boolean): { ok: true; steps: WorkflowStep[] } | { ok: false; error: string } {
@@ -95,6 +99,7 @@ export function newStep(kind: StepKind, steps: readonly StepDraft[], d: StepDefa
   switch (kind) {
     case "tool": return { id, kind, tool: d.tool ?? "", args: "{}" };
     case "agent": return { id, kind, agent: d.agent ?? "", prompt: "" };
+    case "team": return { id, kind, team: d.team ?? "", prompt: "" };
     case "llm": return { id, kind, profile: d.profile ?? "", prompt: "" };
     case "foreach": return { id, kind, items: "", body: inlineJson({ id: `${id}-step`, kind: "llm", profile: d.profile ?? "", prompt: "{{item}}" }) };
     case "parallel": return { id, kind, steps: JSON.stringify([{ id: `${id}-a`, kind: "llm", profile: d.profile ?? "", prompt: "" }], null, 2) };
@@ -118,8 +123,8 @@ export const OPTION_LIMITS = { retry: 5, retryDelay: 300, timeout: 86_400 } as c
 export const DEFAULT_RETRY_DELAY_S = 2;
 
 /** The steps that take `StepOptions`. */
-export const hasOptions = (s: StepDraft): s is Extract<StepDraft, { kind: "tool" | "agent" | "llm" | "foreach" | "parallel" | "workflow" }> =>
-  s.kind === "tool" || s.kind === "agent" || s.kind === "llm" || s.kind === "foreach" || s.kind === "parallel" || s.kind === "workflow";
+export const hasOptions = (s: StepDraft): s is Extract<StepDraft, { kind: "tool" | "agent" | "team" | "llm" | "foreach" | "parallel" | "workflow" }> =>
+  s.kind === "tool" || s.kind === "agent" || s.kind === "team" || s.kind === "llm" || s.kind === "foreach" || s.kind === "parallel" || s.kind === "workflow";
 
 /** Options without the defaults (what the backend does not serialize either); `undefined` when nothing is left. */
 export function cleanOptions(o: StepOptions | undefined): StepOptions | undefined {
@@ -200,6 +205,7 @@ export function stepTexts(s: StepDraft): string[] {
   switch (s.kind) {
     case "tool": return [s.args];
     case "agent":
+    case "team":
     case "llm": return [s.prompt];
     case "foreach": return [s.items, s.body];
     case "parallel": return [s.steps];
@@ -213,6 +219,7 @@ function mapTexts(s: StepDraft, fn: (t: string) => string): StepDraft {
   switch (s.kind) {
     case "tool": return { ...s, args: fn(s.args) };
     case "agent": return { ...s, prompt: fn(s.prompt) };
+    case "team": return { ...s, prompt: fn(s.prompt) };
     case "llm": return { ...s, prompt: fn(s.prompt) };
     case "foreach": return { ...s, items: fn(s.items), body: fn(s.body) };
     case "parallel": return { ...s, steps: fn(s.steps) };
@@ -249,6 +256,7 @@ export function stepSummary(s: StepDraft): string {
   switch (s.kind) {
     case "tool": return `${s.tool || "tool da scegliere"} ${s.args.replace(/\s+/g, " ").trim()}`.trim();
     case "agent": return `${s.agent || "agente da scegliere"}: ${s.prompt}`;
+    case "team": return `${s.team || "team da scegliere"}: ${s.prompt}`;
     case "llm": return `${s.profile || "profilo da scegliere"}: ${s.prompt}`;
     case "foreach": return `per ogni voce di ${s.items.replace(/\s+/g, " ").trim() || "…"}${s.parallel && s.parallel > 1 ? ` (${s.parallel} alla volta)` : ""}`;
     case "parallel": {

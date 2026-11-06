@@ -830,6 +830,7 @@ export interface StepOptions {
 export type WorkflowStep =
   | ({ id: string; kind: "tool"; tool: string; args: Record<string, unknown> } & StepOptions)
   | ({ id: string; kind: "agent"; agent: string; prompt: string } & StepOptions)
+  | ({ id: string; kind: "team"; team: string; prompt: string } & StepOptions)
   | ({ id: string; kind: "llm"; profile: string; prompt: string } & StepOptions)
   /** `do` is one inline tool/agent/llm step that can use `{{item}}`, `{{item.field}}` and `{{index}}`; the output is the JSON array of its outputs. */
   | ({ id: string; kind: "foreach"; items: string; do: WorkflowStep; parallel?: number } & StepOptions)

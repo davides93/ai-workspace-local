@@ -549,6 +549,9 @@ pub struct BudgetLimits {
     pub max_seconds: Option<u64>,
 }
 
+/// Prefix of the agent id that addresses a team: sessions and workflow steps run it as `team:<id>`.
+pub const TEAM_AGENT_PREFIX: &str = "team:";
+
 /// A team of agents used in chat like a single agent (session agent id `team:<id>`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TeamDef {
@@ -1096,7 +1099,7 @@ pub enum WorkflowStep {
     Foreach {
         id: String,
         items: String,
-        /// A single inline `tool`, `agent` or `llm` step.
+        /// A single inline `tool`, `agent`, `team` or `llm` step.
         #[serde(rename = "do")]
         body: Box<WorkflowStep>,
         /// How many entries run at the same time (1..=8).
@@ -1105,7 +1108,17 @@ pub enum WorkflowStep {
         #[serde(default, flatten)]
         opts: StepOptions,
     },
-    /// Runs inline `tool`, `agent` and `llm` steps all at once. The output is the JSON object
+    /// Hands the prompt to a team (`/api/teams`) and waits for its final answer, which is the
+    /// output. The team runs like an agent whose id is `team:<id>`, in its own session.
+    Team {
+        id: String,
+        /// Id of the team to run.
+        team: String,
+        prompt: String,
+        #[serde(default, flatten)]
+        opts: StepOptions,
+    },
+    /// Runs inline `tool`, `agent`, `team` and `llm` steps all at once. The output is the JSON object
     /// `{inner_id: output}`; each inner output is also `{{steps.<inner_id>.output}}`.
     Parallel {
         id: String,
@@ -1151,6 +1164,7 @@ impl WorkflowStep {
         match self {
             WorkflowStep::Tool { id, .. }
             | WorkflowStep::Agent { id, .. }
+            | WorkflowStep::Team { id, .. }
             | WorkflowStep::Llm { id, .. }
             | WorkflowStep::Foreach { id, .. }
             | WorkflowStep::Parallel { id, .. }
@@ -1179,6 +1193,7 @@ impl WorkflowStep {
         match self {
             WorkflowStep::Tool { opts, .. }
             | WorkflowStep::Agent { opts, .. }
+            | WorkflowStep::Team { opts, .. }
             | WorkflowStep::Llm { opts, .. }
             | WorkflowStep::Foreach { opts, .. }
             | WorkflowStep::Parallel { opts, .. }

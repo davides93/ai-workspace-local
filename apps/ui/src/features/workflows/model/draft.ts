@@ -56,11 +56,12 @@ export function triggerFromDraft(t: TriggerDraft, secret = ""): WorkflowTrigger 
 }
 
 function stepToDraft(s: WorkflowStep): StepDraft {
-  const opts = s.kind === "tool" || s.kind === "agent" || s.kind === "llm" || s.kind === "foreach" || s.kind === "parallel" || s.kind === "workflow" ? optionsOf(s) : undefined;
+  const opts = s.kind === "tool" || s.kind === "agent" || s.kind === "team" || s.kind === "llm" || s.kind === "foreach" || s.kind === "parallel" || s.kind === "workflow" ? optionsOf(s) : undefined;
   const o = opts ? { opts } : {};
   switch (s.kind) {
     case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: pretty(s.args ?? {}), ...o };
     case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt, ...o };
+    case "team": return { id: s.id, kind: "team", team: s.team, prompt: s.prompt, ...o };
     case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt, ...o };
     case "foreach": return { id: s.id, kind: "foreach", items: s.items, body: inlineJson(s.do), ...(s.parallel !== undefined && s.parallel !== 1 ? { parallel: s.parallel } : {}), ...o };
     case "parallel": return { id: s.id, kind: "parallel", steps: inlineJson(s.steps), ...o };
@@ -86,6 +87,7 @@ function stepFromDraft(s: StepDraft): WorkflowStep {
   switch (s.kind) {
     case "tool": return { id: s.id, kind: "tool", tool: s.tool, args: parseArgs(s.args) ?? {}, ...o };
     case "agent": return { id: s.id, kind: "agent", agent: s.agent, prompt: s.prompt, ...o };
+    case "team": return { id: s.id, kind: "team", team: s.team, prompt: s.prompt, ...o };
     case "llm": return { id: s.id, kind: "llm", profile: s.profile, prompt: s.prompt, ...o };
     case "foreach": {
       const inner = parseInline(s.body, false);
@@ -234,6 +236,8 @@ export interface Issue {
 
 export interface ValidationContext {
   agents: readonly string[];
+  /** Ids of the teams a `team` step can run; empty or absent = not known. */
+  teams?: readonly string[];
   profiles: readonly string[];
   tools: readonly string[];
   /** Ids of the workflows a `workflow` step can start; empty or absent = not known. */
@@ -303,6 +307,11 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
         else if (ctx.agents.length > 0 && !ctx.agents.includes(s.agent)) w("agent", `L'agente «${s.agent}» non esiste: il passo fallirà.`);
         if (!s.prompt.trim()) e("prompt", "Scrivi il compito per l'agente.");
         break;
+      case "team":
+        if (!s.team.trim()) e("team", "Scegli il team.");
+        else if (ctx.teams && ctx.teams.length > 0 && !ctx.teams.includes(s.team)) w("team", `Il team «${s.team}» non esiste: il passo fallirà.`);
+        if (!s.prompt.trim()) e("prompt", "Scrivi il compito per il team.");
+        break;
       case "llm":
         if (!s.profile.trim()) e("profile", "Scegli il profilo di inferenza.");
         else if (ctx.profiles.length > 0 && !ctx.profiles.includes(s.profile)) w("profile", `Il profilo «${s.profile}» non esiste: il passo fallirà.`);
@@ -314,6 +323,7 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
         const r = parseInline(s.body, false);
         if (!r.ok) e("body", r.error);
         else if (r.steps[0].kind === "agent" && ctx.agents.length > 0 && !ctx.agents.includes(r.steps[0].agent)) w("body", `L'agente «${r.steps[0].agent}» non esiste: il passo fallirà.`);
+        else if (r.steps[0].kind === "team" && ctx.teams && ctx.teams.length > 0 && !ctx.teams.includes(r.steps[0].team)) w("body", `Il team «${r.steps[0].team}» non esiste: il passo fallirà.`);
         break;
       }
       case "parallel": {
