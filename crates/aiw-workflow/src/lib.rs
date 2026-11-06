@@ -39,9 +39,12 @@ pub fn validate(wf: &WorkflowDef) -> Result<()> {
         top_level.insert(s.id().to_string());
         // The inline steps of foreach/parallel count for the uniqueness of the ids.
         for inner in s.inner() {
-            if !matches!(inner, WorkflowStep::Tool { .. } | WorkflowStep::Agent { .. } | WorkflowStep::Llm { .. }) {
+            if !matches!(
+                inner,
+                WorkflowStep::Tool { .. } | WorkflowStep::Agent { .. } | WorkflowStep::Team { .. } | WorkflowStep::Llm { .. }
+            ) {
                 return Err(Error::Invalid(format!(
-                    "il passo {}: i passi interni possono essere solo tool, agent o llm (niente annidamento, approval o condition); {} non va bene",
+                    "il passo {}: i passi interni possono essere solo tool, agent, team o llm (niente annidamento, approval o condition); {} non va bene",
                     s.id(),
                     inner.id()
                 )));
@@ -49,10 +52,12 @@ pub fn validate(wf: &WorkflowDef) -> Result<()> {
             if !seen.insert(inner.id().to_string()) {
                 return Err(Error::Invalid(format!("id di passo duplicato: {}", inner.id())));
             }
+            check_team_step(inner)?;
             if let Some(o) = inner.opts() {
                 check_options(inner.id(), o)?;
             }
         }
+        check_team_step(s)?;
         match s {
             WorkflowStep::Workflow { workflow, .. } if workflow.trim().is_empty() => {
                 return Err(Error::Invalid(format!("il passo {}: indica il workflow da avviare", s.id())));
@@ -100,6 +105,16 @@ pub fn validate(wf: &WorkflowDef) -> Result<()> {
     Ok(())
 }
 
+/// A `team` step names the team to run; whether it exists is checked when the step runs, like for agents.
+fn check_team_step(s: &WorkflowStep) -> Result<()> {
+    match s {
+        WorkflowStep::Team { team, .. } if team.trim().is_empty() => {
+            Err(Error::Invalid(format!("il passo {}: indica il team da avviare", s.id())))
+        }
+        _ => Ok(()),
+    }
+}
+
 fn check_options(id: &str, o: &StepOptions) -> Result<()> {
     if o.retry > MAX_STEP_RETRY {
         return Err(Error::Invalid(format!("il passo {id}: retry al massimo {MAX_STEP_RETRY}")));
@@ -139,6 +154,22 @@ steps:
         let wf = load_file(&p).unwrap();
         assert_eq!(wf.steps.len(), 3);
         assert!(validate(&wf).is_ok());
+    }
+
+    #[test]
+    fn a_team_step_loads_from_yaml_and_needs_a_team() {
+        let wf = |step: &str| -> WorkflowDef {
+            serde_yaml::from_str(&format!("id: w\nname: W\ntrigger: {{ kind: manual }}\nsteps:\n  - {step}\n")).unwrap()
+        };
+        let ok = wf("{ id: a, kind: team, team: squadra, prompt: \"Studia\", retry: 1, timeout_s: 600 }");
+        assert!(validate(&ok).is_ok());
+        assert!(matches!(&ok.steps[0], WorkflowStep::Team { team, opts, .. } if team == "squadra" && opts.retry == 1));
+        // A blank team is refused, also when the step is inline in a parallel or foreach.
+        let blank = validate(&wf("{ id: a, kind: team, team: \"  \", prompt: x }")).unwrap_err().to_string();
+        assert!(blank.contains("indica il team"), "{blank}");
+        assert!(validate(&wf("{ id: p, kind: parallel, steps: [{ id: a, kind: team, team: squadra, prompt: x }] }")).is_ok());
+        assert!(validate(&wf("{ id: p, kind: parallel, steps: [{ id: a, kind: team, team: \"\", prompt: x }] }")).is_err());
+        assert!(validate(&wf("{ id: f, kind: foreach, items: \"[1]\", do: { id: a, kind: team, team: squadra, prompt: x } }")).is_ok());
     }
 
     #[test]
@@ -193,14 +224,15 @@ steps:
             .contains("parallel"));
         assert!(err("  - { id: f, kind: foreach, items: x, parallel: 0, do: { id: d, kind: llm, profile: p, prompt: x } }\n")
             .contains("parallel"));
-        assert!(err("  - { id: f, kind: foreach, items: x, do: { id: d, kind: approval, message: x } }\n").contains("tool, agent o llm"));
+        assert!(
+            err("  - { id: f, kind: foreach, items: x, do: { id: d, kind: approval, message: x } }\n").contains("tool, agent, team o llm")
+        );
         assert!(err(
             "  - { id: f, kind: foreach, items: x, do: { id: d, kind: foreach, items: y, do: { id: e, kind: tool, tool: t } } }\n"
         )
         .contains("annidamento"));
-        assert!(
-            err("  - { id: p, kind: parallel, steps: [ { id: c, kind: condition, if: x, then: [] } ] }\n").contains("tool, agent o llm")
-        );
+        assert!(err("  - { id: p, kind: parallel, steps: [ { id: c, kind: condition, if: x, then: [] } ] }\n")
+            .contains("tool, agent, team o llm"));
         assert!(err("  - { id: p, kind: parallel, steps: [] }\n").contains("almeno un passo"));
         assert!(err("  - { id: d, kind: tool, tool: t }\n  - { id: p, kind: parallel, steps: [ { id: d, kind: tool, tool: t } ] }\n")
             .contains("duplicato"));

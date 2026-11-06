@@ -215,6 +215,85 @@ async fn agents_running_together_in_a_workflow_get_their_own_sessions() {
     assert!(e.sessions().unwrap().iter().filter(|s| s.title.starts_with("⚙ Par")).count() >= 2);
 }
 
+/// An engine whose scripted model answers `turns` in order, with two copies of an agent for a team.
+async fn engine_with_team_members(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, tempfile::TempDir, tempfile::TempDir) {
+    let data = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let e = Engine::new(options(data.path(), ws.path())).await.unwrap();
+    e.register_native_runtime("llama-embedded", Arc::new(ScriptedBackend::new(turns)));
+    e.save_profile(InferenceProfile {
+        id: "default".into(),
+        name: "Test".into(),
+        description: None,
+        runtime_id: "llama-embedded".into(),
+        model: "scripted".into(),
+        params: InferenceParams { context: Some(8192), ..Default::default() },
+    })
+    .unwrap();
+    for id in ["primo", "secondo"] {
+        let mut a = e.agent("planner").unwrap();
+        a.id = id.into();
+        a.name = id.into();
+        e.save_agent(a).unwrap();
+    }
+    e.save_team(TeamDef {
+        id: "squadra".into(),
+        name: "Squadra".into(),
+        description: "Un team di prova".into(),
+        strategy: "pipeline".into(),
+        supervisor: None,
+        members: ["primo", "secondo"].iter().map(|a| TeamMember { agent: a.to_string(), role: format!("ruolo di {a}") }).collect(),
+        aggregator: None,
+        budget: None,
+        output_schema: None,
+    })
+    .unwrap();
+    (e, data, ws)
+}
+
+#[tokio::test]
+async fn a_team_step_runs_the_team_in_its_own_session_and_its_answer_is_the_output() {
+    let (e, _d, _w) = engine_with_team_members(vec![ScriptedBackend::text_turn("uno"), ScriptedBackend::text_turn("due")]).await;
+    e.save_workflow(serde_json::from_value(json!({
+        "id": "notturno", "name": "Notturno", "enabled": false, "trigger": {"kind": "cron", "expr": "0 3 * * *"}, "inputs": {"tema": "AI"},
+        "steps": [{"id": "squad", "kind": "team", "team": "squadra", "prompt": "Studia {{inputs.tema}}", "retry": 1}]
+    }))
+    .unwrap())
+    .unwrap();
+    let first = e.run_workflow("notturno", Map::new(), "test").await.unwrap();
+    wait_until("run finished", || e.workflow_runs().iter().any(|r| r.id == first.id && r.status != "running")).await;
+    let run = e.workflow_runs().into_iter().find(|r| r.id == first.id).unwrap();
+    assert_eq!(run.status, "succeeded", "{run:?}");
+    assert_eq!(run.steps[0].output.as_deref(), Some("due"), "the answer of the last member of the pipeline");
+    let session = e.sessions().unwrap().into_iter().find(|s| s.title.starts_with("⚙ Notturno")).expect("the team session");
+    assert_eq!(session.agent_id, "team:squadra");
+    assert_eq!(e.messages(&session.id).unwrap().first().unwrap().content, "Studia AI");
+}
+
+#[tokio::test]
+async fn a_team_step_of_a_missing_team_fails_the_run_and_a_used_team_cannot_be_deleted() {
+    let (e, _d, _w) = engine_with_team_members(vec![]).await;
+    let wf = |id: &str, team: &str| {
+        serde_json::from_value::<WorkflowDef>(json!({
+            "id": id, "name": id, "enabled": false, "trigger": {"kind": "manual"}, "inputs": {},
+            "steps": [{"id": "squad", "kind": "parallel", "steps": [{"id": "in", "kind": "team", "team": team, "prompt": "x"}]}]
+        }))
+        .unwrap()
+    };
+    e.save_workflow(wf("ghost", "nessuno")).unwrap();
+    let first = e.run_workflow("ghost", Map::new(), "test").await.unwrap();
+    wait_until("run finished", || e.workflow_runs().iter().any(|r| r.id == first.id && r.status != "running")).await;
+    let run = e.workflow_runs().into_iter().find(|r| r.id == first.id).unwrap();
+    assert_eq!(run.status, "failed", "{run:?}");
+
+    // A team named by a step, even an inline one, cannot be deleted from under the workflow.
+    e.save_workflow(wf("usa", "squadra")).unwrap();
+    let err = e.delete_team("squadra").unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)) && err.to_string().contains("usa"), "{err}");
+    e.delete_workflow("usa").unwrap();
+    e.delete_team("squadra").unwrap();
+}
+
 fn simple_workflow(id: &str, steps: serde_json::Value) -> WorkflowDef {
     serde_json::from_value(json!({"id": id, "name": id, "enabled": false, "trigger": {"kind": "manual"}, "inputs": {}, "steps": steps}))
         .unwrap()

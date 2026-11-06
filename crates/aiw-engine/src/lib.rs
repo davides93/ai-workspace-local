@@ -134,7 +134,7 @@ pub const MAX_TITLE_CHARS: usize = 200;
 /// Prefix of the ids of remote agents (`remote:<id>`) in teams and sub-agent lists.
 pub const REMOTE_PREFIX: &str = "remote:";
 /// Prefix of a session's agent id that points at a team (`team:<id>`).
-pub const TEAM_PREFIX: &str = "team:";
+pub const TEAM_PREFIX: &str = aiw_core::api::TEAM_AGENT_PREFIX;
 
 fn random_digits(n: usize) -> String {
     let u = uuid::Uuid::new_v4().as_u128();
@@ -781,6 +781,19 @@ impl Engine {
     }
     pub fn delete_team(&self, id: &str) -> Result<()> {
         let team = self.team(id)?;
+        let used_by: Vec<String> = self
+            .workflows()?
+            .into_iter()
+            .filter(|w| w.steps.iter().flat_map(|s| s.with_inner()).any(|s| matches!(s, WorkflowStep::Team { team: t, .. } if t == id)))
+            .map(|w| w.name)
+            .collect();
+        if !used_by.is_empty() {
+            return Err(Error::Conflict(format!(
+                "Il team «{}» è usato dai workflow: {}. Modificali prima di eliminarlo.",
+                team.name,
+                used_by.join(", ")
+            )));
+        }
         self.0.store.delete_doc("team", id)?;
         self.audit_user("team.delete", &format!("{} ({id})", team.name));
         Ok(())
