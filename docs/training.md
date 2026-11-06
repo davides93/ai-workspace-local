@@ -116,3 +116,26 @@ gli addestramenti con il log e gli adapter.
   `adapter_config.json` per MLX; `adapter_config.json` e i pesi per PEFT).
 - I log e i file di configurazione dei job stanno in `~/.aiw/train/<id>/`; il file di configurazione
   per gli script TRL è leggibile solo dall'utente.
+
+## DPO dalle coppie di preferenza
+
+DPO insegna al modello a preferire una risposta a un'altra. Serve il trainer `trl` o `unsloth`
+(non mlx-lm). Il dataset è fatto di coppie `{"prompt": [messaggi], "chosen": "…", "rejected": "…"}`:
+
+- **feedback**: la stessa domanda con una risposta col pollice in su e una col pollice in giù. Può
+  essere la stessa sessione dopo una rigenerazione, o sessioni diverse con lo stesso ultimo messaggio
+  dell'utente (maiuscole e spaziatura non contano). Il prompt è la conversazione fino a quel messaggio.
+- **eval**: i tentativi di un task nei report indicati (`--eval-report`), eseguiti con `--repeat`, dove
+  uno è riuscito e uno fallito.
+
+Servono almeno 10 coppie; i segreti sono mascherati come per l'SFT.
+
+```
+aiw train dpo --base Qwen/Qwen3-4B --name "Operator preferenze"
+aiw train dpo --base Qwen/Qwen3-4B --source eval --eval-report evr_… --iters 100
+```
+
+Le opzioni sono quelle di `aiw train sft` (`--dataset`, `--iters`, `--rank`, `--lr`, `--eval`…).
+Nella UI scegli «DPO» nel dataset e nell'addestramento. Lo script `trl_train.py` usa `DPOTrainer`
+con un adapter LoRA: il modello di riferimento è il modello base senza adapter. L'adapter è in
+formato PEFT.

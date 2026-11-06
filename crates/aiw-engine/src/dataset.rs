@@ -126,6 +126,7 @@ impl Engine {
     pub fn build_dataset(&self, spec: &DatasetSpec) -> Result<DatasetInfo> {
         let (examples, sources) = match spec.method.as_str() {
             "sft" => self.sft_examples(spec)?,
+            "dpo" => self.dpo_examples(spec)?,
             other => return Err(Error::Invalid(format!("metodo «{other}» sconosciuto: usa sft, dpo o grpo"))),
         };
         self.write_dataset(spec, examples, sources)
@@ -209,6 +210,144 @@ impl Engine {
         Ok(())
     }
 
+    // ------------------------------------------------------------------ DPO
+    /// Preference pairs: the same prompt with an answer rated up and one rated down (in one session
+    /// after a regeneration, or in different sessions with the same user message), plus the repeated
+    /// attempts of an evaluation task where one passed and one failed.
+    fn dpo_examples(&self, spec: &DatasetSpec) -> Result<(Vec<Example>, Vec<String>)> {
+        let mut sources: Vec<String> = spec.sources.clone();
+        if sources.is_empty() {
+            sources.push("feedback".into());
+            if !spec.eval_reports.is_empty() {
+                sources.push("eval".into());
+            }
+        }
+        for s in &sources {
+            if !matches!(s.as_str(), "feedback" | "eval") {
+                return Err(Error::Invalid(format!("sorgente «{s}» sconosciuta per dpo: usa feedback o eval")));
+            }
+        }
+        sources.sort();
+        sources.dedup();
+        let mut out = vec![];
+        if sources.iter().any(|s| s == "feedback") {
+            out.extend(self.feedback_pairs(spec)?);
+        }
+        if sources.iter().any(|s| s == "eval") {
+            out.extend(self.eval_pairs(spec)?);
+        }
+        if let Some(limit) = spec.limit {
+            out.truncate(limit);
+        }
+        Ok((out, sources))
+    }
+
+    fn feedback_pairs(&self, spec: &DatasetSpec) -> Result<Vec<Example>> {
+        let store = &self.0.store;
+        let since = spec.since.as_deref().map(|s| crate::traces::parse_bound(s, false, "since")).transpose()?;
+        let until = spec.until.as_deref().map(|s| crate::traces::parse_bound(s, true, "until")).transpose()?;
+        let redactor = Redactor::new(crate::traces::mcp_secret_values(store));
+        // Rated answers grouped by the normalized user message they answer.
+        let mut groups: std::collections::BTreeMap<String, (Vec<Answer>, Vec<Answer>)> = Default::default();
+        for s in store.all_sessions()? {
+            if spec.agent.as_deref().is_some_and(|a| a != s.agent_id) {
+                continue;
+            }
+            if since.is_some() || until.is_some() {
+                let Ok(updated) = chrono::DateTime::parse_from_rfc3339(&s.updated_at).map(|t| t.with_timezone(&chrono::Utc)) else {
+                    continue;
+                };
+                if since.is_some_and(|b| updated < b) || until.is_some_and(|b| updated > b) {
+                    continue;
+                }
+            }
+            let ratings = store.session_feedback(&s.id)?;
+            if ratings.is_empty() {
+                continue;
+            }
+            let stored = store.messages(&s.id)?;
+            let convo: Vec<_> = stored.iter().filter(|m| !crate::traces::is_note(m)).collect();
+            for (i, m) in convo.iter().enumerate() {
+                let Some(f) = ratings.iter().find(|f| f.message_id == m.id && f.rating != 0) else { continue };
+                if m.role != "assistant" || m.tool_calls.as_ref().is_some_and(|t| !t.is_empty()) || m.content.trim().is_empty() {
+                    continue;
+                }
+                let Some(last_user) = convo[..i].iter().rposition(|x| x.role == "user") else { continue };
+                // The prompt is the conversation up to the last user message, tools included.
+                let prompt: Vec<Value> = convo[..=last_user]
+                    .iter()
+                    .map(|x| {
+                        let v = serde_json::to_value(x).unwrap_or(Value::Null);
+                        let mut c = chat_message(&v);
+                        c["content"] = json!(redactor.apply(x.content.as_str()));
+                        c
+                    })
+                    .collect();
+                let key = normalize(&convo[last_user].content);
+                if key.is_empty() {
+                    continue;
+                }
+                let answer = Answer { prompt, text: redactor.apply(&m.content) };
+                let entry = groups.entry(key).or_default();
+                if f.rating > 0 {
+                    entry.0.push(answer);
+                } else {
+                    entry.1.push(answer);
+                }
+            }
+        }
+        let mut out = vec![];
+        for (key, (up, down)) in groups {
+            // Equal answers are not a preference.
+            for (c, r) in up.iter().zip(down.iter()).filter(|(c, r)| c.text.trim() != r.text.trim()) {
+                out.push(pair_example(&format!("feedback:{key}"), &c.prompt, &c.text, &r.text, ""));
+            }
+        }
+        Ok(out)
+    }
+
+    /// One pair per task of the reports that has an attempt that passed and one that failed.
+    fn eval_pairs(&self, spec: &DatasetSpec) -> Result<Vec<Example>> {
+        if spec.eval_reports.is_empty() {
+            return Err(Error::Invalid(
+                "la sorgente eval richiede i report di valutazione (con --repeat) da cui prendere le coppie".into(),
+            ));
+        }
+        let redactor = Redactor::new(crate::traces::mcp_secret_values(&self.0.store));
+        let mut out = vec![];
+        for report_id in &spec.eval_reports {
+            let report = self.eval_report(report_id)?;
+            let suite = self.eval_suite(&report.suite_id).map_err(|_| {
+                Error::Invalid(format!("la suite «{}» del report {report_id} non esiste più: servono i prompt dei task", report.suite_id))
+            })?;
+            let agent = report.agent.clone().or_else(|| suite.agent.clone()).unwrap_or_default();
+            let mut ids: Vec<&str> = report.tasks.iter().map(|t| t.task_id.as_str()).collect();
+            ids.sort();
+            ids.dedup();
+            for task_id in ids {
+                let Some(task) = suite.task(task_id) else { continue };
+                let answers = |passed: bool| -> Vec<String> {
+                    report
+                        .tasks
+                        .iter()
+                        .filter(|t| t.task_id == task_id && t.passed == passed)
+                        .filter_map(|t| t.run_id.as_ref())
+                        .map(|r| final_text(&self.run_events(r)))
+                        .filter(|a| !a.trim().is_empty())
+                        .collect()
+                };
+                let prompt = vec![json!({"role": "user", "content": redactor.apply(&task.prompt)})];
+                for (c, r) in answers(true).iter().zip(answers(false).iter()).filter(|(c, r)| c.trim() != r.trim()) {
+                    let (c, r) = (redactor.apply(c), redactor.apply(r));
+                    let mut ex = pair_example(&format!("eval:{report_id}:{task_id}"), &prompt, &c, &r, &agent);
+                    ex.agent = agent.clone();
+                    out.push(ex);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     // ------------------------------------------------------------------ SFT
     fn sft_examples(&self, spec: &DatasetSpec) -> Result<(Vec<Example>, Vec<String>)> {
         let mut sources: Vec<String> = spec.sources.clone();
@@ -275,6 +414,33 @@ impl Engine {
             }
         }
         Ok(out)
+    }
+}
+
+/// A rated answer with the conversation that led to it.
+struct Answer {
+    prompt: Vec<Value>,
+    text: String,
+}
+
+/// A user message with the case and the spacing taken out, to tell when two sessions asked the same thing.
+fn normalize(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// A line of a DPO dataset. The key depends on the content, so the split is stable.
+fn pair_example(origin: &str, prompt: &[Value], chosen: &str, rejected: &str, agent: &str) -> Example {
+    let mut h = Sha256::new();
+    for part in [chosen, rejected] {
+        h.update(part.as_bytes());
+        h.update([0]);
+    }
+    h.update(serde_json::to_string(prompt).unwrap_or_default().as_bytes());
+    let digest = format!("{:x}", h.finalize());
+    Example {
+        key: format!("{origin}:{}", &digest[..16]),
+        value: json!({"prompt": prompt, "chosen": chosen, "rejected": rejected}),
+        agent: agent.to_string(),
     }
 }
 
@@ -350,5 +516,15 @@ mod tests {
         let events = vec![ev(0, "m1", "Cerco"), ev(1, "m2", "Ecco "), ev(2, "m2", "fatto")];
         assert_eq!(final_text(&events), "Ecco fatto");
         assert_eq!(final_text(&[]), "");
+    }
+
+    #[test]
+    fn pairs_depend_on_their_content_and_user_messages_are_normalized() {
+        let prompt = vec![msg("user", "ciao")];
+        let a = pair_example("x", &prompt, "si", "no", "");
+        assert_eq!(a.key, pair_example("x", &prompt, "si", "no", "").key);
+        assert_ne!(a.key, pair_example("x", &prompt, "no", "si", "").key);
+        assert_eq!(a.value["chosen"], "si");
+        assert_eq!(normalize("  Che   ORA è? "), "che ora è?");
     }
 }

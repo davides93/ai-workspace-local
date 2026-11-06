@@ -167,6 +167,8 @@ enum TrainCmd {
     Install { id: String },
     /// Addestra un adapter LoRA con SFT sulle conversazioni approvate (pollice in su, riuscite o task superati)
     Sft(Box<TrainArgs>),
+    /// Addestra un adapter LoRA con DPO sulle coppie di preferenza (pollice in su e in giù sullo stesso messaggio, task di eval ripetuti)
+    Dpo(Box<TrainArgs>),
     /// Elenca gli addestramenti
     Jobs,
     /// Mostra il log di un addestramento
@@ -582,6 +584,7 @@ async fn train_run(engine: &Engine, method: &str, a: TrainArgs, reward_suite: Op
 async fn train_cmd(engine: &Engine, cmd: TrainCmd) -> Result<()> {
     match cmd {
         TrainCmd::Sft(a) => train_run(engine, "sft", *a, None).await?,
+        TrainCmd::Dpo(a) => train_run(engine, "dpo", *a, None).await?,
         TrainCmd::Jobs => {
             for j in engine.train_jobs()? {
                 let pct = j.progress.map(|p| format!("{:.0}%", p * 100.0)).unwrap_or_default();

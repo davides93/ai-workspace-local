@@ -6,7 +6,7 @@ AIW lancia questo script con un file di configurazione JSON:
     python trl_train.py --config <cartella del job>/config.json
 
 Il file di configurazione contiene:
-    method        "sft" (poi "dpo" e "grpo")
+    method        "sft" o "dpo" (poi "grpo")
     backend       "trl" oppure "unsloth"
     base_model    cartella locale o repository Hugging Face del modello base
     dataset_dir   cartella con train.jsonl e valid.jsonl
@@ -173,7 +173,55 @@ def run_sft(cfg):
     write_metrics(cfg, metrics)
 
 
-METHODS = {"sft": run_sft}
+def as_preference_row(row):
+    """Una riga di AIW (`prompt` = messaggi, `chosen` e `rejected` = testo) nel formato conversazionale di TRL."""
+    return {
+        "prompt": row["prompt"],
+        "chosen": [{"role": "assistant", "content": row["chosen"]}],
+        "rejected": [{"role": "assistant", "content": row["rejected"]}],
+    }
+
+
+def run_dpo(cfg):
+    from datasets import Dataset
+    from transformers import TrainerCallback
+    from trl import DPOConfig, DPOTrainer
+
+    rank = int(cfg.get("rank") or DEFAULT_RANK)
+    train_file, valid_file = dataset_files(cfg)
+    train = Dataset.from_list([as_preference_row(r) for r in load_jsonl(train_file)])
+    valid = Dataset.from_list([as_preference_row(r) for r in load_jsonl(valid_file)]) if valid_file else None
+    model, tokenizer, peft_config = load_model_for_peft(cfg, rank)
+    args = common_args(cfg)
+    args["beta"] = float(cfg.get("beta") or 0.1)
+    if valid is not None:
+        args["eval_strategy"] = "epoch" if not cfg.get("iters") else "no"
+    callback = make_progress_callback(TrainerCallback)
+    # Con un adapter LoRA il modello di riferimento è il modello base senza adapter: nessuna copia in memoria.
+    trainer = DPOTrainer(
+        model=model,
+        args=DPOConfig(**args),
+        train_dataset=train,
+        eval_dataset=valid,
+        processing_class=tokenizer,
+        peft_config=peft_config,
+        callbacks=[callback],
+    )
+    started = time.time()
+    result = trainer.train()
+    trainer.save_model(cfg["output_dir"])
+    tokenizer.save_pretrained(cfg["output_dir"])
+    metrics = {
+        "train_loss": callback.last_loss if callback.last_loss is not None else result.training_loss,
+        "steps": int(trainer.state.global_step),
+        "duration_s": round(time.time() - started, 1),
+    }
+    if callback.last_val is not None:
+        metrics["val_loss"] = callback.last_val
+    write_metrics(cfg, metrics)
+
+
+METHODS = {"sft": run_sft, "dpo": run_dpo}
 
 
 def main():

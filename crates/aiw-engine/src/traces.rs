@@ -160,7 +160,7 @@ pub(crate) fn mcp_secret_values(store: &Store) -> Vec<String> {
 
 /// `since`/`until` as instants. A bare date means the whole day (UTC): the start for `since`,
 /// the last millisecond for `until`.
-fn parse_bound(s: &str, end_of_day: bool, what: &str) -> Result<DateTime<Utc>> {
+pub(crate) fn parse_bound(s: &str, end_of_day: bool, what: &str) -> Result<DateTime<Utc>> {
     let s = s.trim();
     if let Ok(t) = DateTime::parse_from_rfc3339(s) {
         return Ok(t.with_timezone(&Utc));
@@ -207,7 +207,7 @@ fn cites(set: &GlobSet, text: &str) -> bool {
 }
 
 /// Is this message an internal note rather than part of the conversation?
-fn is_note(m: &ChatMessage) -> bool {
+pub(crate) fn is_note(m: &ChatMessage) -> bool {
     match m.name.as_deref() {
         Some(n) if n == BLOCKED_PROMPT_MESSAGE || n == RUN_ERROR_MESSAGE => true,
         Some(n) if n == aiw_agent::runner::SELF_CHECK_NAME || n == aiw_agent::runner::FORMAT_CHECK_NAME => true,

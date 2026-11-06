@@ -9,7 +9,14 @@ export const MIN_EXAMPLES = 10;
 export const METHOD_LABEL: Record<TrainMethod, string> = { sft: "SFT", dpo: "DPO", grpo: "GRPO" };
 
 /** The methods the page offers. */
-export const METHODS: TrainMethod[] = ["sft"];
+export const METHODS: TrainMethod[] = ["sft", "dpo"];
+
+/** Where the examples of each method can come from (GRPO takes its prompts from a suite instead). */
+export const METHOD_SOURCES: Record<TrainMethod, string[]> = {
+  sft: ["feedback", "succeeded", "eval"],
+  dpo: ["feedback", "eval"],
+  grpo: [],
+};
 
 export const METHOD_HINT: Record<TrainMethod, string> = {
   sft: "Impara dalle conversazioni approvate.",
@@ -21,6 +28,12 @@ export const SOURCE_LABEL: Record<string, string> = {
   feedback: "Pollice in su",
   succeeded: "Sessioni riuscite",
   eval: "Task superati nelle valutazioni",
+};
+
+/** What a source means for DPO: a pair needs both sides. */
+export const DPO_SOURCE_LABEL: Record<string, string> = {
+  feedback: "Pollice in su e in giù sulla stessa domanda",
+  eval: "Tentativi riusciti e falliti degli stessi task (valutazioni con ripetizioni)",
 };
 
 /** The job is still going: the page polls it. */
@@ -85,16 +98,16 @@ export const blankDatasetForm = (method: TrainMethod = "sft"): DatasetForm => ({
 export function datasetSpec(f: DatasetForm): { spec: DatasetSpec; error?: undefined } | { spec?: undefined; error: string } {
   const limit = f.limit.trim();
   if (limit && !(Number.isInteger(Number(limit)) && Number(limit) >= 1)) return { error: "Il limite deve essere un numero intero da 1 in su." };
-  if (f.method === "sft" && f.sources.length === 0) return { error: "Scegli almeno una sorgente." };
+  if (METHOD_SOURCES[f.method].length > 0 && f.sources.length === 0) return { error: "Scegli almeno una sorgente." };
   const reports = f.evalReports.split(/[\s,]+/).filter(Boolean);
-  if (f.sources.includes("eval") && reports.length === 0) return { error: "Per i task superati indica almeno un report di valutazione." };
+  if (f.sources.includes("eval") && reports.length === 0) return { error: "Per la sorgente delle valutazioni indica almeno un report di valutazione." };
   const spec: DatasetSpec = { method: f.method };
   if (f.name.trim()) spec.name = f.name.trim();
   if (f.agent) spec.agent = f.agent;
   if (f.since.trim()) spec.since = f.since.trim();
   if (f.until.trim()) spec.until = f.until.trim();
   if (limit) spec.limit = Number(limit);
-  if (f.method === "sft") spec.sources = f.sources;
+  if (METHOD_SOURCES[f.method].length > 0) spec.sources = f.sources;
   if (reports.length > 0) spec.eval_reports = reports;
   return { spec };
 }

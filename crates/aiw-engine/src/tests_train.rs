@@ -401,3 +401,110 @@ async fn a_job_interrupted_by_a_restart_is_failed() {
     assert_eq!(j.status, "failed");
     assert!(j.error.unwrap().contains("interrotto"));
 }
+
+// ------------------------------------------------------------------ DPO
+
+/// A session where one question got a good answer and a rejected one (a regeneration).
+fn regenerated_session(e: &Engine, question: &str, good: &str, bad: &str) {
+    let s = e.create_session("operator", None).unwrap();
+    let msg = |role: &str, content: &str| ChatMessage {
+        id: new_id("msg"),
+        role: role.into(),
+        content: content.into(),
+        reasoning: None,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+        created_at: now_rfc3339(),
+    };
+    let (q, down, up) = (msg("user", question), msg("assistant", bad), msg("assistant", good));
+    let (down_id, up_id) = (down.id.clone(), up.id.clone());
+    e.0.store.append_messages(&s.id, &[q, down, up]).unwrap();
+    e.set_feedback(&s.id, &down_id, -1, None).unwrap();
+    e.set_feedback(&s.id, &up_id, 1, None).unwrap();
+}
+
+#[tokio::test]
+async fn a_dpo_dataset_pairs_good_and_rejected_answers_to_the_same_question() {
+    let (e, _d, _w) = engine(vec![]).await;
+    let dpo = |sources: Vec<String>| DatasetSpec { method: "dpo".into(), sources, ..Default::default() };
+    for n in 0..9 {
+        regenerated_session(&e, &format!("domanda {n}"), "risposta buona", "risposta scartata");
+    }
+    let err = e.build_dataset(&dpo(vec![])).unwrap_err();
+    assert!(err.to_string().contains("almeno 10 coppie") && err.to_string().contains("ne ho trovati 9"), "{err}");
+
+    regenerated_session(&e, "domanda 9", "la chiave è sk-abcdefghijklmnop1234567890", "no");
+    // Answers to different questions make no pair.
+    rated_session(&e, 77, Some(1), "ok chiaro");
+    rated_session(&e, 78, Some(-1), "ok confuso");
+    let info = e.build_dataset(&dpo(vec![])).unwrap();
+    assert_eq!((info.method.as_str(), info.examples), ("dpo", 10));
+    assert_eq!(info.sources, vec!["feedback"]);
+
+    let all = format!(
+        "{}{}",
+        std::fs::read_to_string(format!("{}/train.jsonl", info.path)).unwrap(),
+        std::fs::read_to_string(format!("{}/valid.jsonl", info.path)).unwrap()
+    );
+    assert!(!all.contains("sk-abcdefghij"), "secrets are masked");
+    let first: Value = serde_json::from_str(all.lines().next().unwrap()).unwrap();
+    assert_eq!(first["prompt"][0]["role"], "user");
+    assert!(first["chosen"].is_string() && first["rejected"].is_string());
+    assert_ne!(first["chosen"], first["rejected"]);
+
+    // The same question (spacing and case aside) rated in another session makes one more pair.
+    regenerated_session(&e, "Domanda   0", "altra buona", "altra scartata");
+    assert_eq!(e.build_dataset(&dpo(vec![])).unwrap().examples, 11);
+    assert!(matches!(e.build_dataset(&dpo(vec!["succeeded".into()])), Err(Error::Invalid(_))));
+    assert!(e.build_dataset(&dpo(vec!["eval".into()])).unwrap_err().to_string().contains("report"));
+}
+
+/// Like the fake MLX trainer, but for the TRL script: it reads the job configuration and writes a PEFT adapter.
+#[cfg(unix)]
+fn fake_trl_trainer(e: &Engine) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = e.0.dirs.root.join("pyenv").join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = r#"#!/bin/sh
+if [ "$1" = "-c" ]; then exit 0; fi
+CFG="$3"
+OUT=$(sed -n 's/.*"output_dir": "\(.*\)",/\1/p' "$CFG")
+METHOD=$(sed -n 's/.*"method": "\(.*\)",/\1/p' "$CFG")
+echo "metodo $METHOD"
+echo 'AIW_PROGRESS {"step":1,"total":2,"loss":0.9}'
+echo 'AIW_PROGRESS {"step":2,"total":2,"loss":0.4}'
+mkdir -p "$OUT"
+echo weights > "$OUT/adapter_model.safetensors"
+echo '{}' > "$OUT/adapter_config.json"
+"#;
+    let py = bin.join("python");
+    std::fs::write(&py, script).unwrap();
+    std::fs::set_permissions(&py, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dpo_job_runs_on_trl_and_mlx_cannot_do_it() {
+    let (e, _d, _w) = engine(vec![]).await;
+    e.set_device(device("linux", "x86_64", "m", 64, vec![("cuda", Some(24)), ("cpu", None)]));
+    fake_trl_trainer(&e);
+    for n in 0..10 {
+        regenerated_session(&e, &format!("domanda {n}"), "buona", "scartata");
+    }
+    let ds = e.build_dataset(&DatasetSpec { method: "dpo".into(), ..Default::default() }).unwrap();
+    let req = TrainJobRequest { method: "dpo".into(), ..sft_request(&ds.id, "org/modello") };
+    let err = e.start_train_job(TrainJobRequest { trainer: Some("mlx-lm-lora".into()), ..req.clone() }).await.unwrap_err();
+    assert!(matches!(err, Error::Unsupported(_)), "{err}");
+
+    let job = e.start_train_job(req).await.unwrap();
+    assert_eq!(job.trainer, "trl");
+    let done = wait_job(&e, &job.id).await;
+    assert_eq!(done.status, "succeeded", "{:?}", done.error);
+    let cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(e.0.dirs.train_jobs().join(&job.id).join("config.json")).unwrap()).unwrap();
+    assert_eq!(cfg["method"], "dpo");
+    assert!(e.train_job_log(&job.id, 10).unwrap().join("\n").contains("metodo dpo"));
+    let a = e.adapter(done.adapter_id.as_deref().unwrap()).unwrap();
+    assert_eq!((a.method.as_str(), a.format.as_str()), ("dpo", "peft"));
+}

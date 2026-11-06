@@ -6,7 +6,7 @@ import { errorMessage } from "../../../shared/lib/errors";
 import type { DatasetInfo, TrainDoctor, TrainMethod } from "../../../shared/api/types";
 import { useAgentChoices } from "../../workflows/api";
 import { useBuildDataset, useDeleteDataset } from "../api";
-import { blankDatasetForm, datasetSpec, METHOD_HINT, METHOD_LABEL, METHODS, MIN_EXAMPLES, SOURCE_LABEL, type DatasetForm } from "../model/training";
+import { blankDatasetForm, datasetSpec, METHOD_HINT, DPO_SOURCE_LABEL, METHOD_LABEL, METHOD_SOURCES, METHODS, MIN_EXAMPLES, SOURCE_LABEL, type DatasetForm } from "../model/training";
 
 function BuildDialog({ onClose }: { onClose: () => void }) {
   const agents = useAgentChoices();
@@ -30,16 +30,16 @@ function BuildDialog({ onClose }: { onClose: () => void }) {
           Servono almeno {MIN_EXAMPLES} esempi. I segreti nelle conversazioni (chiavi, token) vengono mascherati prima di scrivere i file.
         </p>
         <Field label="Metodo" htmlFor="ds-method" hint={METHOD_HINT[f.method]}>
-          <Select id="ds-method" value={f.method} onChange={(e) => set("method", e.target.value as TrainMethod)}>
+          <Select id="ds-method" value={f.method} onChange={(e) => { const m = e.target.value as TrainMethod; setF((x) => ({ ...x, method: m, sources: x.sources.filter((s) => METHOD_SOURCES[m].includes(s)).length ? x.sources.filter((s) => METHOD_SOURCES[m].includes(s)) : METHOD_SOURCES[m].slice(0, 1) })); }}>
             {METHODS.map((m) => <option key={m} value={m}>{METHOD_LABEL[m]}</option>)}
           </Select>
         </Field>
         <Field label="Nome" htmlFor="ds-name" hint="Facoltativo."><Input id="ds-name" value={f.name} onChange={(e) => set("name", e.target.value)} autoComplete="off" /></Field>
-        {f.method === "sft" && (
+        {METHOD_SOURCES[f.method].length > 0 && (
           <fieldset className="tr-sources">
-            <legend>Da dove prendere gli esempi</legend>
-            {Object.entries(SOURCE_LABEL).map(([id, label]) => (
-              <label key={id}><input type="checkbox" checked={f.sources.includes(id)} onChange={() => toggle(id)} /> {label}</label>
+            <legend>{f.method === "dpo" ? "Da dove prendere le coppie" : "Da dove prendere gli esempi"}</legend>
+            {METHOD_SOURCES[f.method].map((id) => (
+              <label key={id}><input type="checkbox" checked={f.sources.includes(id)} onChange={() => toggle(id)} /> {(f.method === "dpo" ? DPO_SOURCE_LABEL : SOURCE_LABEL)[id]}</label>
             ))}
           </fieldset>
         )}

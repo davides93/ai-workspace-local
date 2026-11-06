@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TrainDoctor, TrainerInfo } from "../../../shared/api/types";
-import { blankDatasetForm, blankJobForm, datasetSpec, isActive, jobPercent, jobRequest, methodBlocker, metricsLine, metricText, readyTrainers, adapterRuntime } from "./training";
+import { blankDatasetForm, blankJobForm, datasetSpec, METHOD_SOURCES, METHODS, isActive, jobPercent, jobRequest, methodBlocker, metricsLine, metricText, readyTrainers, adapterRuntime } from "./training";
 
 const trainer = (id: string, state: TrainerInfo["state"], methods: TrainerInfo["methods"], reason?: string): TrainerInfo => ({
   id, name: id.toUpperCase(), description: "", state, reason, methods, adapter_format: "peft", install_auto: true,
@@ -58,6 +58,11 @@ describe("dataset form", () => {
     expect(datasetSpec(blankDatasetForm()).spec).toEqual({ method: "sft", sources: ["feedback"] });
     const f = { ...blankDatasetForm(), name: " Mio ", agent: "operator", since: "2026-01-01", limit: "50", sources: ["feedback", "eval"], evalReports: "evr_1, evr_2" };
     expect(datasetSpec(f).spec).toEqual({ method: "sft", name: "Mio", agent: "operator", since: "2026-01-01", limit: 50, sources: ["feedback", "eval"], eval_reports: ["evr_1", "evr_2"] });
+  });
+  it("offers DPO the sources a pair can come from", () => {
+    expect(METHODS).toContain("dpo");
+    expect(METHOD_SOURCES.dpo).toEqual(["feedback", "eval"]);
+    expect(datasetSpec(blankDatasetForm("dpo")).spec).toEqual({ method: "dpo", sources: ["feedback"] });
   });
   it("catches the mistakes the engine would refuse", () => {
     expect(datasetSpec({ ...blankDatasetForm(), limit: "0" }).error).toMatch(/limite/);
