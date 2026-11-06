@@ -206,6 +206,7 @@ impl Engine {
         .await;
         if let Ok(report) = &result {
             self.save_eval_report(report);
+            self.rewards_from_report(suite, req.agent.as_deref(), req.profile.as_deref(), report);
         }
         result
     }

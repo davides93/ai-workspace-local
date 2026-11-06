@@ -1,6 +1,7 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
 pub mod a2a_client;
+mod dataset;
 pub mod defaults;
 pub mod eval;
 mod host;
@@ -9,9 +10,13 @@ mod models;
 pub mod optimize;
 pub mod pairing;
 pub mod peers;
+pub mod reward;
+pub mod routing;
 mod secrets;
 pub mod store;
 pub mod traces;
+pub mod train;
+pub mod train_jobs;
 pub mod update;
 pub mod voice;
 pub mod webhook;
@@ -130,6 +135,8 @@ pub(crate) struct Inner {
     pub pair_guard: Mutex<pairing::PairGuard>,
     pub updater: update::Updater,
     pub current_version: semver::Version,
+    /// Running fine-tuning jobs.
+    pub train: train_jobs::TrainState,
 }
 
 #[derive(Clone)]
@@ -251,6 +258,7 @@ impl Engine {
             pairing: Mutex::new((random_digits(6), Instant::now())),
             pair_guard: Default::default(),
             updater: update::Updater::new(opts.update_api_base.clone(), &updater_os, &updater_arch, updates_dir),
+            train: Default::default(),
             current_version: semver::Version::parse(opts.current_version.as_deref().unwrap_or(aiw_core::VERSION))
                 .map_err(|e| Error::Invalid(format!("versione non valida: {e}")))?,
         }));
@@ -268,6 +276,7 @@ impl Engine {
 
     fn seed(&self) -> Result<()> {
         let s = &self.0.store;
+        self.fail_interrupted_train_jobs()?;
         // Tasks served to other agents expire after a day.
         let _ = s.a2a_cleanup(&(chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
         // Nothing can be running yet: whatever says so was interrupted by a crash or a kill.
@@ -366,6 +375,14 @@ impl Engine {
     }
     pub fn token(&self) -> &str {
         &self.0.token
+    }
+    /// The address this process serves the API on (set by the server when it starts): where a trainer
+    /// reaches the reward endpoint.
+    pub fn local_url(&self) -> Option<String> {
+        self.0.train.local_url.lock().unwrap().clone()
+    }
+    pub fn set_local_url(&self, url: String) {
+        *self.0.train.local_url.lock().unwrap() = Some(url);
     }
     pub fn subscribe(&self) -> broadcast::Receiver<RunEventMsg> {
         self.0.bus.subscribe()
@@ -507,8 +524,9 @@ impl Engine {
                     ps.into_iter().find(|p| p.runtime_id == id && !p.model.is_empty() && model.as_deref().is_none_or(|m| m == p.model))
                 });
                 let ctx = profile.as_ref().and_then(|p| p.params.context);
+                let adapters = profile.as_ref().map(|p| p.params.adapters.clone()).unwrap_or_default();
                 let model = model.or_else(|| profile.map(|p| p.model));
-                self.0.runtimes.start_with(id, model, ctx).await
+                self.0.runtimes.start_for(id, model, ctx, &adapters).await
             }
             "stop" => self.0.runtimes.stop(id).await,
             "refresh" => self.0.runtimes.refresh_one(id).await,
@@ -584,7 +602,9 @@ impl Engine {
         if p.id.trim().is_empty() || p.runtime_id.trim().is_empty() {
             return Err(Error::Invalid("profilo senza id o runtime".into()));
         }
-        self.0.runtimes.manifest(&p.runtime_id)?;
+        let manifest = self.0.runtimes.manifest(&p.runtime_id)?;
+        // A runtime that cannot load an adapter says so now, not at the first message.
+        aiw_runtimes::adapters::validate(&manifest, &p.params.adapters)?;
         self.0.store.put_doc("profile", &p.id, &p)?;
         Ok(p)
     }
@@ -624,6 +644,7 @@ impl Engine {
                 unknown.join(", ")
             )));
         }
+        routing::check_candidates(self, &a)?;
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
     }
@@ -664,6 +685,7 @@ impl Engine {
             )));
         }
         self.0.store.delete_doc("agent", id)?;
+        self.0.store.reset_profile_rewards(id)?;
         self.audit_user("agent.delete", &format!("{} ({id})", agent.name));
         Ok(())
     }
@@ -708,6 +730,7 @@ impl Engine {
                     max_turns: first.max_turns,
                     output_schema: None,
                     budget: None,
+                    candidate_profiles: vec![],
                 }
             }
         };
@@ -1036,6 +1059,7 @@ impl Engine {
             note,
             created_at: now_rfc3339(),
         })?;
+        self.reward_from_feedback(session_id, message_id, saved.run_id.as_deref(), rating);
         if rating < 0 {
             self.maybe_reflect(session_id, saved.run_id.clone(), learning::ReflectTrigger::Feedback);
         }
@@ -1045,6 +1069,7 @@ impl Engine {
     pub fn delete_feedback(&self, session_id: &str, message_id: &str) -> Result<()> {
         self.0.store.session(session_id)?;
         self.0.store.delete_feedback(session_id, message_id)?;
+        self.forget_feedback_reward(session_id, message_id);
         Ok(())
     }
     pub fn session_feedback(&self, session_id: &str) -> Result<Vec<Feedback>> {
@@ -1275,7 +1300,13 @@ impl Engine {
             other => other,
         };
         let (agent, team) = self.session_agent(&session.agent_id).map_err(|e| gone("l'agente o il team", e))?;
-        let profile = self.profile(&agent.inference_profile).map_err(|e| gone("il profilo", e))?;
+        // The router (top-level runs of agents with candidate profiles) may replace the agent's own profile.
+        // A team session keeps the profile of its own agent: its members run with theirs.
+        let routed = if team.is_none() { self.route_profile(&agent) } else { None };
+        let profile = match &routed {
+            Some((p, _)) => p.clone(),
+            None => self.profile(&agent.inference_profile).map_err(|e| gone("il profilo", e))?,
+        };
         let manifest = self.0.runtimes.manifest(&profile.runtime_id).map_err(|e| gone("il runtime", e))?;
         if profile.model.is_empty() && manifest.launch.as_ref().map(|l| l.requires_model).unwrap_or(false) {
             return Err(Error::Invalid(format!(
@@ -1298,6 +1329,13 @@ impl Engine {
             );
         }
         self.0.store.start_run(&run_id, Some(session_id))?;
+        if let Some((p, choice)) = &routed {
+            self.remember_route(&run_id, &agent.id, &p.id);
+            self.emit(
+                &run_id,
+                AgEvent::Custom { name: "aiw.route".into(), value: json!({"profile": choice.profile, "reason": choice.reason}) },
+            );
+        }
         let history = to_msgs(&self.0.store.messages(session_id)?);
         let user_msg = ChatMessage {
             id: new_id("msg"),
@@ -1857,7 +1895,7 @@ impl Engine {
     /// Resolves a gateway model name to a backend and the model to send to it.
     pub async fn gateway_backend(&self, model: &str) -> Result<(Arc<dyn ChatBackend>, String)> {
         if let Ok(p) = self.profile(model) {
-            return Ok((self.0.runtimes.backend_with(&p.runtime_id, Some(&p.model), p.params.context).await?, p.model));
+            return Ok((self.0.runtimes.backend_for(&p.runtime_id, Some(&p.model), p.params.context, &p.params.adapters).await?, p.model));
         }
         if self.0.models.read().unwrap().iter().any(|m| m.id == model) {
             // A bare local GGUF: llama-server when it is there, else the in-process engine.
@@ -1871,7 +1909,7 @@ impl Engine {
             }
         }
         let p = self.fallback_profile()?;
-        Ok((self.0.runtimes.backend_with(&p.runtime_id, Some(&p.model), p.params.context).await?, p.model))
+        Ok((self.0.runtimes.backend_for(&p.runtime_id, Some(&p.model), p.params.context, &p.params.adapters).await?, p.model))
     }
 
     /// Profile used when a gateway client names no known model: `default`, else the profile of the
@@ -2101,7 +2139,11 @@ mod tests_learning;
 #[cfg(test)]
 mod tests_optimize;
 #[cfg(test)]
+mod tests_routing;
+#[cfg(test)]
 mod tests_traces;
+#[cfg(test)]
+mod tests_train;
 #[cfg(test)]
 mod tests_validation;
 #[cfg(test)]

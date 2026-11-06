@@ -60,6 +60,8 @@ impl Store {
              CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, run_id TEXT, rating INTEGER NOT NULL, note TEXT, created_at TEXT NOT NULL);
              CREATE UNIQUE INDEX IF NOT EXISTS feedback_message ON feedback(session_id, message_id);
              CREATE TABLE IF NOT EXISTS eval_runs (id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS train_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, trainer TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, json TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS profile_rewards (agent_id TEXT NOT NULL, key TEXT NOT NULL, profile_id TEXT NOT NULL, reward REAL NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(agent_id, key));
              CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS workflow_state (run_id TEXT PRIMARY KEY, json TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS a2a_tasks (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, session_id TEXT, json TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -459,6 +461,78 @@ impl Store {
         }
         Ok(out)
     }
+    // ---------------- bandit router
+    /// Sets the reward of `key` (a thumb, an evaluation attempt) for a profile of an agent; the same key
+    /// again replaces it, so a changed thumb is counted once.
+    pub fn set_profile_reward(&self, agent_id: &str, profile_id: &str, key: &str, reward: f64) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT OR REPLACE INTO profile_rewards(agent_id,key,profile_id,reward,created_at) VALUES(?1,?2,?3,?4,?5)",
+                params![agent_id, key, profile_id, reward, aiw_core::now_rfc3339()],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+    /// Removes the reward of `key` (a thumb taken back).
+    pub fn delete_profile_reward(&self, key: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute("DELETE FROM profile_rewards WHERE key=?1", params![key]).map_err(db)?;
+        Ok(())
+    }
+    /// `(profile, n, reward_sum)` of an agent.
+    pub fn profile_rewards(&self, agent_id: &str) -> Result<Vec<(String, u64, f64)>> {
+        let c = self.conn.lock().unwrap();
+        let mut st =
+            c.prepare("SELECT profile_id, COUNT(*), SUM(reward) FROM profile_rewards WHERE agent_id=?1 GROUP BY profile_id").map_err(db)?;
+        let rows = st
+            .query_map(params![agent_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, f64>(2)?)))
+            .map_err(db)?;
+        rows.map(|r| r.map_err(db)).collect()
+    }
+    pub fn reset_profile_rewards(&self, agent_id: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute("DELETE FROM profile_rewards WHERE agent_id=?1", params![agent_id]).map_err(db)?;
+        Ok(())
+    }
+
+    // ---------------- fine-tuning jobs
+    /// Inserts or replaces a job; `kind` is the method (`sft`, `dpo`, `grpo`).
+    pub fn save_train_job<T: Serialize>(&self, id: &str, kind: &str, trainer: &str, status: &str, created_at: &str, job: &T) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT OR REPLACE INTO train_jobs(id,kind,trainer,status,created_at,json) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![id, kind, trainer, status, created_at, serde_json::to_string(job)?],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+    pub fn train_job<T: DeserializeOwned>(&self, id: &str) -> Result<Option<T>> {
+        let s: Option<String> = self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT json FROM train_jobs WHERE id=?1", params![id], |r| r.get(0))
+            .optional()
+            .map_err(db)?;
+        s.map(|s| serde_json::from_str(&s).map_err(Error::from)).transpose()
+    }
+    /// The most recent jobs first.
+    pub fn train_jobs<T: DeserializeOwned>(&self, limit: usize) -> Result<Vec<T>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT json FROM train_jobs ORDER BY created_at DESC, rowid DESC LIMIT ?1").map_err(db)?;
+        let rows = st.query_map(params![limit as i64], |r| r.get::<_, String>(0)).map_err(db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(serde_json::from_str(&r.map_err(db)?)?);
+        }
+        Ok(out)
+    }
+    pub fn delete_train_job(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.lock().unwrap().execute("DELETE FROM train_jobs WHERE id=?1", params![id]).map_err(db)? > 0)
+    }
+
     pub fn save_workflow_run(&self, r: &WorkflowRun) -> Result<()> {
         self.conn
             .lock()

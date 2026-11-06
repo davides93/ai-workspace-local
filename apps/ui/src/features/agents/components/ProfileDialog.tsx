@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Button, Dialog, Field, Input, Select, StatusPill } from "../../../shared/ui";
 import { formatBytes, formatContext } from "../../../shared/lib/format";
-import type { InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
+import type { AdapterRef, InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
 import {
   blankProfile, chatRuntimes, compatibleModels, CONTEXT_PRESETS, hasProfileErrors, idForProfile, modelAfterRuntimeChange, normalizeProfile, validateProfile,
   type ProfileIssue,
@@ -45,6 +45,13 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
   const runtime = runtimes.find((r) => r.id === draft.runtime_id);
   const set = (patch: Partial<InferenceProfile>) => setDraft((d) => ({ ...d, ...patch }));
   const setParam = (patch: Partial<InferenceProfile["params"]>) => setDraft((d) => ({ ...d, params: { ...d.params, ...patch } }));
+
+  /** The first adapter of the profile (others set through the API stay as they are). */
+  const setAdapter = (patch: Partial<AdapterRef>) =>
+    setDraft((d) => {
+      const [first, ...rest] = d.params.adapters ?? [];
+      return { ...d, params: { ...d.params, adapters: [{ ...(first ?? { path: "" }), ...patch }, ...rest] } };
+    });
 
   const changeRuntime = (runtime_id: string) => {
     const nextFits = compatibleModels(models, runtime_id);
@@ -120,6 +127,23 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
             </Field>
           </div>
         </fieldset>
+        <Field
+          label="Adapter LoRA" htmlFor="pf-adapter" error={err(issues, "adapters")}
+          hint={runtime?.adapter_format
+            ? runtime.adapter_format === "gguf" ? "Percorso di un file GGUF. Facoltativo." : "Percorso della cartella dell'adapter. Facoltativo."
+            : "Questo runtime non carica adapter da un profilo."}
+        >
+          <div className="copyfield-row">
+            <Input
+              id="pf-adapter" mono value={draft.params.adapters?.[0]?.path ?? ""} disabled={!runtime?.adapter_format && !draft.params.adapters?.length}
+              onChange={(e) => setAdapter({ path: e.target.value })} placeholder={runtime?.adapter_format === "gguf" ? "/percorso/adapter.gguf" : "/percorso/adapter"} autoComplete="off" aria-invalid={!!err(issues, "adapters")}
+            />
+            <Input
+              id="pf-adapter-scale" className="num" type="number" step={0.1} min={0} aria-label="Scala dell'adapter" placeholder="Scala" disabled={!draft.params.adapters?.length}
+              value={num(draft.params.adapters?.[0]?.scale)} onChange={(e) => setAdapter({ scale: parse(e.target.value) })}
+            />
+          </div>
+        </Field>
         <button type="submit" className="sr-only" tabIndex={-1}>Salva</button>
       </form>
     </Dialog>

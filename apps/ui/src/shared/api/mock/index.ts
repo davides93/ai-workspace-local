@@ -3,9 +3,10 @@ import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
+  DatasetSpec, TrainJobRequest,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
@@ -15,6 +16,7 @@ import { demoLesson, lessonProblem, lessons } from "./lessons";
 import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
+import * as training from "./training";
 
 /** A simulated download: files transferred one after the other, then verified. */
 interface MockJob {
@@ -83,6 +85,9 @@ function validateMcp(s: { name: string; transport: string; command?: string; url
 
 /** What the demo "hears", one sentence per request. */
 const VOICE_DEMO_SENTENCES = ["Quali file ho modificato oggi nel workspace?", "Riassumi in due righe il preventivo più recente", "Grazie, per ora è tutto"];
+
+/** Demo statistics of the router, by `agent|profile`. */
+const routingStats = new Map<string, RoutingCandidate>([["operator|balanced", { profile: "balanced", n: 12, reward_sum: 9, mean: 0.75 }]]);
 
 export class MockTransport implements Transport {
   readonly kind = "mock" as const;
@@ -384,11 +389,24 @@ export class MockTransport implements Transport {
     if (!profiles.some((p) => p.id === a.inference_profile)) throw new ApiError(400, `il profilo di inferenza \`${a.inference_profile}\` non esiste`);
     const unknown = a.tools.filter((t) => t !== "*" && !t.startsWith("mcp__") && !tools.some((x) => x.name === t));
     if (unknown.length > 0) throw new ApiError(400, `strumenti sconosciuti: ${unknown.join(", ")} (usa "*" oppure i nomi elencati in Strumenti)`);
+    const dup = (a.candidate_profiles ?? []).find((p, i, all) => all.indexOf(p) !== i);
+    if (dup) throw new ApiError(400, `il profilo candidato \`${dup}\` è elencato due volte`);
+    const missing = (a.candidate_profiles ?? []).find((p) => !profiles.some((x) => x.id === p));
+    if (missing) throw new ApiError(400, `il profilo candidato \`${missing}\` non esiste`);
     const i = agents.findIndex((x) => x.id === a.id);
     if (i >= 0) agents[i] = a; else agents.push(a);
     return a;
   }
 
+  async agentRouting(id: string): Promise<RoutingStats> {
+    const a = agents.find((x) => x.id === id);
+    if (!a) throw new ApiError(404, `agente ${id} non trovato`);
+    return { enabled: false, candidates: (a.candidate_profiles ?? []).filter((p) => profiles.some((x) => x.id === p)).map((p) => routingStats.get(`${id}|${p}`) ?? { profile: p, n: 0, reward_sum: 0 }) };
+  }
+  async resetAgentRouting(id: string) {
+    if (!agents.some((x) => x.id === id)) throw new ApiError(404, `agente ${id} non trovato`);
+    for (const k of [...routingStats.keys()]) if (k.startsWith(`${id}|`)) routingStats.delete(k);
+  }
   async runEvents(runId: string) {
     return structuredClone(this.runLog.get(runId) ?? []);
   }
@@ -965,6 +983,30 @@ export class MockTransport implements Transport {
     return compareReports(await this.evalReport(a), await this.evalReport(b));
   }
 
+  async trainDoctor() { return training.doctor(); }
+  async installTrainer(id: string): Promise<InstallJob> {
+    const t = training.trainers.find((x) => x.id === id);
+    if (!t) throw new ApiError(404, `trainer ${id} non trovato`);
+    if (t.state === "unsupported") throw new ApiError(422, `${t.name} non si può usare qui: ${t.reason ?? ""}`);
+    const job: InstallJob = { runtime_id: id, state: "running", step: 1, steps: 2, log: ["$ python3 -m venv ~/.aiw/pyenv"] };
+    this.installs.set(`trainer:${id}`, job);
+    setTimeout(() => { job.step = 2; job.log.push(`$ python -m pip install ${id}`, "Downloading wheel (312 MB)"); }, 700);
+    setTimeout(() => { job.log.push("✓ Installazione completata"); job.state = "done"; t.state = "ready"; }, 1800);
+    return structuredClone(job);
+  }
+  async trainerInstall(id: string): Promise<InstallJob | null> {
+    const j = this.installs.get(`trainer:${id}`);
+    return j ? structuredClone(j) : null;
+  }
+  async datasets() { return structuredClone(training.datasets); }
+  async buildDataset(spec: DatasetSpec) { return training.buildDataset(spec); }
+  async deleteDataset(id: string) { training.deleteDataset(id); }
+  async trainJobs() { return structuredClone(training.jobs); }
+  async startTrainJob(req: TrainJobRequest) { return training.startJob(req); }
+  async cancelTrainJob(id: string) { return training.cancelJob(id); }
+  async trainJobLog(id: string, lines = 200) { return training.jobLog(id, lines); }
+  async adapters() { return structuredClone(training.adapters); }
+  async deleteAdapter(id: string) { training.deleteAdapter(id); }
   async startPromptOptimization(suiteId: string, req: OptimizeRequest) {
     const suite = evalSuites.find((x) => x.id === suiteId);
     if (!suite) throw new ApiError(404, `suite di valutazione ${suiteId} non trovata`);

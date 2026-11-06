@@ -66,6 +66,24 @@ describe("ids and normalization", () => {
   it("keeps top_p of a profile that has it", () => {
     expect(normalizeProfile(ok({ params: { top_p: 0.95 } })).params).toEqual({ top_p: 0.95 });
   });
+
+  it("keeps the adapters with a path and drops the empty ones", () => {
+    const n = normalizeProfile(ok({ params: { adapters: [{ path: " /a/lora.gguf ", scale: 0.5 }, { path: "  " }, { path: "/a/b.gguf", scale: Number.NaN }] } }));
+    expect(n.params.adapters).toEqual([{ path: "/a/lora.gguf", scale: 0.5 }, { path: "/a/b.gguf" }]);
+    expect(normalizeProfile(ok({ params: { adapters: [{ path: "" }] } })).params.adapters).toBeUndefined();
+  });
+});
+
+describe("adapters in a profile", () => {
+  it("are refused for a runtime that cannot load them, and for a bad scale", () => {
+    const withAdapter = (runtime_id: string, scale?: number) => ok({ runtime_id, params: { adapters: [{ path: "/a/lora", scale }] } });
+    expect(validateProfile(withAdapter("llama-server"), ctx).filter((i) => i.field === "adapters")).toEqual([]);
+    const refused = validateProfile(withAdapter("ollama"), ctx).find((i) => i.field === "adapters");
+    expect(refused).toMatchObject({ level: "error", message: expect.stringContaining("non carica adapter") });
+    expect(hasProfileErrors(validateProfile(withAdapter("llama-server", 0), ctx))).toBe(true);
+    // No adapter, no complaint, whatever the runtime.
+    expect(validateProfile(ok({ runtime_id: "ollama" }), ctx).some((i) => i.field === "adapters")).toBe(false);
+  });
 });
 
 describe("validateProfile", () => {

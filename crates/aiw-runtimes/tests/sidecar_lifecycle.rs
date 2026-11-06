@@ -87,6 +87,7 @@ fn fixture(local_model: Option<(&str, &Path)>) -> Fixture {
             "settings_args": {"ctx_size": ["--ctx", "{value}"]},
             "ready_timeout_s": 20, "requires_model": true
         },
+        "adapters": {"format": "gguf", "args": ["--lora", "{path}"], "max": 2},
         "settings": {"type": "object", "properties": {
             "ctx_size": {"type": "integer", "title": "ctx", "default": 4096, "minimum": 512, "maximum": 1048576}
         }}
@@ -192,5 +193,31 @@ async fn larger_context_does_not_restart_while_requests_are_in_flight() {
     // Idle again: the larger context restarts the sidecar.
     fx.reg.backend_with("fakesrv", Some("m"), Some(16384)).await.unwrap();
     assert_eq!(fx.starts(), 2);
+    fx.reg.stop_all().await;
+}
+
+#[tokio::test]
+async fn a_change_of_adapters_restarts_the_sidecar_and_a_bad_one_never_starts_it() {
+    use aiw_core::api::AdapterRef;
+    let models = tempfile::tempdir().unwrap();
+    let (a, b) = (models.path().join("a.gguf"), models.path().join("b.gguf"));
+    std::fs::write(&a, b"x").unwrap();
+    std::fs::write(&b, b"x").unwrap();
+    let adapter = |p: &Path| vec![AdapterRef { path: p.display().to_string(), scale: None }];
+    let fx = fixture(None);
+    fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&a)).await.unwrap();
+    assert_eq!(fx.starts(), 1);
+    // The same adapters: the process is reused.
+    fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&a)).await.unwrap();
+    assert_eq!(fx.starts(), 1);
+    // Another adapter, then none: each is a restart.
+    fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&b)).await.unwrap();
+    assert_eq!(fx.starts(), 2);
+    fx.reg.backend_for("fakesrv", Some("m"), None, &[]).await.unwrap();
+    assert_eq!(fx.starts(), 3);
+    // A path that is not an adapter is refused before anything is stopped or started.
+    let err = fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&models.path().join("nope.gguf"))).await.err().unwrap();
+    assert!(err.to_string().contains("non esiste"), "{err}");
+    assert_eq!(fx.starts(), 3);
     fx.reg.stop_all().await;
 }

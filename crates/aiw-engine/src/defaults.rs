@@ -16,6 +16,7 @@ pub fn agents() -> Vec<AgentProfile> {
         max_turns: turns,
         output_schema: None,
         budget: None,
+        candidate_profiles: vec![],
     };
     vec![
         a(
@@ -203,6 +204,7 @@ fn profile(description: String, runtime_id: &str, model: &str, ctx: u32) -> Infe
             // The answer must leave room for the conversation in a small window.
             max_tokens: Some(4096.min(ctx / 2)),
             context: Some(ctx),
+            adapters: vec![],
         },
     }
 }

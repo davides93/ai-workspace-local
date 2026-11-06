@@ -65,11 +65,13 @@ export function cleanBudget(b: BudgetLimits | undefined): BudgetLimits | undefin
 /** Form values trimmed and clamped the way the backend will keep them. */
 export function normalizeAgent(a: AgentProfile): AgentProfile {
   const turns = Number.isFinite(a.max_turns) ? Math.round(a.max_turns) : 30;
-  const { budget: _budget, ...rest } = a;
+  const { budget: _budget, candidate_profiles: _candidates, ...rest } = a;
   const budget = cleanBudget(a.budget);
+  const candidates = [...new Set(a.candidate_profiles ?? [])];
   return {
     ...rest,
     ...(budget ? { budget } : {}),
+    ...(candidates.length > 0 ? { candidate_profiles: candidates } : {}),
     name: a.name.trim(),
     description: a.description.trim(),
     system_prompt: a.system_prompt,

@@ -44,19 +44,24 @@ export function idForProfile(name: string, existing: readonly InferenceProfile[]
 /** Empty optional fields are left out so the backend keeps its own defaults. */
 export function normalizeProfile(p: InferenceProfile): InferenceProfile {
   const params: InferenceProfile["params"] = {};
-  const put = <K extends keyof InferenceProfile["params"]>(k: K, v: number | undefined) => {
+  const put = <K extends Exclude<keyof InferenceProfile["params"], "adapters">>(k: K, v: number | undefined) => {
     if (v !== undefined && Number.isFinite(v)) params[k] = v;
   };
   put("temperature", p.params.temperature);
   put("top_p", p.params.top_p);
   put("max_tokens", p.params.max_tokens === undefined ? undefined : Math.round(p.params.max_tokens));
   put("context", p.params.context === undefined ? undefined : Math.round(p.params.context));
+  const adapters = (p.params.adapters ?? [])
+    .map((a) => ({ path: a.path.trim(), scale: a.scale !== undefined && Number.isFinite(a.scale) ? a.scale : undefined }))
+    .filter((a) => a.path !== "")
+    .map((a) => (a.scale === undefined ? { path: a.path } : a));
+  if (adapters.length > 0) params.adapters = adapters;
   const description = p.description?.trim();
   return { ...p, name: p.name.trim(), description: description ? description : undefined, model: p.model.trim(), params };
 }
 
 export interface ProfileIssue {
-  field: "name" | "runtime_id" | "model" | "temperature" | "top_p" | "context" | "max_tokens";
+  field: "name" | "runtime_id" | "model" | "temperature" | "top_p" | "context" | "max_tokens" | "adapters";
   level: "error" | "warn";
   message: string;
 }
@@ -76,6 +81,14 @@ export function validateProfile(p: InferenceProfile, ctx: { runtimes: readonly R
   if (m !== undefined && (!Number.isFinite(m) || m < 1)) issues.push({ field: "max_tokens", level: "error", message: "Indica almeno 1 token di risposta." });
   if (c !== undefined && m !== undefined && Number.isFinite(c) && Number.isFinite(m) && m >= c) {
     issues.push({ field: "max_tokens", level: "warn", message: "La risposta massima è pari o superiore al contesto: non resta spazio per la conversazione." });
+  }
+  const named = (p.params.adapters ?? []).filter((a) => a.path.trim() !== "");
+  const runtime = ctx.runtimes.find((r) => r.id === p.runtime_id);
+  if (named.length > 0 && runtime && !runtime.adapter_format) {
+    issues.push({ field: "adapters", level: "error", message: `${runtime.name} non carica adapter LoRA da un profilo.` });
+  }
+  if ((p.params.adapters ?? []).some((a) => a.scale !== undefined && (!Number.isFinite(a.scale) || a.scale <= 0))) {
+    issues.push({ field: "adapters", level: "error", message: "La scala dell'adapter deve essere un numero maggiore di 0." });
   }
   const model = ctx.models.find((x) => x.id === p.model);
   if (model && p.runtime_id) {

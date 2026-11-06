@@ -1,8 +1,9 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
+  AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
 } from "./types";
@@ -80,6 +81,10 @@ export interface Transport {
   agents(): Promise<AgentProfile[]>;
   saveAgent(a: AgentProfile): Promise<AgentProfile>;
   deleteAgent(id: string): Promise<void>;
+  /** What the bandit router learned about the candidate profiles of an agent. */
+  agentRouting(id: string): Promise<RoutingStats>;
+  /** Forgets it. */
+  resetAgentRouting(id: string): Promise<void>;
   remoteAgents(): Promise<RemoteAgent[]>;
   /** A token equal to `SECRET_MASK` keeps the stored one. */
   saveRemoteAgent(r: RemoteAgent): Promise<RemoteAgent>;
@@ -146,6 +151,23 @@ export interface Transport {
   promptOptimization(id: string): Promise<PromptOptimization>;
   /** Saves the prompt of a variant (index in `variants`) as the agent's system prompt. */
   applyPromptOptimization(id: string, variant: number): Promise<PromptOptimization>;
+
+  /** Device, trainers and what can be trained here. */
+  trainDoctor(): Promise<TrainDoctor>;
+  installTrainer(id: string): Promise<InstallJob>;
+  trainerInstall(id: string): Promise<InstallJob | null>;
+  datasets(): Promise<DatasetInfo[]>;
+  /** The server refuses with the reason when there are too few examples. */
+  buildDataset(spec: DatasetSpec): Promise<DatasetInfo>;
+  deleteDataset(id: string): Promise<void>;
+  trainJobs(): Promise<TrainJob[]>;
+  /** Starts a fine-tuning in the background: the job comes back `queued` and is polled with `trainJobs`. */
+  startTrainJob(req: TrainJobRequest): Promise<TrainJob>;
+  cancelTrainJob(id: string): Promise<TrainJob>;
+  /** The last `lines` lines of the log. */
+  trainJobLog(id: string, lines?: number): Promise<string[]>;
+  adapters(): Promise<AdapterInfo[]>;
+  deleteAdapter(id: string): Promise<void>;
 
   tools(): Promise<ToolInfo[]>;
   setToolEnabled(name: string, enabled: boolean): Promise<void>;

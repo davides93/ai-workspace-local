@@ -123,6 +123,7 @@ mod tests {
                 max_turns: 8,
                 output_schema: None,
                 budget: None,
+                candidate_profiles: vec![],
             },
             profile: InferenceProfile {
                 id: "p".into(),

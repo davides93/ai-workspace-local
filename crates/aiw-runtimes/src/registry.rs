@@ -3,8 +3,9 @@ use crate::manifest::{builtin, Launch, RuntimeManifest};
 use crate::ollama::{self, OllamaBackend};
 use crate::openai::OpenAiBackend;
 use crate::supervisor::{find_binary, LaunchSpec, Supervisor};
+use crate::trainer::{self, TrainerManifest};
 use crate::types::ChatBackend;
-use aiw_core::api::RuntimeInfo;
+use aiw_core::api::{AdapterRef, RuntimeInfo};
 use aiw_core::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -45,6 +46,7 @@ pub struct RuntimeRegistry {
     pyenv: RwLock<PathBuf>,
     /// Guided installations, one per runtime (the last one is kept for the UI).
     installs: StdMutex<HashMap<String, Arc<StdMutex<InstallJob>>>>,
+    trainers: Vec<TrainerManifest>,
 }
 
 impl RuntimeRegistry {
@@ -76,6 +78,7 @@ impl RuntimeRegistry {
             inflight: StdMutex::new(HashMap::new()),
             pyenv: RwLock::new(pyenv),
             installs: StdMutex::new(HashMap::new()),
+            trainers: trainer::builtin(),
         }
     }
 
@@ -357,6 +360,7 @@ impl RuntimeRegistry {
             install_hint: m.install_hint(&self.os),
             install_auto: m.installer_for(&self.os).is_some(),
             homepage: m.homepage.clone(),
+            adapter_format: m.adapters.as_ref().map(|a| a.format.clone()),
         })
     }
 
@@ -374,6 +378,12 @@ impl RuntimeRegistry {
     /// `OLLAMA_CONTEXT_LENGTH`…) for the process that is launched. A server that is already
     /// answering (started outside AIW) is reused as it is.
     pub async fn start_with(&self, id: &str, model: Option<String>, ctx: Option<u32>) -> Result<RuntimeInfo> {
+        self.start_for(id, model, ctx, &[]).await
+    }
+
+    /// [`start_with`](Self::start_with) with the LoRA adapters of the profile: a sidecar that
+    /// runs with other adapters is restarted.
+    pub async fn start_for(&self, id: &str, model: Option<String>, ctx: Option<u32>, adapters: &[AdapterRef]) -> Result<RuntimeInfo> {
         let lock = self.start_lock(id);
         let _guard = lock.lock().await;
         // A healthy sidecar that already serves this model with enough context is reused: a
@@ -383,12 +393,15 @@ impl RuntimeRegistry {
                 let (_, served) = self.supervisor.endpoint(id).await.unwrap_or_default();
                 let served_ctx = self.supervisor.served_ctx(id).await;
                 let single = m.launch.as_ref().map(launch_uses_model).unwrap_or(false);
-                if !needs_restart(single, m.ctx_setting().is_some(), model.as_deref(), served.as_deref(), ctx, served_ctx) {
+                let adapters_changed = m.adapters.is_some() && self.supervisor.served_adapters(id).await != adapters;
+                if !adapters_changed
+                    && !needs_restart(single, m.ctx_setting().is_some(), model.as_deref(), served.as_deref(), ctx, served_ctx)
+                {
                     return self.refresh_one(id).await;
                 }
             }
         }
-        self.start_unlocked(id, model, ctx).await
+        self.start_unlocked(id, model, ctx, adapters).await
     }
 
     fn start_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -400,8 +413,9 @@ impl RuntimeRegistry {
     }
 
     /// The body of [`start_with`](Self::start_with); the caller holds the runtime's start lock.
-    async fn start_unlocked(&self, id: &str, model: Option<String>, ctx: Option<u32>) -> Result<RuntimeInfo> {
+    async fn start_unlocked(&self, id: &str, model: Option<String>, ctx: Option<u32>, adapters: &[AdapterRef]) -> Result<RuntimeInfo> {
         let m = self.manifest(id)?;
+        crate::adapters::validate(&m, adapters)?;
         if !self.supports(&m) {
             return Err(Error::Unsupported(if m.supports_platform(&self.os) {
                 format!("{} {}", m.name, self.unsupported_detail(&m))
@@ -451,6 +465,7 @@ impl RuntimeRegistry {
                             model_path,
                             models_dir: self.models_dir.clone(),
                             ctx,
+                            adapters,
                         },
                         &self.http,
                     )
@@ -487,13 +502,60 @@ impl RuntimeRegistry {
             return Err(Error::Unsupported(format!("{} {}", m.name, self.unsupported_detail(&m))));
         }
         let plan = self.install_plan(id).await?;
+        self.begin_recipe(id, &m.name, plan, m.installer_for(&self.os)).await
+    }
+
+    /// The trainers AIW knows (see [`crate::trainer`]); never part of [`list`](Self::list).
+    pub fn trainers(&self) -> Vec<TrainerManifest> {
+        self.trainers.clone()
+    }
+
+    pub fn trainer(&self, id: &str) -> Result<TrainerManifest> {
+        self.trainers.iter().find(|t| t.id == id).cloned().ok_or_else(|| Error::NotFound(format!("trainer `{id}` non trovato")))
+    }
+
+    /// The Python (managed environment first) that has everything trainer `id` needs, if any.
+    pub async fn trainer_python(&self, id: &str) -> Option<PathBuf> {
+        let t = self.trainer(id).ok()?;
+        self.python_with(&t.detect.python_modules).await
+    }
+
+    /// What installing trainer `id` takes on this machine.
+    pub async fn trainer_install_plan(&self, id: &str) -> Result<InstallPlan> {
+        let t = self.trainer(id)?;
+        let python_ok = match install::system_python() {
+            Some(py) => python_recent_enough(&py).await,
+            None => false,
+        };
+        let brew = self.os != "windows" && install::find_brew_path().is_some();
+        Ok(install::plan_for(&t.id, &t.name, t.installer_for(&self.os), t.install_hint(&self.os), t.homepage.clone(), python_ok, brew))
+    }
+
+    /// [`begin_install`](Self::begin_install) for a trainer. The job is kept under `trainer:<id>`.
+    pub async fn begin_trainer_install(&self, id: &str) -> Result<(Vec<install::Command>, Arc<StdMutex<InstallJob>>)> {
+        let t = self.trainer(id)?;
+        let plan = self.trainer_install_plan(id).await?;
+        self.begin_recipe(&format!("trainer:{id}"), &t.name, plan, t.installer_for(&self.os)).await
+    }
+
+    pub fn trainer_install_job(&self, id: &str) -> Option<InstallJob> {
+        self.install_job(&format!("trainer:{id}"))
+    }
+
+    async fn begin_recipe(
+        &self,
+        key: &str,
+        name: &str,
+        plan: InstallPlan,
+        installer: Option<&crate::manifest::Installer>,
+    ) -> Result<(Vec<install::Command>, Arc<StdMutex<InstallJob>>)> {
         if !plan.automatic {
-            return Err(Error::Unsupported(format!("{}: installazione manuale. {}", m.name, plan.hint.unwrap_or_default())));
+            return Err(Error::Unsupported(format!("{name}: installazione manuale. {}", plan.hint.unwrap_or_default())));
         }
         if let Some(p) = plan.prerequisites.iter().find(|p| !p.ok) {
-            return Err(Error::Unsupported(format!("{} richiede: {}. {}", m.name, p.name, p.hint.clone().unwrap_or_default())));
+            return Err(Error::Unsupported(format!("{name} richiede: {}. {}", p.name, p.hint.clone().unwrap_or_default())));
         }
-        let installer = m.installer_for(&self.os).ok_or_else(|| Error::Unsupported(format!("{}: nessuna ricetta", m.name)))?;
+        let installer = installer.ok_or_else(|| Error::Unsupported(format!("{name}: nessuna ricetta")))?;
         let pyenv = self.pyenv.read().unwrap().clone();
         let venv_exists = install::venv_python(&pyenv).is_file();
         let brew = install::find_brew_path();
@@ -503,11 +565,11 @@ impl RuntimeRegistry {
         };
         let cmds = install::commands(installer, &pyenv, python.as_deref(), brew.as_deref(), venv_exists).map_err(Error::Invalid)?;
         let mut jobs = self.installs.lock().unwrap();
-        if jobs.get(id).is_some_and(|j| j.lock().unwrap().state == InstallState::Running) {
-            return Err(Error::Invalid(format!("{} è già in installazione", m.name)));
+        if jobs.get(key).is_some_and(|j| j.lock().unwrap().state == InstallState::Running) {
+            return Err(Error::Invalid(format!("{name} è già in installazione")));
         }
-        let job = Arc::new(StdMutex::new(InstallJob::new(id, cmds.len())));
-        jobs.insert(id.to_string(), job.clone());
+        let job = Arc::new(StdMutex::new(InstallJob::new(key, cmds.len())));
+        jobs.insert(key.to_string(), job.clone());
         Ok((cmds, job))
     }
 
@@ -589,11 +651,25 @@ impl RuntimeRegistry {
     ///   [`needs_restart`]);
     /// - an in-process engine runs its generations with it ([`ChatBackend::with_context`]).
     pub async fn backend_with(&self, id: &str, model: Option<&str>, ctx: Option<u32>) -> Result<Arc<dyn ChatBackend>> {
+        self.backend_for(id, model, ctx, &[]).await
+    }
+
+    /// [`backend_with`](Self::backend_with) for a profile that names LoRA adapters: a sidecar
+    /// started now loads them, one that runs with other adapters is restarted, and a runtime that
+    /// cannot load adapters refuses (see [`crate::adapters::validate`]).
+    pub async fn backend_for(
+        &self,
+        id: &str,
+        model: Option<&str>,
+        ctx: Option<u32>,
+        adapters: &[AdapterRef],
+    ) -> Result<Arc<dyn ChatBackend>> {
         let bridge = self.bridges.read().unwrap().get(id).cloned();
         if let Some(b) = bridge {
             return Ok(ctx.and_then(|c| b.with_context(c)).unwrap_or(b));
         }
         let m = self.manifest(id)?;
+        crate::adapters::validate(&m, adapters)?;
         let settings = self.settings(id)?;
         let timeout = Duration::from_secs(settings.get("timeout_s").and_then(|v| v.as_u64()).unwrap_or(900));
         let api_key = settings.get("api_key").and_then(|v| v.as_str()).map(String::from);
@@ -608,7 +684,10 @@ impl RuntimeRegistry {
             let single_model = m.launch.as_ref().map(launch_uses_model).unwrap_or(false);
             let supports_ctx = m.ctx_setting().is_some();
             let mut restart = needs_restart(single_model, supports_ctx, model, served.as_deref(), ctx, served_ctx);
-            if restart && !needs_restart(single_model, supports_ctx, model, served.as_deref(), None, served_ctx) {
+            // A different set of adapters is a different model: restart whatever is in flight.
+            let adapters_changed = m.adapters.is_some() && self.supervisor.served_adapters(id).await != adapters;
+            restart |= adapters_changed;
+            if restart && !adapters_changed && !needs_restart(single_model, supports_ctx, model, served.as_deref(), None, served_ctx) {
                 // Only the context grew. Restarting would cut the streams of the requests that
                 // are running right now: serve with the current context and say so.
                 let busy = self.inflight_counter(id).load(Ordering::SeqCst);
@@ -636,10 +715,16 @@ impl RuntimeRegistry {
             "sidecar" => {
                 if let Some(ep) = self.external_endpoint(&m, &settings) {
                     if self.probe_models(&ep, api_key.as_deref()).await.is_some() {
+                        if !adapters.is_empty() {
+                            return Err(Error::Unsupported(format!(
+                                "{} è già attivo fuori da AIW ({ep}): gli adapter si caricano all'avvio, ferma quel server e lascia che lo avvii AIW",
+                                m.name
+                            )));
+                        }
                         return Ok(make_backend(&m, ep, api_key, timeout, None));
                     }
                 }
-                self.start_unlocked(id, model_to_start, ctx).await?;
+                self.start_unlocked(id, model_to_start, ctx, adapters).await?;
                 let (ep, _) = self.supervisor.endpoint(id).await.ok_or_else(|| Error::Runtime(format!("{} non è partito", m.name)))?;
                 Ok(self.sidecar_backend(id, &m, ep, api_key, timeout).await)
             }
@@ -901,6 +986,40 @@ mod tests {
         reg.update_settings("lmstudio", json!({"base_url": fake_ollama().await}).as_object().unwrap().clone()).unwrap();
         let info = reg.refresh_one("lmstudio").await.unwrap();
         assert_eq!(info.loaded_models, vec!["qwen3:4b"]);
+    }
+
+    /// A virtual environment whose `python` only "imports" the modules in `has`.
+    #[cfg(unix)]
+    fn fake_pyenv(dir: &Path, has: &[&str]) {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = format!(
+            "#!/bin/sh\nfor m in $(echo \"$2\" | tr ';' ' ' | sed 's/import //g'); do\n  case \" {} \" in *\" $m \"*) ;; *) exit 1;; esac\ndone\nexit 0\n",
+            has.join(" ")
+        );
+        let py = bin.join("python");
+        std::fs::write(&py, script).unwrap();
+        std::fs::set_permissions(&py, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn trainers_are_detected_in_the_managed_environment_and_are_not_runtimes() {
+        let (reg, dir) = registry("linux");
+        let pyenv = dir.path().join("pyenv");
+        reg.set_pyenv_dir(pyenv.clone());
+        fake_pyenv(&pyenv, &["trl", "peft", "transformers", "datasets"]);
+        let py = reg.trainer_python("trl").await.expect("trl is importable in the fake environment");
+        assert_eq!(py, install::venv_python(&pyenv));
+        assert!(reg.trainer_python("unsloth").await.is_none(), "unsloth is not there");
+        assert!(reg.trainer("nope").is_err());
+        // The trainers do not appear among the runtimes.
+        assert!(reg.list().iter().all(|r| r.kind != "trainer" && reg.trainers().iter().all(|t| t.id != r.id)));
+        assert!(reg.manifest("trl").is_err());
+        // Their installation is planned like a runtime's, with a recipe of its own.
+        let plan = reg.trainer_install_plan("trl").await.unwrap();
+        assert!(plan.automatic && plan.steps.last().unwrap().command.contains("peft"), "{plan:?}");
     }
 
     #[tokio::test]

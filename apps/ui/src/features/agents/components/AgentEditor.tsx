@@ -11,6 +11,7 @@ import { BudgetSection } from "./BudgetSection";
 import { IdentitySection } from "./IdentitySection";
 import { ModelSection } from "./ModelSection";
 import { OutputSection } from "./OutputSection";
+import { RoutingSection } from "./RoutingSection";
 import { SecuritySection } from "./SecuritySection";
 import { ToolPicker } from "./ToolPicker";
 
@@ -105,6 +106,9 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
           </FormSection>
           <FormSection id="model" title="Modello" hint="Quale motore risponde.">
             <ModelSection agent={draft} profiles={profiles.data ?? []} runtimes={runtimes.data ?? []} issues={shown} onChange={change} />
+          </FormSection>
+          <FormSection id="routing" title="Router" hint="Più profili, scelti da quello che funziona meglio.">
+            <RoutingSection agent={draft} savedAgent={isNew ? undefined : saved} profiles={profiles.data ?? []} onChange={change} />
           </FormSection>
           <FormSection id="tools" title="Tool" hint="Cosa può fare oltre a rispondere.">
             <QueryState query={tools}>

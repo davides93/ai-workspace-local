@@ -1,0 +1,73 @@
+[
+  {
+    "id": "mlx-lm-lora",
+    "name": "MLX LM (LoRA)",
+    "vendor": "Apple ML Research",
+    "kind": "trainer",
+    "description": "Fine-tuning LoRA con mlx-lm su Apple Silicon (memoria unificata). Addestra adapter SFT per i modelli in formato MLX.",
+    "platforms": ["macos"],
+    "arch": ["aarch64"],
+    "accelerators": ["metal"],
+    "methods": ["sft"],
+    "adapter_format": "mlx",
+    "detect": { "python_modules": ["mlx_lm"] },
+    "memory": [
+      { "up_to_b": 1.5, "memory_gb": 8 },
+      { "up_to_b": 4, "memory_gb": 16 },
+      { "up_to_b": 8, "memory_gb": 32 },
+      { "up_to_b": 14, "memory_gb": 48 }
+    ],
+    "install": { "macos": "pip install mlx-lm" },
+    "installer": { "macos": { "kind": "pip", "packages": ["mlx-lm"] } },
+    "homepage": "https://github.com/ml-explore/mlx-lm"
+  },
+  {
+    "id": "trl",
+    "name": "TRL + PEFT",
+    "vendor": "Hugging Face",
+    "kind": "trainer",
+    "description": "SFT, DPO e GRPO con LoRA tramite TRL e PEFT su GPU CUDA. Usa lo script di AIW (`trl_train.py`).",
+    "platforms": ["linux", "windows"],
+    "accelerators": ["cuda"],
+    "methods": ["sft", "dpo", "grpo"],
+    "adapter_format": "peft",
+    "min_tier": { "grpo": "l" },
+    "detect": { "python_modules": ["trl", "peft", "transformers", "datasets"] },
+    "memory": [
+      { "up_to_b": 1.5, "memory_gb": 6 },
+      { "up_to_b": 4, "memory_gb": 12 },
+      { "up_to_b": 8, "memory_gb": 24 },
+      { "up_to_b": 14, "memory_gb": 40 }
+    ],
+    "install": { "linux": "pip install trl peft transformers datasets accelerate", "windows": "pip install trl peft transformers datasets accelerate" },
+    "installer": {
+      "linux": { "kind": "pip", "packages": ["trl", "peft", "transformers", "datasets", "accelerate"] },
+      "windows": { "kind": "pip", "packages": ["trl", "peft", "transformers", "datasets", "accelerate"] }
+    },
+    "homepage": "https://github.com/huggingface/trl"
+  },
+  {
+    "id": "unsloth",
+    "name": "Unsloth",
+    "vendor": "Unsloth AI",
+    "kind": "trainer",
+    "description": "Come TRL ma con i kernel di Unsloth: meno memoria e più velocità su GPU CUDA. Facoltativo, usa lo stesso script di AIW.",
+    "platforms": ["linux", "windows"],
+    "accelerators": ["cuda"],
+    "methods": ["sft", "dpo"],
+    "adapter_format": "peft",
+    "detect": { "python_modules": ["unsloth", "trl", "peft"] },
+    "memory": [
+      { "up_to_b": 1.5, "memory_gb": 4 },
+      { "up_to_b": 4, "memory_gb": 8 },
+      { "up_to_b": 8, "memory_gb": 16 },
+      { "up_to_b": 14, "memory_gb": 24 }
+    ],
+    "install": { "linux": "pip install unsloth trl peft", "windows": "pip install unsloth trl peft" },
+    "installer": {
+      "linux": { "kind": "pip", "packages": ["unsloth", "trl", "peft"] },
+      "windows": { "kind": "pip", "packages": ["unsloth", "trl", "peft"] }
+    },
+    "homepage": "https://github.com/unslothai/unsloth"
+  }
+]

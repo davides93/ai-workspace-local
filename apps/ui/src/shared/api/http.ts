@@ -1,9 +1,10 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
+  AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
 } from "./types";
@@ -109,6 +110,8 @@ export class HttpTransport implements Transport {
   agents = () => this.req<AgentProfile[]>("GET", "/agents");
   saveAgent = (a: AgentProfile) => this.req<AgentProfile>("PUT", `/agents/${enc(a.id)}`, a);
   deleteAgent = (id: string) => this.req<void>("DELETE", `/agents/${enc(id)}`);
+  agentRouting = (id: string) => this.req<RoutingStats>("GET", `/agents/${enc(id)}/routing`);
+  resetAgentRouting = (id: string) => this.req<void>("DELETE", `/agents/${enc(id)}/routing`);
   remoteAgents = () => this.req<RemoteAgent[]>("GET", "/remote-agents");
   saveRemoteAgent = (r: RemoteAgent) => this.req<RemoteAgent>("PUT", `/remote-agents/${enc(r.id)}`, r);
   deleteRemoteAgent = (id: string) => this.req<void>("DELETE", `/remote-agents/${enc(id)}`);
@@ -248,6 +251,19 @@ export class HttpTransport implements Transport {
   promptOptimizations = () => this.req<PromptOptimization[]>("GET", "/prompt-optimizations");
   promptOptimization = (id: string) => this.req<PromptOptimization>("GET", `/prompt-optimizations/${enc(id)}`);
   applyPromptOptimization = (id: string, variant: number) => this.req<PromptOptimization>("POST", `/prompt-optimizations/${enc(id)}/apply`, { variant });
+
+  trainDoctor = () => this.req<TrainDoctor>("GET", "/train/doctor");
+  installTrainer = (id: string) => this.req<InstallJob>("POST", `/trainers/${enc(id)}/install`);
+  trainerInstall = (id: string) => this.req<InstallJob | null>("GET", `/trainers/${enc(id)}/install`);
+  datasets = () => this.req<DatasetInfo[]>("GET", "/datasets");
+  buildDataset = (spec: DatasetSpec) => this.req<DatasetInfo>("POST", "/datasets", spec);
+  deleteDataset = (id: string) => this.req<void>("DELETE", `/datasets/${enc(id)}`);
+  trainJobs = () => this.req<TrainJob[]>("GET", "/train/jobs");
+  startTrainJob = (req: TrainJobRequest) => this.req<TrainJob>("POST", "/train/jobs", req);
+  cancelTrainJob = (id: string) => this.req<TrainJob>("POST", `/train/jobs/${enc(id)}/cancel`);
+  trainJobLog = async (id: string, lines = 200) => (await this.req<{ lines: string[] }>("GET", `/train/jobs/${enc(id)}/log?lines=${lines}`)).lines;
+  adapters = () => this.req<AdapterInfo[]>("GET", "/adapters");
+  deleteAdapter = (id: string) => this.req<void>("DELETE", `/adapters/${enc(id)}`);
 
   tools = () => this.req<ToolInfo[]>("GET", "/tools");
   setToolEnabled = (name: string, enabled: boolean) => this.req<void>("PUT", `/tools/${enc(name)}`, { enabled });

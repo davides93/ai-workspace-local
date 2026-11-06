@@ -49,6 +49,7 @@ pub fn app_schema() -> SettingsSchema {
             "agents.budget.max_tokens": {"type": "integer", "title": "Budget di token per run (0 = nessun limite)", "description": "Somma di prompt e risposta di tutte le chiamate al modello, subagenti compresi; vale se l'agente non ha un suo limite", "default": 0, "minimum": 0},
             "agents.budget.max_turns": {"type": "integer", "title": "Budget di turni per run (0 = nessun limite)", "description": "Chiamate al modello di tutto il run, subagenti compresi; vale se l'agente non ha un suo limite", "default": 0, "minimum": 0},
             "agents.budget.max_seconds": {"type": "integer", "title": "Tempo massimo per run, in secondi (0 = nessun limite)", "description": "Vale se l'agente non ha un suo limite", "default": 0, "minimum": 0},
+            "routing.bandit": {"type": "boolean", "title": "Router a bandit tra i profili candidati degli agenti", "description": "Per gli agenti con profili candidati sceglie a ogni run il profilo con UCB1, usando i pollici e i task di valutazione superati come reward", "default": false},
             "network.allow_domains": {"type": "array", "title": "Domini consentiti a web/browser (vuoto = tutti i pubblici)", "items": {"type": "string"}, "default": []},
             "server.lan": {"type": "boolean", "title": "Accesso dalla LAN (richiede pairing)", "default": false},
             "server.port": {"type": "integer", "title": "Porta API", "default": 7777, "minimum": 1024, "maximum": 65535},

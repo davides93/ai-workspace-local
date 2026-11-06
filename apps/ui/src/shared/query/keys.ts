@@ -30,6 +30,7 @@ export const qk = {
 
   profiles: () => ["profiles"] as const,
   agents: () => ["agents"] as const,
+  agentRouting: (id: string) => ["agents", "routing", id] as const,
   teams: () => ["teams"] as const,
   remoteAgents: () => ["remote-agents"] as const,
 
@@ -65,6 +66,15 @@ export const qk = {
     compare: (a: string, b: string) => ["evals", "compare", a, b] as const,
     optimizations: () => ["evals", "optimizations"] as const,
     optimization: (id: string) => ["evals", "optimizations", id] as const,
+  },
+
+  training: {
+    all: () => ["training"] as const,
+    doctor: () => ["training", "doctor"] as const,
+    datasets: () => ["training", "datasets"] as const,
+    jobs: () => ["training", "jobs"] as const,
+    log: (id: string) => ["training", "jobs", id, "log"] as const,
+    adapters: () => ["training", "adapters"] as const,
   },
 
   tools: () => ["tools"] as const,

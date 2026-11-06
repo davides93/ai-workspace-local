@@ -124,6 +124,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/profiles/{id}", put(save_profile).delete(delete_profile))
         .route("/api/agents", get(agents))
         .route("/api/agents/{id}", put(save_agent).delete(delete_agent))
+        .route("/api/agents/{id}/routing", get(agent_routing).delete(reset_agent_routing))
         .route("/api/remote-agents", get(remote_agents))
         .route("/api/remote-agents/{id}", put(save_remote_agent).delete(delete_remote_agent))
         .route("/api/teams", get(teams))
@@ -177,6 +178,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/evals", get(eval_suites))
         .route("/api/evals/{id}", get(eval_suite).put(save_eval_suite).delete(delete_eval_suite))
         .route("/api/evals/{id}/runs", post(start_eval))
+        .route("/api/evals/{id}/reward", post(eval_reward))
         .route("/api/evals/{id}/optimize", post(start_optimization))
         .route("/api/prompt-optimizations", get(prompt_optimizations))
         .route("/api/prompt-optimizations/{id}", get(prompt_optimization))
@@ -184,6 +186,18 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/eval-runs", get(eval_runs))
         .route("/api/eval-runs/compare", get(compare_eval_runs))
         .route("/api/eval-runs/{id}", get(eval_run))
+        .route("/api/trainers", get(trainers))
+        .route("/api/trainers/{id}/install-plan", get(trainer_install_plan))
+        .route("/api/trainers/{id}/install", get(trainer_install_status).post(trainer_install_start))
+        .route("/api/train/doctor", get(train_doctor))
+        .route("/api/datasets", get(datasets).post(build_dataset))
+        .route("/api/datasets/{id}", get(dataset).delete(delete_dataset))
+        .route("/api/train/jobs", get(train_jobs).post(start_train_job))
+        .route("/api/train/jobs/{id}", get(train_job))
+        .route("/api/train/jobs/{id}/log", get(train_job_log))
+        .route("/api/train/jobs/{id}/cancel", post(cancel_train_job))
+        .route("/api/adapters", get(adapters))
+        .route("/api/adapters/{id}", get(adapter).delete(delete_adapter))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat_completions))
         .route("/v1/messages", post(anthropic::messages))
@@ -939,6 +953,27 @@ async fn start_eval(State(s): State<AppState>, Path(id): Path<String>, body: Opt
     ok(s.engine.start_eval(suite, req)?)
 }
 #[derive(Deserialize)]
+struct RewardBody {
+    task_id: String,
+    output: String,
+}
+/// Scores an answer with the graders of a task (only the ones that look at the answer): the reward of a
+/// reinforcement-learning trainer. Guarded like every other route.
+async fn eval_reward(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<RewardBody>,
+) -> ApiResult<aiw_engine::reward::RewardResult> {
+    ok(s.engine.reward(&id, &b.task_id, &b.output).await?)
+}
+async fn agent_routing(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::RoutingStats> {
+    ok(s.engine.routing_stats(&id)?)
+}
+async fn reset_agent_routing(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.reset_routing(&id)?;
+    ok(json!({"reset": true}))
+}
+#[derive(Deserialize)]
 struct StartOptimization {
     agent: String,
     variants: Option<u32>,
@@ -990,6 +1025,64 @@ struct CompareQuery {
 async fn compare_eval_runs(State(s): State<AppState>, Query(q): Query<CompareQuery>) -> ApiResult<aiw_eval::Comparison> {
     // Only stored reports by id: a path from the network is not read.
     ok(aiw_eval::compare(&s.engine.eval_report(&q.a)?, &s.engine.eval_report(&q.b)?))
+}
+async fn trainers(State(s): State<AppState>) -> ApiResult<Vec<aiw_runtimes::trainer::TrainerInfo>> {
+    ok(s.engine.trainers().await)
+}
+async fn trainer_install_plan(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallPlan> {
+    ok(s.engine.trainer_install_plan(&id).await?)
+}
+async fn trainer_install_start(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallJob> {
+    ok(s.engine.trainer_install_start(&id).await?)
+}
+async fn trainer_install_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Option<aiw_runtimes::install::InstallJob>> {
+    ok(s.engine.trainer_install_status(&id))
+}
+async fn train_doctor(State(s): State<AppState>) -> ApiResult<aiw_engine::train::TrainDoctor> {
+    ok(s.engine.train_doctor().await)
+}
+async fn datasets(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::DatasetInfo>> {
+    ok(s.engine.datasets()?)
+}
+async fn build_dataset(State(s): State<AppState>, Json(spec): Json<aiw_core::api::DatasetSpec>) -> ApiResult<aiw_core::api::DatasetInfo> {
+    ok(s.engine.build_dataset(&spec)?)
+}
+async fn dataset(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::DatasetInfo> {
+    ok(s.engine.dataset(&id)?)
+}
+async fn delete_dataset(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_dataset(&id)?;
+    ok(json!({"deleted": true}))
+}
+async fn train_jobs(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::TrainJob>> {
+    ok(s.engine.train_jobs()?)
+}
+async fn start_train_job(State(s): State<AppState>, Json(req): Json<aiw_core::api::TrainJobRequest>) -> ApiResult<aiw_core::api::TrainJob> {
+    ok(s.engine.start_train_job(req).await?)
+}
+async fn train_job(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::TrainJob> {
+    ok(s.engine.train_job(&id)?)
+}
+#[derive(Deserialize)]
+struct LogQuery {
+    lines: Option<usize>,
+}
+async fn train_job_log(State(s): State<AppState>, Path(id): Path<String>, Query(q): Query<LogQuery>) -> ApiResult<Value> {
+    let lines = q.lines.unwrap_or(aiw_engine::train_jobs::DEFAULT_LOG_LINES).clamp(1, 5000);
+    ok(json!({"lines": s.engine.train_job_log(&id, lines)?}))
+}
+async fn cancel_train_job(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::TrainJob> {
+    ok(s.engine.cancel_train_job(&id)?)
+}
+async fn adapters(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::AdapterInfo>> {
+    ok(s.engine.adapters()?)
+}
+async fn adapter(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::AdapterInfo> {
+    ok(s.engine.adapter(&id)?)
+}
+async fn delete_adapter(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_adapter(&id)?;
+    ok(json!({"deleted": true}))
 }
 async fn tools(State(s): State<AppState>) -> ApiResult<Vec<ToolInfo>> {
     ok(s.engine.tools())
@@ -1060,6 +1153,7 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     let port = listener.local_addr()?.port();
     let _ = LISTENER.set((port, lan));
+    engine.set_local_url(format!("http://127.0.0.1:{port}"));
     tracing::info!("AI Workspace Local in ascolto su http://{host}:{port} (LAN: {lan})");
     if lan {
         mesh::start(&engine, port);
@@ -1086,3 +1180,5 @@ mod tests_remote;
 mod tests_security;
 #[cfg(test)]
 mod tests_traces;
+#[cfg(test)]
+mod tests_train;

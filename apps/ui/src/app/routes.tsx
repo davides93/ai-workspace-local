@@ -9,7 +9,7 @@ import type { IconName } from "../shared/ui";
  */
 
 export type RouteId =
-  | "home" | "chat" | "agents" | "teams" | "workflows" | "evals" | "capabilities" | "integrations"
+  | "home" | "chat" | "agents" | "teams" | "workflows" | "evals" | "training" | "capabilities" | "integrations"
   | "models" | "runtimes" | "devices" | "security" | "activity" | "settings";
 
 export type GroupId = "overview" | "work" | "capabilities" | "inference" | "control";
@@ -49,6 +49,7 @@ export const ROUTES: AppRoute[] = [
   { id: "models", path: "/models/:tab?", label: "Modelli", icon: "cube", group: "inference", tab: 2, keywords: ["modelli", "scarica", "gguf", "hugging face", "ollama", "download"], View: view(() => import("../features/models/ModelsView"), "ModelsView") },
   { id: "runtimes", path: "/runtimes/:runtimeId?", label: "Runtime", icon: "chip", group: "inference", tab: 3, keywords: ["llama", "motore", "inferenza"], View: view(() => import("../features/runtimes/RuntimesView"), "RuntimesView") },
   { id: "devices", path: "/devices", label: "Dispositivi", icon: "device", group: "inference", keywords: ["hardware", "pairing", "gpu", "rete"], View: view(() => import("../features/devices/DevicesView"), "DevicesView") },
+  { id: "training", path: "/training/:tab?", label: "Addestramento", icon: "bolt", group: "inference", keywords: ["fine-tuning", "lora", "adapter", "sft", "dpo", "grpo", "dataset", "addestra"], View: view(() => import("../features/training/TrainingView"), "TrainingView") },
   { id: "security", path: "/security/:tab?", label: "Sicurezza", icon: "shield", group: "control", keywords: ["policy", "hook", "sandbox", "permessi"], View: view(() => import("../features/security/SecurityView"), "SecurityView") },
   { id: "activity", path: "/activity", label: "Attività", icon: "activity", group: "control", keywords: ["audit", "log", "cronologia"], View: view(() => import("../features/activity/ActivityView"), "ActivityView") },
   { id: "settings", path: "/settings", label: "Impostazioni", icon: "settings", group: "control", keywords: ["configurazione", "tema", "preferenze"], View: view(() => import("../features/settings/SettingsView"), "SettingsView") },

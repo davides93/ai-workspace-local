@@ -1,0 +1,19 @@
+/* Fine-tuning: device and trainers, jobs, datasets, adapters. Tokens only. */
+
+.tr-trainers { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: var(--space-3); }
+.tr-trainer { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); display: flex; flex-direction: column; gap: var(--space-2); }
+.tr-trainer-head { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; }
+.tr-methods { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-sm); }
+.tr-advice { margin: 0; padding-left: var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); }
+
+.tr-job { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.tr-job-head { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: center; }
+.tr-job-head .grow { min-width: 0; overflow-wrap: anywhere; }
+.tr-jobs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.tr-error { color: var(--crit); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: var(--fs-sm); }
+.tr-log { max-height: 16rem; overflow: auto; margin: 0; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); font-size: 0.78rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tr-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.tr-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--space-3); }
+.tr-sources { display: flex; flex-direction: column; gap: var(--space-2); border: 0; margin: 0; padding: 0; }
+.tr-sources legend { padding: 0; margin-bottom: var(--space-1); font-weight: 600; }
+.tr-sources label { display: flex; gap: var(--space-2); align-items: center; }
