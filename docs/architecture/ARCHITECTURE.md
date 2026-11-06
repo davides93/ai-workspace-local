@@ -290,6 +290,7 @@ Le strategie senza supervisore sono eseguite da `aiw-agent::team` (nessun modell
 subagente: stessi limiti del padre (modalità, sandbox, tool), budget condiviso con il run radice, un run figlio con il
 proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs/{id}/events.json`.
 
+- **Nei workflow**: il passo `team` (vedi «Workflow», sopra) lancia un team da un workflow, anche schedulato.
 - **Handoff**: il tool `handoff` chiude il run e passa la sessione a un altro agente (nota `aiw.handoff` in chat);
   al massimo 3 passaggi per messaggio dell'utente, mai verso una modalità più permissiva.
 - **Stato condiviso**: il tool `team_state` (leggi, scrivi, elimina; 64 chiavi, 32 KB) vive nel `RunState.shared` del run
@@ -331,8 +332,8 @@ steps:
     agent: { profile: "operator", prompt: "Esegui il piano: {{steps.triage.output}}", tools: ["move_file"] }
 ```
 
-Tipi di step: `tool`, `agent`, `llm`, `approval`, `condition` (`if`), `foreach`, `workflow`
-(sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
+Tipi di step: `tool`, `agent`, `team`, `llm`, `approval`, `condition` (`if`), `foreach`, `parallel`,
+`workflow` (sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
 ripresa dopo un'approvazione.
 
 **Segnaposto.** `{{inputs.x}}`, `{{now}}`, `{{steps.<id>.output}}` (anche `{{steps.<id>}}`),
@@ -343,21 +344,28 @@ intero o contiene un blocco ```json, altrimenti il segnaposto resta vuoto. Un va
 inserisce senza virgolette, gli altri come JSON. Dentro un `foreach` ci sono anche `{{item}}`,
 `{{item.campo}}` e `{{index}}`. Le `condition` vedono il testo già sostituito.
 
-**Opzioni dei passi.** `tool`, `agent` e `llm` accettano `retry` (0–5 nuovi tentativi),
+**Opzioni dei passi.** `tool`, `agent`, `team` e `llm` accettano `retry` (0–5 nuovi tentativi),
 `retry_delay_s` (attesa, default 2 s), `timeout_s` (limite per tentativo) e `on_error: continue`
 (il passo resta `failed`, il run prosegue e l'errore è in `{{steps.<id>.error}}`). Il timeout di un
 passo `agent` annulla anche il run dell'agente.
 
 **`foreach` e `parallel`.** `foreach` (`items`, `do`, `parallel` 1–8) esegue un passo inline
-`tool`/`agent`/`llm` per ogni voce di `items`: un array JSON (anche in un blocco ```json) oppure un
+`tool`/`agent`/`team`/`llm` per ogni voce di `items`: un array JSON (anche in un blocco ```json) oppure un
 testo con una voce per riga, al massimo 200. Nel passo valgono `{{item}}`, `{{item.campo}}` e
 `{{index}}`; l'output è l'array JSON degli output nell'ordine delle voci (`null` per una voce
 fallita con `on_error: continue`). Con `on_error: fail` il primo errore ferma il ciclo e annulla le
 voci ancora in corso. `parallel` (`steps`) esegue più passi inline insieme; l'output è l'oggetto
 `{id_interno: output}` e ogni output è leggibile anche come `{{steps.<id_interno>.output}}`. I passi
-interni possono essere solo `tool`, `agent` o `llm` (niente annidamento, `approval` o `condition`) e
+interni possono essere solo `tool`, `agent`, `team` o `llm` (niente annidamento, `approval` o `condition`) e
 i loro id contano nell'unicità degli id del workflow. Gli agenti eseguiti insieme usano sessioni
 diverse. Durante l'esecuzione il passo mostra «3/5 completati».
+
+**Team.** `{kind: team, team: <id>, prompt: "…"}` affida il compito a un team (§5, «Team») e ne usa la
+risposta finale come output, leggibile come `{{steps.<id>.output}}` o `.json`. Il team gira come
+l'agente `team:<id>` in una sessione propria del workflow (con `foreach`/`parallel`, una per voce),
+quindi vale la sua strategia, il suo budget e il suo schema di risposta; un workflow schedulato può
+così lanciare un team. L'esistenza del team si controlla all'esecuzione (come per `agent`), ma un team
+usato da un workflow non si può eliminare (409).
 
 **Sotto-workflow.** `{kind: workflow, workflow: <id>, inputs: {…}}` avvia il workflow figlio (i
 valori di `inputs` accettano i segnaposto) e ne aspetta la fine. L'output del passo è l'output

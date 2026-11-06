@@ -6,7 +6,7 @@ import { slugify, uniqueSlug } from "../../../shared/lib/slug";
 import { useUnsavedGuard } from "../../../shared/lib/useUnsavedGuard";
 import type { WorkflowDef } from "../../../shared/api/types";
 import {
-  useAgentChoices, useDeleteWorkflow, useProfileChoices, useRunWorkflow, useSaveWorkflow, useToolChoices, useWorkflowRuns, useWorkflows,
+  useAgentChoices, useDeleteWorkflow, useProfileChoices, useRunWorkflow, useSaveWorkflow, useTeamChoices, useToolChoices, useWorkflowRuns, useWorkflows,
 } from "../api";
 import {
   blankWorkflow, copyOf, defFromPlain, hasErrors, keyDraft, plainFromDef, previewJson, unkeyDraft, validateDraft, type KeyedDraft, type PlainDraft,
@@ -35,6 +35,7 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
   const wfs = useWorkflows();
   const runs = useWorkflowRuns();
   const agents = useAgentChoices();
+  const teams = useTeamChoices();
   const profiles = useProfileChoices();
   const tools = useToolChoices();
   const save = useSaveWorkflow();
@@ -67,17 +68,17 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
   const liveId = isNew && plain ? uniqueSlug(slugify(plain.name, "workflow"), list.map((w) => w.id)) : plain?.id ?? "";
   const issues = useMemo(
     () => (plain ? validateDraft(plain, {
-      agents: (agents.data ?? []).map((a) => a.id), profiles: (profiles.data ?? []).map((p) => p.id), tools: (tools.data ?? []).map((t) => t.name),
+      agents: (agents.data ?? []).map((a) => a.id), teams: (teams.data ?? []).map((t) => t.id), profiles: (profiles.data ?? []).map((p) => p.id), tools: (tools.data ?? []).map((t) => t.name),
       workflows: list.map((w) => w.id), selfId: isNew ? liveId : workflowId,
     }) : []),
-    [plain, agents.data, profiles.data, tools.data, list, isNew, liveId, workflowId],
+    [plain, agents.data, teams.data, profiles.data, tools.data, list, isNew, liveId, workflowId],
   );
   const catalog = useMemo(
     () => ({
-      agents: agents.data ?? [], profiles: profiles.data ?? [], tools: tools.data ?? [],
+      agents: agents.data ?? [], teams: teams.data ?? [], profiles: profiles.data ?? [], tools: tools.data ?? [],
       workflows: list.filter((w) => w.id !== workflowId).map((w) => ({ id: w.id, name: w.name })),
     }),
-    [agents.data, profiles.data, tools.data, list, workflowId],
+    [agents.data, teams.data, profiles.data, tools.data, list, workflowId],
   );
 
   const secret = saved?.trigger.kind === "webhook" ? saved.trigger.secret ?? "" : "";
