@@ -137,6 +137,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/sessions/{id}/messages", get(messages))
         .route("/api/sessions/{id}/messages/{mid}/feedback", put(set_feedback).delete(delete_feedback))
         .route("/api/sessions/{id}/feedback", get(session_feedback))
+        .route("/api/sessions/{id}/reflect", post(reflect_session))
+        .route("/api/lessons", get(lessons))
+        .route("/api/lessons/{id}/approve", post(approve_lesson))
+        .route("/api/lessons/{id}/reject", post(reject_lesson))
         .route("/api/sessions/{id}/active-run", get(active_run))
         .route("/api/sessions/{id}/runs", post(start_run))
         .route("/api/sessions/{id}/checkpoints", get(session_checkpoints))
@@ -173,6 +177,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/evals", get(eval_suites))
         .route("/api/evals/{id}", get(eval_suite).put(save_eval_suite).delete(delete_eval_suite))
         .route("/api/evals/{id}/runs", post(start_eval))
+        .route("/api/evals/{id}/optimize", post(start_optimization))
+        .route("/api/prompt-optimizations", get(prompt_optimizations))
+        .route("/api/prompt-optimizations/{id}", get(prompt_optimization))
+        .route("/api/prompt-optimizations/{id}/apply", post(apply_optimization))
         .route("/api/eval-runs", get(eval_runs))
         .route("/api/eval-runs/compare", get(compare_eval_runs))
         .route("/api/eval-runs/{id}", get(eval_run))
@@ -540,6 +548,35 @@ async fn delete_feedback(State(s): State<AppState>, Path((id, mid)): Path<(Strin
 async fn session_feedback(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<Feedback>> {
     ok(s.engine.session_feedback(&id)?)
 }
+#[derive(Deserialize)]
+struct LessonsQuery {
+    status: Option<String>,
+}
+async fn lessons(State(s): State<AppState>, Query(q): Query<LessonsQuery>) -> ApiResult<Vec<Lesson>> {
+    ok(s.engine.lessons(q.status.as_deref())?)
+}
+#[derive(Deserialize, Default)]
+struct ApproveLesson {
+    title: Option<String>,
+    content: Option<String>,
+}
+/// Approving writes the lesson (`AGENTS.md` or a new skill); the title and the content can be edited first.
+async fn approve_lesson(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<ApproveLesson>>) -> ApiResult<Lesson> {
+    let b = body.map(|b| b.0).unwrap_or_default();
+    ok(s.engine.approve_lesson(&id, b.title, b.content)?)
+}
+async fn reject_lesson(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Lesson> {
+    ok(s.engine.reject_lesson(&id)?)
+}
+#[derive(Deserialize, Default)]
+struct ReflectBody {
+    run_id: Option<String>,
+}
+/// Asks the agent for a lesson on the conversation now (the answer waits for the model).
+async fn reflect_session(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<ReflectBody>>) -> ApiResult<Lesson> {
+    let b = body.map(|b| b.0).unwrap_or_default();
+    ok(s.engine.reflect(&id, b.run_id.as_deref().filter(|r| !r.is_empty())).await?)
+}
 async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.session(&id)?; // an unknown session is a 404, not "no run"
     ok(json!({"run_id": s.engine.active_run(&id)}))
@@ -901,6 +938,44 @@ async fn start_eval(State(s): State<AppState>, Path(id): Path<String>, body: Opt
     };
     ok(s.engine.start_eval(suite, req)?)
 }
+#[derive(Deserialize)]
+struct StartOptimization {
+    agent: String,
+    variants: Option<u32>,
+    profile: Option<String>,
+    repeat: Option<u32>,
+}
+/// Starts the optimization of an agent's prompt in the background; the answer is the record as it is (`running`), to be
+/// polled at `/api/prompt-optimizations/{id}`. Nothing is applied to the agent.
+async fn start_optimization(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<StartOptimization>,
+) -> ApiResult<PromptOptimization> {
+    let suite = s.engine.eval_suite(&id)?;
+    let opts =
+        aiw_engine::optimize::OptimizeOptions { variants: b.variants, profile: b.profile.filter(|p| !p.is_empty()), repeat: b.repeat };
+    ok(s.engine.start_prompt_optimization(suite, &b.agent, opts)?)
+}
+async fn prompt_optimizations(State(s): State<AppState>) -> ApiResult<Vec<PromptOptimization>> {
+    ok(s.engine.prompt_optimizations()?)
+}
+async fn prompt_optimization(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<PromptOptimization> {
+    ok(s.engine.prompt_optimization(&id)?)
+}
+#[derive(Deserialize)]
+struct ApplyOptimization {
+    /// Index in `variants` (from 0).
+    variant: usize,
+}
+/// Saves the prompt of a variant as the system prompt of the agent: the only way a prompt changes, always asked for.
+async fn apply_optimization(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<ApplyOptimization>,
+) -> ApiResult<PromptOptimization> {
+    ok(s.engine.apply_prompt_optimization(&id, b.variant)?)
+}
 async fn eval_runs(State(s): State<AppState>) -> ApiResult<Vec<aiw_eval::EvalReport>> {
     ok(s.engine.eval_reports()?)
 }
@@ -1000,7 +1075,11 @@ mod tests_errors;
 #[cfg(test)]
 mod tests_eval;
 #[cfg(test)]
+mod tests_learning;
+#[cfg(test)]
 mod tests_models;
+#[cfg(test)]
+mod tests_optimize;
 #[cfg(test)]
 mod tests_remote;
 #[cfg(test)]

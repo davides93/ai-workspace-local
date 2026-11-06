@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
+  AgEvent, AgentProfile, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -233,6 +233,10 @@ export class HttpTransport implements Transport {
     this.req<WorkflowRun>("POST", `/workflows/${enc(id)}/run`, { inputs: inputs ?? {} });
   workflowRuns = () => this.req<WorkflowRun[]>("GET", "/workflows/runs");
 
+  lessons = (status?: LessonStatus) => this.req<Lesson[]>("GET", status ? `/lessons?status=${enc(status)}` : "/lessons");
+  approveLesson = (id: string, edit?: { title?: string; content?: string }) => this.req<Lesson>("POST", `/lessons/${enc(id)}/approve`, edit ?? {});
+  rejectLesson = (id: string) => this.req<Lesson>("POST", `/lessons/${enc(id)}/reject`, {});
+  reflectSession = (sessionId: string) => this.req<Lesson>("POST", `/sessions/${enc(sessionId)}/reflect`, {});
   evalSuites = () => this.req<EvalSuite[]>("GET", "/evals");
   saveEvalSuite = (s: EvalSuite) => this.req<EvalSuite>("PUT", `/evals/${enc(s.id)}`, s);
   deleteEvalSuite = (id: string) => this.req<void>("DELETE", `/evals/${enc(id)}`);
@@ -240,6 +244,10 @@ export class HttpTransport implements Transport {
   evalReports = () => this.req<EvalReport[]>("GET", "/eval-runs");
   evalReport = (id: string) => this.req<EvalReport>("GET", `/eval-runs/${enc(id)}`);
   compareEvalReports = (a: string, b: string) => this.req<EvalComparison>("GET", `/eval-runs/compare?a=${enc(a)}&b=${enc(b)}`);
+  startPromptOptimization = (suiteId: string, req: OptimizeRequest) => this.req<PromptOptimization>("POST", `/evals/${enc(suiteId)}/optimize`, req);
+  promptOptimizations = () => this.req<PromptOptimization[]>("GET", "/prompt-optimizations");
+  promptOptimization = (id: string) => this.req<PromptOptimization>("GET", `/prompt-optimizations/${enc(id)}`);
+  applyPromptOptimization = (id: string, variant: number) => this.req<PromptOptimization>("POST", `/prompt-optimizations/${enc(id)}/apply`, { variant });
 
   tools = () => this.req<ToolInfo[]>("GET", "/tools");
   setToolEnabled = (name: string, enabled: boolean) => this.req<void>("PUT", `/tools/${enc(name)}`, { enabled });

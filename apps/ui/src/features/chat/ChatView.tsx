@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { navigate, useParams } from "../../app/router";
+import { Link, navigate, useParams } from "../../app/router";
 import { lastChatSession, rememberChatSession } from "../../shared/lib/navMemory";
 import { defaultAgentId } from "../../shared/lib/agents";
 import { forgetSessionRuns } from "../../shared/lib/runIndex";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { Session } from "../../shared/api/types";
-import { Button, Drawer, EmptyState, ModalShell, Sheet } from "../../shared/ui";
+import { Button, Drawer, EmptyState, Icon, ModalShell, Sheet } from "../../shared/ui";
 import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
+import { useLessons } from "../learning/api";
+import { pendingFor } from "../learning/model/lessons";
 import { useTeams } from "../teams/api";
 import { teamAsAgent, teamIdOf } from "../teams/model/teams";
 import { useConfig } from "../settings/api";
@@ -83,6 +85,8 @@ export function ChatView() {
   );
   const conv = useConversation(openId, { onGone: gone });
   const feedback = useFeedback(openId, conv.items, conv.running);
+  // After a thumbs down the agent may have proposed a lesson: point to it.
+  const lessonToReview = pendingFor(useLessons("pending").data, openId);
   const [input, setInput] = useDraft(openId);
   const [focusTick, setFocusTick] = useState(0);
   const [showSessions, setShowSessions] = useState(false);
@@ -192,6 +196,16 @@ export function ChatView() {
             onRespond={conv.respond} onAction={conv.sendAction} notice={notice} sessionKey={openId} feedback={feedback}
             empty={<ChatEmpty onPick={(text) => { setInput(text); setFocusTick((n) => n + 1); }} />}
           />
+        )}
+        {lessonToReview && (
+          <div className="ws-note ws-lesson" role="status">
+            <Icon name="sparkle" size={18} />
+            <div className="ws-note-body">
+              <b>Ho proposto una lezione da rivedere</b>
+              <span className="ws-note-hint">«{lessonToReview.title}»: non viene scritta finché non la approvi.</span>
+              <Link to="/" className="ws-note-link">Rivedila nella Panoramica <Icon name="forward" size={12} /></Link>
+            </div>
+          </div>
         )}
         <Composer
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}

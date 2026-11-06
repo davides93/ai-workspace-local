@@ -460,6 +460,55 @@ esporta e la usa per misurare gli agenti:
   `~/.aiw/evals` (le suite già salvate si possono comunque eseguire) e il confronto via API legge solo
   report salvati, mai percorsi di file.
 
+### 5.5 Apprendimento senza pesi
+
+L'agente impara dalle conversazioni senza toccare i pesi del modello: propone **lezioni** e l'utente
+decide. Nulla viene scritto prima dell'approvazione.
+
+- **Lezione** (`Lesson`, documenti `kind: "lesson"`): `kind` `memory` (una regola per `AGENTS.md`) o
+  `skill` (una procedura), `title`, `content` in Markdown, `reason`, `status` `pending` →
+  `approved` | `rejected`, la sessione e il run di origine.
+- **Riflessione** (`Engine::reflect`, `POST /api/sessions/{id}/reflect`): prende la traccia della
+  sessione con lo stesso codice dell'export (ultimi 30 messaggi, contenuti lunghi troncati, segreti
+  mascherati, errori dei run, rifiuti, note dei pollici giù) e chiede al profilo `learning.profile`
+  (vuoto = il profilo dell'agente della sessione) un JSON `{kind, title, content, reason}`, validato
+  con `aiw_agent::schema`. Una risposta non valida ha un solo tentativo di correzione, poi c'è un
+  errore e nessuna lezione.
+- **Avvio automatico** (`learning.reflect`): `off`; `on_feedback` (default) dopo un pollice giù;
+  `on_failure` anche dopo un run fallito o fermato dal budget. Va in background, con al massimo una
+  lezione in attesa per sessione; gli errori vanno solo nei log.
+- **Approvazione** (`POST /api/lessons/{id}/approve {title?, content?}`): una `memory` è aggiunta in
+  fondo alla sezione `## Lezioni apprese` di `~/.aiw/AGENTS.md` (creata se manca), con titolo e data;
+  una `skill` diventa `~/.aiw/skills/<titolo-in-minuscolo>/SKILL.md` con frontmatter `name` e
+  `description` (un nome già usato prende il suffisso `-2`, `-3`…). Titolo e contenuto si possono
+  modificare prima. Audit `lesson.approve` / `lesson.reject`. La cartella del workspace non viene mai
+  toccata: è contenuto del repository. Le istruzioni globali entrano nel prompt di sistema dei run
+  successivi (troncate a 20.000 caratteri), le skill sono nell'indice delle skill disponibili.
+
+CLI: `aiw lessons [list [--status pending|approved|rejected|all]|approve <id> [--title] [--content]|reject <id>]`.
+
+**Ottimizzazione del prompt** (`Engine::optimize_prompt`, `aiw eval optimize`): usa la valutazione per
+migliorare il system prompt di un agente, senza cambiarlo da sola.
+
+1. Esegue la suite con il prompt attuale (baseline). `TaskRequest.system_prompt` sovrascrive il prompt
+   dell'agente solo per quel task: l'agente salvato non viene toccato.
+2. Chiede al profilo `learning.profile` (vuoto: il `--profile` indicato, altrimenti il profilo
+   dell'agente) da 1 a 5 varianti (default 3) come JSON `{variants: [{prompt, rationale}]}`, validato
+   come le lezioni (un tentativo di correzione), dandogli il prompt attuale e i task falliti con i
+   dettagli dei grader. Le varianti vuote, ripetute o uguali all'attuale sono scartate.
+3. Esegue la suite per ogni variante.
+4. Sceglie la migliore per score, a parità per pass rate, poi per prompt più corto, **solo se batte la
+   baseline** (score maggiore, o uguale con pass rate maggiore); altrimenti `best` manca e il
+   risultato dice che non c'è nulla da applicare.
+
+Il risultato è un documento `kind: "prompt_optimization"` (`running` → `done` | `failed` → `applied`):
+baseline e varianti con score, pass rate, id dei report e diff unificato rispetto al prompt di
+partenza. Quelli rimasti `running` all'avvio del motore diventano `failed`. L'applicazione
+(`Engine::apply_prompt_optimization`, audit `prompt.apply`) salva il prompt con le stesse validazioni
+di `save_agent` e si rifiuta se il prompt dell'agente è cambiato nel frattempo. Non è mai automatica:
+`--apply` chiede conferma sul terminale (fuori da un terminale serve anche `--yes`) e la UI chiede
+conferma prima di «Applica all'agente».
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
@@ -495,6 +544,12 @@ esporta e la usa per misurare gli agenti:
 | GET/PUT/DELETE | `/api/evals[/{id}]` | Suite di valutazione (PUT: JSON della suite o `{"text": yaml|json}`; i grader `command` non si scrivono via API) |
 | POST | `/api/evals/{id}/runs` | Avvia la suite in background (`{agent?, profile?, repeat?}`); risponde con il report `running` |
 | GET | `/api/eval-runs` · `/api/eval-runs/{id}` · `/api/eval-runs/compare?a=&b=` | Report (aggiornati a ogni task), confronto A/B tra due report salvati |
+| GET | `/api/lessons?status=` | Lezioni proposte dagli agenti (`pending`, `approved`, `rejected`) |
+| POST | `/api/lessons/{id}/approve` · `/api/lessons/{id}/reject` | Approva (scrive `AGENTS.md` o una skill; `{title?, content?}` per modificare) o scarta |
+| POST | `/api/evals/{id}/optimize` | Avvia in background l'ottimizzazione del prompt di un agente su una suite (`{agent, variants?, profile?, repeat?}`); risponde con il record `running` |
+| GET | `/api/prompt-optimizations[/{id}]` | Ottimizzazioni (baseline, varianti, diff), aggiornate a ogni esecuzione |
+| POST | `/api/prompt-optimizations/{id}/apply` | Salva nell'agente il prompt della variante (`{variant}`) |
+| POST | `/api/sessions/{id}/reflect` | Chiede subito all'agente una lezione sulla conversazione |
 | GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |

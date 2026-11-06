@@ -370,6 +370,71 @@ describe("other v0.4 methods", () => {
     await expect(api.deleteEvalSuite("ev-tmp")).rejects.toThrow(/non trovata/);
   });
 
+  it("proposes lessons after a thumbs down and writes them only when approved, like the engine does", async () => {
+    const pending = await api.lessons("pending");
+    expect(pending.length).toBeGreaterThan(0);
+    expect(pending.every((l) => l.status === "pending")).toBe(true);
+    expect((await api.lessons()).length).toBeGreaterThan(pending.length);
+
+    // A thumbs down proposes a lesson (one waiting per session); a thumbs up does not.
+    const before = (await api.lessons("pending")).filter((l) => l.session_id === "ses_ui").length;
+    await api.setFeedback("ses_ui", "m1", 1);
+    expect((await api.lessons("pending")).filter((l) => l.session_id === "ses_ui")).toHaveLength(before);
+    await api.setFeedback("ses_ui", "m1", -1);
+    await api.setFeedback("ses_ui", "m2", -1);
+    const proposed = (await api.lessons("pending")).filter((l) => l.session_id === "ses_ui");
+    expect(proposed).toHaveLength(Math.max(before, 1));
+
+    // Approved with edits; deciding twice or editing to nothing is refused with the reason.
+    const id = proposed[0].id;
+    await expect(api.approveLesson(id, { title: " " })).rejects.toThrow(/vuoti/);
+    const done = await api.approveLesson(id, { title: "Titolo nuovo", content: "Contenuto nuovo" });
+    expect(done).toMatchObject({ status: "approved", title: "Titolo nuovo", content: "Contenuto nuovo" });
+    expect(done.decided_at).toBeTruthy();
+    await expect(api.approveLesson(id)).rejects.toThrow(/già stata approvata/);
+    await expect(api.rejectLesson(id)).rejects.toThrow(/già stata/);
+    expect((await api.lessons("pending")).some((l) => l.id === id)).toBe(false);
+
+    const other = (await api.reflectSession("ses_cv")).id;
+    expect((await api.rejectLesson(other)).status).toBe("rejected");
+    await expect(api.rejectLesson("les_none")).rejects.toThrow(/non trovata/);
+    await expect(api.reflectSession("ses_none")).rejects.toThrow(/non trovata/);
+  });
+
+  it("optimizes a prompt in the background and applies a variant only on request, like the engine does", async () => {
+    await expect(api.startPromptOptimization("esempio", { agent: "fantasma" })).rejects.toThrow(/non trovato/);
+    await expect(api.startPromptOptimization("nessuna", { agent: "operator" })).rejects.toThrow(/non trovata/);
+    await expect(api.startPromptOptimization("esempio", { agent: "operator", variants: 6 })).rejects.toThrow(/variants/);
+    await expect(api.startPromptOptimization("esempio", { agent: "operator", repeat: 0 })).rejects.toThrow(/repeat/);
+
+    const promptBefore = (await api.agents()).find((a) => a.id === "operator")!.system_prompt;
+    vi.useFakeTimers();
+    const started = await api.startPromptOptimization("esempio", { agent: "operator", variants: 2 });
+    expect(started).toMatchObject({ status: "running", suite_id: "esempio", agent_id: "operator", base_prompt: promptBefore });
+    await expect(api.applyPromptOptimization(started.id, 0)).rejects.toThrow(/in corso/);
+    await vi.advanceTimersByTimeAsync(4000);
+    vi.useRealTimers();
+    const done = await api.promptOptimization(started.id);
+    expect(done.status).toBe("done");
+    expect(done.variants).toHaveLength(2);
+    expect(done.best).toBe(1);
+    expect(done.variants[1].diff).toContain("+");
+    expect((await api.promptOptimizations())[0].id).toBe(started.id);
+    // Not applied by itself.
+    expect((await api.agents()).find((a) => a.id === "operator")!.system_prompt).toBe(promptBefore);
+
+    await expect(api.applyPromptOptimization(started.id, 7)).rejects.toThrow(/non esiste/);
+    const applied = await api.applyPromptOptimization(started.id, 1);
+    expect(applied).toMatchObject({ status: "applied", applied: 1 });
+    expect((await api.agents()).find((a) => a.id === "operator")!.system_prompt).toBe(done.variants[1].prompt);
+    await expect(api.applyPromptOptimization(started.id, 1)).rejects.toThrow(/già stata applicata/);
+    await expect(api.promptOptimization("opt_none")).rejects.toThrow(/non trovata/);
+
+    // The demo has one result where nothing wins: no `best`, so nothing to propose.
+    const none = (await api.promptOptimizations()).find((o) => o.id === "opt_demo_none")!;
+    expect(none.best).toBeUndefined();
+  });
+
   it("re-detects runtimes", async () => {
     vi.useFakeTimers();
     const p = api.refreshRuntimes();

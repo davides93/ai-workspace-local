@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { EvalReport, EvalRunRequest, EvalSuite } from "../../shared/api/types";
+import type { EvalReport, EvalRunRequest, EvalSuite, OptimizeRequest, PromptOptimization } from "../../shared/api/types";
 import { EVAL_POLL_MS, isRunning } from "./model/evals";
+import { isOptimizing, OPT_POLL_MS } from "./model/optimizations";
 
 export function useEvalSuites() {
   const api = useApi();
@@ -85,6 +86,50 @@ export function useStartEval() {
       toast("Valutazione avviata");
       qc.setQueryData<EvalReport[]>(qk.evals.reports(), (list) => [report, ...(list ?? []).filter((r) => r.id !== report.id)]);
       void qc.invalidateQueries({ queryKey: qk.evals.reports() });
+    },
+  });
+}
+
+/** Optimizations of the prompt, most recent first; refreshed while one of them is still going. */
+export function useOptimizations() {
+  const api = useApi();
+  return useQuery({
+    queryKey: qk.evals.optimizations(),
+    queryFn: () => api.promptOptimizations(),
+    refetchInterval: (q) => (q.state.data?.some(isOptimizing) ? OPT_POLL_MS : false),
+  });
+}
+
+/** Starts the optimization in the background; it is in the cached list at once so the page can open it. */
+export function useStartOptimization() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { suiteId: string } & OptimizeRequest) => {
+      const { suiteId, ...req } = v;
+      return api.startPromptOptimization(suiteId, req);
+    },
+    meta: { handled: true },
+    onSuccess: (o) => {
+      toast("Ottimizzazione avviata");
+      qc.setQueryData<PromptOptimization[]>(qk.evals.optimizations(), (list) => [o, ...(list ?? []).filter((x) => x.id !== o.id)]);
+      void qc.invalidateQueries({ queryKey: qk.evals.optimizations() });
+    },
+  });
+}
+
+/** Saves the prompt of a variant in the agent. The agent list is stale after this, so it is refreshed. */
+export function useApplyOptimization() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string; variant: number }) => api.applyPromptOptimization(v.id, v.variant),
+    meta: { handled: true },
+    onSuccess: (o) => {
+      toast("Prompt applicato all'agente");
+      qc.setQueryData<PromptOptimization[]>(qk.evals.optimizations(), (list) => list?.map((x) => (x.id === o.id ? o : x)));
+      void qc.invalidateQueries({ queryKey: qk.evals.optimizations() });
+      void qc.invalidateQueries({ queryKey: qk.agents() });
     },
   });
 }

@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
+  AgEvent, AgentProfile, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -108,6 +108,13 @@ export interface Transport {
   /** Rates an assistant message; rating again replaces the previous rating (and its note). */
   setFeedback(sessionId: string, messageId: string, rating: 1 | -1, note?: string): Promise<Feedback>;
   deleteFeedback(sessionId: string, messageId: string): Promise<void>;
+  /** The lessons the agents proposed, most recent first. */
+  lessons(status?: LessonStatus): Promise<Lesson[]>;
+  /** Approving writes the lesson (AGENTS.md or a new skill); title and content can be changed first. */
+  approveLesson(id: string, edit?: { title?: string; content?: string }): Promise<Lesson>;
+  rejectLesson(id: string): Promise<Lesson>;
+  /** Asks the agent for a lesson on this conversation now (the answer waits for the model). */
+  reflectSession(sessionId: string): Promise<Lesson>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
   startRun(sessionId: string, input: string, kind?: "a2ui.action"): Promise<{ run_id: string }>;
   cancelRun(runId: string): Promise<void>;
@@ -133,6 +140,12 @@ export interface Transport {
   evalReports(): Promise<EvalReport[]>;
   evalReport(id: string): Promise<EvalReport>;
   compareEvalReports(a: string, b: string): Promise<EvalComparison>;
+  /** Tries variants of the agent's prompt on the suite in the background: the record comes back as `running` and is polled with `promptOptimization`. Nothing is applied. */
+  startPromptOptimization(suiteId: string, req: OptimizeRequest): Promise<PromptOptimization>;
+  promptOptimizations(): Promise<PromptOptimization[]>;
+  promptOptimization(id: string): Promise<PromptOptimization>;
+  /** Saves the prompt of a variant (index in `variants`) as the agent's system prompt. */
+  applyPromptOptimization(id: string, variant: number): Promise<PromptOptimization>;
 
   tools(): Promise<ToolInfo[]>;
   setToolEnabled(name: string, enabled: boolean): Promise<void>;

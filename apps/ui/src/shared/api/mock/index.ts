@@ -3,7 +3,7 @@ import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
 } from "../types";
@@ -11,6 +11,8 @@ import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
   remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
+import { demoLesson, lessonProblem, lessons } from "./lessons";
+import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 
@@ -543,11 +545,47 @@ export class MockTransport implements Transport {
     const prev = this.feedback.find((f) => f.session_id === sessionId && f.message_id === messageId);
     const f: Feedback = { id: prev?.id ?? nid("fbk"), session_id: sessionId, message_id: messageId, rating, ...(text ? { note: text } : {}), created_at: now() };
     this.feedback = [...this.feedback.filter((x) => x !== prev), f];
+    // A thumbs down makes the agent propose a lesson (setting `learning.reflect`), one waiting per session.
+    const mode = String(effective()["learning.reflect"] ?? "on_feedback");
+    const session = sessions.find((s) => s.id === sessionId)!;
+    if (rating === -1 && mode !== "off" && !lessons.some((l) => l.session_id === sessionId && l.status === "pending")) {
+      lessons.unshift(demoLesson(session, nid("les")));
+    }
     return structuredClone(f);
   }
   async deleteFeedback(sessionId: string, messageId: string) {
     if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     this.feedback = this.feedback.filter((f) => !(f.session_id === sessionId && f.message_id === messageId));
+  }
+
+  async lessons(status?: LessonStatus) { return structuredClone(lessons.filter((l) => !status || l.status === status)); }
+  private pendingLesson(id: string): Lesson {
+    const l = lessons.find((x) => x.id === id);
+    if (!l) throw new ApiError(404, `lezione ${id} non trovata`);
+    if (l.status !== "pending") throw new ApiError(409, `la lezione è già stata ${l.status === "approved" ? "approvata" : "scartata"}`);
+    return l;
+  }
+  async approveLesson(id: string, edit: { title?: string; content?: string } = {}) {
+    const l = this.pendingLesson(id);
+    const title = edit.title?.trim() ?? l.title;
+    const content = edit.content?.trim() ?? l.content;
+    const problem = lessonProblem(title, content);
+    if (problem) throw new ApiError(400, problem);
+    Object.assign(l, { title, content, status: "approved", decided_at: now() });
+    return structuredClone(l);
+  }
+  async rejectLesson(id: string) {
+    const l = this.pendingLesson(id);
+    Object.assign(l, { status: "rejected", decided_at: now() });
+    return structuredClone(l);
+  }
+  async reflectSession(sessionId: string) {
+    const s = sessions.find((x) => x.id === sessionId);
+    if (!s) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    await sleep(600);
+    const l = demoLesson(s, nid("les"));
+    lessons.unshift(l);
+    return structuredClone(l);
   }
 
   async activeRun(sessionId?: string) {
@@ -925,6 +963,60 @@ export class MockTransport implements Transport {
   }
   async compareEvalReports(a: string, b: string): Promise<EvalComparison> {
     return compareReports(await this.evalReport(a), await this.evalReport(b));
+  }
+
+  async startPromptOptimization(suiteId: string, req: OptimizeRequest) {
+    const suite = evalSuites.find((x) => x.id === suiteId);
+    if (!suite) throw new ApiError(404, `suite di valutazione ${suiteId} non trovata`);
+    const agent = agents.find((a) => a.id === req.agent);
+    if (!agent) throw new ApiError(404, `agente ${req.agent} non trovato`);
+    if (req.profile && !profiles.some((p) => p.id === req.profile)) throw new ApiError(404, `profilo ${req.profile} non trovato`);
+    const n = req.variants ?? 3;
+    if (!Number.isInteger(n) || n < 1 || n > 5) throw new ApiError(400, "variants deve essere tra 1 e 5");
+    const repeat = req.repeat ?? 1;
+    if (!Number.isInteger(repeat) || repeat < 1 || repeat > 50) throw new ApiError(400, "repeat deve essere tra 1 e 50");
+    const o: PromptOptimization = {
+      id: nid("opt"), suite_id: suite.id, agent_id: agent.id, status: "running", started_at: now(), base_prompt: agent.system_prompt,
+      baseline_score: 0, baseline_pass_rate: 0, variants: [],
+    };
+    optimizations.unshift(o);
+    void (async () => {
+      await sleep(900);
+      o.baseline_score = 0.5;
+      o.baseline_pass_rate = 0.33;
+      o.baseline_report_id = nid("evr");
+      for (const [i, c] of demoPrompts(agent.system_prompt, n).entries()) {
+        await sleep(900);
+        const [score, rate] = DEMO_SCORES[i];
+        o.variants.push({ ...variant(agent.system_prompt, c.prompt, c.rationale, score, rate, nid("evr")) });
+      }
+      const top = o.variants.reduce((b, v, i) => (v.score > o.variants[b].score ? i : b), 0);
+      if (o.variants[top].score > o.baseline_score) o.best = top;
+      o.status = "done";
+      o.finished_at = now();
+    })();
+    return structuredClone(o);
+  }
+  async promptOptimizations() { return structuredClone(optimizations); }
+  async promptOptimization(id: string) {
+    const o = optimizations.find((x) => x.id === id);
+    if (!o) throw new ApiError(404, `ottimizzazione del prompt ${id} non trovata`);
+    return structuredClone(o);
+  }
+  async applyPromptOptimization(id: string, variantIndex: number) {
+    const o = optimizations.find((x) => x.id === id);
+    if (!o) throw new ApiError(404, `ottimizzazione del prompt ${id} non trovata`);
+    if (o.status !== "done") throw new ApiError(409, o.status === "applied" ? "questa ottimizzazione è già stata applicata" : o.status === "running" ? "l'ottimizzazione è ancora in corso" : "l'ottimizzazione non è finita: non c'è nulla da applicare");
+    const v = o.variants[variantIndex];
+    if (!v) throw new ApiError(400, `la variante ${variantIndex} non esiste`);
+    const agent = agents.find((a) => a.id === o.agent_id);
+    if (!agent) throw new ApiError(404, `agente ${o.agent_id} non trovato`);
+    if (agent.system_prompt !== o.base_prompt) throw new ApiError(409, `il prompt dell'agente «${agent.name}» è cambiato dopo l'ottimizzazione: rifalla con il prompt attuale`);
+    agent.system_prompt = v.prompt;
+    o.status = "applied";
+    o.applied = variantIndex;
+    audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "prompt.apply", detail: `agente ${agent.id} · ottimizzazione ${o.id} · variante ${variantIndex + 1}` });
+    return structuredClone(o);
   }
 
   async tools() { return structuredClone(tools); }
