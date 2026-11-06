@@ -436,13 +436,15 @@ impl AgentRunner {
                 }
             };
             input.budget.record_turn();
-            let (text, reasoning, mut calls, usage, stream_error) = Self::consume(stream, &ev, turn).await;
+            // The stored message keeps the id its live events carry, so that clients can refer to it (feedback).
+            let msg_id = new_id("msg");
+            let (text, reasoning, mut calls, usage, stream_error) = Self::consume(stream, &ev, turn, &msg_id).await;
             if let Some(e) = stream_error {
                 // Keep what the model had said before the stream broke (cancellation included);
                 // tool calls that were still being written are dropped.
                 if !text.trim().is_empty() {
                     outcome.new_messages.push(ChatMessage {
-                        id: new_id("msg"),
+                        id: msg_id.clone(),
                         role: "assistant".into(),
                         content: text,
                         reasoning: (!reasoning.is_empty()).then_some(reasoning),
@@ -509,7 +511,7 @@ impl AgentRunner {
                 ..Default::default()
             });
             outcome.new_messages.push(ChatMessage {
-                id: new_id("msg"),
+                id: msg_id,
                 role: "assistant".into(),
                 content: text.clone(),
                 reasoning: (!reasoning.is_empty()).then_some(reasoning),
@@ -703,8 +705,9 @@ impl AgentRunner {
         mut stream: aiw_runtimes::DeltaStream,
         ev: &Emitter<'_>,
         turn: u32,
+        msg_id: &str,
     ) -> (String, String, Vec<PendingCall>, Option<aiw_runtimes::TokenUsage>, Option<Error>) {
-        let msg_id = new_id("msg");
+        let msg_id = msg_id.to_string();
         let reason_id = format!("{msg_id}_r");
         let (mut text, mut reasoning) = (String::new(), String::new());
         let (mut text_open, mut reason_open) = (false, false);

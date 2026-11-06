@@ -36,6 +36,7 @@ export const qk = {
     list: () => ["sessions", "list"] as const,
     detail: (id: string) => ["sessions", "detail", id] as const,
     messages: (id: string) => ["sessions", "messages", id] as const,
+    feedback: (id: string) => ["sessions", "feedback", id] as const,
     worktree: (id: string) => ["sessions", "worktree", id] as const,
   },
 
@@ -45,6 +46,14 @@ export const qk = {
     all: () => ["workflows"] as const,
     list: () => ["workflows", "list"] as const,
     runs: () => ["workflows", "runs"] as const,
+  },
+
+  evals: {
+    all: () => ["evals"] as const,
+    suites: () => ["evals", "suites"] as const,
+    reports: () => ["evals", "reports"] as const,
+    report: (id: string) => ["evals", "reports", id] as const,
+    compare: (a: string, b: string) => ["evals", "compare", a, b] as const,
   },
 
   tools: () => ["tools"] as const,

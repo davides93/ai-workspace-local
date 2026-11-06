@@ -299,6 +299,83 @@ Tipi di step: `tool`, `agent`, `llm`, `approval`, `condition` (`if`), `foreach`,
 (sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
 ripresa dopo un'approvazione.
 
+### 5.4 Valutazione e tracce
+
+Ogni sessione è già una traiettoria completa (messaggi, eventi AG-UI, run, audit). Il motore la
+esporta e la usa per misurare gli agenti:
+
+- **Export** (`aiw traces export`, `GET /api/traces/export`): una riga JSON (NDJSON) per sessione,
+  con i messaggi in formato OpenAI, i run, le decisioni sulle approvazioni (`signals`) e i
+  feedback. Le note interne (controlli automatici, errori del run, prompt bloccati) restano fuori
+  dai messaggi e sono contate in `notes`. I segreti sono mascherati di default (`[SEGRETO]`: chiavi
+  `sk-…`, token GitHub, `AKIA…`, `xox…`, `Bearer …`, chiavi private e i valori dei segreti MCP
+  salvati); `--no-redact` lo disattiva, `--exclude-path` sostituisce con `[escluso]` il contenuto
+  dei messaggi dei tool che citano i percorsi indicati.
+- **Feedback**: pollice su/giù (valore 1 o -1) con nota facoltativa (fino a 2000 caratteri) su un
+  messaggio dell'assistente, uno per messaggio (tabella `feedback`, sostituito a ogni nuova
+  valutazione). Il `run_id` è il run in corso quando il messaggio è stato scritto. Entra nel campo
+  `feedback` dei record dell'export e `--rated up|down|any` seleziona le sessioni valutate.
+- **Suite di valutazione** (crate `aiw-eval`, esempio in `docs/evals/esempio.yaml`): un file YAML o
+  JSON con i task da dare a un agente e i grader che dicono se ciascuno è riuscito.
+
+  ```yaml
+  id: base
+  name: Suite di base
+  agent: operator            # facoltativo, anche per task
+  profile: default           # facoltativo, sostituisce il profilo dell'agente
+  tasks:
+    - id: crea-nota
+      prompt: "Crea note.md con scritto ciao"
+      files: { "input.txt": "contenuto iniziale" }   # scritti nella cartella di lavoro prima del run
+      timeout_s: 300
+      graders:
+        - { kind: file_exists, path: note.md }
+        - { kind: file_contains, path: note.md, pattern: "(?i)ciao" }
+        - { kind: output_matches, pattern: "note\\.md" }
+        - { kind: json_schema, schema: { type: object, required: [ok] } }   # sulla risposta finale
+        - { kind: command, run: "test -s note.md", expect_exit: 0, timeout_s: 30 }
+        - { kind: judge, criteria: "La nota è cortese e breve", profile: default, threshold: 0.7 }
+  ```
+
+  Ogni task gira in una cartella temporanea sotto `~/.aiw/eval-work/` (cancellata alla fine, salvo
+  `--keep`) che è la radice del workspace dell'agente: modalità di policy `auto`, sandbox
+  `workspace-write`, nessuna conferma possibile (se il run ne chiedesse una, viene rifiutata), il
+  timeout del task come budget di tempo. Il run non appartiene a nessuna sessione; i suoi eventi
+  sono salvati come gli altri. Il punteggio di un task è la media dei suoi grader, e il task riesce
+  solo se tutti passano e il run non è finito in errore (o per limite di tempo). Con `--repeat N`
+  ogni task gira N volte; il report ha `summary` con riusciti, totale, score medio e pass rate.
+  I report sono nella tabella `eval_runs` e si aggiornano a ogni task.
+
+  Il grader `command` esegue un comando con `sh -c` (PowerShell su Windows) nella cartella del
+  task, con timeout, **fuori dalla sandbox dell'agente e con i permessi dell'utente**: la suite la
+  scrive sempre l'utente. Per questo le suite si leggono solo da `~/.aiw/evals` (e dal database);
+  quelle della cartella del workspace (`.aiw/evals`) **non** vengono caricate, perché un repository
+  sconosciuto non deve poter eseguire comandi. Dalla CLI si può comunque lanciare un file qualsiasi,
+  sapendo cosa contiene: `aiw eval run <file|id> [--agent] [--profile] [--repeat N] [--out report.json] [--keep]`,
+  `aiw eval suites`, `aiw eval list`.
+
+  Il grader `judge` chiede a un modello (il profilo `profile`, altrimenti `default`) di valutare il
+  lavoro rispetto ai `criteria`: gli mostra il prompt del task, la risposta finale e i file che il run
+  ha creato, modificato o eliminato, e si aspetta `{"score": 0..1, "reason": "…"}` (il JSON è letto
+  con tolleranza, anche dentro un blocco di codice). Passa se `score >= threshold` (default 0,7); lo
+  score del grader è quello del giudice. Una risposta senza JSON, senza punteggio o con un punteggio
+  fuori da 0–1 fa fallire il grader con la spiegazione. Il giudice non ha strumenti.
+
+  Confronto A/B: `aiw eval compare <report_a> <report_b>` (id salvati o file scritti da `--out`;
+  `--json` per la struttura) mostra per ogni task riusciti, pass rate e score di A e B e la differenza
+  B − A, più i totali, i token e la durata medi. `aiw eval run <suite> --profile a --profile b` esegue la
+  suite con ciascun profilo e stampa il confronto dei successivi con il primo (con `--out report.json`
+  scrive `report.json.a.json`, `report.json.b.json`). Nel motore: `Engine::compare_eval_runs(a, b)`.
+
+  Dall'API (`/api/evals`, `/api/eval-runs`) e dalla pagina **Valutazioni** della UI (`#/evals`: suite,
+  esecuzione, report, confronto) una suite parte in background (`Engine::start_eval`): la risposta è
+  il report `running`, che il motore aggiorna a ogni task e la UI legge a intervalli finché non è
+  `completed` o `failed`. I report ancora `running` all'avvio del motore sono di un run interrotto e
+  diventano `failed`. Poiché il grader `command` esegue comandi con i permessi dell'utente senza
+  alcuna conferma, l'API rifiuta di salvare suite che ne contengono: si scrivono solo nei file di
+  `~/.aiw/evals` (le suite già salvate si possono comunque eseguire) e il confronto via API legge solo
+  report salvati, mai percorsi di file.
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
@@ -330,6 +407,11 @@ ripresa dopo un'approvazione.
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
+| PUT/DELETE | `/api/sessions/{id}/messages/{mid}/feedback` · GET `/api/sessions/{id}/feedback` | Feedback sulle risposte |
+| GET/PUT/DELETE | `/api/evals[/{id}]` | Suite di valutazione (PUT: JSON della suite o `{"text": yaml|json}`; i grader `command` non si scrivono via API) |
+| POST | `/api/evals/{id}/runs` | Avvia la suite in background (`{agent?, profile?, repeat?}`); risponde con il report `running` |
+| GET | `/api/eval-runs` · `/api/eval-runs/{id}` · `/api/eval-runs/compare?a=&b=` | Report (aggiornati a ogni task), confronto A/B tra due report salvati |
+| GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
 | POST | `/api/kill` | Kill switch |
@@ -353,8 +435,9 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
 ## 9. Storage
 
 - `~/.aiw/` (desktop) o la sandbox dell'app (mobile): `config.json`, `aiw.db` (SQLite:
-  sessioni, messaggi, eventi, run, workflow, audit), `models/`, `runtimes/` (manifest utente),
-  `skills/`, `checkpoints/`.
+  sessioni, messaggi, eventi, run, workflow, audit, feedback, report di valutazione), `models/`,
+  `runtimes/` (manifest utente), `skills/`, `checkpoints/`, `evals/` (suite di valutazione),
+  `eval-work/` (cartelle temporanee dei task).
 - Workspace utente: `AGENTS.md`, `.aiw/config.json`, `.aiw/skills/`, `.aiw/workflows/`.
 
 ## 10. Piattaforme: cosa gira dove

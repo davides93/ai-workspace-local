@@ -9,7 +9,7 @@ import type { IconName } from "../shared/ui";
  */
 
 export type RouteId =
-  | "home" | "chat" | "agents" | "workflows" | "capabilities" | "integrations"
+  | "home" | "chat" | "agents" | "workflows" | "evals" | "capabilities" | "integrations"
   | "models" | "runtimes" | "devices" | "security" | "activity" | "settings";
 
 export type GroupId = "overview" | "work" | "capabilities" | "inference" | "control";
@@ -42,6 +42,7 @@ export const ROUTES: AppRoute[] = [
   { id: "chat", path: "/chat/:sessionId?", label: "Workspace", icon: "chat", group: "work", tab: 1, keywords: ["chat", "conversazione", "sessioni"], View: view(() => import("../features/chat/ChatView"), "ChatView") },
   { id: "agents", path: "/agents/:agentId?", label: "Agenti", icon: "agent", group: "work", keywords: ["profili", "prompt"], View: view(() => import("../features/agents/AgentsView"), "AgentsView") },
   { id: "workflows", path: "/workflows/:workflowId?", label: "Workflow", icon: "flow", group: "work", keywords: ["automazioni", "trigger", "webhook"], View: view(() => import("../features/workflows/WorkflowsView"), "WorkflowsView") },
+  { id: "evals", path: "/evals/:tab?", label: "Valutazioni", icon: "check", group: "work", keywords: ["valutazione", "eval", "test", "benchmark", "grader", "confronto", "qualità"], View: view(() => import("../features/evals/EvalsView"), "EvalsView") },
   { id: "capabilities", path: "/capabilities/:tab?", label: "Tool, MCP e browser", icon: "tool", group: "capabilities", keywords: ["tool", "mcp", "browser", "computer-use", "strumenti"], View: view(() => import("../features/capabilities/CapabilitiesView"), "CapabilitiesView") },
   { id: "integrations", path: "/integrations", label: "Integrazioni", icon: "plug", group: "capabilities", keywords: ["api", "openai", "anthropic", "a2a", "webhook", "endpoint"], View: view(() => import("../features/integrations/IntegrationsView"), "IntegrationsView") },
   { id: "models", path: "/models/:tab?", label: "Modelli", icon: "cube", group: "inference", tab: 2, keywords: ["modelli", "scarica", "gguf", "hugging face", "ollama", "download"], View: view(() => import("../features/models/ModelsView"), "ModelsView") },

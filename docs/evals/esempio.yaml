@@ -1,0 +1,48 @@
+# Suite di esempio: cinque task operativi semplici, valutati solo con grader che guardano i file e la risposta.
+# Si esegue con `aiw eval run docs/evals/esempio.yaml` (o, importata, con `aiw eval run esempio`).
+# Formato e grader: docs/architecture/ARCHITECTURE.md §5.4.
+id: esempio
+name: Task operativi di base
+description: Creare, leggere, rinominare e modificare file in una cartella di lavoro vuota.
+agent: operator
+tasks:
+  - id: crea-nota
+    prompt: "Crea il file note.md con scritto ciao."
+    graders:
+      - { kind: file_exists, path: note.md }
+      - { kind: file_contains, path: note.md, pattern: "(?i)ciao" }
+
+  - id: conta-righe
+    prompt: "Leggi dati.txt e dimmi quante righe contiene. Rispondi solo con il numero."
+    files:
+      dati.txt: "uno\ndue\ntre\n"
+    graders:
+      - { kind: output_matches, pattern: "\\b3\\b" }
+
+  - id: rinomina
+    prompt: "Rinomina il file bozza.txt in finale.txt, senza cambiarne il contenuto."
+    files:
+      bozza.txt: "testo della bozza\n"
+    graders:
+      - { kind: file_exists, path: finale.txt }
+      - { kind: file_contains, path: finale.txt, pattern: "testo della bozza" }
+
+  - id: aggiungi-riga
+    prompt: "Aggiungi la riga «- due» in fondo a todo.md, senza cancellare le righe che ci sono già."
+    files:
+      todo.md: "- uno\n"
+    graders:
+      - { kind: file_contains, path: todo.md, pattern: "- uno" }
+      - { kind: file_contains, path: todo.md, pattern: "- due" }
+
+  - id: elenco-json
+    prompt: >-
+      Quanti file ci sono in questa cartella? Rispondi solo con un oggetto JSON del tipo {"file": 3}.
+    files:
+      a.txt: "a"
+      b.txt: "b"
+    timeout_s: 180
+    graders:
+      - kind: json_schema
+        schema: { type: object, required: [file], properties: { file: { type: integer } } }
+      - { kind: output_matches, pattern: "\"file\"\\s*:\\s*2" }

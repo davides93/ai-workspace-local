@@ -439,6 +439,138 @@ export interface WorktreeStatus extends WorktreeInfo {
   truncated: boolean;
 }
 
+/** The user's rating of an assistant message (one per message). */
+export interface Feedback {
+  id: string;
+  session_id: string;
+  message_id: string;
+  /** The run that produced the message, when the engine could tell. */
+  run_id?: string;
+  /** 1 = thumbs up, -1 = thumbs down. */
+  rating: 1 | -1;
+  note?: string;
+  created_at: string;
+}
+
+/** Longest note the engine accepts with a rating. */
+export const MAX_FEEDBACK_NOTE_CHARS = 2000;
+
+/** One grader of an evaluation task: `kind` plus the fields of that kind (path, pattern, criteria…). */
+export interface EvalGraderSpec {
+  kind: "file_exists" | "file_contains" | "output_matches" | "json_schema" | "command" | "judge" | (string & {});
+  [field: string]: unknown;
+}
+
+export interface EvalTask {
+  id: string;
+  prompt: string;
+  agent?: string;
+  profile?: string;
+  /** Files written in the working folder before the run. */
+  files?: Record<string, string>;
+  timeout_s?: number;
+  graders: EvalGraderSpec[];
+}
+
+/** A set of tasks given to an agent, with the graders that say whether each one worked. */
+export interface EvalSuite {
+  id: string;
+  name: string;
+  description?: string;
+  agent?: string;
+  profile?: string;
+  tasks: EvalTask[];
+}
+
+export interface EvalGraderResult {
+  kind: string;
+  passed: boolean;
+  /** 0..1: 0 or 1 for the deterministic graders, the judge's own score for `judge`. */
+  score: number;
+  detail: string;
+}
+
+export interface EvalTaskResult {
+  task_id: string;
+  attempt: number;
+  passed: boolean;
+  score: number;
+  graders: EvalGraderResult[];
+  duration_ms: number;
+  tokens: number;
+  turns: number;
+  run_id?: string;
+  error?: string;
+  workdir?: string;
+}
+
+export interface EvalSummary {
+  passed: number;
+  total: number;
+  score: number;
+  pass_rate: number;
+}
+
+export type EvalStatus = "running" | "completed" | "failed";
+
+/** The outcome of running a suite; it is stored after every task, so it can be read while it goes on. */
+export interface EvalReport {
+  id: string;
+  suite_id: string;
+  suite_name: string;
+  status: EvalStatus;
+  started_at: string;
+  finished_at?: string;
+  agent?: string;
+  profile?: string;
+  repeat: number;
+  tasks: EvalTaskResult[];
+  summary: EvalSummary;
+  error?: string;
+}
+
+export interface EvalRunRequest {
+  agent?: string;
+  profile?: string;
+  repeat?: number;
+}
+
+/** What a report says about one task, all its attempts together. */
+export interface EvalSide {
+  attempts: number;
+  passed: number;
+  pass_rate: number;
+  score: number;
+  avg_tokens: number;
+  avg_duration_ms: number;
+}
+
+export interface EvalTaskDelta {
+  task_id: string;
+  a?: EvalSide | null;
+  b?: EvalSide | null;
+  /** `b - a`, only when both reports ran the task. */
+  pass_rate_delta?: number | null;
+  score_delta?: number | null;
+}
+
+export interface EvalReportRef {
+  id: string;
+  suite_id: string;
+  agent?: string | null;
+  profile?: string | null;
+}
+
+export interface EvalComparison {
+  a: EvalReportRef;
+  b: EvalReportRef;
+  tasks: EvalTaskDelta[];
+  total_a: EvalSide;
+  total_b: EvalSide;
+  pass_rate_delta: number;
+  score_delta: number;
+}
+
 export type RunStatus = "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled";
 
 export interface ToolCall {

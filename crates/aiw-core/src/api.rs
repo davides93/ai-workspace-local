@@ -553,6 +553,26 @@ pub struct ChatMessage {
     pub created_at: String,
 }
 
+/// Longest note accepted with a rating.
+pub const MAX_FEEDBACK_NOTE_CHARS: usize = 2000;
+
+/// The user's rating of an assistant message (one per message).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Feedback {
+    pub id: String,
+    pub session_id: String,
+    pub message_id: String,
+    /// The run that produced the message, when it can be told.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// 1 (thumbs up) or -1 (thumbs down).
+    pub rating: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// When the rating was last set.
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Todo {
     pub content: String,

@@ -61,6 +61,17 @@ describe("HttpTransport", () => {
     await t.setPolicy([{ tool: "shell", action: "ask" }]);
     await t.hooks();
     await t.setHooks([]);
+    await t.sessionFeedback("s");
+    await t.setFeedback("s", "m/1", -1, "troppo lunga");
+    await t.setFeedback("s", "m2", 1);
+    await t.deleteFeedback("s", "m2");
+    await t.evalSuites();
+    await t.saveEvalSuite({ id: "s/1", name: "S", tasks: [] });
+    await t.deleteEvalSuite("s/1");
+    await t.startEval("s/1", { profile: "veloce", repeat: 3 });
+    await t.evalReports();
+    await t.evalReport("evr 1");
+    await t.compareEvalReports("evr_a", "evr b");
     vi.unstubAllGlobals();
     expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
       "POST /runtimes/refresh",
@@ -81,11 +92,26 @@ describe("HttpTransport", () => {
       "PUT /policy",
       "GET /hooks",
       "PUT /hooks",
+      "GET /sessions/s/feedback",
+      "PUT /sessions/s/messages/m%2F1/feedback",
+      "PUT /sessions/s/messages/m2/feedback",
+      "DELETE /sessions/s/messages/m2/feedback",
+      "GET /evals",
+      "PUT /evals/s%2F1",
+      "DELETE /evals/s%2F1",
+      "POST /evals/s%2F1/runs",
+      "GET /eval-runs",
+      "GET /eval-runs/evr%201",
+      "GET /eval-runs/compare?a=evr_a&b=evr%20b",
     ]);
     expect(JSON.parse(calls[2].body!)).toEqual({ token: "t0k", endpoint: "https://mirror" });
     expect(JSON.parse(calls[5].body!)).toEqual({ id: "some-id" });
     expect(JSON.parse(calls[11].body!)).toEqual({ title: "Titolo" });
     expect(JSON.parse(calls[15].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
+    expect(JSON.parse(calls[19].body!)).toEqual({ rating: -1, note: "troppo lunga" });
+    expect(JSON.parse(calls[20].body!)).toEqual({ rating: 1 });
+    expect(JSON.parse(calls[23].body!)).toMatchObject({ id: "s/1", name: "S" });
+    expect(JSON.parse(calls[25].body!)).toEqual({ profile: "veloce", repeat: 3 });
   });
 });
 

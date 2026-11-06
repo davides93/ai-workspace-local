@@ -3,7 +3,7 @@ use aiw_engine::EngineOptions;
 use aiw_runtimes::ScriptedBackend;
 use std::sync::Arc;
 
-async fn app() -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
+pub(crate) async fn app() -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
     app_on(None).await
 }
 
