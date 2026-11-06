@@ -5,6 +5,7 @@ import { errorMessage } from "../../../shared/lib/errors";
 import type { EvalSuite } from "../../../shared/api/types";
 import { useDeleteEvalSuite, useSaveEvalSuite } from "../api";
 import { blankSuite, parseSuiteText, suiteText } from "../model/evals";
+import { OptimizeDialog } from "./OptimizeDialog";
 import { RunDialog } from "./RunDialog";
 
 export const NEW_SUITE = "new";
@@ -26,6 +27,7 @@ export function SuiteDetail({ suiteId, suites }: { suiteId: string; suites: Eval
   const save = useSaveEvalSuite();
   const remove = useDeleteEvalSuite();
   const [running, setRunning] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   if (!isNew && !saved) {
@@ -53,6 +55,7 @@ export function SuiteDetail({ suiteId, suites }: { suiteId: string; suites: Eval
         actions={
           <>
             {saved && <Button variant="primary" icon="play" onClick={() => setRunning(true)} disabled={dirty} title={dirty ? "Salva le modifiche prima di eseguire" : undefined}>Esegui</Button>}
+            {saved && <Button icon="sparkle" onClick={() => setOptimizing(true)} disabled={dirty} title={dirty ? "Salva le modifiche prima di ottimizzare" : "Prova varianti del prompt di un agente su questa suite"}>Ottimizza il prompt</Button>}
             {saved && <Button variant="ghost" icon="trash" onClick={() => setDeleting(true)}>Elimina</Button>}
           </>
         }
@@ -86,6 +89,7 @@ export function SuiteDetail({ suiteId, suites }: { suiteId: string; suites: Eval
       </Panel>
 
       {running && saved && <RunDialog suite={saved} onClose={() => setRunning(false)} />}
+      {optimizing && saved && <OptimizeDialog suite={saved} onClose={() => setOptimizing(false)} />}
       {deleting && saved && (
         <DecisionDialog
           title={`Eliminare «${saved.name}»?`} confirmLabel="Elimina" pending={remove.isPending} error={remove.error}

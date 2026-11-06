@@ -36,7 +36,7 @@ src/
     model/                   logica pura del dominio (testata)
 ```
 
-Domini: `home`, `chat`, `agents`, `teams`, `workflows`, `evals`, `capabilities` (tool, server MCP, browser e
+Domini: `home`, `chat`, `agents`, `teams`, `workflows`, `evals`, `training`, `capabilities` (tool, server MCP, browser e
 computer-use), `integrations`, `models`, `runtimes`, `devices`, `security`, `activity`,
 `settings`, `pairing`, `approvals`.
 
@@ -100,7 +100,8 @@ Router su hash scritto in casa (nessuna dipendenza). Percorsi:
 | agents | `#/agents`, `#/agents/:agentId` | |
 | teams | `#/teams`, `#/teams/:teamId` | `new` apre il modulo vuoto, `?from=` una copia; i team compaiono anche nel selettore dell'agente della chat (`team:<id>`) |
 | workflows | `#/workflows`, `#/workflows/:workflowId` | |
-| evals | `#/evals/:tab?` | `suites` (default; `?suite=` la suite aperta, `new` per crearne una), `reports` (`?report=` il report aperto, `?b=` quello con cui confrontarlo) |
+| evals | `#/evals/:tab?` | `suites` (default; `?suite=` la suite aperta, `new` per crearne una), `reports` (`?report=` il report aperto, `?b=` quello con cui confrontarlo), `optimizations` (`?opt=` l'ottimizzazione del prompt aperta) |
+| training | `#/training/:tab?` | `jobs` (default: dispositivo, trainer, addestramenti con log e annullamento), `datasets`, `adapters` |
 | capabilities | `#/capabilities/:tab?` | `tools` (default), `mcp`, `browser` |
 | integrations | `#/integrations` | oltre agli endpoint, il registro degli agenti remoti A2A |
 | models | `#/models/:tab?` | `installed` (default), `discover`, `downloads`, `catalog`; query `?provider=&q=&format=` |
@@ -135,7 +136,7 @@ del server, che segue il server finché l'utente non ha toccato nulla) e a `Save
 | Controllo | Sicurezza · Attività · Impostazioni |
 
 - **Panoramica**: device e acceleratori, runtime attivi, modello del profilo predefinito, conferme in
-  attesa, sessioni recenti, download in corso, prossimi workflow, checklist di primo avvio
+  attesa, lezioni proposte dagli agenti da rivedere (approva, modifica, scarta), sessioni recenti, download in corso, prossimi workflow, checklist di primo avvio
   (runtime → modello consigliato → profilo → prima chat; DESIGN §5.1).
 - **Telefono** (≤ 760 px): tabbar con Panoramica, Workspace, Modelli, Runtime, Altro. "Altro" apre
   un foglio con tutte le sezioni, il device e il **kill switch** (sul telefono oggi non è
@@ -275,6 +276,8 @@ cancelDownload(id: string): Promise<DownloadProgress>;
 clearDownload(id: string): Promise<void>;
 deleteModel(id: string): Promise<void>;
 deleteAgent(id: string): Promise<void>;               // DELETE /api/agents/{id}
+agentRouting(id: string): Promise<RoutingStats>;       // GET /api/agents/{id}/routing
+resetAgentRouting(id: string): Promise<void>;          // DELETE /api/agents/{id}/routing
 remoteAgents(): Promise<RemoteAgent[]>;              // GET /api/remote-agents (token sempre mascherato)
 saveRemoteAgent(r: RemoteAgent): Promise<RemoteAgent>; // PUT /api/remote-agents/{id}
 deleteRemoteAgent(id: string): Promise<void>;         // DELETE /api/remote-agents/{id} (409 se un team lo usa)

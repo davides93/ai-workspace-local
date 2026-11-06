@@ -48,6 +48,36 @@ pub struct RuntimeManifest {
     pub installer: BTreeMap<String, Installer>,
     #[serde(default)]
     pub homepage: Option<String>,
+    /// How LoRA adapters are given to the server. Without it the runtime refuses profiles that
+    /// name adapters.
+    #[serde(default)]
+    pub adapters: Option<AdapterSupport>,
+    /// What to do instead, for a runtime that cannot load an adapter at launch (shown with the
+    /// refusal).
+    #[serde(default)]
+    pub adapter_hint: Option<String>,
+}
+
+/// Launch arguments that load LoRA adapters (see [`crate::adapters`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdapterSupport {
+    /// `gguf` (a file), `mlx` or `peft` (a folder).
+    pub format: String,
+    /// Added once when at least one adapter is used.
+    #[serde(default)]
+    pub base_args: Vec<String>,
+    /// Added for each adapter; `{path}` and `{name}` (the file or folder name) are replaced.
+    pub args: Vec<String>,
+    /// Like `args` for an adapter with a scale (`{scale}`). Empty: a scale is refused.
+    #[serde(default)]
+    pub scaled_args: Vec<String>,
+    /// Most adapters at the same time.
+    #[serde(default = "one")]
+    pub max: usize,
+}
+
+fn one() -> usize {
+    1
 }
 
 /// A recipe for installing a runtime from inside the app. Only package managers are supported

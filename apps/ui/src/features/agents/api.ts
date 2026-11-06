@@ -9,6 +9,24 @@ export function useAgents() {
   return useQuery({ queryKey: qk.agents(), queryFn: () => api.agents() });
 }
 
+/** The statistics of the bandit router for an agent (`enabled` off: nothing to read). */
+export function useAgentRouting(id: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({ queryKey: qk.agentRouting(id), queryFn: () => api.agentRouting(id), enabled });
+}
+
+export function useResetRouting() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.resetAgentRouting(id),
+    onSuccess: (_void, id) => {
+      toast("Statistiche del router azzerate");
+      void qc.invalidateQueries({ queryKey: qk.agentRouting(id) });
+    },
+  });
+}
+
 export function useProfiles() {
   const api = useApi();
   return useQuery({ queryKey: qk.profiles(), queryFn: () => api.profiles() });

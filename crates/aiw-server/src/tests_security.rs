@@ -558,3 +558,18 @@ async fn responses_cannot_be_framed_or_sniffed() {
         assert_eq!(h.get("referrer-policy").unwrap(), "no-referrer", "{path}");
     }
 }
+
+#[tokio::test]
+async fn the_reward_endpoint_needs_the_token_from_another_machine() {
+    let (app, e, _d, _w) = fixture(vec![]).await;
+    let body = || Some(json!({"task_id": "t", "output": "x"}));
+    let (st, ..) = send(&app, req("POST", "/api/evals/s/reward", Some(LAN), &[], body())).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    // With the token the request reaches the route (the suite does not exist: 404).
+    let bearer = format!("Bearer {}", e.token());
+    let (st, ..) = send(&app, req("POST", "/api/evals/s/reward", Some(LAN), &[("authorization", &bearer)], body())).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    // A web page acting on its own on this machine is refused like for the other routes.
+    let (st, ..) = send(&app, req("POST", "/api/evals/s/reward", Some(LOOPBACK), &[("host", "evil.example")], body())).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+}

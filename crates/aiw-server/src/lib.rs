@@ -124,6 +124,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/profiles/{id}", put(save_profile).delete(delete_profile))
         .route("/api/agents", get(agents))
         .route("/api/agents/{id}", put(save_agent).delete(delete_agent))
+        .route("/api/agents/{id}/routing", get(agent_routing).delete(reset_agent_routing))
         .route("/api/remote-agents", get(remote_agents))
         .route("/api/remote-agents/{id}", put(save_remote_agent).delete(delete_remote_agent))
         .route("/api/teams", get(teams))
@@ -137,6 +138,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/sessions/{id}/messages", get(messages))
         .route("/api/sessions/{id}/messages/{mid}/feedback", put(set_feedback).delete(delete_feedback))
         .route("/api/sessions/{id}/feedback", get(session_feedback))
+        .route("/api/sessions/{id}/reflect", post(reflect_session))
+        .route("/api/lessons", get(lessons))
+        .route("/api/lessons/{id}/approve", post(approve_lesson))
+        .route("/api/lessons/{id}/reject", post(reject_lesson))
         .route("/api/sessions/{id}/active-run", get(active_run))
         .route("/api/sessions/{id}/runs", post(start_run))
         .route("/api/sessions/{id}/checkpoints", get(session_checkpoints))
@@ -173,9 +178,26 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/evals", get(eval_suites))
         .route("/api/evals/{id}", get(eval_suite).put(save_eval_suite).delete(delete_eval_suite))
         .route("/api/evals/{id}/runs", post(start_eval))
+        .route("/api/evals/{id}/reward", post(eval_reward))
+        .route("/api/evals/{id}/optimize", post(start_optimization))
+        .route("/api/prompt-optimizations", get(prompt_optimizations))
+        .route("/api/prompt-optimizations/{id}", get(prompt_optimization))
+        .route("/api/prompt-optimizations/{id}/apply", post(apply_optimization))
         .route("/api/eval-runs", get(eval_runs))
         .route("/api/eval-runs/compare", get(compare_eval_runs))
         .route("/api/eval-runs/{id}", get(eval_run))
+        .route("/api/trainers", get(trainers))
+        .route("/api/trainers/{id}/install-plan", get(trainer_install_plan))
+        .route("/api/trainers/{id}/install", get(trainer_install_status).post(trainer_install_start))
+        .route("/api/train/doctor", get(train_doctor))
+        .route("/api/datasets", get(datasets).post(build_dataset))
+        .route("/api/datasets/{id}", get(dataset).delete(delete_dataset))
+        .route("/api/train/jobs", get(train_jobs).post(start_train_job))
+        .route("/api/train/jobs/{id}", get(train_job))
+        .route("/api/train/jobs/{id}/log", get(train_job_log))
+        .route("/api/train/jobs/{id}/cancel", post(cancel_train_job))
+        .route("/api/adapters", get(adapters))
+        .route("/api/adapters/{id}", get(adapter).delete(delete_adapter))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat_completions))
         .route("/v1/messages", post(anthropic::messages))
@@ -540,6 +562,35 @@ async fn delete_feedback(State(s): State<AppState>, Path((id, mid)): Path<(Strin
 async fn session_feedback(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<Feedback>> {
     ok(s.engine.session_feedback(&id)?)
 }
+#[derive(Deserialize)]
+struct LessonsQuery {
+    status: Option<String>,
+}
+async fn lessons(State(s): State<AppState>, Query(q): Query<LessonsQuery>) -> ApiResult<Vec<Lesson>> {
+    ok(s.engine.lessons(q.status.as_deref())?)
+}
+#[derive(Deserialize, Default)]
+struct ApproveLesson {
+    title: Option<String>,
+    content: Option<String>,
+}
+/// Approving writes the lesson (`AGENTS.md` or a new skill); the title and the content can be edited first.
+async fn approve_lesson(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<ApproveLesson>>) -> ApiResult<Lesson> {
+    let b = body.map(|b| b.0).unwrap_or_default();
+    ok(s.engine.approve_lesson(&id, b.title, b.content)?)
+}
+async fn reject_lesson(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Lesson> {
+    ok(s.engine.reject_lesson(&id)?)
+}
+#[derive(Deserialize, Default)]
+struct ReflectBody {
+    run_id: Option<String>,
+}
+/// Asks the agent for a lesson on the conversation now (the answer waits for the model).
+async fn reflect_session(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<ReflectBody>>) -> ApiResult<Lesson> {
+    let b = body.map(|b| b.0).unwrap_or_default();
+    ok(s.engine.reflect(&id, b.run_id.as_deref().filter(|r| !r.is_empty())).await?)
+}
 async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.session(&id)?; // an unknown session is a 404, not "no run"
     ok(json!({"run_id": s.engine.active_run(&id)}))
@@ -901,6 +952,65 @@ async fn start_eval(State(s): State<AppState>, Path(id): Path<String>, body: Opt
     };
     ok(s.engine.start_eval(suite, req)?)
 }
+#[derive(Deserialize)]
+struct RewardBody {
+    task_id: String,
+    output: String,
+}
+/// Scores an answer with the graders of a task (only the ones that look at the answer): the reward of a
+/// reinforcement-learning trainer. Guarded like every other route.
+async fn eval_reward(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<RewardBody>,
+) -> ApiResult<aiw_engine::reward::RewardResult> {
+    ok(s.engine.reward(&id, &b.task_id, &b.output).await?)
+}
+async fn agent_routing(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::RoutingStats> {
+    ok(s.engine.routing_stats(&id)?)
+}
+async fn reset_agent_routing(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.reset_routing(&id)?;
+    ok(json!({"reset": true}))
+}
+#[derive(Deserialize)]
+struct StartOptimization {
+    agent: String,
+    variants: Option<u32>,
+    profile: Option<String>,
+    repeat: Option<u32>,
+}
+/// Starts the optimization of an agent's prompt in the background; the answer is the record as it is (`running`), to be
+/// polled at `/api/prompt-optimizations/{id}`. Nothing is applied to the agent.
+async fn start_optimization(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<StartOptimization>,
+) -> ApiResult<PromptOptimization> {
+    let suite = s.engine.eval_suite(&id)?;
+    let opts =
+        aiw_engine::optimize::OptimizeOptions { variants: b.variants, profile: b.profile.filter(|p| !p.is_empty()), repeat: b.repeat };
+    ok(s.engine.start_prompt_optimization(suite, &b.agent, opts)?)
+}
+async fn prompt_optimizations(State(s): State<AppState>) -> ApiResult<Vec<PromptOptimization>> {
+    ok(s.engine.prompt_optimizations()?)
+}
+async fn prompt_optimization(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<PromptOptimization> {
+    ok(s.engine.prompt_optimization(&id)?)
+}
+#[derive(Deserialize)]
+struct ApplyOptimization {
+    /// Index in `variants` (from 0).
+    variant: usize,
+}
+/// Saves the prompt of a variant as the system prompt of the agent: the only way a prompt changes, always asked for.
+async fn apply_optimization(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<ApplyOptimization>,
+) -> ApiResult<PromptOptimization> {
+    ok(s.engine.apply_prompt_optimization(&id, b.variant)?)
+}
 async fn eval_runs(State(s): State<AppState>) -> ApiResult<Vec<aiw_eval::EvalReport>> {
     ok(s.engine.eval_reports()?)
 }
@@ -915,6 +1025,64 @@ struct CompareQuery {
 async fn compare_eval_runs(State(s): State<AppState>, Query(q): Query<CompareQuery>) -> ApiResult<aiw_eval::Comparison> {
     // Only stored reports by id: a path from the network is not read.
     ok(aiw_eval::compare(&s.engine.eval_report(&q.a)?, &s.engine.eval_report(&q.b)?))
+}
+async fn trainers(State(s): State<AppState>) -> ApiResult<Vec<aiw_runtimes::trainer::TrainerInfo>> {
+    ok(s.engine.trainers().await)
+}
+async fn trainer_install_plan(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallPlan> {
+    ok(s.engine.trainer_install_plan(&id).await?)
+}
+async fn trainer_install_start(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallJob> {
+    ok(s.engine.trainer_install_start(&id).await?)
+}
+async fn trainer_install_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Option<aiw_runtimes::install::InstallJob>> {
+    ok(s.engine.trainer_install_status(&id))
+}
+async fn train_doctor(State(s): State<AppState>) -> ApiResult<aiw_engine::train::TrainDoctor> {
+    ok(s.engine.train_doctor().await)
+}
+async fn datasets(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::DatasetInfo>> {
+    ok(s.engine.datasets()?)
+}
+async fn build_dataset(State(s): State<AppState>, Json(spec): Json<aiw_core::api::DatasetSpec>) -> ApiResult<aiw_core::api::DatasetInfo> {
+    ok(s.engine.build_dataset(&spec)?)
+}
+async fn dataset(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::DatasetInfo> {
+    ok(s.engine.dataset(&id)?)
+}
+async fn delete_dataset(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_dataset(&id)?;
+    ok(json!({"deleted": true}))
+}
+async fn train_jobs(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::TrainJob>> {
+    ok(s.engine.train_jobs()?)
+}
+async fn start_train_job(State(s): State<AppState>, Json(req): Json<aiw_core::api::TrainJobRequest>) -> ApiResult<aiw_core::api::TrainJob> {
+    ok(s.engine.start_train_job(req).await?)
+}
+async fn train_job(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::TrainJob> {
+    ok(s.engine.train_job(&id)?)
+}
+#[derive(Deserialize)]
+struct LogQuery {
+    lines: Option<usize>,
+}
+async fn train_job_log(State(s): State<AppState>, Path(id): Path<String>, Query(q): Query<LogQuery>) -> ApiResult<Value> {
+    let lines = q.lines.unwrap_or(aiw_engine::train_jobs::DEFAULT_LOG_LINES).clamp(1, 5000);
+    ok(json!({"lines": s.engine.train_job_log(&id, lines)?}))
+}
+async fn cancel_train_job(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::TrainJob> {
+    ok(s.engine.cancel_train_job(&id)?)
+}
+async fn adapters(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::AdapterInfo>> {
+    ok(s.engine.adapters()?)
+}
+async fn adapter(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::AdapterInfo> {
+    ok(s.engine.adapter(&id)?)
+}
+async fn delete_adapter(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_adapter(&id)?;
+    ok(json!({"deleted": true}))
 }
 async fn tools(State(s): State<AppState>) -> ApiResult<Vec<ToolInfo>> {
     ok(s.engine.tools())
@@ -985,6 +1153,7 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     let port = listener.local_addr()?.port();
     let _ = LISTENER.set((port, lan));
+    engine.set_local_url(format!("http://127.0.0.1:{port}"));
     tracing::info!("AI Workspace Local in ascolto su http://{host}:{port} (LAN: {lan})");
     if lan {
         mesh::start(&engine, port);
@@ -1000,10 +1169,16 @@ mod tests_errors;
 #[cfg(test)]
 mod tests_eval;
 #[cfg(test)]
+mod tests_learning;
+#[cfg(test)]
 mod tests_models;
+#[cfg(test)]
+mod tests_optimize;
 #[cfg(test)]
 mod tests_remote;
 #[cfg(test)]
 mod tests_security;
 #[cfg(test)]
 mod tests_traces;
+#[cfg(test)]
+mod tests_train;

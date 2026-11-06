@@ -67,6 +67,7 @@ export const SECTIONS: SettingsSection[] = [
   { id: "security", title: "Sicurezza e rete", description: "Conferme, sandbox e siti raggiungibili da web e browser.", prefixes: ["policy", "sandbox", "network"] },
   { id: "server", title: "Server e accesso", description: "Come altri dispositivi e programmi raggiungono il workspace.", prefixes: ["server"] },
   { id: "folders", title: "Cartelle", description: "Dove stanno i modelli e dove lavorano gli agenti.", prefixes: ["models", "workspace"] },
+  { id: "learning", title: "Apprendimento", description: "Lezioni che gli agenti propongono dopo una conversazione e ottimizzazione del prompt: niente cambia senza la tua approvazione.", prefixes: ["learning"] },
   { id: "voice", title: "Voce", description: "Dettatura e conversazione a voce: lingua, motore di trascrizione e voce che legge le risposte.", prefixes: ["voice"] },
   { id: "update", title: "Canale e aggiornamenti", description: "Quale canale seguire (produzione, beta, alpha) e se cercare e scaricare gli aggiornamenti da soli.", prefixes: ["update"] },
   { id: "telemetry", title: "Telemetria", description: "Esportazione di tracce e metriche.", prefixes: ["telemetry"] },
@@ -163,6 +164,7 @@ const OPTION_LABEL: Record<string, Record<string, string>> = {
     "aiw-peer": "Dispositivo accoppiato",
     "remote-openai": "Endpoint compatibile OpenAI",
   },
+  "learning.reflect": { off: "off · mai", on_feedback: "on_feedback · dopo un pollice giù", on_failure: "on_failure · anche dopo un run fallito o fermato dal budget" },
   "sandbox.mode": { "read-only": "read-only · sola lettura", "workspace-write": "workspace-write · scrive nel workspace", off: "off · nessuna sandbox" },
 };
 

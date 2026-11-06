@@ -53,6 +53,8 @@ describe("HttpTransport", () => {
     await t.clearDownload("dl_1");
     await t.deleteModel("ollama:qwen3:4b");
     await t.deleteAgent("a");
+    await t.agentRouting("a/1");
+    await t.resetAgentRouting("a/1");
     await t.deleteProfile("p");
     await t.teams();
     await t.saveTeam({ id: "t 1", name: "T", description: "", strategy: "pipeline", members: [{ agent: "a", role: "" }] });
@@ -78,6 +80,18 @@ describe("HttpTransport", () => {
     await t.remoteAgents();
     await t.saveRemoteAgent({ id: "r 1", name: "R", url: "http://h:1", token: "", description: "" });
     await t.deleteRemoteAgent("r 1");
+    await t.trainDoctor();
+    await t.installTrainer("trl");
+    await t.trainerInstall("trl");
+    await t.datasets();
+    await t.buildDataset({ method: "sft", sources: ["feedback"] });
+    await t.deleteDataset("ds 1");
+    await t.trainJobs();
+    await t.startTrainJob({ method: "sft", base_model: "m", dataset_id: "ds_1" });
+    await t.cancelTrainJob("trn/1");
+    await t.trainJobLog("trn_1", 50);
+    await t.adapters();
+    await t.deleteAdapter("ad 1");
     vi.unstubAllGlobals();
     expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
       "POST /runtimes/refresh",
@@ -90,6 +104,8 @@ describe("HttpTransport", () => {
       "DELETE /models/downloads/dl_1",
       "DELETE /models/ollama%3Aqwen3%3A4b",
       "DELETE /agents/a",
+      "GET /agents/a%2F1/routing",
+      "DELETE /agents/a%2F1/routing",
       "DELETE /profiles/p",
       "GET /teams",
       "PUT /teams/t%201",
@@ -115,16 +131,30 @@ describe("HttpTransport", () => {
       "GET /remote-agents",
       "PUT /remote-agents/r%201",
       "DELETE /remote-agents/r%201",
+      "GET /train/doctor",
+      "POST /trainers/trl/install",
+      "GET /trainers/trl/install",
+      "GET /datasets",
+      "POST /datasets",
+      "DELETE /datasets/ds%201",
+      "GET /train/jobs",
+      "POST /train/jobs",
+      "POST /train/jobs/trn%2F1/cancel",
+      "GET /train/jobs/trn_1/log?lines=50",
+      "GET /adapters",
+      "DELETE /adapters/ad%201",
     ]);
     expect(JSON.parse(calls[2].body!)).toEqual({ token: "t0k", endpoint: "https://mirror" });
     expect(JSON.parse(calls[5].body!)).toEqual({ id: "some-id" });
-    expect(JSON.parse(calls[12].body!)).toMatchObject({ id: "t 1", strategy: "pipeline" });
-    expect(JSON.parse(calls[14].body!)).toEqual({ title: "Titolo" });
-    expect(JSON.parse(calls[18].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
-    expect(JSON.parse(calls[22].body!)).toEqual({ rating: -1, note: "troppo lunga" });
-    expect(JSON.parse(calls[23].body!)).toEqual({ rating: 1 });
-    expect(JSON.parse(calls[26].body!)).toMatchObject({ id: "s/1", name: "S" });
-    expect(JSON.parse(calls[28].body!)).toEqual({ profile: "veloce", repeat: 3 });
+    expect(JSON.parse(calls[14].body!)).toMatchObject({ id: "t 1", strategy: "pipeline" });
+    expect(JSON.parse(calls[16].body!)).toEqual({ title: "Titolo" });
+    expect(JSON.parse(calls[20].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
+    expect(JSON.parse(calls[24].body!)).toEqual({ rating: -1, note: "troppo lunga" });
+    expect(JSON.parse(calls[25].body!)).toEqual({ rating: 1 });
+    expect(JSON.parse(calls[28].body!)).toMatchObject({ id: "s/1", name: "S" });
+    expect(JSON.parse(calls[30].body!)).toEqual({ profile: "veloce", repeat: 3 });
+    expect(JSON.parse(calls[41].body!)).toEqual({ method: "sft", sources: ["feedback"] });
+    expect(JSON.parse(calls[44].body!)).toEqual({ method: "sft", base_model: "m", dataset_id: "ds_1" });
   });
 });
 

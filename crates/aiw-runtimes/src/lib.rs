@@ -1,8 +1,10 @@
 //! Inference layer (architecture §4): manifests, detection, adapters, sidecar supervisor.
 
+pub mod adapters;
 #[cfg(feature = "llama-embedded")]
 pub mod embedded;
 pub mod install;
+pub mod job;
 pub mod manifest;
 pub mod ollama;
 pub mod openai;
@@ -13,6 +15,7 @@ pub mod scripted;
 pub mod stt;
 pub mod supervisor;
 pub mod textproto;
+pub mod trainer;
 pub mod types;
 
 pub use manifest::RuntimeManifest;

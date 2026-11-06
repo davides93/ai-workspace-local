@@ -24,6 +24,7 @@ aiw-core.workspace = true
 aiw-engine.workspace = true
 aiw-eval.workspace = true
 aiw-models.workspace = true
+aiw-runtimes.workspace = true
 aiw-server.workspace = true
 anyhow.workspace = true
 clap.workspace = true

@@ -370,6 +370,71 @@ describe("other v0.4 methods", () => {
     await expect(api.deleteEvalSuite("ev-tmp")).rejects.toThrow(/non trovata/);
   });
 
+  it("proposes lessons after a thumbs down and writes them only when approved, like the engine does", async () => {
+    const pending = await api.lessons("pending");
+    expect(pending.length).toBeGreaterThan(0);
+    expect(pending.every((l) => l.status === "pending")).toBe(true);
+    expect((await api.lessons()).length).toBeGreaterThan(pending.length);
+
+    // A thumbs down proposes a lesson (one waiting per session); a thumbs up does not.
+    const before = (await api.lessons("pending")).filter((l) => l.session_id === "ses_ui").length;
+    await api.setFeedback("ses_ui", "m1", 1);
+    expect((await api.lessons("pending")).filter((l) => l.session_id === "ses_ui")).toHaveLength(before);
+    await api.setFeedback("ses_ui", "m1", -1);
+    await api.setFeedback("ses_ui", "m2", -1);
+    const proposed = (await api.lessons("pending")).filter((l) => l.session_id === "ses_ui");
+    expect(proposed).toHaveLength(Math.max(before, 1));
+
+    // Approved with edits; deciding twice or editing to nothing is refused with the reason.
+    const id = proposed[0].id;
+    await expect(api.approveLesson(id, { title: " " })).rejects.toThrow(/vuoti/);
+    const done = await api.approveLesson(id, { title: "Titolo nuovo", content: "Contenuto nuovo" });
+    expect(done).toMatchObject({ status: "approved", title: "Titolo nuovo", content: "Contenuto nuovo" });
+    expect(done.decided_at).toBeTruthy();
+    await expect(api.approveLesson(id)).rejects.toThrow(/già stata approvata/);
+    await expect(api.rejectLesson(id)).rejects.toThrow(/già stata/);
+    expect((await api.lessons("pending")).some((l) => l.id === id)).toBe(false);
+
+    const other = (await api.reflectSession("ses_cv")).id;
+    expect((await api.rejectLesson(other)).status).toBe("rejected");
+    await expect(api.rejectLesson("les_none")).rejects.toThrow(/non trovata/);
+    await expect(api.reflectSession("ses_none")).rejects.toThrow(/non trovata/);
+  });
+
+  it("optimizes a prompt in the background and applies a variant only on request, like the engine does", async () => {
+    await expect(api.startPromptOptimization("esempio", { agent: "fantasma" })).rejects.toThrow(/non trovato/);
+    await expect(api.startPromptOptimization("nessuna", { agent: "operator" })).rejects.toThrow(/non trovata/);
+    await expect(api.startPromptOptimization("esempio", { agent: "operator", variants: 6 })).rejects.toThrow(/variants/);
+    await expect(api.startPromptOptimization("esempio", { agent: "operator", repeat: 0 })).rejects.toThrow(/repeat/);
+
+    const promptBefore = (await api.agents()).find((a) => a.id === "operator")!.system_prompt;
+    vi.useFakeTimers();
+    const started = await api.startPromptOptimization("esempio", { agent: "operator", variants: 2 });
+    expect(started).toMatchObject({ status: "running", suite_id: "esempio", agent_id: "operator", base_prompt: promptBefore });
+    await expect(api.applyPromptOptimization(started.id, 0)).rejects.toThrow(/in corso/);
+    await vi.advanceTimersByTimeAsync(4000);
+    vi.useRealTimers();
+    const done = await api.promptOptimization(started.id);
+    expect(done.status).toBe("done");
+    expect(done.variants).toHaveLength(2);
+    expect(done.best).toBe(1);
+    expect(done.variants[1].diff).toContain("+");
+    expect((await api.promptOptimizations())[0].id).toBe(started.id);
+    // Not applied by itself.
+    expect((await api.agents()).find((a) => a.id === "operator")!.system_prompt).toBe(promptBefore);
+
+    await expect(api.applyPromptOptimization(started.id, 7)).rejects.toThrow(/non esiste/);
+    const applied = await api.applyPromptOptimization(started.id, 1);
+    expect(applied).toMatchObject({ status: "applied", applied: 1 });
+    expect((await api.agents()).find((a) => a.id === "operator")!.system_prompt).toBe(done.variants[1].prompt);
+    await expect(api.applyPromptOptimization(started.id, 1)).rejects.toThrow(/già stata applicata/);
+    await expect(api.promptOptimization("opt_none")).rejects.toThrow(/non trovata/);
+
+    // The demo has one result where nothing wins: no `best`, so nothing to propose.
+    const none = (await api.promptOptimizations()).find((o) => o.id === "opt_demo_none")!;
+    expect(none.best).toBeUndefined();
+  });
+
   it("re-detects runtimes", async () => {
     vi.useFakeTimers();
     const p = api.refreshRuntimes();
@@ -623,6 +688,86 @@ describe("updates (demo)", () => {
     expect(view.schema.properties["update.channel"].enum).toEqual(["auto", "stable", "beta", "alpha"]);
     expect(view.effective["update.auto_check"]).toBe(true);
     expect(view.effective["update.auto_download"]).toBe(false);
+  });
+});
+
+describe("fine-tuning", () => {
+  let api: MockTransport;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    api = new MockTransport();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const sleep = async (ms: number) => void (await vi.advanceTimersByTimeAsync(ms));
+
+  it("explains the device and refuses a dataset with too few examples", async () => {
+    const d = await api.trainDoctor();
+    expect(d.trainers.map((t) => t.id)).toEqual(["mlx-lm-lora", "trl", "unsloth"]);
+    await expect(api.buildDataset({ method: "sft", agent: "planner" })).rejects.toThrow(/almeno 10 esempi.*ne ho trovati 3/);
+    await expect(api.buildDataset({ method: "sft", sources: ["eval"] })).rejects.toThrow(/report di valutazione/);
+    await expect(api.buildDataset({ method: "sft", sources: ["boh"] })).rejects.toThrow(/sorgente/);
+    const ds = await api.buildDataset({ method: "sft", name: "Nuovo" });
+    expect(ds.examples).toBe(ds.train + ds.valid);
+    expect((await api.datasets())[0].id).toBe(ds.id);
+    await api.deleteDataset(ds.id);
+    await expect(api.deleteDataset(ds.id)).rejects.toThrow(/non trovato/);
+  });
+
+  it("serves the router statistics of the candidates and refuses wrong ones", async () => {
+    const base = (await api.agents()).find((a) => a.id === "operator")!;
+    await expect(api.saveAgent({ ...base, candidate_profiles: ["balanced", "balanced"] })).rejects.toThrow(/due volte/);
+    await expect(api.saveAgent({ ...base, candidate_profiles: ["fantasma"] })).rejects.toThrow(/non esiste/);
+    await api.saveAgent({ ...base, candidate_profiles: ["balanced", "fast-local"] });
+    const stats = await api.agentRouting("operator");
+    expect(stats.candidates).toEqual([{ profile: "balanced", n: 12, reward_sum: 9, mean: 0.75 }, { profile: "fast-local", n: 0, reward_sum: 0 }]);
+    await api.resetAgentRouting("operator");
+    expect((await api.agentRouting("operator")).candidates[0]).toMatchObject({ n: 0 });
+    await expect(api.agentRouting("nessuno")).rejects.toThrow(/non trovato/);
+    await api.saveAgent(base);
+  });
+
+  it("builds a GRPO dataset from the prompts of a suite", async () => {
+    await expect(api.buildDataset({ method: "grpo" })).rejects.toThrow(/suite/);
+    await expect(api.buildDataset({ method: "grpo", suite: "esempio" })).rejects.toThrow(/ne ho trovati 5.*repeat/);
+    const ds = await api.buildDataset({ method: "grpo", suite: "esempio", repeat: 2 });
+    expect([ds.examples, ds.sources]).toEqual([10, ["suite:esempio"]]);
+    await api.deleteDataset(ds.id);
+  });
+
+  it("runs a job to the adapter, one at a time, and can cancel it", async () => {
+    const ds = await api.buildDataset({ method: "sft" });
+    const job = await api.startTrainJob({ method: "sft", base_model: "Qwen/Qwen3-4B", dataset_id: ds.id, params: { iters: 3 }, name: "Prova" });
+    expect(job.status).toBe("queued");
+    await expect(api.startTrainJob({ method: "sft", base_model: "x", dataset_id: ds.id })).rejects.toThrow(/già un addestramento/);
+    await expect(api.deleteDataset(ds.id)).rejects.toThrow(/in uso/);
+    await sleep(3000);
+    const done = (await api.trainJobs()).find((j) => j.id === job.id)!;
+    expect(done.status).toBe("succeeded");
+    expect(done.adapter_id).toBeTruthy();
+    expect((await api.adapters())[0]).toMatchObject({ id: done.adapter_id, name: "Prova", method: "sft" });
+    expect((await api.trainJobLog(job.id, 2)).at(-1)).toBe("Addestramento completato.");
+
+    const second = await api.startTrainJob({ method: "sft", base_model: "x", dataset_id: ds.id, params: { iters: 50 } });
+    await sleep(1200);
+    await api.cancelTrainJob(second.id);
+    await sleep(800);
+    expect((await api.trainJobs()).find((j) => j.id === second.id)!.status).toBe("cancelled");
+    await expect(api.cancelTrainJob(second.id)).rejects.toThrow(/non è in corso/);
+    await api.deleteAdapter(done.adapter_id!);
+    await expect(api.deleteAdapter(done.adapter_id!)).rejects.toThrow(/non trovato/);
+  });
+
+  it("refuses a trainer that is missing or cannot run here", async () => {
+    const ds = await api.buildDataset({ method: "sft" });
+    await expect(api.startTrainJob({ method: "sft", trainer: "unsloth", base_model: "x", dataset_id: ds.id })).rejects.toThrow(/non è installato/);
+    await expect(api.startTrainJob({ method: "sft", trainer: "mlx-lm-lora", base_model: "x", dataset_id: ds.id })).rejects.toThrow(/non si può usare qui/);
+    await expect(api.startTrainJob({ method: "dpo", base_model: "x", dataset_id: ds.id })).rejects.toThrow(/è per SFT/);
+    const install = await api.installTrainer("unsloth");
+    expect(install.state).toBe("running");
+    await sleep(2000);
+    expect((await api.trainerInstall("unsloth"))?.state).toBe("done");
+    expect((await api.trainDoctor()).trainers.find((t) => t.id === "unsloth")!.state).toBe("ready");
   });
 });
 

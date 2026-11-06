@@ -468,6 +468,113 @@ esporta e la usa per misurare gli agenti:
   `~/.aiw/evals` (le suite già salvate si possono comunque eseguire) e il confronto via API legge solo
   report salvati, mai percorsi di file.
 
+### 5.5 Apprendimento senza pesi
+
+L'agente impara dalle conversazioni senza toccare i pesi del modello: propone **lezioni** e l'utente
+decide. Nulla viene scritto prima dell'approvazione.
+
+- **Lezione** (`Lesson`, documenti `kind: "lesson"`): `kind` `memory` (una regola per `AGENTS.md`) o
+  `skill` (una procedura), `title`, `content` in Markdown, `reason`, `status` `pending` →
+  `approved` | `rejected`, la sessione e il run di origine.
+- **Riflessione** (`Engine::reflect`, `POST /api/sessions/{id}/reflect`): prende la traccia della
+  sessione con lo stesso codice dell'export (ultimi 30 messaggi, contenuti lunghi troncati, segreti
+  mascherati, errori dei run, rifiuti, note dei pollici giù) e chiede al profilo `learning.profile`
+  (vuoto = il profilo dell'agente della sessione) un JSON `{kind, title, content, reason}`, validato
+  con `aiw_agent::schema`. Una risposta non valida ha un solo tentativo di correzione, poi c'è un
+  errore e nessuna lezione.
+- **Avvio automatico** (`learning.reflect`): `off`; `on_feedback` (default) dopo un pollice giù;
+  `on_failure` anche dopo un run fallito o fermato dal budget. Va in background, con al massimo una
+  lezione in attesa per sessione; gli errori vanno solo nei log.
+- **Approvazione** (`POST /api/lessons/{id}/approve {title?, content?}`): una `memory` è aggiunta in
+  fondo alla sezione `## Lezioni apprese` di `~/.aiw/AGENTS.md` (creata se manca), con titolo e data;
+  una `skill` diventa `~/.aiw/skills/<titolo-in-minuscolo>/SKILL.md` con frontmatter `name` e
+  `description` (un nome già usato prende il suffisso `-2`, `-3`…). Titolo e contenuto si possono
+  modificare prima. Audit `lesson.approve` / `lesson.reject`. La cartella del workspace non viene mai
+  toccata: è contenuto del repository. Le istruzioni globali entrano nel prompt di sistema dei run
+  successivi (troncate a 20.000 caratteri), le skill sono nell'indice delle skill disponibili.
+
+CLI: `aiw lessons [list [--status pending|approved|rejected|all]|approve <id> [--title] [--content]|reject <id>]`.
+
+**Ottimizzazione del prompt** (`Engine::optimize_prompt`, `aiw eval optimize`): usa la valutazione per
+migliorare il system prompt di un agente, senza cambiarlo da sola.
+
+1. Esegue la suite con il prompt attuale (baseline). `TaskRequest.system_prompt` sovrascrive il prompt
+   dell'agente solo per quel task: l'agente salvato non viene toccato.
+2. Chiede al profilo `learning.profile` (vuoto: il `--profile` indicato, altrimenti il profilo
+   dell'agente) da 1 a 5 varianti (default 3) come JSON `{variants: [{prompt, rationale}]}`, validato
+   come le lezioni (un tentativo di correzione), dandogli il prompt attuale e i task falliti con i
+   dettagli dei grader. Le varianti vuote, ripetute o uguali all'attuale sono scartate.
+3. Esegue la suite per ogni variante.
+4. Sceglie la migliore per score, a parità per pass rate, poi per prompt più corto, **solo se batte la
+   baseline** (score maggiore, o uguale con pass rate maggiore); altrimenti `best` manca e il
+   risultato dice che non c'è nulla da applicare.
+
+Il risultato è un documento `kind: "prompt_optimization"` (`running` → `done` | `failed` → `applied`):
+baseline e varianti con score, pass rate, id dei report e diff unificato rispetto al prompt di
+partenza. Quelli rimasti `running` all'avvio del motore diventano `failed`. L'applicazione
+(`Engine::apply_prompt_optimization`, audit `prompt.apply`) salva il prompt con le stesse validazioni
+di `save_agent` e si rifiuta se il prompt dell'agente è cambiato nel frattempo. Non è mai automatica:
+`--apply` chiede conferma sul terminale (fuori da un terminale serve anche `--yes`) e la UI chiede
+conferma prima di «Applica all'agente».
+
+### 5.6 Addestramento
+
+AIW orchestra il fine-tuning, non lo esegue: i **trainer** sono programmi Python esterni
+(mlx-lm su Apple Silicon, TRL/PEFT e Unsloth su CUDA) descritti da manifest propri
+(`crates/aiw-runtimes/manifests/trainers.json`, `kind: "trainer"`, modulo `aiw_runtimes::trainer`):
+piattaforme, architetture, acceleratori, metodi (`sft`, `dpo`, `grpo`), moduli Python da rilevare,
+ricetta `pip`, memoria necessaria per taglia del modello. Stanno in un catalogo separato da quello
+dei runtime, quindi non compaiono nelle liste dei runtime né nei profili di inferenza.
+
+`Engine::trainers()` dà a ciascun trainer uno stato sul dispositivo: `ready` (idoneo e installato),
+`missing` (idoneo, da installare) o `unsupported` con il motivo (piattaforma, acceleratore,
+memoria). L'idoneità dipende da piattaforma, architettura, acceleratori e memoria utile
+(memoria unificata su Apple Silicon, VRAM altrove); DPO richiede 1,5 volte la memoria dell'SFT e GRPO
+2 volte più la classe L (`min_tier`). `Engine::train_doctor()` (CLI `aiw train doctor`) riassume tutto
+e, se il dispositivo non può addestrare, cerca fra i dispositivi accoppiati quelli che potrebbero
+(il pairing salva classe, memoria e acceleratori in `PeerDevice.hardware`). L'installazione riusa
+`aiw_runtimes::install` (`pip` nel venv `~/.aiw/pyenv`).
+
+**Adapter nei profili.** `InferenceParams.adapters` (lista di `AdapterRef { path, scale? }`) è la forma
+scelta per usare un adapter: per percorso. Il manifest di un runtime dichiara come li carica
+(`adapters: { format, args, scaled_args, max }`: llama-server `--lora`/`--lora-scaled` con GGUF, mlx-lm
+`--adapter-path` con una cartella); `Engine::save_profile` valida i percorsi e il formato
+(`aiw_runtimes::adapters`) e rifiuta i runtime senza supporto. Il supervisor aggiunge gli argomenti al
+lancio e ricorda gli adapter con cui il sidecar è partito: un set diverso lo riavvia.
+
+**SFT dalle traiettorie.** `Engine::build_dataset` (`dataset.rs`) scrive in `~/.aiw/datasets/<id>/`
+`train.jsonl`, `valid.jsonl` (90/10 stabile: dipende dall'esempio, non dall'ordine) e `meta.json`.
+Le sorgenti sono le sessioni con un pollice in su e nessuno in giù (`feedback`), quelle il cui ultimo run è
+riuscito (`succeeded`) e i task superati nei report di valutazione (`eval`, un solo turno: prompt e risposta
+finale). Passano dallo stesso mascheramento dei segreti dell'export delle traiettorie e servono almeno 10
+esempi. Le chiamate di tool escono con gli argomenti come oggetto JSON, non come stringa, perché è ciò che si
+aspettano i chat template. `Engine::start_train_job` (`train_jobs.rs`) sceglie il trainer, controlla che il
+modello entri nel dispositivo e lancia il processo con `aiw_runtimes::job` (gruppo di processi, log su file,
+annullamento che uccide il gruppo): un solo job alla volta. Il progresso si legge dal log (righe di mlx-lm
+`Iter N: Train loss …` o `AIW_PROGRESS {json}` dello script TRL, `scripts/train/trl_train.py`, che l'engine
+copia in `~/.aiw/scripts/train/`). A fine corsa l'adapter è nella sua cartella `~/.aiw/adapters/<id>/`, verificata
+dal formato, e registrato; con una suite di valutazione il job la esegue con il modello del profilo scelto
+prima senza e poi con l'adapter (profilo temporaneo) e riporta la differenza nelle metriche. Un job rimasto
+`running` quando l'app si riavvia risulta `failed`. Il file di configurazione dello script TRL è `0600`.
+
+**DPO e GRPO.** Il dataset DPO (`dataset.rs`) è fatto di coppie `{prompt, chosen, rejected}`: la stessa
+domanda (ultimo messaggio dell'utente normalizzato) con una risposta col pollice in su e una in giù, nella
+stessa sessione o in sessioni diverse, e i tentativi riusciti e falliti dello stesso task in report con
+`--repeat`. Per GRPO i prompt sono i task di una suite e la reward di una risposta la calcola
+`Engine::reward` (`reward.rs`) con i grader del task che guardano solo la risposta (`output_matches`,
+`json_schema`, `judge`): è la stessa funzione di `POST /api/evals/{id}/reward`, che lo script
+`trl_train.py` chiama durante l'addestramento con l'indirizzo e il token scritti nella configurazione del
+job (mai nel log). L'engine ricorda l'indirizzo del server che lo ospita (`set_local_url`); `aiw train
+grpo` ne avvia uno su una porta locale libera.
+
+**Router a bandit.** Un agente con `candidate_profiles` e l'impostazione `routing.bandit` attiva sceglie il
+profilo a ogni run di primo livello con UCB1 (`routing.rs`): un profilo mai valutato va per primo, poi
+vince `media + sqrt(2 ln N / n)`. Le reward stanno in `profile_rewards`, una riga per pollice o tentativo di
+valutazione (chiave `fb:<sessione>:<messaggio>` o `eval:<report>:<task>:<tentativo>`: cambiare un pollice
+sostituisce la reward, toglierlo la rimuove). Il profilo scelto è nello `STATE_SNAPSHOT` (`runtime`,
+`model`) e in un evento `CUSTOM aiw.route {profile, reason}`; il run ricorda il suo profilo, così un
+pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e azzerano le statistiche.
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
@@ -503,7 +610,17 @@ esporta e la usa per misurare gli agenti:
 | GET/PUT/DELETE | `/api/evals[/{id}]` | Suite di valutazione (PUT: JSON della suite o `{"text": yaml|json}`; i grader `command` non si scrivono via API) |
 | POST | `/api/evals/{id}/runs` | Avvia la suite in background (`{agent?, profile?, repeat?}`); risponde con il report `running` |
 | GET | `/api/eval-runs` · `/api/eval-runs/{id}` · `/api/eval-runs/compare?a=&b=` | Report (aggiornati a ogni task), confronto A/B tra due report salvati |
+| GET | `/api/lessons?status=` | Lezioni proposte dagli agenti (`pending`, `approved`, `rejected`) |
+| POST | `/api/lessons/{id}/approve` · `/api/lessons/{id}/reject` | Approva (scrive `AGENTS.md` o una skill; `{title?, content?}` per modificare) o scarta |
+| POST | `/api/evals/{id}/optimize` | Avvia in background l'ottimizzazione del prompt di un agente su una suite (`{agent, variants?, profile?, repeat?}`); risponde con il record `running` |
+| GET | `/api/prompt-optimizations[/{id}]` | Ottimizzazioni (baseline, varianti, diff), aggiornate a ogni esecuzione |
+| POST | `/api/prompt-optimizations/{id}/apply` | Salva nell'agente il prompt della variante (`{variant}`) |
+| POST | `/api/sessions/{id}/reflect` | Chiede subito all'agente una lezione sulla conversazione |
 | GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
+| GET | `/api/trainers` · `/api/train/doctor` · `/api/trainers/{id}/install-plan` · GET/POST `/api/trainers/{id}/install` | Trainer, idoneità del dispositivo, installazione |
+| GET/POST | `/api/datasets` · GET/DELETE `/api/datasets/{id}` | Dataset di addestramento: POST crea da sessioni, feedback e report (`DatasetSpec`), rifiuta con meno di 10 esempi |
+| GET/POST | `/api/train/jobs` · GET `/api/train/jobs/{id}` · `/api/train/jobs/{id}/log?lines=` · POST `/api/train/jobs/{id}/cancel` | Addestramenti (uno alla volta), log e annullamento |
+| GET/DELETE | `/api/adapters[/{id}]` | Adapter registrati; un adapter usato da un profilo non si cancella |
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |

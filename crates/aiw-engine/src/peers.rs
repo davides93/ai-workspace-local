@@ -5,7 +5,7 @@
 //! delegate tasks to the agents running there). Its token stays on this device.
 
 use crate::Engine;
-use aiw_core::api::{McpServerConfig, PeerDevice, SystemInfo};
+use aiw_core::api::{McpServerConfig, PeerDevice, PeerHardware, SystemInfo};
 use aiw_core::{Error, Result};
 use serde_json::{json, Map, Value};
 use std::time::Duration;
@@ -85,6 +85,14 @@ impl Engine {
             address: base.clone(),
             status: "online".into(),
             shared_runtimes: models,
+            hardware: Some(PeerHardware {
+                arch: sys.device.arch.clone(),
+                tier: sys.device.tier.clone(),
+                memory_mb: sys.device.memory_mb,
+                vram_mb: sys.device.vram_mb(),
+                accelerators: sys.device.accelerators.iter().map(|a| a.kind.clone()).collect(),
+                unified_memory: sys.device.unified_memory(),
+            }),
         };
         self.0.store.put_doc("peer", &id, &peer)?;
         self.0.store.put_doc("peer_token", &id, &json!({ "token": token }))?;

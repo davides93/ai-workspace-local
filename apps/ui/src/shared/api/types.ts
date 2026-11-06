@@ -87,6 +87,16 @@ export interface Transcript {
   elapsed_ms: number;
 }
 
+/** What a paired device tells about itself when pairing (absent for peers paired before it existed). */
+export interface PeerHardware {
+  arch: string;
+  tier: string;
+  memory_mb: number;
+  vram_mb: number;
+  accelerators: string[];
+  unified_memory: boolean;
+}
+
 export interface PeerDevice {
   id: string;
   name: string;
@@ -94,6 +104,7 @@ export interface PeerDevice {
   address: string;
   status: "online" | "offline";
   shared_runtimes: string[];
+  hardware?: PeerHardware;
 }
 
 // ---------- Settings schema (JSON Schema subset → generated forms) ----------
@@ -145,6 +156,8 @@ export interface RuntimeInfo {
   /** AIW can install this runtime by itself on this device (pip into its own environment, Homebrew). */
   install_auto?: boolean;
   homepage?: string;
+  /** Format of the LoRA adapters a profile can name (`gguf` file, `mlx`/`peft` folder); missing: the runtime cannot load them. */
+  adapter_format?: "gguf" | "mlx" | "peft";
 }
 
 /** What installing a runtime takes here (GET /api/runtimes/:id/install-plan). */
@@ -378,7 +391,14 @@ export interface InferenceProfile {
   description?: string;
   runtime_id: string;
   model: string;
-  params: { temperature?: number; top_p?: number; max_tokens?: number; context?: number };
+  params: { temperature?: number; top_p?: number; max_tokens?: number; context?: number; adapters?: AdapterRef[] };
+}
+
+/** A LoRA adapter on disk: a GGUF file for llama.cpp, a folder for MLX and PEFT. */
+export interface AdapterRef {
+  path: string;
+  /** Strength of the adapter (1 = as trained); the runtime default when missing. */
+  scale?: number;
 }
 
 export type PolicyMode = "plan" | "ask" | "auto-edit" | "auto" | "yolo";
@@ -398,6 +418,23 @@ export interface AgentProfile {
   output_schema?: unknown;
   /** Limits of one run (sub-agents included); a missing value falls back to the `agents.budget.*` settings. */
   budget?: BudgetLimits;
+  /** Profiles the router may choose from, one per run, when the setting `routing.bandit` is on. */
+  candidate_profiles?: string[];
+}
+
+/** What the bandit router knows about a candidate profile: the rewards (thumbs, evaluation tasks) it earned. */
+export interface RoutingCandidate {
+  profile: string;
+  n: number;
+  reward_sum: number;
+  /** Missing while it was never rewarded. */
+  mean?: number;
+}
+
+export interface RoutingStats {
+  /** The setting `routing.bandit`. */
+  enabled: boolean;
+  candidates: RoutingCandidate[];
 }
 
 /** Each limit is optional; a set one is at least 1 (the backend refuses 0). */
@@ -520,6 +557,31 @@ export interface Feedback {
 /** Longest note the engine accepts with a rating. */
 export const MAX_FEEDBACK_NOTE_CHARS = 2000;
 
+export type LessonKind = "memory" | "skill";
+export type LessonStatus = "pending" | "approved" | "rejected";
+
+/** What the agent learned from a conversation, proposed to the user: nothing is written until it is approved. */
+export interface Lesson {
+  id: string;
+  session_id: string;
+  run_id?: string;
+  agent_id: string;
+  /** memory: a note for AGENTS.md. skill: a new skill. */
+  kind: LessonKind;
+  title: string;
+  /** Markdown. */
+  content: string;
+  /** Why the agent proposes it. */
+  reason: string;
+  status: LessonStatus;
+  created_at: string;
+  decided_at?: string;
+}
+
+/** Limits of the engine on what the user can edit before approving. */
+export const MAX_LESSON_TITLE_CHARS = 120;
+export const MAX_LESSON_CONTENT_CHARS = 6000;
+
 /** One grader of an evaluation task: `kind` plus the fields of that kind (path, pattern, criteria…). */
 export interface EvalGraderSpec {
   kind: "file_exists" | "file_contains" | "output_matches" | "json_schema" | "command" | "judge" | (string & {});
@@ -634,6 +696,48 @@ export interface EvalComparison {
   total_b: EvalSide;
   pass_rate_delta: number;
   score_delta: number;
+}
+
+export type OptimizationStatus = "running" | "done" | "failed" | "applied";
+
+/** A candidate system prompt and how the suite went with it. */
+export interface PromptVariant {
+  prompt: string;
+  rationale: string;
+  score: number;
+  pass_rate: number;
+  /** The report of the suite run with this prompt. */
+  report_id?: string;
+  /** Unified diff against the prompt the agent had. */
+  diff: string;
+}
+
+/** The suite run with the agent's prompt and with variants of it; applying one to the agent is the user's choice. */
+export interface PromptOptimization {
+  id: string;
+  suite_id: string;
+  agent_id: string;
+  status: OptimizationStatus;
+  started_at: string;
+  finished_at?: string;
+  base_prompt: string;
+  baseline_score: number;
+  baseline_pass_rate: number;
+  baseline_report_id?: string;
+  variants: PromptVariant[];
+  /** Index in `variants` of the one that beats the baseline; missing when none does. */
+  best?: number;
+  /** Index of the variant applied to the agent. */
+  applied?: number;
+  error?: string;
+}
+
+export interface OptimizeRequest {
+  agent: string;
+  /** 1 to 5 (default 3). */
+  variants?: number;
+  profile?: string;
+  repeat?: number;
 }
 
 export type RunStatus = "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled";
@@ -855,4 +959,127 @@ export interface AiwImage {
   mime: string;
   /** Base64 data. */
   data: string;
+}
+
+// ---------- Fine-tuning ----------
+export type TrainMethod = "sft" | "dpo" | "grpo";
+
+export interface TrainMethodFit {
+  method: TrainMethod;
+  /** Largest model, in billions of parameters, that fits when the method can run at all. */
+  max_params_b?: number;
+  /** Why it cannot run here. */
+  blocked?: string;
+}
+
+/** `ready` can train and is installed; `missing` could train but is not installed; `unsupported` cannot run here. */
+export interface TrainerInfo {
+  id: string;
+  name: string;
+  description: string;
+  state: "ready" | "missing" | "unsupported";
+  reason?: string;
+  methods: TrainMethodFit[];
+  adapter_format: "mlx" | "peft";
+  install_auto: boolean;
+  install_hint?: string;
+  homepage?: string;
+}
+
+export interface TrainDoctor {
+  device: {
+    name: string; os: string; arch: string; tier: string; memory_mb: number; vram_mb: number; unified_memory: boolean; accelerators: string[];
+  };
+  trainers: TrainerInfo[];
+  can_train: string[];
+  remote: string[];
+  advice: string[];
+}
+
+export interface DatasetSpec {
+  name?: string;
+  method: TrainMethod;
+  agent?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  /** `feedback`, `succeeded`, `eval`. */
+  sources?: string[];
+  eval_reports?: string[];
+  suite?: string;
+  repeat?: number;
+}
+
+export interface DatasetInfo {
+  id: string;
+  name: string;
+  method: TrainMethod;
+  created_at: string;
+  examples: number;
+  train: number;
+  valid: number;
+  tokens_est: number;
+  agents: string[];
+  sources: string[];
+  path: string;
+}
+
+export interface TrainParams {
+  epochs?: number;
+  iters?: number;
+  learning_rate?: number;
+  rank?: number;
+  batch_size?: number;
+}
+
+export interface TrainJobRequest {
+  method: TrainMethod;
+  trainer?: string;
+  base_model: string;
+  dataset_id: string;
+  params?: TrainParams;
+  name?: string;
+  eval_suite?: string;
+  eval_profile?: string;
+  reward_suite?: string;
+}
+
+export type TrainJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface TrainJob {
+  id: string;
+  method: TrainMethod;
+  trainer: string;
+  base_model: string;
+  dataset_id: string;
+  params: TrainParams;
+  status: TrainJobStatus;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  log_path: string;
+  /** 0..1, when the trainer prints it. */
+  progress?: number;
+  adapter_id?: string;
+  metrics?: Record<string, unknown>;
+  error?: string;
+  name?: string;
+  eval_suite?: string;
+  eval_profile?: string;
+  reward_suite?: string;
+}
+
+export interface AdapterInfo {
+  id: string;
+  name: string;
+  base_model: string;
+  method: TrainMethod;
+  trainer: string;
+  dataset_id: string;
+  created_at: string;
+  /** What a profile names in `params.adapters[].path`. */
+  path: string;
+  metrics?: Record<string, unknown>;
+  format: "mlx" | "peft" | "gguf";
+  job_id?: string;
 }

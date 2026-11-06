@@ -64,6 +64,9 @@ describe("normalizeAgent", () => {
     const n = normalizeAgent(valid({ name: "  Revisore ", description: " x ", tools: ["a", "a", "*"], max_turns: 9000 }));
     expect(n).toMatchObject({ name: "Revisore", description: "x", tools: ["*"], max_turns: 500 });
     expect(normalizeAgent(valid({ max_turns: 0 })).max_turns).toBe(1);
+    // Candidate profiles are listed once, and an empty list is left out of the saved agent.
+    expect(normalizeAgent(valid({ candidate_profiles: ["a", "b", "a"] })).candidate_profiles).toEqual(["a", "b"]);
+    expect("candidate_profiles" in normalizeAgent(valid({ candidate_profiles: [] }))).toBe(false);
     expect(normalizeAgent(valid({ max_turns: Number.NaN })).max_turns).toBe(30);
   });
 });

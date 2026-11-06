@@ -19,6 +19,8 @@ pub const EXCLUDED: &str = "[escluso]";
 /// Which sessions to export and how to treat what they contain.
 #[derive(Debug, Clone)]
 pub struct TraceFilter {
+    /// Only this session.
+    pub session: Option<String>,
     pub agent: Option<String>,
     /// RFC 3339 or `YYYY-MM-DD`, compared with the last activity of the session.
     pub since: Option<String>,
@@ -36,7 +38,17 @@ pub struct TraceFilter {
 
 impl Default for TraceFilter {
     fn default() -> Self {
-        Self { agent: None, since: None, until: None, status: None, limit: None, rated: None, redact: true, exclude_paths: vec![] }
+        Self {
+            session: None,
+            agent: None,
+            since: None,
+            until: None,
+            status: None,
+            limit: None,
+            rated: None,
+            redact: true,
+            exclude_paths: vec![],
+        }
     }
 }
 
@@ -138,7 +150,7 @@ impl Redactor {
 }
 
 /// The values of the stored MCP servers that are secrets (see `secrets::is_secret_name`).
-fn mcp_secret_values(store: &Store) -> Vec<String> {
+pub(crate) fn mcp_secret_values(store: &Store) -> Vec<String> {
     let mut out = Vec::new();
     for cfg in store.list_docs::<McpServerConfig>("mcp").unwrap_or_default() {
         for map in [cfg.headers.as_ref(), cfg.env.as_ref()].into_iter().flatten() {
@@ -160,7 +172,7 @@ fn mcp_secret_values(store: &Store) -> Vec<String> {
 
 /// `since`/`until` as instants. A bare date means the whole day (UTC): the start for `since`,
 /// the last millisecond for `until`.
-fn parse_bound(s: &str, end_of_day: bool, what: &str) -> Result<DateTime<Utc>> {
+pub(crate) fn parse_bound(s: &str, end_of_day: bool, what: &str) -> Result<DateTime<Utc>> {
     let s = s.trim();
     if let Ok(t) = DateTime::parse_from_rfc3339(s) {
         return Ok(t.with_timezone(&Utc));
@@ -207,7 +219,7 @@ fn cites(set: &GlobSet, text: &str) -> bool {
 }
 
 /// Is this message an internal note rather than part of the conversation?
-fn is_note(m: &ChatMessage) -> bool {
+pub(crate) fn is_note(m: &ChatMessage) -> bool {
     match m.name.as_deref() {
         Some(n) if n == BLOCKED_PROMPT_MESSAGE || n == RUN_ERROR_MESSAGE => true,
         Some(n) if n == aiw_agent::runner::SELF_CHECK_NAME || n == aiw_agent::runner::FORMAT_CHECK_NAME => true,
@@ -255,6 +267,9 @@ impl Engine {
         for s in store.all_sessions()? {
             if out.len() >= filter.limit.unwrap_or(usize::MAX) {
                 break;
+            }
+            if filter.session.as_deref().is_some_and(|id| id != s.id) {
+                continue;
             }
             if filter.agent.as_deref().is_some_and(|a| a != s.agent_id) {
                 continue;
