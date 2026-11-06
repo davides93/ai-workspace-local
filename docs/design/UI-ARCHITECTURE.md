@@ -36,7 +36,7 @@ src/
     model/                   logica pura del dominio (testata)
 ```
 
-Domini: `home`, `chat`, `agents`, `workflows`, `capabilities` (tool, server MCP, browser e
+Domini: `home`, `chat`, `agents`, `workflows`, `evals`, `capabilities` (tool, server MCP, browser e
 computer-use), `integrations`, `models`, `runtimes`, `devices`, `security`, `activity`,
 `settings`, `pairing`, `approvals`.
 
@@ -99,6 +99,7 @@ Router su hash scritto in casa (nessuna dipendenza). Percorsi:
 | chat | `#/chat`, `#/chat/:sessionId` | la sessione attiva sta nell'URL |
 | agents | `#/agents`, `#/agents/:agentId` | |
 | workflows | `#/workflows`, `#/workflows/:workflowId` | |
+| evals | `#/evals/:tab?` | `suites` (default; `?suite=` la suite aperta, `new` per crearne una), `reports` (`?report=` il report aperto, `?b=` quello con cui confrontarlo) |
 | capabilities | `#/capabilities/:tab?` | `tools` (default), `mcp`, `browser` |
 | integrations | `#/integrations` | |
 | models | `#/models/:tab?` | `installed` (default), `discover`, `downloads`, `catalog`; query `?provider=&q=&format=` |
@@ -284,7 +285,7 @@ setHooks(hooks: HookConfig[]): Promise<{ hooks: HookConfig[] }>;
 ```
 
 `PolicyRule = { tool: string; pattern?: string | null; action: "allow" | "ask" | "deny" }`,
-`HookConfig = { event: "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop"; matcher?: string | null; command: string; timeout_s: number }`.
+`HookConfig = { event: "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop" | "SubagentStart" | "SubagentStop" | "PreCompact"; matcher?: string | null; command: string; timeout_s: number }`.
 
 Eventi: il runner emette `CUSTOM` con `name: "aiw.image"` e
 `value: { toolCallId, mime, data }` (base64, senza prefisso `data:`) per gli screenshot di browser e

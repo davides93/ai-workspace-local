@@ -6,6 +6,7 @@ export function statusTone(s: string): LedTone {
     case "running":
     case "connected":
     case "succeeded":
+    case "completed":
     case "done":
     case "online":
       return "ok";
@@ -25,7 +26,7 @@ export function statusTone(s: string): LedTone {
 
 export const statusLabel: Record<string, string> = {
   running: "In esecuzione", starting: "Avvio…", available: "Disponibile", installable: "Da installare", unsupported: "Non supportato",
-  stopped: "Fermo", error: "Errore", connected: "Connesso", disconnected: "Disconnesso", succeeded: "Completato", failed: "Fallito",
+  stopped: "Fermo", error: "Errore", connected: "Connesso", disconnected: "Disconnesso", succeeded: "Completato", completed: "Completato", failed: "Fallito",
   waiting_approval: "Attende conferma", cancelled: "Annullato", pending: "In coda", done: "Fatto", skipped: "Saltato", waiting: "In attesa",
   online: "Online", offline: "Offline", queued: "In coda", verifying: "Verifica",
 };

@@ -1,7 +1,7 @@
 //! The engine side of [`aiw_agent::RunHost`] and [`aiw_workflow::WorkflowHost`].
 
 use crate::Engine;
-use aiw_agent::{AgentRunner, RunHost, RunInput, Skill};
+use aiw_agent::{narrow_sandbox, narrow_tools, AgentRunner, RunHost, RunInput, Skill};
 use aiw_core::api::{ApprovalOutcome, ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun, WorkflowStep};
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
@@ -24,11 +24,21 @@ pub struct EngineHost {
     workflow: Option<WorkflowDef>,
     first_update: Mutex<Option<oneshot::Sender<WorkflowRun>>>,
     workflow_session: Mutex<Option<String>>,
+    /// Nobody can answer: every confirmation the run asks for is refused (evaluation runs).
+    deny_approvals: bool,
 }
 
 impl EngineHost {
     pub fn new(engine: Engine, session_id: Option<String>, parent_run: Option<String>) -> Self {
-        Self { engine, session_id, parent_run, workflow: None, first_update: Mutex::new(None), workflow_session: Mutex::new(None) }
+        Self {
+            engine,
+            session_id,
+            parent_run,
+            workflow: None,
+            first_update: Mutex::new(None),
+            workflow_session: Mutex::new(None),
+            deny_approvals: false,
+        }
     }
     /// `first` receives the first state of the run (a resumed run has no one waiting for it).
     pub fn for_workflow(engine: Engine, wf: WorkflowDef, first: Option<oneshot::Sender<WorkflowRun>>) -> Self {
@@ -39,7 +49,13 @@ impl EngineHost {
             workflow: Some(wf),
             first_update: Mutex::new(first),
             workflow_session: Mutex::new(None),
+            deny_approvals: false,
         }
+    }
+    /// Refuses every confirmation instead of waiting for a person (sub-agents inherit this).
+    pub fn denying_approvals(mut self) -> Self {
+        self.deny_approvals = true;
+        self
     }
 
     async fn collect_text(backend: Arc<dyn ChatBackend>, req: ChatRequest, cancel: CancellationToken) -> Result<String> {
@@ -85,6 +101,9 @@ impl RunHost for EngineHost {
     }
 
     async fn approve(&self, req: ApprovalRequest) -> bool {
+        if self.deny_approvals {
+            return false;
+        }
         self.engine.wait_approval(req, self.session_id.clone()).await
     }
 
@@ -134,7 +153,14 @@ impl RunHost for EngineHost {
         if mode_rank(&input.policy.mode) > mode_rank(&parent.policy.mode) {
             input.policy.mode = parent.policy.mode.clone();
         }
-        let host = Arc::new(EngineHost::new(self.engine.clone(), self.session_id.clone(), Some(parent.run_id.clone())));
+        // The run budget is shared with the parent: delegating does not buy more.
+        input.budget = parent.budget.clone();
+        // Same for the sandbox and the tool list.
+        input.tool_ctx.sandbox = narrow_sandbox(parent.tool_ctx.sandbox, input.tool_ctx.sandbox);
+        input.agent.tools = narrow_tools(&parent.agent.tools, &input.agent.tools);
+        let mut host = EngineHost::new(self.engine.clone(), self.session_id.clone(), Some(parent.run_id.clone()));
+        host.deny_approvals = self.deny_approvals;
+        let host = Arc::new(host);
         let out = AgentRunner::run(input, host).await?;
         Ok(if out.final_text.is_empty() { "(nessuna risposta)".into() } else { out.final_text })
     }

@@ -79,6 +79,88 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Esporta le traiettorie delle sessioni (per valutazione e fine-tuning)
+    Traces {
+        #[command(subcommand)]
+        cmd: TracesCmd,
+    },
+    /// Valuta gli agenti con suite di task e grader
+    Eval {
+        #[command(subcommand)]
+        cmd: EvalCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvalCmd {
+    /// Esegue una suite (file YAML/JSON o id di una suite salvata) e mostra il riepilogo.
+    /// I grader `command` eseguono comandi della suite con i tuoi permessi: lancia solo suite di cui ti fidi.
+    Run {
+        /// File della suite oppure id di una suite salvata
+        suite: String,
+        /// Agente per tutti i task (sostituisce quello della suite)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Profilo di inferenza per tutti i task (sostituisce quello dell'agente). Ripetuto, esegue la
+        /// suite con ciascun profilo e confronta gli altri con il primo
+        #[arg(long)]
+        profile: Vec<String>,
+        /// Quante volte eseguire ogni task
+        #[arg(long, default_value_t = 1)]
+        repeat: u32,
+        /// Scrive il report in questo file (JSON)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Non cancella le cartelle di lavoro dei task
+        #[arg(long)]
+        keep: bool,
+    },
+    /// Confronta due report (id salvati o file JSON): le differenze sono B meno A
+    Compare {
+        a: String,
+        b: String,
+        /// Scrive il confronto come JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Elenca le suite salvate
+    Suites,
+    /// Elenca i report salvati
+    List,
+}
+
+#[derive(Subcommand)]
+enum TracesCmd {
+    /// Scrive una riga JSON per sessione (JSONL), con i segreti mascherati
+    Export {
+        /// Solo le sessioni di questo agente
+        #[arg(long)]
+        agent: Option<String>,
+        /// Attività dal giorno (AAAA-MM-GG) o dall'istante (RFC 3339)
+        #[arg(long)]
+        since: Option<String>,
+        /// Attività fino al giorno (AAAA-MM-GG, incluso) o all'istante (RFC 3339)
+        #[arg(long)]
+        until: Option<String>,
+        /// Ultimo stato della sessione: succeeded, failed, cancelled, running
+        #[arg(long)]
+        status: Option<String>,
+        /// Numero massimo di sessioni (le più recenti)
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Solo le sessioni con un feedback: up (pollice su), down (pollice giù) o any
+        #[arg(long, value_parser = ["up", "down", "any"])]
+        rated: Option<String>,
+        /// File di destinazione (default: standard output)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Non maschera i segreti: l'export può contenere chiavi e token
+        #[arg(long)]
+        no_redact: bool,
+        /// Glob dei percorsi da escludere: il contenuto dei messaggi dei tool che li citano diventa [escluso]
+        #[arg(long = "exclude-path")]
+        exclude_path: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -252,6 +334,34 @@ async fn main() -> Result<()> {
             })?;
             println!("Profilo {} → {} · {}", p.id, p.runtime_id, p.model);
         }
+        Cmd::Traces { cmd: TracesCmd::Export { agent, since, until, status, limit, rated, out, no_redact, exclude_path } } => {
+            let filter = aiw_engine::traces::TraceFilter {
+                agent,
+                since,
+                until,
+                status,
+                limit,
+                rated,
+                redact: !no_redact,
+                exclude_paths: exclude_path,
+            };
+            let records = engine.export_traces(&filter)?;
+            let jsonl = aiw_engine::traces::to_jsonl(&records)?;
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, jsonl).with_context(|| format!("scrittura di {}", path.display()))?;
+                    eprintln!("{} sessioni esportate in {}", records.len(), path.display());
+                }
+                None => {
+                    print!("{jsonl}");
+                    eprintln!("{} sessioni esportate", records.len());
+                }
+            }
+            if no_redact {
+                eprintln!("Attenzione: i segreti non sono stati mascherati.");
+            }
+        }
+        Cmd::Eval { cmd } => eval_cmd(&engine, cmd).await?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Rewind { run_id, dry_run } => {
             let info = engine.checkpoint_info(&run_id)?;
@@ -306,6 +416,141 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn percent(x: f64) -> String {
+    format!("{:.0}%", x * 100.0)
+}
+
+async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
+    use aiw_engine::eval::EvalRequest;
+    match cmd {
+        EvalCmd::Suites => {
+            for s in engine.eval_suites()? {
+                println!("{:<24} {:>3} task  {}", s.id, s.tasks.len(), s.name);
+            }
+        }
+        EvalCmd::List => {
+            for r in engine.eval_reports()? {
+                println!(
+                    "{:<26} {:<20} {:<10} {:>3}/{:<3} pass rate {:>4}  score {:.2}  {}",
+                    r.id,
+                    r.suite_id,
+                    r.status,
+                    r.summary.passed,
+                    r.summary.total,
+                    percent(r.summary.pass_rate),
+                    r.summary.score,
+                    r.started_at
+                );
+            }
+        }
+        EvalCmd::Compare { a, b, json } => {
+            let comparison = engine.compare_eval_runs(&a, &b)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&comparison)?);
+            } else {
+                print!("{}", comparison.to_text());
+            }
+        }
+        EvalCmd::Run { suite, agent, profile, repeat, out, keep } => {
+            let suite = engine.resolve_eval_suite(&suite)?;
+            eprintln!("Suite «{}»: {} task × {} (i grader `command` girano con i tuoi permessi)", suite.name, suite.tasks.len(), repeat);
+            // With several profiles the suite runs once per profile and the others are compared to the first.
+            let profiles: Vec<Option<String>> = if profile.is_empty() { vec![None] } else { profile.iter().cloned().map(Some).collect() };
+            let mut reports = vec![];
+            for p in &profiles {
+                if profiles.len() > 1 {
+                    eprintln!("\n== profilo {} ==", p.as_deref().unwrap_or_default());
+                }
+                let report = eval_run_one(
+                    engine,
+                    &suite,
+                    EvalRequest { agent: agent.clone(), profile: p.clone(), repeat: Some(repeat), keep, ..Default::default() },
+                )
+                .await?;
+                if let Some(path) = &out {
+                    let path = match (profiles.len(), p) {
+                        (n, Some(p)) if n > 1 => {
+                            let mut name = path.clone().into_os_string();
+                            name.push(format!(".{p}.json"));
+                            PathBuf::from(name)
+                        }
+                        _ => path.clone(),
+                    };
+                    std::fs::write(&path, serde_json::to_string_pretty(&report)?)
+                        .with_context(|| format!("scrittura di {}", path.display()))?;
+                    println!("Report scritto in {}", path.display());
+                }
+                reports.push(report);
+            }
+            for other in reports.iter().skip(1) {
+                println!("\nConfronto tra i profili:\n{}", aiw_eval::compare(&reports[0], other).to_text());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Runs the suite once, telling how it goes, and prints the summary table.
+async fn eval_run_one(engine: &Engine, suite: &aiw_eval::Suite, req: aiw_engine::eval::EvalRequest) -> Result<aiw_eval::EvalReport> {
+    use aiw_eval::EvalEvent;
+    let repeat = req.repeat.unwrap_or(1);
+    {
+        {
+            let mut started = 1;
+            let report = engine
+                .run_eval(suite, &req, &mut |ev| match ev {
+                    EvalEvent::Started(_) => {}
+                    EvalEvent::TaskStarted { task_id, attempt, attempts } => {
+                        eprint!(
+                            "[{}/{attempts}] {task_id}{} … ",
+                            started,
+                            if repeat > 1 { format!(" (tentativo {attempt})") } else { String::new() }
+                        );
+                        started += 1;
+                    }
+                    EvalEvent::TaskFinished { result, .. } => {
+                        eprintln!(
+                            "{} ({:.1} s, {} token, {} turni)",
+                            if result.passed { "ok" } else { "FALLITO" },
+                            result.duration_ms as f64 / 1000.0,
+                            result.tokens,
+                            result.turns
+                        );
+                        if let Some(e) = &result.error {
+                            eprintln!("    errore: {e}");
+                        }
+                        for g in result.graders.iter().filter(|g| !g.passed) {
+                            eprintln!("    ✗ {}: {}", g.kind, g.detail);
+                        }
+                        if let Some(dir) = &result.workdir {
+                            eprintln!("    cartella: {dir}");
+                        }
+                    }
+                })
+                .await?;
+            println!("\n{:<24} {:>8} {:>7} {:>7} {:>8}", "TASK", "RIUSCITI", "SCORE", "TOKEN", "SECONDI");
+            for t in &suite.tasks {
+                let runs: Vec<_> = report.tasks.iter().filter(|r| r.task_id == t.id).collect();
+                let ok = runs.iter().filter(|r| r.passed).count();
+                let n = runs.len().max(1) as f64;
+                println!(
+                    "{:<24} {:>5}/{:<2} {:>7.2} {:>7} {:>8.1}",
+                    t.id,
+                    ok,
+                    runs.len(),
+                    runs.iter().map(|r| r.score).sum::<f64>() / n,
+                    runs.iter().map(|r| r.tokens).sum::<u64>() / runs.len().max(1) as u64,
+                    runs.iter().map(|r| r.duration_ms).sum::<u64>() as f64 / 1000.0 / n
+                );
+            }
+            let s = &report.summary;
+            println!("\nTotale: {}/{} riusciti (pass rate {}), score medio {:.2}", s.passed, s.total, percent(s.pass_rate), s.score);
+            println!("Report: {}", report.id);
+            Ok(report)
+        }
+    }
 }
 
 fn size(bytes: u64) -> String {

@@ -131,6 +131,8 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/sessions/{id}/worktree", get(worktree_status).delete(worktree_discard))
         .route("/api/sessions/{id}/worktree/apply", post(worktree_apply))
         .route("/api/sessions/{id}/messages", get(messages))
+        .route("/api/sessions/{id}/messages/{mid}/feedback", put(set_feedback).delete(delete_feedback))
+        .route("/api/sessions/{id}/feedback", get(session_feedback))
         .route("/api/sessions/{id}/active-run", get(active_run))
         .route("/api/sessions/{id}/runs", post(start_run))
         .route("/api/sessions/{id}/checkpoints", get(session_checkpoints))
@@ -163,6 +165,13 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/mcp/servers/{id}", delete(remove_mcp))
         .route("/api/config", get(config).put(set_config))
         .route("/api/audit", get(audit))
+        .route("/api/traces/export", get(traces_export))
+        .route("/api/evals", get(eval_suites))
+        .route("/api/evals/{id}", get(eval_suite).put(save_eval_suite).delete(delete_eval_suite))
+        .route("/api/evals/{id}/runs", post(start_eval))
+        .route("/api/eval-runs", get(eval_runs))
+        .route("/api/eval-runs/compare", get(compare_eval_runs))
+        .route("/api/eval-runs/{id}", get(eval_run))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat_completions))
         .route("/v1/messages", post(anthropic::messages))
@@ -483,6 +492,25 @@ async fn delete_session(State(s): State<AppState>, Path(id): Path<String>) -> Ap
 async fn messages(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<ChatMessage>> {
     ok(s.engine.messages(&id)?)
 }
+#[derive(Deserialize)]
+struct FeedbackBody {
+    rating: i32,
+    note: Option<String>,
+}
+async fn set_feedback(
+    State(s): State<AppState>,
+    Path((id, mid)): Path<(String, String)>,
+    Json(b): Json<FeedbackBody>,
+) -> ApiResult<Feedback> {
+    ok(s.engine.set_feedback(&id, &mid, b.rating, b.note)?)
+}
+async fn delete_feedback(State(s): State<AppState>, Path((id, mid)): Path<(String, String)>) -> ApiResult<Value> {
+    s.engine.delete_feedback(&id, &mid)?;
+    ok(json!({}))
+}
+async fn session_feedback(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<Feedback>> {
+    ok(s.engine.session_feedback(&id)?)
+}
 async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.session(&id)?; // an unknown session is a 404, not "no run"
     ok(json!({"run_id": s.engine.active_run(&id)}))
@@ -553,6 +581,32 @@ async fn run_events_sse(
     let stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
         if finished { Box::pin(replay_stream) } else { Box::pin(replay_stream.chain(live)) };
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
+/// Trajectories as NDJSON, one session per line. Query: `agent`, `since`, `until`, `status`,
+/// `limit`, `rated` (up | down | any), `redact=false` (secrets are masked by default), `exclude_path` (repeatable glob).
+async fn traces_export(State(s): State<AppState>, axum::extract::RawQuery(q): axum::extract::RawQuery) -> Result<Response, ApiError> {
+    let mut f = aiw_engine::traces::TraceFilter::default();
+    let url = reqwest::Url::parse(&format!("http://localhost/?{}", q.unwrap_or_default()))
+        .map_err(|_| ApiError(Error::Invalid("query non valida".into())))?;
+    for (k, v) in url.query_pairs() {
+        let v = v.into_owned();
+        match k.as_ref() {
+            "agent" if !v.is_empty() => f.agent = Some(v),
+            "since" if !v.is_empty() => f.since = Some(v),
+            "until" if !v.is_empty() => f.until = Some(v),
+            "status" if !v.is_empty() => f.status = Some(v),
+            "rated" if !v.is_empty() => f.rated = Some(v),
+            "limit" if !v.is_empty() => {
+                f.limit = Some(v.parse().map_err(|_| ApiError(Error::Invalid("limit deve essere un numero intero".into())))?)
+            }
+            "redact" => f.redact = !matches!(v.as_str(), "false" | "0" | "no"),
+            "exclude_path" if !v.is_empty() => f.exclude_paths.push(v),
+            _ => {}
+        }
+    }
+    let body = aiw_engine::traces::to_jsonl(&s.engine.export_traces(&f)?)?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/x-ndjson")], body).into_response())
 }
 
 async fn approvals(State(s): State<AppState>) -> ApiResult<Vec<ApprovalRequest>> {
@@ -767,6 +821,72 @@ struct RunWf {
 async fn run_workflow(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<RunWf>>) -> ApiResult<WorkflowRun> {
     ok(s.engine.run_workflow(&id, body.map(|b| b.0.inputs).unwrap_or_default(), "user").await?)
 }
+async fn eval_suites(State(s): State<AppState>) -> ApiResult<Vec<aiw_eval::Suite>> {
+    ok(s.engine.eval_suites()?)
+}
+async fn eval_suite(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_eval::Suite> {
+    ok(s.engine.eval_suite(&id)?)
+}
+/// The body is the suite as JSON, or `{"text": "<yaml|json>"}` as the editors send it; the id is the one in the path.
+async fn save_eval_suite(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<Value>) -> ApiResult<aiw_eval::Suite> {
+    let mut suite = match body.get("text").and_then(Value::as_str) {
+        Some(text) => aiw_eval::Suite::parse(text)?,
+        None => aiw_eval::Suite::parse(&body.to_string())?,
+    };
+    if suite.id != id {
+        return Err(ApiError(Error::Invalid(format!(
+            "l'id della suite (`{}`) non corrisponde a quello dell'indirizzo (`{id}`)",
+            suite.id
+        ))));
+    }
+    // A `command` grader runs a shell command with the user's permissions, outside the agent's sandbox and without any
+    // confirmation: whoever holds an API token must not be able to write one. Those suites come from files in `~/.aiw/evals`.
+    if suite.tasks.iter().flat_map(|t| &t.graders).any(|g| g.kind() == "command") {
+        return Err(ApiError(Error::Invalid(
+            "i grader `command` eseguono comandi con i tuoi permessi: si scrivono solo in un file in ~/.aiw/evals o si lanciano dalla CLI"
+                .into(),
+        )));
+    }
+    suite.id = id;
+    ok(s.engine.save_eval_suite(suite)?)
+}
+async fn delete_eval_suite(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_eval_suite(&id)?;
+    ok(json!({"deleted": true}))
+}
+#[derive(Deserialize, Default)]
+struct StartEval {
+    agent: Option<String>,
+    profile: Option<String>,
+    repeat: Option<u32>,
+}
+/// Starts the suite in the background; the answer is the report as it is (`running`), to be polled at `/api/eval-runs/{id}`.
+async fn start_eval(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<StartEval>>) -> ApiResult<aiw_eval::EvalReport> {
+    let b = body.map(|b| b.0).unwrap_or_default();
+    let suite = s.engine.eval_suite(&id)?;
+    let req = aiw_engine::eval::EvalRequest {
+        agent: b.agent.filter(|a| !a.is_empty()),
+        profile: b.profile.filter(|p| !p.is_empty()),
+        repeat: b.repeat,
+        ..Default::default()
+    };
+    ok(s.engine.start_eval(suite, req)?)
+}
+async fn eval_runs(State(s): State<AppState>) -> ApiResult<Vec<aiw_eval::EvalReport>> {
+    ok(s.engine.eval_reports()?)
+}
+async fn eval_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_eval::EvalReport> {
+    ok(s.engine.eval_report(&id)?)
+}
+#[derive(Deserialize)]
+struct CompareQuery {
+    a: String,
+    b: String,
+}
+async fn compare_eval_runs(State(s): State<AppState>, Query(q): Query<CompareQuery>) -> ApiResult<aiw_eval::Comparison> {
+    // Only stored reports by id: a path from the network is not read.
+    ok(aiw_eval::compare(&s.engine.eval_report(&q.a)?, &s.engine.eval_report(&q.b)?))
+}
 async fn tools(State(s): State<AppState>) -> ApiResult<Vec<ToolInfo>> {
     ok(s.engine.tools())
 }
@@ -849,6 +969,10 @@ mod tests;
 #[cfg(test)]
 mod tests_errors;
 #[cfg(test)]
+mod tests_eval;
+#[cfg(test)]
 mod tests_models;
 #[cfg(test)]
 mod tests_security;
+#[cfg(test)]
+mod tests_traces;

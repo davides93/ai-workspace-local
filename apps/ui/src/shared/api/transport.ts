@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress,
+  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -94,6 +94,11 @@ export interface Transport {
   /** Restores the originals saved by a run and deletes the files it created. */
   rewindRun(runId: string): Promise<RewindResult>;
   messages(sessionId: string): Promise<ChatMessage[]>;
+  /** The ratings of a session (thumbs up/down on assistant messages). */
+  sessionFeedback(sessionId: string): Promise<Feedback[]>;
+  /** Rates an assistant message; rating again replaces the previous rating (and its note). */
+  setFeedback(sessionId: string, messageId: string, rating: 1 | -1, note?: string): Promise<Feedback>;
+  deleteFeedback(sessionId: string, messageId: string): Promise<void>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
   startRun(sessionId: string, input: string, kind?: "a2ui.action"): Promise<{ run_id: string }>;
   cancelRun(runId: string): Promise<void>;
@@ -107,6 +112,16 @@ export interface Transport {
   deleteWorkflow(id: string): Promise<void>;
   runWorkflow(id: string, inputs?: Record<string, unknown>): Promise<WorkflowRun>;
   workflowRuns(): Promise<WorkflowRun[]>;
+
+  evalSuites(): Promise<EvalSuite[]>;
+  /** The server checks the suite (tasks, graders, agents and profiles named) and refuses it with the reason. */
+  saveEvalSuite(s: EvalSuite): Promise<EvalSuite>;
+  deleteEvalSuite(id: string): Promise<void>;
+  /** Starts a run in the background: the report comes back as `running` and is polled with `evalReport`. */
+  startEval(suiteId: string, req?: EvalRunRequest): Promise<EvalReport>;
+  evalReports(): Promise<EvalReport[]>;
+  evalReport(id: string): Promise<EvalReport>;
+  compareEvalReports(a: string, b: string): Promise<EvalComparison>;
 
   tools(): Promise<ToolInfo[]>;
   setToolEnabled(name: string, enabled: boolean): Promise<void>;

@@ -14,6 +14,8 @@ pub fn agents() -> Vec<AgentProfile> {
         mode: mode.into(),
         sandbox: sandbox.into(),
         max_turns: turns,
+        output_schema: None,
+        budget: None,
     };
     vec![
         a(
@@ -238,6 +240,11 @@ pub fn default_profile(models: &[LocalModel], device: &DeviceProfile, avail: &Av
     // Nothing fits and nothing else runs. A model that is too large is worse than a placeholder.
     let runtime = gguf_rt.unwrap_or(if phone { "llama-embedded" } else { "llama-server" });
     profile("Scarica un modello da Modelli per iniziare".into(), runtime, "", 8192)
+}
+
+/// The example suite (`docs/evals/esempio.yaml`), stored on first run.
+pub fn eval_suites() -> Vec<aiw_eval::Suite> {
+    vec![aiw_eval::Suite::parse(include_str!("../../../docs/evals/esempio.yaml")).expect("the example suite is valid")]
 }
 
 pub fn workflows() -> Vec<WorkflowDef> {

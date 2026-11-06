@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 aiw-core.workspace = true
 aiw-engine.workspace = true
+aiw-eval.workspace = true
 aiw-models.workspace = true
 aiw-runtimes.workspace = true
 axum = { workspace = true, features = ["multipart"] }

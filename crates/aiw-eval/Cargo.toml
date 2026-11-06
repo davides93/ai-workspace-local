@@ -1,0 +1,19 @@
+[package]
+name = "aiw-eval"
+description = "Evaluation of agents: task suites, deterministic graders, run reports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aiw-core.workspace = true
+aiw-agent.workspace = true
+async-trait.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

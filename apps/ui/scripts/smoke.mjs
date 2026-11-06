@@ -43,6 +43,7 @@ const SAMPLES = {
   "chat/sessionId": ["ses_pdf", "ses_bug"],
   "agents/agentId": ["coder"],
   "workflows/workflowId": ["inbox-digest"],
+  "evals/tab": ["suites", "reports"],
   "capabilities/tab": ["tools", "mcp", "browser"],
   "models/tab": ["installed", "discover", "downloads", "catalog"],
   "runtimes/runtimeId": ["llama-server", "vllm"],

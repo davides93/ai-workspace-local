@@ -1,12 +1,14 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
 pub mod defaults;
+pub mod eval;
 mod host;
 mod models;
 pub mod pairing;
 pub mod peers;
 mod secrets;
 pub mod store;
+pub mod traces;
 pub mod update;
 pub mod voice;
 pub mod webhook;
@@ -15,7 +17,7 @@ pub mod worktree;
 pub use host::EngineHost;
 pub use pairing::PairOutcome;
 
-use aiw_agent::{to_msgs, AgentRunner, HookConfig, Policy, PolicyRule, RunInput};
+use aiw_agent::{to_msgs, AgentRunner, HookConfig, Policy, PolicyRule, RunBudget, RunInput};
 use aiw_core::api::*;
 use aiw_core::config::{app_schema, Layer, LayeredConfig};
 use aiw_core::events::{AgEvent, SeqEvent, TimedEvent};
@@ -278,6 +280,22 @@ impl Engine {
         if s.list_docs::<WorkflowDef>("workflow")?.is_empty() {
             for w in defaults::workflows() {
                 s.put_doc("workflow", &w.id, &w)?;
+            }
+        }
+        self.fail_interrupted_eval_reports()?;
+        if s.list_docs::<aiw_eval::Suite>("eval_suite")?.is_empty() {
+            for suite in defaults::eval_suites() {
+                s.put_doc("eval_suite", &suite.id, &suite)?;
+            }
+        }
+        // Evaluation suites dropped in ~/.aiw/evals. Only that folder, the user's own: a suite can run
+        // commands (`command` graders), so one that comes with a checked-out project is never picked up.
+        if let Ok(rd) = std::fs::read_dir(self.0.dirs.evals()) {
+            for e in rd.flatten().filter(|e| matches!(e.path().extension().and_then(|x| x.to_str()), Some("yaml" | "yml" | "json"))) {
+                match aiw_eval::Suite::load_file(&e.path()) {
+                    Ok(suite) => s.put_doc("eval_suite", &suite.id, &suite)?,
+                    Err(err) => tracing::warn!("suite di valutazione {}: {err}", e.path().display()),
+                }
             }
         }
         // Workflows dropped in ~/.aiw/workflows (the user's own folder) or
@@ -573,6 +591,16 @@ impl Engine {
         if a.max_turns < 1 {
             return Err(Error::Invalid("max_turns deve essere almeno 1".into()));
         }
+        if let Some(b) = &a.budget {
+            for (name, v) in [("max_tokens", b.max_tokens), ("max_turns", b.max_turns.map(u64::from)), ("max_seconds", b.max_seconds)] {
+                if v == Some(0) {
+                    return Err(Error::Invalid(format!("budget.{name} deve essere almeno 1 (ometti il campo per nessun limite)")));
+                }
+            }
+        }
+        if let Some(schema) = &a.output_schema {
+            aiw_agent::schema::check_schema(schema).map_err(|e| Error::Invalid(format!("output_schema non valido: {e}")))?;
+        }
         if self.0.store.get_doc::<InferenceProfile>("profile", &a.inference_profile)?.is_none() {
             return Err(Error::Invalid(format!("il profilo di inferenza `{}` non esiste", a.inference_profile)));
         }
@@ -793,6 +821,56 @@ impl Engine {
         self.0.store.messages(session_id)
     }
 
+    // ------------------------------------------------------------------ feedback
+    /// Rates an assistant message (1 = good, -1 = bad) with an optional note; rating the same
+    /// message again replaces the previous rating.
+    pub fn set_feedback(&self, session_id: &str, message_id: &str, rating: i32, note: Option<String>) -> Result<Feedback> {
+        if rating != 1 && rating != -1 {
+            return Err(Error::Invalid("la valutazione deve essere 1 (utile) o -1 (da migliorare)".into()));
+        }
+        let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        if note.as_ref().is_some_and(|n| n.chars().count() > MAX_FEEDBACK_NOTE_CHARS) {
+            return Err(Error::Invalid(format!("la nota supera i {MAX_FEEDBACK_NOTE_CHARS} caratteri")));
+        }
+        let msg = self
+            .messages(session_id)?
+            .into_iter()
+            .find(|m| m.id == message_id)
+            .ok_or_else(|| Error::NotFound(format!("messaggio {message_id} non trovato")))?;
+        if msg.role != "assistant" {
+            return Err(Error::Invalid("si possono valutare solo le risposte dell'assistente".into()));
+        }
+        // The run that produced the message is the one running when it was written. Run ids and
+        // message times are RFC 3339 with the same precision, so strings compare as instants.
+        let run_id = self
+            .0
+            .store
+            .session_runs(session_id)?
+            .into_iter()
+            .rev()
+            .find(|r| r.started_at <= msg.created_at && r.finished_at.as_ref().is_none_or(|f| msg.created_at <= *f))
+            .map(|r| r.id);
+        self.0.store.upsert_feedback(&Feedback {
+            id: new_id("fbk"),
+            session_id: session_id.into(),
+            message_id: message_id.into(),
+            run_id,
+            rating,
+            note,
+            created_at: now_rfc3339(),
+        })
+    }
+    /// Removes the rating of a message (no error when there is none).
+    pub fn delete_feedback(&self, session_id: &str, message_id: &str) -> Result<()> {
+        self.0.store.session(session_id)?;
+        self.0.store.delete_feedback(session_id, message_id)?;
+        Ok(())
+    }
+    pub fn session_feedback(&self, session_id: &str) -> Result<Vec<Feedback>> {
+        self.0.store.session(session_id)?;
+        self.0.store.session_feedback(session_id)
+    }
+
     pub(crate) fn emit(&self, run_id: &str, ev: AgEvent) {
         let terminal = ev.is_terminal();
         let timed = TimedEvent::now(ev);
@@ -874,9 +952,27 @@ impl Engine {
         depth: u32,
         session_allow: Arc<Mutex<HashSet<String>>>,
     ) -> RunInput {
+        self.build_input_at(run_id, thread_id, agent, profile, history, user_input, cancel, depth, session_allow, None)
+    }
+
+    /// [`Engine::build_input`] with an explicit working folder (`root`) instead of the one of the session.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_input_at(
+        &self,
+        run_id: &str,
+        thread_id: &str,
+        agent: AgentProfile,
+        profile: InferenceProfile,
+        history: Vec<aiw_runtimes::Msg>,
+        user_input: String,
+        cancel: CancellationToken,
+        depth: u32,
+        session_allow: Arc<Mutex<HashSet<String>>>,
+        root: Option<PathBuf>,
+    ) -> RunInput {
         // Chat runs and their sub-agents use the session id as thread id: an isolated session
         // works in its worktree.
-        let ws = self.session_root(thread_id);
+        let ws = root.unwrap_or_else(|| self.session_root(thread_id));
         let isolated =
             self.worktree_info(thread_id).map(|wt| format!(" (git worktree isolato, branch `{}`)", wt.branch)).unwrap_or_default();
         let device = self.device();
@@ -900,6 +996,7 @@ impl Engine {
             profile.model
         );
         let subagents = self.agents().unwrap_or_default().into_iter().filter(|a| a.id != agent.id).map(|a| (a.id, a.description)).collect();
+        let agent_budget = agent.budget.clone().unwrap_or_default();
         RunInput {
             run_id: run_id.into(),
             thread_id: thread_id.into(),
@@ -919,7 +1016,21 @@ impl Engine {
             depth,
             session_allow,
             subagents,
+            budget: Arc::new(if depth == 0 { self.run_budget(&agent_budget, None) } else { RunBudget::unlimited() }),
+            max_parallel_subagents: self.0.config.get("agents.max_parallel_subagents").and_then(|v| v.as_u64()).unwrap_or(3).max(1)
+                as usize,
         }
+    }
+
+    /// The budget of a new top-level run: the agent's own limits, else the `agents.budget.*` settings
+    /// (0 there means no limit). `cap_seconds` is a time limit that no setting can raise.
+    fn run_budget(&self, own: &aiw_core::api::BudgetLimits, cap_seconds: Option<u64>) -> RunBudget {
+        let setting = |key: &str| self.0.config.get(key).and_then(|v| v.as_u64()).filter(|n| *n > 0);
+        RunBudget::new(
+            own.max_tokens.or_else(|| setting("agents.budget.max_tokens")),
+            own.max_turns.or_else(|| setting("agents.budget.max_turns").map(|n| n.min(u32::MAX as u64) as u32)),
+            own.max_seconds.or_else(|| setting("agents.budget.max_seconds")).map(|s| cap_seconds.map_or(s, |c| s.min(c))).or(cap_seconds),
+        )
     }
 
     pub(crate) fn skills(&self) -> Vec<aiw_agent::Skill> {
@@ -1711,9 +1822,13 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_eval;
+#[cfg(test)]
 mod tests_hardening;
 #[cfg(test)]
 mod tests_inference;
+#[cfg(test)]
+mod tests_traces;
 #[cfg(test)]
 mod tests_validation;
 #[cfg(test)]
