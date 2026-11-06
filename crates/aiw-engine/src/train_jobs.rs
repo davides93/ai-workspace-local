@@ -293,8 +293,8 @@ impl Engine {
                 req.method.to_uppercase()
             )));
         }
-        let trainer = self.pick_trainer(&req.method, req.trainer.as_deref()).await?;
-        self.check_model_fits(&trainer, &req)?;
+        // What the request names is checked before what this machine has installed, so a wrong
+        // suite or profile is reported the same way everywhere.
         if req.eval_suite.is_some() {
             let suite = req.eval_suite.as_deref().unwrap_or_default();
             self.eval_suite(suite).map_err(|_| Error::Invalid(format!("la suite di valutazione `{suite}` non esiste")))?;
@@ -303,6 +303,8 @@ impl Engine {
             })?;
             self.profile(profile).map_err(|_| Error::Invalid(format!("il profilo di inferenza `{profile}` non esiste")))?;
         }
+        let trainer = self.pick_trainer(&req.method, req.trainer.as_deref()).await?;
+        self.check_model_fits(&trainer, &req)?;
         let reward_suite = self.resolve_reward_suite(&req, &dataset)?;
         let id = new_id("trn");
         let job_dir = self.0.dirs.train_jobs().join(&id);
