@@ -9,7 +9,7 @@ export const MIN_EXAMPLES = 10;
 export const METHOD_LABEL: Record<TrainMethod, string> = { sft: "SFT", dpo: "DPO", grpo: "GRPO" };
 
 /** The methods the page offers. */
-export const METHODS: TrainMethod[] = ["sft", "dpo"];
+export const METHODS: TrainMethod[] = ["sft", "dpo", "grpo"];
 
 /** Where the examples of each method can come from (GRPO takes its prompts from a suite instead). */
 export const METHOD_SOURCES: Record<TrainMethod, string[]> = {
@@ -29,6 +29,9 @@ export const SOURCE_LABEL: Record<string, string> = {
   succeeded: "Sessioni riuscite",
   eval: "Task superati nelle valutazioni",
 };
+
+/** A source as the list shows it: `suite:<id>` is the suite a GRPO dataset takes its prompts from. */
+export const sourceLabel = (s: string): string => (s.startsWith("suite:") ? `Suite ${s.slice(6)}` : SOURCE_LABEL[s] ?? s);
 
 /** What a source means for DPO: a pair needs both sides. */
 export const DPO_SOURCE_LABEL: Record<string, string> = {
@@ -88,10 +91,13 @@ export interface DatasetForm {
   until: string;
   limit: string;
   evalReports: string;
+  /** GRPO: the suite whose tasks are the prompts and whose graders give the rewards. */
+  suite: string;
+  repeat: string;
 }
 
 export const blankDatasetForm = (method: TrainMethod = "sft"): DatasetForm => ({
-  name: "", method, agent: "", sources: ["feedback"], since: "", until: "", limit: "", evalReports: "",
+  name: "", method, agent: "", sources: METHOD_SOURCES[method].length ? ["feedback"] : [], since: "", until: "", limit: "", evalReports: "", suite: "", repeat: "",
 });
 
 /** The request for the form, or the first thing wrong with it. */
@@ -99,6 +105,11 @@ export function datasetSpec(f: DatasetForm): { spec: DatasetSpec; error?: undefi
   const limit = f.limit.trim();
   if (limit && !(Number.isInteger(Number(limit)) && Number(limit) >= 1)) return { error: "Il limite deve essere un numero intero da 1 in su." };
   if (METHOD_SOURCES[f.method].length > 0 && f.sources.length === 0) return { error: "Scegli almeno una sorgente." };
+  const repeat = f.repeat.trim();
+  if (f.method === "grpo") {
+    if (!f.suite) return { error: "Scegli la suite da cui prendere i prompt e le reward." };
+    if (repeat && !(Number.isInteger(Number(repeat)) && Number(repeat) >= 1)) return { error: "Le ripetizioni devono essere un numero intero da 1 in su." };
+  }
   const reports = f.evalReports.split(/[\s,]+/).filter(Boolean);
   if (f.sources.includes("eval") && reports.length === 0) return { error: "Per la sorgente delle valutazioni indica almeno un report di valutazione." };
   const spec: DatasetSpec = { method: f.method };
@@ -108,6 +119,11 @@ export function datasetSpec(f: DatasetForm): { spec: DatasetSpec; error?: undefi
   if (f.until.trim()) spec.until = f.until.trim();
   if (limit) spec.limit = Number(limit);
   if (METHOD_SOURCES[f.method].length > 0) spec.sources = f.sources;
+  if (f.method === "grpo") {
+    spec.suite = f.suite;
+    if (repeat) spec.repeat = Number(repeat);
+    return { spec };
+  }
   if (reports.length > 0) spec.eval_reports = reports;
   return { spec };
 }

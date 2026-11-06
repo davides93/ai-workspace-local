@@ -608,6 +608,14 @@ describe("fine-tuning", () => {
     await expect(api.deleteDataset(ds.id)).rejects.toThrow(/non trovato/);
   });
 
+  it("builds a GRPO dataset from the prompts of a suite", async () => {
+    await expect(api.buildDataset({ method: "grpo" })).rejects.toThrow(/suite/);
+    await expect(api.buildDataset({ method: "grpo", suite: "esempio" })).rejects.toThrow(/ne ho trovati 5.*repeat/);
+    const ds = await api.buildDataset({ method: "grpo", suite: "esempio", repeat: 2 });
+    expect([ds.examples, ds.sources]).toEqual([10, ["suite:esempio"]]);
+    await api.deleteDataset(ds.id);
+  });
+
   it("runs a job to the adapter, one at a time, and can cancel it", async () => {
     const ds = await api.buildDataset({ method: "sft" });
     const job = await api.startTrainJob({ method: "sft", base_model: "Qwen/Qwen3-4B", dataset_id: ds.id, params: { iters: 3 }, name: "Prova" });

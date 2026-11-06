@@ -139,3 +139,49 @@ Le opzioni sono quelle di `aiw train sft` (`--dataset`, `--iters`, `--rank`, `--
 Nella UI scegli «DPO» nel dataset e nell'addestramento. Lo script `trl_train.py` usa `DPOTrainer`
 con un adapter LoRA: il modello di riferimento è il modello base senza adapter. L'adapter è in
 formato PEFT.
+
+## GRPO con reward verificabili
+
+GRPO non ha bisogno di esempi scritti da una persona: il modello genera più risposte allo stesso
+prompt e impara da un punteggio. In AIW il punteggio lo danno i grader di una suite di valutazione.
+Serve il trainer `trl` su un dispositivo di classe L o superiore (la regola dell'idoneità, vedi
+`aiw train doctor`); mlx-lm e Unsloth non lo fanno.
+
+```
+aiw train grpo --suite somme --base Qwen/Qwen3-4B --name "Somme RL"
+aiw train grpo --suite somme --repeat 3 --base Qwen/Qwen3-4B --iters 200
+```
+
+- I **prompt** sono quelli dei task della suite (ripetuti `--repeat` volte, minimo 10 in tutto).
+- La **reward** di una risposta è la media dei punteggi dei grader del suo task. Sono ammessi solo i
+  grader che guardano la risposta: `output_matches`, `json_schema` e `judge`. Una suite con
+  `file_exists`, `file_contains` o `command` viene rifiutata, con il nome del task, perché una risposta
+  campionata dal trainer non ha una cartella di lavoro né comandi da eseguire.
+- Durante l'addestramento lo script `trl_train.py` chiede ogni punteggio all'API di AIW. L'indirizzo
+  e il token stanno solo nel file di configurazione del job (`~/.aiw/train/<id>/config.json`, leggibile
+  solo dall'utente), mai nel log. Con `aiw train grpo` il server si avvia da solo su una porta locale;
+  dalla UI serve l'app (o `aiw serve`) in esecuzione. Se l'endpoint non risponde il job si ferma
+  invece di inventare un punteggio.
+
+### L'endpoint di reward da altri framework
+
+`POST /api/evals/{suite}/reward` con `{"task_id": "…", "output": "…"}` risponde
+`{"score": 0.5, "passed": false, "graders": [{"kind": "…", "passed": true, "score": 1, "detail": "…"}]}`.
+Come ogni rotta dell'API vuole il token (`Authorization: Bearer <token>`, il token è in
+`~/.aiw/token`) oppure una richiesta dalla stessa macchina. Qualunque framework RL può usarlo come
+funzione di reward, ad esempio:
+
+```python
+import requests
+
+def reward(task_id, output):
+    r = requests.post(f"http://127.0.0.1:7777/api/evals/somme/reward",
+                      json={"task_id": task_id, "output": output},
+                      headers={"Authorization": "Bearer " + TOKEN}, timeout=120)
+    r.raise_for_status()
+    return r.json()["score"]
+```
+
+Un grader non ammesso dà 400 con il nome del grader; un task o una suite sconosciuti, 404. I grader
+`judge` chiamano il modello del profilo di giudizio: per un addestramento lungo conviene preferire
+`output_matches` e `json_schema`, che costano zero.

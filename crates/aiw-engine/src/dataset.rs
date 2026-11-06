@@ -127,6 +127,7 @@ impl Engine {
         let (examples, sources) = match spec.method.as_str() {
             "sft" => self.sft_examples(spec)?,
             "dpo" => self.dpo_examples(spec)?,
+            "grpo" => self.grpo_examples(spec)?,
             other => return Err(Error::Invalid(format!("metodo «{other}» sconosciuto: usa sft, dpo o grpo"))),
         };
         self.write_dataset(spec, examples, sources)
@@ -136,8 +137,13 @@ impl Engine {
     pub(crate) fn write_dataset(&self, spec: &DatasetSpec, examples: Vec<Example>, sources: Vec<String>) -> Result<DatasetInfo> {
         let noun = if spec.method == "dpo" { "coppie" } else { "esempi" };
         if examples.len() < MIN_EXAMPLES {
+            let hint = match spec.method.as_str() {
+                "grpo" => "Aggiungi task alla suite o usa più ripetizioni (repeat).",
+                "dpo" => "Dai un pollice in su e in giù a risposte alla stessa domanda, o allarga i filtri.",
+                _ => "Dai un pollice alle risposte buone o allarga i filtri.",
+            };
             return Err(Error::Invalid(format!(
-                "servono almeno {MIN_EXAMPLES} {noun} per addestrare, ne ho trovati {}. Dai un pollice alle risposte buone o allarga i filtri.",
+                "servono almeno {MIN_EXAMPLES} {noun} per addestrare, ne ho trovati {}. {hint}",
                 examples.len()
             )));
         }
@@ -208,6 +214,31 @@ impl Engine {
         std::fs::remove_dir_all(self.dataset_dir(id)?)?;
         self.audit_user("dataset.delete", &info.name);
         Ok(())
+    }
+
+    // ------------------------------------------------------------------ GRPO
+    /// The prompts of the tasks of a suite (repeated `repeat` times: GRPO samples several answers to
+    /// each one anyway, but the repetition weighs the prompt). The graders must look at the answer only,
+    /// because that is what the reward endpoint can apply.
+    fn grpo_examples(&self, spec: &DatasetSpec) -> Result<(Vec<Example>, Vec<String>)> {
+        let id = spec.suite.as_deref().ok_or_else(|| Error::Invalid("GRPO richiede la suite da cui prendere i prompt (suite)".into()))?;
+        let suite = self.reward_suite(id)?;
+        let repeat = spec.repeat.unwrap_or(1).clamp(1, 1000) as usize;
+        let redactor = Redactor::new(crate::traces::mcp_secret_values(&self.0.store));
+        let mut out = vec![];
+        for t in &suite.tasks {
+            for n in 1..=repeat {
+                out.push(Example {
+                    key: format!("grpo:{id}:{}:{n}", t.id),
+                    value: json!({"prompt": [{"role": "user", "content": redactor.apply(&t.prompt)}], "task_id": t.id}),
+                    agent: t.agent.clone().or_else(|| suite.agent.clone()).unwrap_or_default(),
+                });
+            }
+        }
+        if let Some(limit) = spec.limit {
+            out.truncate(limit);
+        }
+        Ok((out, vec![format!("suite:{id}")]))
     }
 
     // ------------------------------------------------------------------ DPO

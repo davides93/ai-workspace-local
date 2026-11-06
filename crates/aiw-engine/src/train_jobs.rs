@@ -25,6 +25,8 @@ pub const DEFAULT_LOG_LINES: usize = 200;
 #[derive(Default)]
 pub(crate) struct TrainState {
     pub running: Mutex<HashMap<String, CancellationToken>>,
+    /// Where this process serves the API, once it does.
+    pub local_url: Mutex<Option<String>>,
 }
 
 /// What a line of a trainer's output says about how far it got.
@@ -107,6 +109,15 @@ struct Launch<'a> {
     /// The base model: a local path or the repository id as given.
     model: String,
     script: PathBuf,
+    /// Where the trainer asks for rewards (`grpo`).
+    reward: Option<Reward>,
+}
+
+/// The reward endpoint of a GRPO job: the API of this process and the suite whose graders score the answers.
+struct Reward {
+    url: String,
+    token: String,
+    suite: String,
 }
 
 /// The process that runs `job`.
@@ -165,6 +176,12 @@ fn training_command(l: &Launch<'_>) -> Result<JobSpec> {
                 if let Some(v) = v {
                     cfg[k] = v;
                 }
+            }
+            if let Some(r) = &l.reward {
+                // Only the configuration file (readable by the user alone) holds the token; the log never does.
+                cfg["reward_url"] = json!(r.url);
+                cfg["reward_token"] = json!(r.token);
+                cfg["reward_suite"] = json!(r.suite);
             }
             write_private(&l.job_dir.join("config.json"), &serde_json::to_string_pretty(&cfg)?)?;
             spec.args = vec![l.script.display().to_string(), "--config".into(), l.job_dir.join("config.json").display().to_string()];
@@ -286,7 +303,7 @@ impl Engine {
             })?;
             self.profile(profile).map_err(|_| Error::Invalid(format!("il profilo di inferenza `{profile}` non esiste")))?;
         }
-        self.validate_reward_suite(&req)?;
+        let reward_suite = self.resolve_reward_suite(&req, &dataset)?;
         let id = new_id("trn");
         let job_dir = self.0.dirs.train_jobs().join(&id);
         std::fs::create_dir_all(&job_dir)?;
@@ -309,7 +326,7 @@ impl Engine {
             name: req.name.clone().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()),
             eval_suite: req.eval_suite.clone(),
             eval_profile: req.eval_profile.clone(),
-            reward_suite: req.reward_suite.clone(),
+            reward_suite,
         };
         // One job at a time on a device: the check and the registration happen under one lock.
         let token = CancellationToken::new();
@@ -425,8 +442,8 @@ impl Engine {
                 adapter_dir: adapter_dir.clone(),
                 model,
                 script,
+                reward: self.reward_for(&job)?,
             })?;
-            self.prepare_job_extras(&job, &spec)?;
             Ok(spec)
         })();
         let spec = match prepared {
@@ -538,13 +555,30 @@ impl Engine {
         }
     }
 
-    /// Hook for the methods that need more than the dataset (the reward endpoint of GRPO).
-    fn prepare_job_extras(&self, _job: &TrainJob, _spec: &JobSpec) -> Result<()> {
-        Ok(())
+    /// The suite that rewards a GRPO job: the one asked for, or the one the dataset was made from. It
+    /// must exist and have only graders that look at the answer. `None` for the other methods.
+    fn resolve_reward_suite(&self, req: &TrainJobRequest, dataset: &DatasetInfo) -> Result<Option<String>> {
+        if req.method != "grpo" {
+            return Ok(None);
+        }
+        let from_dataset = dataset.sources.iter().find_map(|s| s.strip_prefix("suite:")).map(str::to_string);
+        let id = req
+            .reward_suite
+            .clone()
+            .or(from_dataset)
+            .ok_or_else(|| Error::Invalid("GRPO richiede la suite che dà le reward (reward_suite)".into()))?;
+        self.eval_suite(&id).map_err(|_| Error::Invalid(format!("la suite di reward `{id}` non esiste")))?;
+        self.reward_suite(&id)?;
+        Ok(Some(id))
     }
 
-    fn validate_reward_suite(&self, _req: &TrainJobRequest) -> Result<()> {
-        Ok(())
+    /// The endpoint a GRPO trainer calls. The server of this process must be listening.
+    fn reward_for(&self, job: &TrainJob) -> Result<Option<Reward>> {
+        let Some(suite) = job.reward_suite.clone().filter(|_| job.method == "grpo") else { return Ok(None) };
+        let url = self.local_url().ok_or_else(|| {
+            Error::Unsupported("la reward passa dall'API di AIW, ma il server non è in ascolto: avvia l'app o `aiw serve`".into())
+        })?;
+        Ok(Some(Reward { url, token: self.token().to_string(), suite }))
     }
 
     /// Runs `suite` with the profile as it is and with the adapter added, and sums up both.

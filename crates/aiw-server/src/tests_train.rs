@@ -57,3 +57,28 @@ async fn datasets_jobs_and_adapters_are_served_and_their_errors_are_http_errors(
     let (st, _) = dispatch(app, "POST", "/api/train/jobs", Some(body)).await;
     assert_eq!(st, 404);
 }
+
+#[tokio::test]
+async fn the_reward_endpoint_scores_answers_and_refuses_graders_that_need_files() {
+    let (app, _e, _d, _w) = super::tests::app().await;
+    let suite = "id: somme\nname: Somme\ntasks:\n  - id: due\n    prompt: quanto fa 1+1?\n    graders: [{ kind: output_matches, pattern: '^2$' }]\n  - id: nota\n    prompt: crea nota.md\n    graders: [{ kind: file_exists, path: nota.md }]\n";
+    let (st, saved) = dispatch(app.clone(), "PUT", "/api/evals/somme", Some(json!({"text": suite}))).await;
+    assert_eq!(st, 200, "{saved}");
+
+    let (st, good) = dispatch(app.clone(), "POST", "/api/evals/somme/reward", Some(json!({"task_id": "due", "output": "2"}))).await;
+    assert_eq!(st, 200, "{good}");
+    assert_eq!((good["score"].as_f64(), good["passed"].as_bool()), (Some(1.0), Some(true)));
+    assert_eq!(good["graders"][0]["kind"], "output_matches");
+    let (_, bad) = dispatch(app.clone(), "POST", "/api/evals/somme/reward", Some(json!({"task_id": "due", "output": "5"}))).await;
+    assert_eq!((bad["score"].as_f64(), bad["passed"].as_bool()), (Some(0.0), Some(false)));
+
+    let (st, err) = dispatch(app.clone(), "POST", "/api/evals/somme/reward", Some(json!({"task_id": "nota", "output": "fatto"}))).await;
+    assert_eq!(st, 400);
+    assert!(err["error"].as_str().unwrap().contains("file_exists"), "{err}");
+    let (st, _) = dispatch(app.clone(), "POST", "/api/evals/somme/reward", Some(json!({"task_id": "boh", "output": "x"}))).await;
+    assert_eq!(st, 404);
+    let (st, _) = dispatch(app.clone(), "POST", "/api/evals/nessuna/reward", Some(json!({"task_id": "due", "output": "x"}))).await;
+    assert_eq!(st, 404);
+    let (st, _) = dispatch(app, "POST", "/api/evals/somme/reward", Some(json!({"task_id": "due"}))).await;
+    assert_eq!(st, 400);
+}

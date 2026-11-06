@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TrainDoctor, TrainerInfo } from "../../../shared/api/types";
-import { blankDatasetForm, blankJobForm, datasetSpec, METHOD_SOURCES, METHODS, isActive, jobPercent, jobRequest, methodBlocker, metricsLine, metricText, readyTrainers, adapterRuntime } from "./training";
+import { blankDatasetForm, blankJobForm, datasetSpec, METHOD_SOURCES, METHODS, sourceLabel, isActive, jobPercent, jobRequest, methodBlocker, metricsLine, metricText, readyTrainers, adapterRuntime } from "./training";
 
 const trainer = (id: string, state: TrainerInfo["state"], methods: TrainerInfo["methods"], reason?: string): TrainerInfo => ({
   id, name: id.toUpperCase(), description: "", state, reason, methods, adapter_format: "peft", install_auto: true,
@@ -63,6 +63,14 @@ describe("dataset form", () => {
     expect(METHODS).toContain("dpo");
     expect(METHOD_SOURCES.dpo).toEqual(["feedback", "eval"]);
     expect(datasetSpec(blankDatasetForm("dpo")).spec).toEqual({ method: "dpo", sources: ["feedback"] });
+  });
+  it("asks GRPO for a suite and leaves the sources out", () => {
+    expect(METHODS).toContain("grpo");
+    expect(datasetSpec(blankDatasetForm("grpo")).error).toMatch(/suite/);
+    const f = { ...blankDatasetForm("grpo"), suite: "esempio", repeat: "2" };
+    expect(datasetSpec(f).spec).toEqual({ method: "grpo", suite: "esempio", repeat: 2 });
+    expect(datasetSpec({ ...f, repeat: "0" }).error).toMatch(/ripetizioni/);
+    expect(sourceLabel("suite:esempio")).toBe("Suite esempio");
   });
   it("catches the mistakes the engine would refuse", () => {
     expect(datasetSpec({ ...blankDatasetForm(), limit: "0" }).error).toMatch(/limite/);

@@ -508,3 +508,98 @@ async fn a_dpo_job_runs_on_trl_and_mlx_cannot_do_it() {
     let a = e.adapter(done.adapter_id.as_deref().unwrap()).unwrap();
     assert_eq!((a.method.as_str(), a.format.as_str()), ("dpo", "peft"));
 }
+
+// ------------------------------------------------------------------ GRPO
+
+/// A suite of `n` arithmetic-like tasks that a regular expression grades.
+fn answer_suite(id: &str, n: usize) -> aiw_eval::Suite {
+    let tasks: String = (0..n)
+        .map(|i| format!("  - id: t{i}\n    prompt: quanto fa {i}+1?\n    graders: [{{ kind: output_matches, pattern: '^{}$' }}]\n", i + 1))
+        .collect();
+    aiw_eval::Suite::parse(&format!("id: {id}\nname: Somme\ntasks:\n{tasks}")).unwrap()
+}
+
+#[tokio::test]
+async fn a_reward_is_the_mean_of_the_graders_that_look_at_the_answer() {
+    let (e, _d, _w) = engine(vec![]).await;
+    let text = "id: mix\nname: Mix\ntasks:\n  - id: due\n    prompt: quanto fa 1+1?\n    graders:\n      - { kind: output_matches, pattern: '^2$' }\n      - { kind: output_matches, pattern: '2' }\n  - id: meta\n    prompt: dimmi due\n    graders:\n      - { kind: output_matches, pattern: 'due' }\n      - { kind: output_matches, pattern: 'tre' }\n  - id: file\n    prompt: crea nota\n    graders: [{ kind: file_exists, path: nota.md }]\n";
+    e.save_eval_suite(aiw_eval::Suite::parse(text).unwrap()).unwrap();
+
+    let ok = e.reward("mix", "due", "2").await.unwrap();
+    assert_eq!((ok.score, ok.passed, ok.graders.len()), (1.0, true, 2));
+    let no = e.reward("mix", "due", "3").await.unwrap();
+    assert_eq!((no.score, no.passed), (0.0, false));
+    let half = e.reward("mix", "meta", "due").await.unwrap();
+    assert_eq!((half.score, half.passed), (0.5, false));
+
+    // Graders on files or commands cannot score a bare answer.
+    let err = e.reward("mix", "file", "fatto").await.unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("file_exists"), "{err}");
+    assert!(matches!(e.reward("mix", "boh", "x").await, Err(Error::NotFound(_))));
+    assert!(matches!(e.reward("nessuna", "due", "x").await, Err(Error::NotFound(_))));
+}
+
+#[tokio::test]
+async fn a_grpo_dataset_is_the_prompts_of_a_suite_with_answer_only_graders() {
+    let (e, _d, _w) = engine(vec![]).await;
+    e.save_eval_suite(answer_suite("somme", 5)).unwrap();
+    let spec =
+        |suite: Option<&str>, repeat| DatasetSpec { method: "grpo".into(), suite: suite.map(Into::into), repeat, ..Default::default() };
+    // Five prompts are not enough; with two repetitions each they are.
+    assert!(e.build_dataset(&spec(Some("somme"), None)).unwrap_err().to_string().contains("ne ho trovati 5"));
+    let info = e.build_dataset(&spec(Some("somme"), Some(2))).unwrap();
+    assert_eq!((info.method.as_str(), info.examples), ("grpo", 10));
+    assert_eq!(info.sources, vec!["suite:somme"]);
+    let train = std::fs::read_to_string(format!("{}/train.jsonl", info.path)).unwrap();
+    let row: Value = serde_json::from_str(train.lines().next().unwrap()).unwrap();
+    assert_eq!(row["prompt"][0]["role"], "user");
+    assert!(row["task_id"].as_str().unwrap().starts_with('t'));
+
+    assert!(e.build_dataset(&spec(None, None)).unwrap_err().to_string().contains("suite"));
+    // A task whose grader needs files is refused, naming it.
+    let files = "id: files\nname: File\ntasks:\n  - id: crea\n    prompt: crea nota\n    graders: [{ kind: file_exists, path: nota.md }]\n";
+    e.save_eval_suite(aiw_eval::Suite::parse(files).unwrap()).unwrap();
+    let err = e.build_dataset(&spec(Some("files"), Some(20))).unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("«crea»") && err.to_string().contains("file_exists"), "{err}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_grpo_job_gets_the_reward_endpoint_in_its_private_config_and_not_in_its_log() {
+    let (e, _d, _w) = engine(vec![]).await;
+    e.set_device(device("linux", "x86_64", "l", 128, vec![("cuda", Some(48)), ("cpu", None)]));
+    fake_trl_trainer(&e);
+    e.save_eval_suite(answer_suite("somme", 5)).unwrap();
+    let ds = e
+        .build_dataset(&DatasetSpec { method: "grpo".into(), suite: Some("somme".into()), repeat: Some(2), ..Default::default() })
+        .unwrap();
+    let req = TrainJobRequest { method: "grpo".into(), ..sft_request(&ds.id, "org/modello") };
+
+    // A suite that does not exist is refused up front.
+    let err = e.start_train_job(TrainJobRequest { reward_suite: Some("nessuna".into()), ..req.clone() }).await.unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err}");
+
+    // Without the API of this process listening there is nobody to ask for rewards.
+    let job = e.start_train_job(req.clone()).await.unwrap();
+    assert_eq!(job.reward_suite.as_deref(), Some("somme"), "taken from the dataset");
+    let failed = wait_job(&e, &job.id).await;
+    assert_eq!(failed.status, "failed");
+    assert!(failed.error.unwrap().contains("aiw serve"));
+
+    e.set_local_url("http://127.0.0.1:4321".into());
+    let job = e.start_train_job(req).await.unwrap();
+    let done = wait_job(&e, &job.id).await;
+    assert_eq!(done.status, "succeeded", "{:?}", done.error);
+    let dir = e.0.dirs.train_jobs().join(&job.id);
+    let cfg: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
+    assert_eq!(
+        (cfg["method"].as_str(), cfg["reward_suite"].as_str(), cfg["reward_url"].as_str()),
+        (Some("grpo"), Some("somme"), Some("http://127.0.0.1:4321"))
+    );
+    assert_eq!(cfg["reward_token"].as_str(), Some(e.token()));
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(dir.join("config.json")).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    assert!(!e.train_job_log(&job.id, 100).unwrap().join("\n").contains(e.token()));
+}

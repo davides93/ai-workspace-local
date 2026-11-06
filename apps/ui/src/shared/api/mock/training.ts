@@ -62,8 +62,24 @@ export const adapters: AdapterInfo[] = [
 
 const logs = new Map<string, string[]>([["trn_demo1", ["Loading model Qwen/Qwen3-4B", "AIW_PROGRESS {\"step\": 51, \"total\": 51, \"loss\": 0.84}", "Addestramento completato."]]]);
 
+/** GRPO: the prompts are the tasks of a suite (the demo suites have five), repeated. */
+function buildPromptDataset(spec: DatasetSpec): DatasetInfo {
+  if (!spec.suite) throw new ApiError(400, "GRPO richiede la suite da cui prendere i prompt (suite)");
+  const found = 5 * Math.max(1, spec.repeat ?? 1);
+  if (found < MIN_EXAMPLES) throw new ApiError(400, `servono almeno ${MIN_EXAMPLES} esempi per addestrare, ne ho trovati ${found}. Aggiungi task alla suite o usa più ripetizioni (repeat).`);
+  const id = nid("ds");
+  const valid = Math.max(1, Math.round(found * 0.1));
+  const info: DatasetInfo = {
+    id, name: spec.name?.trim() || `GRPO ${id.slice(3, 9)}`, method: "grpo", created_at: now(), examples: found, train: found - valid, valid,
+    tokens_est: found * 40, agents: [], sources: [`suite:${spec.suite}`], path: `~/.aiw/datasets/${id}`,
+  };
+  datasets.unshift(info);
+  return structuredClone(info);
+}
+
 export function buildDataset(spec: DatasetSpec): DatasetInfo {
   if (!["sft", "dpo", "grpo"].includes(spec.method)) throw new ApiError(400, `metodo «${spec.method}» sconosciuto: usa sft, dpo o grpo`);
+  if (spec.method === "grpo") return buildPromptDataset(spec);
   const sources = spec.sources?.length ? spec.sources : ["feedback"];
   const bad = sources.find((s) => !["feedback", "succeeded", "eval"].includes(s));
   if (bad) throw new ApiError(400, `sorgente «${bad}» sconosciuta: usa feedback, succeeded o eval`);
@@ -113,7 +129,8 @@ export function startJob(req: TrainJobRequest): TrainJob {
   const job: TrainJob = {
     id: nid("trn"), method: req.method, trainer: trainer.id, base_model: req.base_model.trim(), dataset_id: ds.id, params: req.params ?? {}, status: "queued",
     created_at: now(), log_path: "~/.aiw/train/job/train.log", ...(req.name?.trim() ? { name: req.name.trim() } : {}),
-    ...(req.eval_suite ? { eval_suite: req.eval_suite } : {}), ...(req.eval_profile ? { eval_profile: req.eval_profile } : {}),
+    ...(req.eval_suite ? { eval_suite: req.eval_suite } : {}),
+    ...(req.method === "grpo" ? { reward_suite: req.reward_suite ?? ds.sources.find((x) => x.startsWith("suite:"))?.slice(6) } : {}), ...(req.eval_profile ? { eval_profile: req.eval_profile } : {}),
   };
   jobs.unshift(job);
   logs.set(job.id, []);

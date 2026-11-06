@@ -7,6 +7,7 @@ mod host;
 mod models;
 pub mod pairing;
 pub mod peers;
+pub mod reward;
 mod secrets;
 pub mod store;
 pub mod traces;
@@ -359,6 +360,14 @@ impl Engine {
     }
     pub fn token(&self) -> &str {
         &self.0.token
+    }
+    /// The address this process serves the API on (set by the server when it starts): where a trainer
+    /// reaches the reward endpoint.
+    pub fn local_url(&self) -> Option<String> {
+        self.0.train.local_url.lock().unwrap().clone()
+    }
+    pub fn set_local_url(&self, url: String) {
+        *self.0.train.local_url.lock().unwrap() = Some(url);
     }
     pub fn subscribe(&self) -> broadcast::Receiver<RunEventMsg> {
         self.0.bus.subscribe()

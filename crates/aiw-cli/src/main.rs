@@ -169,6 +169,8 @@ enum TrainCmd {
     Sft(Box<TrainArgs>),
     /// Addestra un adapter LoRA con DPO sulle coppie di preferenza (pollice in su e in giù sullo stesso messaggio, task di eval ripetuti)
     Dpo(Box<TrainArgs>),
+    /// Addestra un adapter LoRA con GRPO: i prompt sono i task di una suite e la reward la danno i suoi grader (solo dispositivi di classe alta)
+    Grpo(Box<GrpoArgs>),
     /// Elenca gli addestramenti
     Jobs,
     /// Mostra il log di un addestramento
@@ -182,6 +184,19 @@ enum TrainCmd {
     Cancel { id: String },
     /// Elenca i dataset creati
     Datasets,
+}
+
+/// GRPO: the prompts and the rewards come from a suite.
+#[derive(clap::Args)]
+struct GrpoArgs {
+    #[command(flatten)]
+    common: TrainArgs,
+    /// Suite i cui task danno i prompt e i cui grader (output_matches, json_schema, judge) danno le reward
+    #[arg(long)]
+    suite: String,
+    /// Quante volte compare ogni prompt
+    #[arg(long)]
+    repeat: Option<u32>,
 }
 
 #[derive(Subcommand)]
@@ -506,7 +521,7 @@ async fn main() -> Result<()> {
 }
 
 /// Starts a fine-tuning (creating the dataset when none is given), follows it and registers the adapter.
-async fn train_run(engine: &Engine, method: &str, a: TrainArgs, reward_suite: Option<String>) -> Result<()> {
+async fn train_run(engine: &Engine, method: &str, a: TrainArgs, reward_suite: Option<String>, repeat: Option<u32>) -> Result<()> {
     use aiw_core::api::{DatasetSpec, TrainJobRequest, TrainParams};
     let dataset_id = match a.dataset {
         Some(id) => id,
@@ -521,7 +536,7 @@ async fn train_run(engine: &Engine, method: &str, a: TrainArgs, reward_suite: Op
                 sources: a.source,
                 eval_reports: a.eval_report,
                 suite: reward_suite.clone(),
-                ..Default::default()
+                repeat,
             })?;
             println!(
                 "Dataset {} ({}): {} esempi ({} per l'addestramento, {} per la validazione), ~{} token",
@@ -530,6 +545,21 @@ async fn train_run(engine: &Engine, method: &str, a: TrainArgs, reward_suite: Op
             ds.id
         }
     };
+    if reward_suite.is_some() && engine.local_url().is_none() {
+        // The trainer asks this process for rewards: serve the API on a free local port while it runs.
+        let (e, ui) = (engine.clone(), None);
+        tokio::spawn(async move {
+            if let Err(err) = aiw_server::serve(e, 0, false, ui).await {
+                eprintln!("server delle reward: {err}");
+            }
+        });
+        for _ in 0..50 {
+            if engine.local_url().is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    }
     let job = engine
         .start_train_job(TrainJobRequest {
             method: method.into(),
@@ -583,8 +613,12 @@ async fn train_run(engine: &Engine, method: &str, a: TrainArgs, reward_suite: Op
 
 async fn train_cmd(engine: &Engine, cmd: TrainCmd) -> Result<()> {
     match cmd {
-        TrainCmd::Sft(a) => train_run(engine, "sft", *a, None).await?,
-        TrainCmd::Dpo(a) => train_run(engine, "dpo", *a, None).await?,
+        TrainCmd::Sft(a) => train_run(engine, "sft", *a, None, None).await?,
+        TrainCmd::Dpo(a) => train_run(engine, "dpo", *a, None, None).await?,
+        TrainCmd::Grpo(a) => {
+            let GrpoArgs { common, suite, repeat } = *a;
+            train_run(engine, "grpo", common, Some(suite), repeat).await?
+        }
         TrainCmd::Jobs => {
             for j in engine.train_jobs()? {
                 let pct = j.progress.map(|p| format!("{:.0}%", p * 100.0)).unwrap_or_default();

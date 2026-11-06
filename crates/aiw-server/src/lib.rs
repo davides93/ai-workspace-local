@@ -166,6 +166,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/evals", get(eval_suites))
         .route("/api/evals/{id}", get(eval_suite).put(save_eval_suite).delete(delete_eval_suite))
         .route("/api/evals/{id}/runs", post(start_eval))
+        .route("/api/evals/{id}/reward", post(eval_reward))
         .route("/api/eval-runs", get(eval_runs))
         .route("/api/eval-runs/compare", get(compare_eval_runs))
         .route("/api/eval-runs/{id}", get(eval_run))
@@ -872,6 +873,20 @@ async fn start_eval(State(s): State<AppState>, Path(id): Path<String>, body: Opt
     };
     ok(s.engine.start_eval(suite, req)?)
 }
+#[derive(Deserialize)]
+struct RewardBody {
+    task_id: String,
+    output: String,
+}
+/// Scores an answer with the graders of a task (only the ones that look at the answer): the reward of a
+/// reinforcement-learning trainer. Guarded like every other route.
+async fn eval_reward(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<RewardBody>,
+) -> ApiResult<aiw_engine::reward::RewardResult> {
+    ok(s.engine.reward(&id, &b.task_id, &b.output).await?)
+}
 async fn eval_runs(State(s): State<AppState>) -> ApiResult<Vec<aiw_eval::EvalReport>> {
     ok(s.engine.eval_reports()?)
 }
@@ -1014,6 +1029,7 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     let port = listener.local_addr()?.port();
     let _ = LISTENER.set((port, lan));
+    engine.set_local_url(format!("http://127.0.0.1:{port}"));
     tracing::info!("AI Workspace Local in ascolto su http://{host}:{port} (LAN: {lan})");
     if lan {
         mesh::start(&engine, port);

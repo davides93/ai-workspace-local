@@ -6,13 +6,15 @@ AIW lancia questo script con un file di configurazione JSON:
     python trl_train.py --config <cartella del job>/config.json
 
 Il file di configurazione contiene:
-    method        "sft" o "dpo" (poi "grpo")
+    method        "sft", "dpo" o "grpo"
     backend       "trl" oppure "unsloth"
     base_model    cartella locale o repository Hugging Face del modello base
     dataset_dir   cartella con train.jsonl e valid.jsonl
     output_dir    dove scrivere l'adapter (cartella PEFT) e metrics.json
     work_dir      cartella di lavoro per i checkpoint intermedi
     epochs, iters, learning_rate, rank, batch_size   facoltativi
+    reward_url, reward_token, reward_suite   solo "grpo": l'API di AIW che dà le reward e la suite
+                  i cui grader valutano le risposte (il token sta solo in questo file, mai nel log)
 
 Le righe che iniziano con `AIW_PROGRESS ` sono JSON (`step`, `total`, `loss`, `val_loss`) e AIW le usa
 per la barra di avanzamento. Tutto il resto finisce nel log del job.
@@ -221,7 +223,90 @@ def run_dpo(cfg):
     write_metrics(cfg, metrics)
 
 
-METHODS = {"sft": run_sft, "dpo": run_dpo}
+def completion_text(completion):
+    """Il testo di una risposta, che TRL dà come lista di messaggi (formato conversazionale) o come stringa."""
+    if isinstance(completion, list):
+        return "".join(m.get("content", "") for m in completion if isinstance(m, dict))
+    return str(completion)
+
+
+def make_reward_function(cfg):
+    """Funzione di reward per GRPOTrainer: chiede il punteggio all'endpoint di AIW, risposta per risposta."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    url = cfg["reward_url"].rstrip("/") + "/api/evals/" + urllib.parse.quote(cfg["reward_suite"], safe="") + "/reward"
+    token = cfg["reward_token"]
+
+    def score(task_id, output):
+        body = json.dumps({"task_id": task_id, "output": output}).encode("utf-8")
+        request = urllib.request.Request(
+            url, data=body, method="POST", headers={"Content-Type": "application/json", "Authorization": "Bearer " + token}
+        )
+        last = None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    return float(json.loads(response.read().decode("utf-8"))["score"])
+            except urllib.error.HTTPError as e:
+                # Un rifiuto (task sconosciuto, grader non ammesso) non migliora riprovando.
+                detail = e.read().decode("utf-8", "replace")[:300]
+                raise RuntimeError(f"AIW ha rifiutato la reward del task {task_id}: {e.code} {detail}")
+            except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+                last = e
+                time.sleep(1 + attempt)
+        # Una reward inventata (per esempio 0) falserebbe l'addestramento: meglio fermarsi.
+        raise RuntimeError(f"endpoint di reward non raggiungibile ({last.__class__.__name__})")
+
+    def aiw_reward(prompts, completions, task_id=None, **kwargs):
+        return [score(tid, completion_text(c)) for tid, c in zip(task_id, completions)]
+
+    return aiw_reward
+
+
+def run_grpo(cfg):
+    from datasets import load_dataset
+    from transformers import TrainerCallback
+    from trl import GRPOConfig, GRPOTrainer
+
+    for key in ("reward_url", "reward_token", "reward_suite"):
+        if not cfg.get(key):
+            sys.exit(f"configurazione incompleta: manca {key}")
+    rank = int(cfg.get("rank") or DEFAULT_RANK)
+    train_file, _ = dataset_files(cfg)
+    data = load_dataset("json", data_files={"train": train_file})["train"]
+    model, tokenizer, peft_config = load_model_for_peft(cfg, rank)
+    generations = int(cfg.get("num_generations") or 4)
+    args = common_args(cfg)
+    # Il batch di generazione deve essere un multiplo del numero di risposte per prompt.
+    batch = max(int(cfg.get("batch_size") or generations), generations)
+    args["per_device_train_batch_size"] = ((batch + generations - 1) // generations) * generations
+    args["num_generations"] = generations
+    args["max_completion_length"] = int(cfg.get("max_completion_length") or 512)
+    callback = make_progress_callback(TrainerCallback)
+    trainer = GRPOTrainer(
+        model=model,
+        reward_funcs=make_reward_function(cfg),
+        args=GRPOConfig(**args),
+        train_dataset=data,
+        processing_class=tokenizer,
+        peft_config=peft_config,
+        callbacks=[callback],
+    )
+    started = time.time()
+    result = trainer.train()
+    trainer.save_model(cfg["output_dir"])
+    tokenizer.save_pretrained(cfg["output_dir"])
+    metrics = {
+        "train_loss": callback.last_loss if callback.last_loss is not None else result.training_loss,
+        "steps": int(trainer.state.global_step),
+        "duration_s": round(time.time() - started, 1),
+    }
+    write_metrics(cfg, metrics)
+
+
+METHODS = {"sft": run_sft, "dpo": run_dpo, "grpo": run_grpo}
 
 
 def main():
