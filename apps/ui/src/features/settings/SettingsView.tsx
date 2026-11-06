@@ -48,7 +48,9 @@ export function SettingsView() {
 
       <QueryState query={cfg}>
         {(view) => {
-          const groups = groupSettings(view.schema, query);
+          const groups = groupSettings(view.schema, query)
+            .map((group) => ({ ...group, entries: group.entries.filter((entry) => entry.key !== "update.channel") }))
+            .filter((group) => group.entries.length > 0);
           return (
             <>
               <LayerBar view={view} layer={layer} onLayer={setLayer} />

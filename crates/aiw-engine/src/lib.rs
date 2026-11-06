@@ -17,6 +17,7 @@ pub mod store;
 pub mod traces;
 pub mod train;
 pub mod train_jobs;
+mod training_tool;
 pub mod update;
 pub mod voice;
 pub mod webhook;
@@ -265,6 +266,7 @@ impl Engine {
         if !opts.offline {
             engine.0.runtimes.refresh().await;
         }
+        training_tool::register(&engine);
         engine.seed()?;
         engine.resume_workflows();
         if !opts.offline {
@@ -494,17 +496,22 @@ impl Engine {
         for a in approvals {
             let _ = a.tx.send(false);
         }
+        let training = self.0.train.running.lock().unwrap().values().cloned().collect::<Vec<_>>();
+        for token in &training {
+            token.cancel();
+        }
         let sidecars = self.0.runtimes.stop_all().await;
         let browser = self.0.browser.close().await;
         let detail = format!(
-            "{} run, {} conferme, {} sidecar fermati{}",
+            "{} run, {} conferme, {} addestramenti, {} sidecar fermati{}",
             runs.len(),
             n_appr,
+            training.len(),
             sidecars,
             if browser { ", browser chiuso" } else { "" }
         );
         self.audit_system("kill", &detail);
-        json!({"runs": runs.len(), "approvals": n_appr, "sidecars": sidecars, "browser": browser})
+        json!({"runs": runs.len(), "approvals": n_appr, "training": training.len(), "sidecars": sidecars, "browser": browser})
     }
 
     // ------------------------------------------------------------------ runtimes
@@ -543,14 +550,29 @@ impl Engine {
     /// Installs the runtime in the background (one click, no further questions) and returns the
     /// job to follow with [`runtime_install_status`](Self::runtime_install_status). When it
     /// ends the runtimes are detected again, so the UI sees the new state.
-    pub async fn runtime_install_start(&self, id: &str) -> Result<aiw_runtimes::install::InstallJob> {
+    pub async fn runtime_install_start(&self, id: &str, start: bool) -> Result<aiw_runtimes::install::InstallJob> {
+        if start && id != "localai" {
+            return Err(Error::Invalid("L’avvio dopo l’installazione è disponibile per LocalAI.".into()));
+        }
         let (cmds, job) = self.0.runtimes.begin_install(id).await?;
         let name = self.0.runtimes.manifest(id).map(|m| m.name).unwrap_or_else(|_| id.to_string());
         self.audit_user("runtime.install", &format!("{name}: {}", cmds.iter().map(|c| c.display()).collect::<Vec<_>>().join(" && ")));
         let initial = job.lock().unwrap().clone();
         let engine = self.clone();
+        let id = id.to_string();
         tokio::spawn(async move {
-            aiw_runtimes::install::run(cmds, job).await;
+            use aiw_runtimes::install::InstallState;
+            aiw_runtimes::install::run(cmds, job.clone(), start).await;
+            if start && job.lock().unwrap().state == InstallState::Running {
+                match engine.runtime_action(&id, "start", None).await {
+                    Ok(_) => job.lock().unwrap().state = InstallState::Done,
+                    Err(error) => {
+                        let mut job = job.lock().unwrap();
+                        job.state = InstallState::Failed;
+                        job.error = Some(error.to_string());
+                    }
+                }
+            }
             engine.0.runtimes.refresh().await;
         });
         Ok(initial)
@@ -1899,16 +1921,60 @@ impl Engine {
     }
 
     // ------------------------------------------------------------------ OpenAI-compatible gateway
-    /// Model ids exposed on `/v1/models`: inference profiles and local GGUF files.
+    /// Model ids exposed on `/v1/models`: inference profiles, system models and local GGUF files.
     pub fn gateway_models(&self) -> Vec<String> {
         let mut v: Vec<String> = self.profiles().unwrap_or_default().into_iter().map(|p| p.id).collect();
         v.extend(self.0.models.read().unwrap().iter().filter(|m| m.format == "gguf").map(|m| m.id.clone()));
+        v.extend(self.available_system_models().into_iter().map(|m| m.id));
+        let mut seen = HashSet::new();
+        v.retain(|id| seen.insert(id.clone()));
         v
     }
+    pub async fn preview_system_model(&self, id: &str, prompt: &str) -> Result<String> {
+        use aiw_runtimes::{ChatDelta, ChatRequest, Msg};
+        use futures::StreamExt;
+        let prompt = prompt.trim();
+        if prompt.is_empty() || prompt.chars().count() > 2000 {
+            return Err(Error::Invalid("Scrivi una richiesta da 1 a 2000 caratteri.".into()));
+        }
+        let model = self
+            .available_system_models()
+            .into_iter()
+            .find(|m| m.id == id)
+            .ok_or_else(|| Error::NotFound("Modello di sistema non disponibile su questo dispositivo.".into()))?;
+        let cancel = CancellationToken::new();
+        let _guard = cancel.clone().drop_guard();
+        let backend = self.0.runtimes.backend(&model.runtimes[0], Some(id)).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(90), async {
+            let mut stream = backend
+                .chat(
+                    ChatRequest { model: id.into(), messages: vec![Msg::user(prompt)], max_tokens: Some(512), ..Default::default() },
+                    cancel,
+                )
+                .await?;
+            let mut answer = String::new();
+            while let Some(delta) = stream.next().await {
+                if let ChatDelta::Text(text) = delta? {
+                    answer.push_str(&text);
+                }
+            }
+            if answer.is_empty() {
+                return Err(Error::Runtime("Il modello non ha restituito una risposta.".into()));
+            }
+            Ok(answer)
+        })
+        .await
+        .map_err(|_| Error::Runtime("Il modello non ha risposto entro 90 secondi. Riprova.".into()))?
+    }
+
     /// Resolves a gateway model name to a backend and the model to send to it.
     pub async fn gateway_backend(&self, model: &str) -> Result<(Arc<dyn ChatBackend>, String)> {
         if let Ok(p) = self.profile(model) {
             return Ok((self.0.runtimes.backend_for(&p.runtime_id, Some(&p.model), p.params.context, &p.params.adapters).await?, p.model));
+        }
+        if let Some(local) = self.available_system_models().into_iter().find(|m| m.id == model) {
+            let runtime = &local.runtimes[0];
+            return Ok((self.0.runtimes.backend(runtime, Some(model)).await?, model.to_string()));
         }
         if self.0.models.read().unwrap().iter().any(|m| m.id == model) {
             // A bare local GGUF: llama-server when it is there, else the in-process engine.

@@ -1,3 +1,4 @@
+import { pickRuntime } from "../../models/model/profile";
 import { useMemo, useState } from "react";
 import { Button, Dialog, Field, Input, Select, StatusPill } from "../../../shared/ui";
 import { formatBytes, formatContext } from "../../../shared/lib/format";
@@ -53,6 +54,16 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
       return { ...d, params: { ...d.params, adapters: [{ ...(first ?? { path: "" }), ...patch }, ...rest] } };
     });
 
+  const availableModels = models.filter((model) => pickRuntime(model) !== null);
+  const chosenModel = availableModels.find((model) => model.id === draft.model);
+  const changeModel = (id: string) => {
+    const model = availableModels.find((item) => item.id === id);
+    const runtimeId = model && pickRuntime(model, draft.runtime_id);
+    if (!runtimeId) return;
+    set({ model: id, runtime_id: runtimeId });
+    setCustom(false);
+  };
+
   const changeRuntime = (runtime_id: string) => {
     const nextFits = compatibleModels(models, runtime_id);
     const keepCustom = custom && draft.model !== "" && !nextFits.some((m) => m.id === draft.model);
@@ -83,6 +94,26 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
           </Field>
         </div>
 
+        <Field label="Modello disponibile qui" htmlFor="pf-model-simple" hint={chosenModel ? `Runtime: ${runtime?.name ?? draft.runtime_id}` : undefined}>
+          <Select id="pf-model-simple" value={chosenModel?.id ?? ""} onChange={(event) => changeModel(event.target.value)}>
+            <option value="">{draft.model && !chosenModel ? draft.model : "Scegli un modello…"}</option>
+            {availableModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Stile di risposta" htmlFor="pf-style">
+          <Select id="pf-style" value={draft.params.temperature === undefined ? "default" :
+            [0.2, 0.7, 1].includes(draft.params.temperature) ? String(draft.params.temperature) : "custom"}
+            onChange={(event) => setParam({ temperature: event.target.value === "default" ? undefined : Number(event.target.value) })}>
+            <option value="default">Predefinito del modello</option>
+            <option value="0.2">Preciso</option>
+            <option value="0.7">Bilanciato</option>
+            <option value="1">Creativo</option>
+            <option value="custom" disabled>Personalizzato</option>
+          </Select>
+        </Field>
+
+        <details open={!chosenModel && !availableModels.length || undefined}>
+          <summary>Runtime e parametri avanzati</summary>
         <div className="cols-2">
           <Field label="Runtime" htmlFor="pf-runtime" error={err(issues, "runtime_id")} hint={runtime ? <span className="row"><StatusPill status={runtime.status} /><span>{runtime.status_detail ?? ""}</span></span> : undefined}>
             <Select id="pf-runtime" value={draft.runtime_id} onChange={(e) => changeRuntime(e.target.value)} aria-invalid={!!err(issues, "runtime_id")}>
@@ -144,6 +175,7 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
             />
           </div>
         </Field>
+        </details>
         <button type="submit" className="sr-only" tabIndex={-1}>Salva</button>
       </form>
     </Dialog>

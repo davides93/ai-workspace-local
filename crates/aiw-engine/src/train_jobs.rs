@@ -51,7 +51,22 @@ pub fn parse_progress(line: &str) -> Option<Progress> {
             val_loss: v["val_loss"].as_f64(),
         });
     }
-    let rest = line.strip_prefix("Iter ")?;
+    let Some(rest) = line.strip_prefix("Iter ") else {
+        // Newer mlx-lm prints a table: step, loss, tokens/s and token count.
+        let mut columns = line.split_whitespace();
+        let step = columns.next()?.parse().ok()?;
+        let value = columns.next()?;
+        if value == "val" {
+            let val_loss = columns.next()?.parse().ok()?;
+            return Some(Progress { step, val_loss: Some(val_loss), ..Default::default() });
+        }
+        let loss = value.parse().ok()?;
+        let tokens = columns.next_back()?;
+        if !tokens.ends_with('k') && !tokens.ends_with('M') {
+            return None;
+        }
+        return Some(Progress { step, loss: Some(loss), ..Default::default() });
+    };
     let (n, rest) = rest.split_once(':')?;
     let step: u64 = n.trim().parse().ok()?;
     let rest = rest.trim_start();
@@ -152,6 +167,9 @@ fn training_command(l: &Launch<'_>) -> Result<JobSpec> {
                 "-c".into(),
                 yaml.display().to_string(),
             ];
+            if l.dataset.sources.iter().any(|source| source == "import") {
+                spec.args.push("--mask-prompt".into());
+            }
             if let Some(lr) = p.learning_rate {
                 spec.args.extend(["--learning-rate".into(), lr.to_string()]);
             }
@@ -193,12 +211,15 @@ fn training_command(l: &Launch<'_>) -> Result<JobSpec> {
 
 /// A file only the user can read (the configuration of a job can hold the token of a reward endpoint).
 pub(crate) fn write_private(path: &Path, text: &str) -> Result<()> {
-    std::fs::write(path, text)?;
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
+    options.open(path)?.write_all(text.as_bytes())?;
     Ok(())
 }
 
@@ -277,6 +298,15 @@ impl Engine {
     /// Starts a fine-tuning in the background and returns the job as it is when it is queued. The
     /// trainer must be installed, the dataset must exist for the method, and no other job may be running.
     pub async fn start_train_job(&self, req: TrainJobRequest) -> Result<TrainJob> {
+        self.start_training(req, CancellationToken::new(), None).await
+    }
+
+    pub(crate) async fn start_training(
+        &self,
+        req: TrainJobRequest,
+        token: CancellationToken,
+        max_duration: Option<std::time::Duration>,
+    ) -> Result<TrainJob> {
         if !matches!(req.method.as_str(), "sft" | "dpo" | "grpo") {
             return Err(Error::Invalid(format!("metodo «{}» sconosciuto: usa sft, dpo o grpo", req.method)));
         }
@@ -331,8 +361,11 @@ impl Engine {
             reward_suite,
         };
         // One job at a time on a device: the check and the registration happen under one lock.
-        let token = CancellationToken::new();
         {
+            if token.is_cancelled() {
+                let _ = std::fs::remove_dir_all(&job_dir);
+                return Err(Error::Conflict("avvio dell’addestramento annullato".into()));
+            }
             let mut running = self.0.train.running.lock().unwrap();
             if let Some(other) = running.keys().next() {
                 let _ = std::fs::remove_dir_all(&job_dir);
@@ -344,7 +377,17 @@ impl Engine {
         self.audit_user("train.start", &format!("{} {} su {}", req.method, trainer.name, job.base_model));
         let engine = self.clone();
         tokio::spawn(async move {
+            let deadline = max_duration.map(|duration| {
+                let token = token.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(duration).await;
+                    token.cancel();
+                })
+            });
             engine.run_train_job(id.clone(), trainer, dataset, token).await;
+            if let Some(deadline) = deadline {
+                deadline.abort();
+            }
             engine.0.train.running.lock().unwrap().remove(&id);
         });
         Ok(job)
@@ -355,6 +398,9 @@ impl Engine {
         let name = req.base_model.trim();
         let local = self.0.models.read().unwrap().iter().find(|m| m.id == name || m.name == name).cloned();
         let Some(m) = local else { return Ok(()) };
+        if m.format == "system" {
+            return Err(Error::Invalid("I modelli di sistema non possono essere addestrati da AIW.".into()));
+        }
         if m.format == "gguf" {
             return Err(Error::Invalid(format!(
                 "«{}» è un file GGUF e non si addestra: usa il modello in formato safetensors/MLX oppure un repository Hugging Face",
@@ -459,7 +505,7 @@ impl Engine {
         let seen = Arc::new(Mutex::new(Progress::default()));
         let (engine, job_id, seen2) = (self.clone(), id.clone(), seen.clone());
         let last_saved = Mutex::new(-1.0f32);
-        let outcome = job::run_logged(spec, cancel, move |line| {
+        let outcome = job::run_logged(spec, cancel.clone(), move |line| {
             let Some(p) = parse_progress(line) else { return };
             let mut s = seen2.lock().unwrap();
             s.step = p.step;
@@ -492,9 +538,8 @@ impl Engine {
             }
             Ok(JobEnd::Exited(code)) if code != Some(0) => {
                 let _ = std::fs::remove_dir_all(&adapter_dir);
-                let tail = job::tail(Path::new(&job.log_path), 5).join("\n");
                 let how = code.map_or("terminato da un segnale".to_string(), |c| format!("uscito con codice {c}"));
-                self.fail_job(&id, format!("{} è {how}. Ultime righe del log:\n{tail}", trainer.name));
+                self.fail_job(&id, format!("{} è {how}. Apri il log del job per i dettagli.", trainer.name));
             }
             Ok(JobEnd::Exited(_)) => {
                 if let Err(why) = aiw_runtimes::adapters::check_files(&adapter_dir, &trainer.adapter_format) {
@@ -539,7 +584,7 @@ impl Engine {
                 });
                 // The adapter is already registered: the comparison can fail without taking it away.
                 if let (Some(suite), Some(profile)) = (job.eval_suite.clone(), job.eval_profile.clone()) {
-                    let eval = match self.compare_adapter(&suite, &profile, &adapter).await {
+                    let eval = match self.compare_adapter(&suite, &profile, &adapter, &cancel).await {
                         Ok(v) => v,
                         Err(e) => json!({"suite": suite, "profile": profile, "error": e.to_string()}),
                     };
@@ -549,7 +594,7 @@ impl Engine {
                     let _ = self.0.store.put_doc("adapter", &stored.id, &stored);
                 }
                 self.mutate_job(&id, |j| {
-                    j.status = "succeeded".into();
+                    j.status = if cancel.is_cancelled() { "cancelled" } else { "succeeded" }.into();
                     j.metrics = Some(metrics);
                     j.finished_at = Some(now_rfc3339());
                 });
@@ -584,13 +629,22 @@ impl Engine {
     }
 
     /// Runs `suite` with the profile as it is and with the adapter added, and sums up both.
-    async fn compare_adapter(&self, suite_id: &str, profile_id: &str, adapter: &AdapterInfo) -> Result<Value> {
+    async fn compare_adapter(&self, suite_id: &str, profile_id: &str, adapter: &AdapterInfo, cancel: &CancellationToken) -> Result<Value> {
         use crate::eval::EvalRequest;
         let suite = self.eval_suite(suite_id)?;
         let base_profile = self.profile(profile_id)?;
         let summary = |r: &aiw_eval::EvalReport| json!({"report": r.id, "passed": r.summary.passed, "total": r.summary.total, "pass_rate": r.summary.pass_rate, "score": r.summary.score});
-        let baseline =
-            self.run_eval(&suite, &EvalRequest { profile: Some(profile_id.to_string()), ..Default::default() }, &mut |_| {}).await?;
+        let baseline = self
+            .run_eval_with_cancel(
+                &suite,
+                &EvalRequest { profile: Some(profile_id.to_string()), ..Default::default() },
+                &mut |_| {},
+                cancel.clone(),
+            )
+            .await?;
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         // A temporary profile: the same model, with the adapter.
         let temp_id = format!("train-{}", adapter.id);
         let mut temp = base_profile.clone();
@@ -598,9 +652,19 @@ impl Engine {
         temp.name = format!("{} + {}", base_profile.name, adapter.name);
         temp.params.adapters = vec![AdapterRef { path: adapter.path.clone(), scale: None }];
         self.save_profile(temp)?;
-        let with = self.run_eval(&suite, &EvalRequest { profile: Some(temp_id.clone()), ..Default::default() }, &mut |_| {}).await;
+        let with = self
+            .run_eval_with_cancel(
+                &suite,
+                &EvalRequest { profile: Some(temp_id.clone()), ..Default::default() },
+                &mut |_| {},
+                cancel.clone(),
+            )
+            .await;
         let _ = self.0.store.delete_doc("profile", &temp_id);
         let with = with?;
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         Ok(json!({
             "suite": suite_id,
             "profile": profile_id,

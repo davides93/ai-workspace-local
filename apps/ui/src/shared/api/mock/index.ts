@@ -659,6 +659,8 @@ export class MockTransport implements Transport {
       note: automatic ? "Viene installato in un ambiente Python isolato di AIW (`~/.aiw/pyenv`): non tocca il Python di sistema." : "",
     };
   }
+  async previewSystemModel(_id: string, _prompt: string) { return "Risposta di esempio del modello di sistema."; }
+
   async installRuntime(id: string): Promise<InstallJob> {
     const r = runtimes.find((x) => x.id === id);
     if (!r) throw new ApiError(404, `runtime ${id} non trovato`);
@@ -999,6 +1001,7 @@ export class MockTransport implements Transport {
     return j ? structuredClone(j) : null;
   }
   async datasets() { return structuredClone(training.datasets); }
+  async importSftDataset(name: string, _jsonl: string) { return this.buildDataset({ name, method: "sft", sources: ["feedback"] }); }
   async buildDataset(spec: DatasetSpec) { return training.buildDataset(spec); }
   async deleteDataset(id: string) { training.deleteDataset(id); }
   async trainJobs() { return structuredClone(training.jobs); }

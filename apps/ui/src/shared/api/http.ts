@@ -81,7 +81,8 @@ export class HttpTransport implements Transport {
     this.req<RuntimeInfo>("PUT", `/runtimes/${enc(id)}/settings`, settings);
   runtimeLogs = (id: string) => this.req<string[]>("GET", `/runtimes/${enc(id)}/logs`);
   runtimeInstallPlan = (id: string) => this.req<InstallPlan>("GET", `/runtimes/${enc(id)}/install-plan`);
-  installRuntime = (id: string) => this.req<InstallJob>("POST", `/runtimes/${enc(id)}/install`, {});
+  previewSystemModel = (id: string, prompt: string) => this.req<string>("POST", "/model-preview", { id, prompt });
+  installRuntime = (id: string, start = false) => this.req<InstallJob>("POST", `/runtimes/${enc(id)}/install${start ? "?start=true" : ""}`, {});
   runtimeInstall = (id: string) => this.req<InstallJob | null>("GET", `/runtimes/${enc(id)}/install`);
 
   updateStatus = () => this.req<UpdateStatus>("GET", "/update");
@@ -256,6 +257,7 @@ export class HttpTransport implements Transport {
   installTrainer = (id: string) => this.req<InstallJob>("POST", `/trainers/${enc(id)}/install`);
   trainerInstall = (id: string) => this.req<InstallJob | null>("GET", `/trainers/${enc(id)}/install`);
   datasets = () => this.req<DatasetInfo[]>("GET", "/datasets");
+  importSftDataset = (name: string, jsonl: string) => this.req<DatasetInfo>("POST", "/dataset-import", { name, jsonl });
   buildDataset = (spec: DatasetSpec) => this.req<DatasetInfo>("POST", "/datasets", spec);
   deleteDataset = (id: string) => this.req<void>("DELETE", `/datasets/${enc(id)}`);
   trainJobs = () => this.req<TrainJob[]>("GET", "/train/jobs");

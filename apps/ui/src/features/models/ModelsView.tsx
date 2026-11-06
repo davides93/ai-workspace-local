@@ -1,3 +1,5 @@
+import { ProfilesPanel } from "../agents/components/ProfilesPanel";
+import "../agents/agents.css";
 import { navigate, useParams } from "../../app/router";
 import { formatBytes, formatMb } from "../../shared/lib/format";
 import { useSystem } from "../../shared/query/system";
@@ -10,8 +12,8 @@ import { DownloadsTab } from "./components/DownloadsTab";
 import { InstalledTab } from "./components/InstalledTab";
 import "./models.css";
 
-type Tab = "installed" | "discover" | "downloads" | "catalog";
-const TABS: Tab[] = ["installed", "discover", "downloads", "catalog"];
+type Tab = "installed" | "discover" | "downloads" | "catalog" | "profiles";
+const TABS: Tab[] = ["installed", "discover", "downloads", "catalog", "profiles"];
 
 /** Modelli: installed, live discovery on several providers, the download queue, and the curated catalog. */
 export function ModelsView() {
@@ -29,12 +31,13 @@ export function ModelsView() {
     <Page>
       <PageHeader
         eyebrow="Inferenza" title="Modelli"
-        subtitle={`${models.data?.length ?? 0} installati · ${formatBytes(totalInstalled)} su disco · memoria disponibile: RAM ${formatMb(system.data?.device.memory_mb)}${vram ? `, VRAM ${formatMb(vram)}` : ""}`}
+        subtitle={`${models.data?.length ?? 0} disponibili · ${formatBytes(totalInstalled)} su disco · memoria disponibile: RAM ${formatMb(system.data?.device.memory_mb)}${vram ? `, VRAM ${formatMb(vram)}` : ""}`}
       />
       <Tabs
         idPrefix="models" label="Sezioni dei modelli" value={tab} onChange={(t) => navigate(t === "installed" ? "/models" : `/models/${t}`)}
         tabs={[
-          { id: "installed", label: "Installati", count: models.data?.length },
+          { id: "installed", label: "Disponibili qui", count: models.data?.length },
+          { id: "profiles", label: "Profili" },
           { id: "discover", label: "Scopri" },
           { id: "downloads", label: "Download", count: jobs.filter(isActiveDownload).length || undefined },
           { id: "catalog", label: "Catalogo" },
@@ -42,6 +45,7 @@ export function ModelsView() {
       />
       {tab !== "downloads" && <ActiveDownloadsStrip jobs={jobs} />}
       <TabPanel idPrefix="models" id={tab}>
+        {tab === "profiles" && <ProfilesPanel />}
         {tab === "installed" && <InstalledTab />}
         {tab === "discover" && <DiscoverTab />}
         {tab === "downloads" && <QueryState query={downloads}>{(list) => <DownloadsTab jobs={list} />}</QueryState>}

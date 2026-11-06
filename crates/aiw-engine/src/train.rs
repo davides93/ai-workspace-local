@@ -64,7 +64,7 @@ impl Engine {
         self.audit_user("trainer.install", &format!("{}: {}", m.name, cmds.iter().map(|c| c.display()).collect::<Vec<_>>().join(" && ")));
         let initial = job.lock().unwrap().clone();
         tokio::spawn(async move {
-            aiw_runtimes::install::run(cmds, job).await;
+            aiw_runtimes::install::run(cmds, job, false).await;
         });
         Ok(initial)
     }

@@ -125,15 +125,17 @@ export function groupTools(catalog: readonly PickerTool[], query = ""): ToolGrou
     .map(([id, tools]) => ({ id, label: categoryLabel(id), tools }));
 }
 
-/** `["*", "x"]` is the same as `["*"]`; duplicates go away. */
+export const TRAINING_TOOL = "training_harness";
+
+/** A wildcard subsumes ordinary tools; training always needs an explicit grant. */
 export function normalizeTools(tools: readonly string[]): string[] {
-  if (tools.includes(ALL)) return [ALL];
+  if (tools.includes(ALL)) return tools.includes(TRAINING_TOOL) ? [ALL, TRAINING_TOOL] : [ALL];
   return [...new Set(tools.map((t) => t.trim()).filter(Boolean))];
 }
 
 export const isAllTools = (tools: readonly string[]): boolean => tools.includes(ALL);
 
-export const isSelected = (tools: readonly string[], name: string): boolean => tools.includes(ALL) || tools.includes(name);
+export const isSelected = (tools: readonly string[], name: string): boolean => tools.includes(name) || (name !== TRAINING_TOOL && tools.includes(ALL));
 
 /** Turns `"*"` into the explicit list of every tool of the catalogue (internal ones included). */
 export function expandAll(catalog: readonly PickerTool[]): string[] {

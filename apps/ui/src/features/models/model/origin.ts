@@ -11,6 +11,7 @@ export interface OriginInfo {
 
 /** Where an installed model comes from (docs/architecture/model-hub.md §6 and §9). */
 export const ORIGINS: Record<ModelOrigin, OriginInfo> = {
+  system: { label: "Di sistema", owner: "il sistema operativo", description: "Fornito dal dispositivo, senza download.", external: false },
   aiw: { label: "AIW", owner: "AIW", description: "Scaricato da AIW nella cartella dei modelli.", external: false },
   manual: { label: "Manuale", owner: "te", description: "File copiato a mano nella cartella dei modelli di AIW.", external: false },
   ollama: { label: "Ollama", owner: "Ollama", description: "Letto in sola lettura dalla libreria di Ollama: non viene copiato.", external: true },
@@ -19,7 +20,7 @@ export const ORIGINS: Record<ModelOrigin, OriginInfo> = {
 };
 
 /** Display order of the origin filter. */
-export const ORIGIN_ORDER: ModelOrigin[] = ["aiw", "manual", "ollama", "lmstudio", "hf-cache"];
+export const ORIGIN_ORDER: ModelOrigin[] = ["system", "aiw", "manual", "ollama", "lmstudio", "hf-cache"];
 
 /** Unknown or missing origin (older backends) is treated as a manual file. */
 export function originInfo(origin: string | undefined): OriginInfo {
