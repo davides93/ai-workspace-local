@@ -29,6 +29,11 @@ export function useAgentChoices() {
   return useQuery({ queryKey: qk.agents(), queryFn: () => api.agents() });
 }
 
+export function useTeamChoices() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.teams(), queryFn: () => api.teams() });
+}
+
 export function useProfileChoices() {
   const api = useApi();
   return useQuery({ queryKey: qk.profiles(), queryFn: () => api.profiles() });

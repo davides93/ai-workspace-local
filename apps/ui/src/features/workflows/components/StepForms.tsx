@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Chip, Field, Input, Select, Textarea } from "../../../shared/ui";
-import type { AgentProfile, InferenceProfile, ToolInfo } from "../../../shared/api/types";
+import type { AgentProfile, InferenceProfile, TeamDef, ToolInfo } from "../../../shared/api/types";
 import type { Issue } from "../model/draft";
 import { cleanOptions, DEFAULT_RETRY_DELAY_S, FOREACH_MAX_PARALLEL, OPTION_LIMITS, schemaParams, type StepDraft } from "../model/steps";
 import type { StepOptions } from "../../../shared/api/types";
@@ -10,6 +10,7 @@ export interface StepCatalog {
   /** Workflows a sub-workflow step can start (not the one being edited). */
   workflows: { id: string; name: string }[];
   agents: AgentProfile[];
+  teams: TeamDef[];
   profiles: InferenceProfile[];
   tools: ToolInfo[];
 }
@@ -85,6 +86,23 @@ export function AgentFields({ step, uid, issues, catalog, before, inputKeys, onC
         </Select>
       </Field>
       <PromptField id={`st-${uid}-prompt`} label="Compito" value={step.prompt} placeholder="Descrivi cosa deve fare l'agente. Puoi citare i risultati dei passi precedenti." issues={issues} field="prompt" before={before} inputKeys={inputKeys} onChange={(prompt) => onChange({ ...step, prompt })} />
+    </>
+  );
+}
+
+export function TeamFields({ step, uid, issues, catalog, before, inputKeys, onChange }: Props<"team">) {
+  const known = catalog.teams.some((t) => t.id === step.team);
+  const n = note(issues, "team");
+  return (
+    <>
+      <Field label="Team" htmlFor={`st-${uid}-team`} error={n.error} hint={n.hint ?? catalog.teams.find((t) => t.id === step.team)?.description}>
+        <Select id={`st-${uid}-team`} value={step.team} onChange={(e) => onChange({ ...step, team: e.target.value })} aria-invalid={!!n.error}>
+          {!step.team && <option value="">Scegli un team…</option>}
+          {step.team && !known && <option value={step.team}>{step.team} (non esiste)</option>}
+          {catalog.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </Select>
+      </Field>
+      <PromptField id={`st-${uid}-prompt`} label="Compito" value={step.prompt} placeholder="Descrivi il lavoro del team. Puoi citare i risultati dei passi precedenti." issues={issues} field="prompt" before={before} inputKeys={inputKeys} onChange={(prompt) => onChange({ ...step, prompt })} />
     </>
   );
 }

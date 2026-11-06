@@ -28,8 +28,14 @@ describe("new steps", () => {
     expect(newStep("agent", [], { agent: "coder" })).toEqual({ id: "agent1", kind: "agent", agent: "coder", prompt: "" });
     expect(newStep("tool", [], { tool: "shell" })).toEqual({ id: "tool1", kind: "tool", tool: "shell", args: "{}" });
     expect(newStep("llm", [], { profile: "fast" })).toMatchObject({ kind: "llm", profile: "fast" });
+    expect(newStep("team", [], { team: "ricerca" })).toEqual({ id: "team1", kind: "team", team: "ricerca", prompt: "" });
     expect(newStep("condition", [])).toMatchObject({ kind: "condition", then: [], else: [] });
     expect(newStep("approval", [])).toMatchObject({ kind: "approval" });
+  });
+
+  it("carry the options from an agent step to a team step", () => {
+    const agent: StepDraft = { id: "a", kind: "agent", agent: "operator", prompt: "x", opts: { retry: 2, timeout_s: 60 } };
+    expect(changeKind(agent, "team", [agent], { team: "ricerca" })).toEqual({ id: "a", kind: "team", team: "ricerca", prompt: "", opts: { retry: 2, timeout_s: 60 } });
   });
 
   it("keep the id when the kind changes", () => {

@@ -2,6 +2,7 @@
 
 ## Non rilasciato
 
+- Workflow: passo `team` (`{kind: team, team, prompt}`) che affida il compito a un team e ne usa la risposta finale; accetta `retry`, `timeout_s` e `on_error`, si può usare dentro `foreach` e `parallel`, ha il suo selettore nell'editor dei workflow. Un team usato da un workflow non si può eliminare (409).
 - Team multi-agente: nuova pagina Team (editor con strategie supervisore, parallelo e catena, membri, budget e schema di risposta); un team si sceglie in chat come un agente. I membri lavorano con i limiti del padre, con budget condiviso, e la loro traccia (testo, tool, risultati) si apre dentro la scheda del subagente.
 - Handoff: un agente può passare la conversazione a un altro (tool `handoff`), fino a 3 passaggi per messaggio, senza mai passare a una modalità più permissiva; la chat mostra una nota a ogni passaggio.
 - Stato condiviso del team (tool `team_state`), visibile nell'Inspector.

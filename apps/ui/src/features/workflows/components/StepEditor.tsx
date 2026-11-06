@@ -18,7 +18,7 @@ export function StepEditor({ rows, setRows, issues, catalog, inputKeys, lastRun 
 }) {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const steps = rows.map((r) => r.value);
-  const defaults = { agent: catalog.agents[0]?.id, profile: catalog.profiles[0]?.id, workflow: catalog.workflows[0]?.id };
+  const defaults = { agent: catalog.agents[0]?.id, team: catalog.teams[0]?.id, profile: catalog.profiles[0]?.id, workflow: catalog.workflows[0]?.id };
   const toggle = (uid: number) => setCollapsed((c) => {
     const n = new Set(c);
     if (!n.delete(uid)) n.add(uid);
