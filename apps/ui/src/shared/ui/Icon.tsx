@@ -49,7 +49,9 @@ const paths = {
   edit: "M4 16l1-4 8-8 3 3-8 8zM12 5l3 3",
   mic: "M10 3a2.5 2.5 0 0 1 2.5 2.5v4a2.5 2.5 0 0 1-5 0v-4A2.5 2.5 0 0 1 10 3zM5.5 9.5a4.5 4.5 0 0 0 9 0M10 14v3M7.5 17h5",
   wave: "M3 9v2M6 6.5v7M9 4v12M12 7v6M15 5.5v9M17.5 9v2",
-  cloud: "M6 15a4 4 0 0 1-.5-8 5 5 0 0 1 9.5 1A3.5 3.5 0 0 1 14.5 15z",
+  thumbup: "M4 9h3v8H4zM7 9l3-6c1.4 0 2 1 2 2v3h4a1 1 0 0 1 1 1.2l-1 6A1.5 1.5 0 0 1 14.5 17H7",
+  thumbdown: "M4 11h3V3H4zM7 11l3 6c1.4 0 2-1 2-2v-3h4a1 1 0 0 0 1-1.2l-1-6A1.5 1.5 0 0 0 14.5 3H7",
+  cloud:"M6 15a4 4 0 0 1-.5-8 5 5 0 0 1 9.5 1A3.5 3.5 0 0 1 14.5 15z",
 } as const;
 
 export type IconName = keyof typeof paths;

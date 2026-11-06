@@ -3,7 +3,8 @@ import { useApi } from "../../shared/api/context";
 import { ignoreNotFound } from "../../shared/lib/errors";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { Session } from "../../shared/api/types";
+import type { Feedback, Session } from "../../shared/api/types";
+import { withoutRating, withRating } from "./model/feedback";
 
 export function useSessions() {
   const api = useApi();
@@ -50,6 +51,36 @@ export function useDeleteSession() {
   });
 }
 
+/** The ratings (thumbs up/down) given in a session. */
+export function useSessionFeedback(sessionId: string | null) {
+  const api = useApi();
+  return useQuery({
+    queryKey: qk.sessions.feedback(sessionId ?? ""),
+    queryFn: () => api.sessionFeedback(sessionId!),
+    enabled: !!sessionId,
+  });
+}
+
+/** Rates (or re-rates) a reply; the list shows it at once, the failure comes back as the usual toast. */
+export function useSetFeedback(sessionId: string | null) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { messageId: string; rating: 1 | -1; note?: string }) => api.setFeedback(sessionId!, v.messageId, v.rating, v.note),
+    onSuccess: (f) => qc.setQueryData<Feedback[]>(qk.sessions.feedback(f.session_id), (list) => withRating(list, f)),
+  });
+}
+
+export function useDeleteFeedback(sessionId: string | null) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    // Already gone (404 on the message or the session) is what was asked for.
+    mutationFn: (messageId: string) => ignoreNotFound(api.deleteFeedback(sessionId!, messageId)),
+    onSuccess: (_r, messageId) => qc.setQueryData<Feedback[]>(qk.sessions.feedback(sessionId ?? ""), (list) => withoutRating(list, messageId)),
+  });
+}
+
 /** Starts a run (a user message or an A2UI action); the caller subscribes to its events. */
 export function useStartRun() {
   const api = useApi();
@@ -88,6 +119,30 @@ export function useWorktree(sessionId: string, enabled: boolean) {
     queryFn: () => api.worktreeStatus(sessionId),
     enabled,
     staleTime: 0,
+  });
+}
+
+/** Checkpoints of the runs of a session: what each run changed, so it can be put back. */
+export function useCheckpoints(sessionId: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: qk.sessions.checkpoints(sessionId),
+    queryFn: () => api.sessionCheckpoints(sessionId),
+    enabled,
+    staleTime: 0,
+  });
+}
+
+export function useRewind(sessionId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) => api.rewindRun(runId),
+    onSuccess: (r) => {
+      toast(r.failed.length > 0 ? `Ripristino incompleto: ${r.failed.length} file non ripristinati` : `File ripristinati: ${r.restored.length}, eliminati: ${r.deleted.length}`);
+      void qc.invalidateQueries({ queryKey: qk.sessions.checkpoints(sessionId) });
+      void qc.invalidateQueries({ queryKey: qk.sessions.worktree(sessionId) });
+    },
   });
 }
 

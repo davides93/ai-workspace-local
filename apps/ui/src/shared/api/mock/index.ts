@@ -1,16 +1,17 @@
 import type { Transport, TransportCapabilities } from "../transport";
 import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
-import { SECRET_MASK } from "../types";
+import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, HookConfig, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
+  SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
 } from "../types";
 import {
-  agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
+  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
   remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
+import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 
 /** A simulated download: files transferred one after the other, then verified. */
@@ -499,15 +500,54 @@ export class MockTransport implements Transport {
     const s = sessions.find((x) => x.id === sessionId);
     if (s) s.worktree = undefined;
   }
+  async sessionCheckpoints(sessionId: string): Promise<CheckpointInfo[]> {
+    if (sessionId !== "ses_bug" || rewoundRuns.has("run_bug")) return [];
+    return [{
+      run_id: "run_bug",
+      root: "~/progetto",
+      restore: ["crates/aiw-models/src/gguf.rs"],
+      delete: ["crates/aiw-models/tests/header.rs"],
+      external: [],
+    }];
+  }
+  async rewindRun(runId: string): Promise<RewindResult> {
+    if (runId !== "run_bug" || rewoundRuns.has(runId)) throw new ApiError(404, `nessun checkpoint per il run ${runId}`);
+    rewoundRuns.add(runId);
+    return { run_id: runId, restored: ["crates/aiw-models/src/gguf.rs"], deleted: ["crates/aiw-models/tests/header.rs"], external: [], failed: [] };
+  }
   async deleteSession(id: string) {
     const i = sessions.findIndex((s) => s.id === id);
     if (i < 0) throw new ApiError(404, `sessione ${id} non trovata`);
     sessions.splice(i, 1);
+    this.feedback = this.feedback.filter((f) => f.session_id !== id);
   }
   // 404 for a session that is gone, like the backend (the UI leaves a conversation that was deleted elsewhere).
   async messages(sessionId: string) {
     if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     return structuredClone(sessionMessages[sessionId] ?? []);
+  }
+
+  private feedback: Feedback[] = [];
+  async sessionFeedback(sessionId: string) {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    return structuredClone(this.feedback.filter((f) => f.session_id === sessionId));
+  }
+  async setFeedback(sessionId: string, messageId: string, rating: 1 | -1, note?: string) {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    if (rating !== 1 && rating !== -1) throw new ApiError(400, "la valutazione deve essere 1 (utile) o -1 (da migliorare)");
+    const text = note?.trim() || undefined;
+    if (text && [...text].length > MAX_FEEDBACK_NOTE_CHARS) throw new ApiError(400, `la nota supera i ${MAX_FEEDBACK_NOTE_CHARS} caratteri`);
+    // The replies of a run in progress are not stored in the demo: only a stored message can be refused.
+    const stored = (sessionMessages[sessionId] ?? []).find((m) => m.id === messageId);
+    if (stored && stored.role !== "assistant") throw new ApiError(400, "si possono valutare solo le risposte dell'assistente");
+    const prev = this.feedback.find((f) => f.session_id === sessionId && f.message_id === messageId);
+    const f: Feedback = { id: prev?.id ?? nid("fbk"), session_id: sessionId, message_id: messageId, rating, ...(text ? { note: text } : {}), created_at: now() };
+    this.feedback = [...this.feedback.filter((x) => x !== prev), f];
+    return structuredClone(f);
+  }
+  async deleteFeedback(sessionId: string, messageId: string) {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    this.feedback = this.feedback.filter((f) => !(f.session_id === sessionId && f.message_id === messageId));
   }
 
   async activeRun(sessionId?: string) {
@@ -825,6 +865,66 @@ export class MockTransport implements Transport {
       run.finished_at = now();
     })();
     return structuredClone(run);
+  }
+
+  async evalSuites() { return structuredClone(evalSuites); }
+  async saveEvalSuite(s: EvalSuite) {
+    const problem = suiteProblem(s);
+    if (problem) throw new ApiError(400, problem);
+    for (const a of [s.agent, ...s.tasks.map((t) => t.agent)]) {
+      if (a && !agents.some((x) => x.id === a)) throw new ApiError(400, `l'agente \`${a}\` della suite non esiste`);
+    }
+    for (const p of [s.profile, ...s.tasks.flatMap((t) => [t.profile, ...t.graders.map((g) => (g.kind === "judge" ? (g.profile as string | undefined) : undefined))])]) {
+      if (p && !profiles.some((x) => x.id === p)) throw new ApiError(400, `il profilo di inferenza \`${p}\` non esiste`);
+    }
+    const i = evalSuites.findIndex((x) => x.id === s.id);
+    const saved = structuredClone(s);
+    if (i >= 0) evalSuites[i] = saved; else evalSuites.push(saved);
+    return structuredClone(saved);
+  }
+  async deleteEvalSuite(id: string) {
+    const i = evalSuites.findIndex((x) => x.id === id);
+    if (i < 0) throw new ApiError(404, `suite di valutazione ${id} non trovata`);
+    evalSuites.splice(i, 1);
+  }
+  async startEval(suiteId: string, req: EvalRunRequest = {}) {
+    const suite = evalSuites.find((x) => x.id === suiteId);
+    if (!suite) throw new ApiError(404, `suite di valutazione ${suiteId} non trovata`);
+    if (req.agent && !agents.some((a) => a.id === req.agent)) throw new ApiError(404, `agente ${req.agent} non trovato`);
+    if (req.profile && !profiles.some((p) => p.id === req.profile)) throw new ApiError(404, `profilo ${req.profile} non trovato`);
+    const repeat = req.repeat ?? 1;
+    if (!Number.isInteger(repeat) || repeat < 1 || repeat > 50) throw new ApiError(400, "repeat deve essere tra 1 e 50");
+    const report: EvalReport = {
+      id: nid("evr"), suite_id: suite.id, suite_name: suite.name, status: "running", started_at: now(), repeat, tasks: [],
+      summary: { passed: 0, total: 0, score: 0, pass_rate: 0 }, ...(req.agent ? { agent: req.agent } : {}), ...(req.profile ? { profile: req.profile } : {}),
+    };
+    evalReports.unshift(report);
+    void (async () => {
+      let n = 0;
+      for (let attempt = 1; attempt <= repeat; attempt++) {
+        for (const t of suite.tasks) {
+          await sleep(700);
+          const passed = n++ % 3 !== 2;
+          report.tasks.push({
+            task_id: t.id, attempt, passed, score: passed ? 1 : 0.5, duration_ms: 8000 + n * 900, tokens: 1500 + n * 120, turns: 3, run_id: nid("run"),
+            graders: t.graders.map((g) => ({ kind: g.kind, passed, score: passed ? 1 : 0, detail: passed ? "come atteso (demo)" : "risultato diverso da quello atteso (demo)" })),
+          });
+          refreshSummary(report);
+        }
+      }
+      report.status = "completed";
+      report.finished_at = now();
+    })();
+    return structuredClone(report);
+  }
+  async evalReports() { return structuredClone(evalReports); }
+  async evalReport(id: string) {
+    const r = evalReports.find((x) => x.id === id);
+    if (!r) throw new ApiError(404, `report di valutazione ${id} non trovato`);
+    return structuredClone(r);
+  }
+  async compareEvalReports(a: string, b: string): Promise<EvalComparison> {
+    return compareReports(await this.evalReport(a), await this.evalReport(b));
   }
 
   async tools() { return structuredClone(tools); }

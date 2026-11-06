@@ -24,6 +24,7 @@ import { setDraft } from "./model/drafts";
 import { forgetSessionImages } from "./model/imageCache";
 import { describeRunError, lastRunNotice } from "./model/runNotice";
 import { useConversation } from "./useConversation";
+import { useFeedback } from "./useFeedback";
 import { useVoice } from "./useVoice";
 import { COMPACT_SESSIONS_QUERY, useDraft, useInspectorMode, useInspectorOpen } from "./useLayout";
 import "./chat.css";
@@ -81,6 +82,7 @@ export function ChatView() {
     [qc],
   );
   const conv = useConversation(openId, { onGone: gone });
+  const feedback = useFeedback(openId, conv.items, conv.running);
   const [input, setInput] = useDraft(openId);
   const [focusTick, setFocusTick] = useState(0);
   const [showSessions, setShowSessions] = useState(false);
@@ -187,7 +189,7 @@ export function ChatView() {
         ) : (
           <ConversationLog
             ref={log} items={conv.items} state={logState} onRetry={listFailed ? () => void sessions.refetch() : conv.reload} busy={conv.running} respondingId={conv.respondingId}
-            onRespond={conv.respond} onAction={conv.sendAction} notice={notice} sessionKey={openId}
+            onRespond={conv.respond} onAction={conv.sendAction} notice={notice} sessionKey={openId} feedback={feedback}
             empty={<ChatEmpty onPick={(text) => { setInput(text); setFocusTick((n) => n + 1); }} />}
           />
         )}

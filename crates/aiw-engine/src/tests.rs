@@ -1,7 +1,7 @@
 use super::*;
 use aiw_runtimes::ScriptedBackend;
 
-async fn engine(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, tempfile::TempDir, tempfile::TempDir) {
+pub(crate) async fn engine(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, tempfile::TempDir, tempfile::TempDir) {
     let data = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     let e = Engine::new(EngineOptions {
@@ -28,7 +28,7 @@ async fn engine(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, tempfile::
     (e, data, ws)
 }
 
-async fn wait_finished(e: &Engine, run_id: &str) {
+pub(crate) async fn wait_finished(e: &Engine, run_id: &str) {
     for _ in 0..200 {
         if e.run_done(run_id) {
             tokio::time::sleep(Duration::from_millis(100)).await;

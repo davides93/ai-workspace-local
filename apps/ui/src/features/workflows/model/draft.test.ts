@@ -17,6 +17,93 @@ describe("conversion", () => {
     }
   });
 
+  it("keeps the retry, timeout and error options of the steps", () => {
+    const def: WorkflowDef = {
+      id: "o", name: "O", enabled: false, trigger: { kind: "manual" }, inputs: {},
+      steps: [{ id: "a", kind: "llm", profile: "p", prompt: "x", retry: 2, timeout_s: 30, on_error: "continue" }, { id: "b", kind: "tool", tool: "list_dir", args: {} }],
+    };
+    const plain = plainFromDef(def);
+    expect(plain.steps[0]).toMatchObject({ opts: { retry: 2, timeout_s: 30, on_error: "continue" } });
+    expect(plain.steps[1]).not.toHaveProperty("opts");
+    expect(defFromPlain(plain)).toEqual(def);
+    expect(find(validateDraft({ ...base(), steps: [{ id: "a", kind: "llm", profile: "fast-local", prompt: "x", opts: { retry: 9 } }] }, ctx), "retry")).toHaveLength(1);
+  });
+
+  it("keeps the time limit and default answer of an approval", () => {
+    const def: WorkflowDef = {
+      id: "a", name: "A", enabled: false, trigger: { kind: "manual" }, inputs: {},
+      steps: [{ id: "ok", kind: "approval", message: "Procedo?", timeout_s: 600, default: "allow" }, { id: "no", kind: "approval", message: "E ora?", timeout_s: 30 }, { id: "plain", kind: "approval", message: "?" }],
+    };
+    const plain = plainFromDef(def);
+    expect(plain.steps[0]).toMatchObject({ timeout_s: 600, default: "allow" });
+    expect(plain.steps[2]).not.toHaveProperty("timeout_s");
+    expect(defFromPlain(plain)).toEqual(def);
+    const bad = validateDraft({ ...base(), steps: [{ id: "ok", kind: "approval", message: "?", timeout_s: 0 }] }, ctx);
+    expect(find(bad, "timeout_s")).toHaveLength(1);
+  });
+
+  it("round-trips foreach and parallel steps with their inline steps", () => {
+    const def: WorkflowDef = {
+      id: "f", name: "F", enabled: false, trigger: { kind: "manual" }, inputs: {},
+      steps: [
+        { id: "each", kind: "foreach", items: "{{inputs.list}}", parallel: 4, retry: 1, do: { id: "one", kind: "llm", profile: "p", prompt: "{{item.name}} {{index}}", on_error: "continue" } },
+        { id: "both", kind: "parallel", steps: [{ id: "a", kind: "tool", tool: "list_dir", args: {} }, { id: "b", kind: "agent", agent: "operator", prompt: "x" }] },
+        { id: "seq", kind: "foreach", items: "uno\ndue", do: { id: "two", kind: "tool", tool: "list_dir", args: {} } },
+      ],
+    };
+    const plain = plainFromDef(def);
+    expect(plain.steps[0]).toMatchObject({ kind: "foreach", parallel: 4, opts: { retry: 1 } });
+    expect(plain.steps[2]).not.toHaveProperty("parallel");
+    expect(defFromPlain(plain)).toEqual(def);
+    expect(parseWorkflowJson(previewJson(plain), "f")).toMatchObject({ ok: true });
+  });
+
+  it("checks the inline steps, the ids they use and the loop placeholders", () => {
+    const loop = (over: object) => ({ id: "each", kind: "foreach" as const, items: "a", body: '{"id": "one", "kind": "llm", "profile": "fast-local", "prompt": "{{item}} {{item.x}} {{index}}"}', ...over });
+    const run = (steps: PlainDraft["steps"]) => validateDraft({ ...base(), steps }, ctx);
+    expect(run([loop({})]).filter((i) => i.level === "error")).toEqual([]);
+    expect(run([loop({})]).filter((i) => i.field === "placeholder")).toEqual([]);
+    expect(find(run([loop({ body: "{" })]), "body")).toHaveLength(1);
+    expect(find(run([loop({ body: '{"id": "z", "kind": "approval", "message": "?"}' })]), "body")).toHaveLength(1);
+    expect(find(run([loop({ items: " " })]), "items")).toHaveLength(1);
+    expect(find(run([loop({ parallel: 9 })]), "parallel")).toHaveLength(1);
+    expect(run([loop({}), { id: "one", kind: "agent", agent: "operator", prompt: "x" }]).some((i) => i.message.includes("duplicato"))).toBe(true);
+    expect(find(run([{ id: "p", kind: "parallel", steps: "[]" }]), "steps")).toHaveLength(1);
+    // {{item}} outside a loop is not known.
+    expect(find(run([{ id: "a", kind: "agent", agent: "operator", prompt: "{{item}}" }]), "placeholder")).toHaveLength(1);
+  });
+
+  it("round-trips sub-workflow steps and leaves out empty inputs", () => {
+    const def: WorkflowDef = {
+      id: "p", name: "P", enabled: false, trigger: { kind: "manual" }, inputs: {},
+      steps: [{ id: "sub", kind: "workflow", workflow: "figlio", inputs: { dir: "{{inputs.folder}}", n: 2 }, timeout_s: 60 }, { id: "bare", kind: "workflow", workflow: "altro" }],
+    };
+    const plain = plainFromDef(def);
+    expect(plain.steps[1]).toMatchObject({ kind: "workflow", inputs: "{}" });
+    expect(defFromPlain(plain)).toEqual(def);
+    expect(parseWorkflowJson(previewJson(plain), "p")).toMatchObject({ ok: true });
+  });
+
+  it("checks the workflow a step starts", () => {
+    const run = (workflow: string, inputs = "{}") => validateDraft({ ...base(), steps: [{ id: "s", kind: "workflow", workflow, inputs }] }, { ...ctx, workflows: ["figlio", "wf-x"], selfId: "wf-x" });
+    expect(run("figlio")).toEqual([]);
+    expect(find(run(""), "workflow")).toHaveLength(1);
+    expect(find(run("wf-x"), "workflow")[0].message).toContain("se stesso");
+    expect(find(run("sparito"), "workflow")[0].level).toBe("warn");
+    expect(find(run("figlio", "[1]"), "inputs")).toHaveLength(1);
+  });
+
+  it("accepts the json and error placeholders of earlier steps and warns about unknown endings", () => {
+    const steps: PlainDraft["steps"] = [
+      { id: "a", kind: "agent", agent: "operator", prompt: "x" },
+      { id: "b", kind: "agent", agent: "operator", prompt: "{{steps.a.json.items.0.name}} {{steps.a.error}} {{steps.a.output}}" },
+      { id: "c", kind: "agent", agent: "operator", prompt: "{{steps.a.result}}" },
+    ];
+    const warns = find(validateDraft({ ...base(), steps }, ctx), "placeholder");
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toMatchObject({ step: 2, level: "warn" });
+  });
+
   it("keeps non-string inputs as JSON and string ones as text", () => {
     const def: WorkflowDef = { id: "i", name: "I", enabled: false, trigger: { kind: "manual" }, inputs: { folder: "~/x", n: 3, flags: { a: true } }, steps: [] };
     const plain = plainFromDef(def);

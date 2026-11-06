@@ -1,13 +1,23 @@
 //! SQLite persistence: documents (agents, profiles, workflows, MCP servers, settings), sessions,
 //! messages, run events (replay), audit trail and workflow runs.
 
-use aiw_core::api::{AuditEntry, ChatMessage, Session, WorkflowRun};
+use aiw_core::api::{AuditEntry, ChatMessage, Feedback, Session, WorkflowRun};
 use aiw_core::events::SeqEvent;
 use aiw_core::{Error, Result};
+use aiw_workflow::WorkflowState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
+
+/// One row of the `runs` table.
+#[derive(Debug, Clone)]
+pub struct RunRow {
+    pub id: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -15,6 +25,18 @@ pub struct Store {
 
 fn db<E: std::fmt::Display>(e: E) -> Error {
     Error::Other(format!("errore del database: {e}"))
+}
+
+fn feedback_row(r: &rusqlite::Row) -> rusqlite::Result<Feedback> {
+    Ok(Feedback {
+        id: r.get(0)?,
+        session_id: r.get(1)?,
+        message_id: r.get(2)?,
+        run_id: r.get(3)?,
+        rating: r.get(4)?,
+        note: r.get(5)?,
+        created_at: r.get(6)?,
+    })
 }
 
 impl Store {
@@ -35,7 +57,11 @@ impl Store {
              CREATE TABLE IF NOT EXISTS events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY(run_id, seq));
              CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, session_id TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT);
              CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, ts TEXT NOT NULL, json TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, run_id TEXT, rating INTEGER NOT NULL, note TEXT, created_at TEXT NOT NULL);
+             CREATE UNIQUE INDEX IF NOT EXISTS feedback_message ON feedback(session_id, message_id);
+             CREATE TABLE IF NOT EXISTS eval_runs (id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS workflow_state (run_id TEXT PRIMARY KEY, json TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS a2a_tasks (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, session_id TEXT, json TEXT NOT NULL, updated_at TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS a2a_tasks_context ON a2a_tasks(context_id, updated_at);",
         )
@@ -202,6 +228,26 @@ impl Store {
             .map_err(db)?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
     }
+    /// Every session, most recently active first (no cap, unlike [`Store::sessions`]): for exports.
+    pub fn all_sessions(&self) -> Result<Vec<Session>> {
+        let c = self.conn.lock().unwrap();
+        let mut st =
+            c.prepare("SELECT id,title,agent_id,created_at,updated_at,last_status FROM sessions ORDER BY updated_at DESC").map_err(db)?;
+        let rows = st
+            .query_map([], |r| {
+                Ok(Session {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    agent_id: r.get(2)?,
+                    created_at: r.get(3)?,
+                    updated_at: r.get(4)?,
+                    last_status: r.get(5)?,
+                    worktree: None,
+                })
+            })
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
     pub fn delete_session(&self, id: &str) -> Result<()> {
         let c = self.conn.lock().unwrap();
         c.execute("DELETE FROM messages WHERE session_id=?1", params![id]).map_err(db)?;
@@ -241,6 +287,43 @@ impl Store {
         Ok(out)
     }
 
+    // ---------------- feedback
+    /// Sets the rating of a message; a second call for the same message replaces the first
+    /// (the row keeps its id).
+    pub fn upsert_feedback(&self, f: &Feedback) -> Result<Feedback> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO feedback(id,session_id,message_id,run_id,rating,note,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)
+             ON CONFLICT(session_id,message_id) DO UPDATE SET run_id=excluded.run_id, rating=excluded.rating, note=excluded.note, created_at=excluded.created_at",
+            params![f.id, f.session_id, f.message_id, f.run_id, f.rating, f.note, f.created_at],
+        )
+        .map_err(db)?;
+        c.query_row(
+            "SELECT id,session_id,message_id,run_id,rating,note,created_at FROM feedback WHERE session_id=?1 AND message_id=?2",
+            params![f.session_id, f.message_id],
+            feedback_row,
+        )
+        .map_err(db)
+    }
+    pub fn delete_feedback(&self, session_id: &str, message_id: &str) -> Result<bool> {
+        let n = self
+            .conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM feedback WHERE session_id=?1 AND message_id=?2", params![session_id, message_id])
+            .map_err(db)?;
+        Ok(n > 0)
+    }
+    /// The ratings of a session, in the order they were given.
+    pub fn session_feedback(&self, session_id: &str) -> Result<Vec<Feedback>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c
+            .prepare("SELECT id,session_id,message_id,run_id,rating,note,created_at FROM feedback WHERE session_id=?1 ORDER BY created_at, rowid")
+            .map_err(db)?;
+        let rows = st.query_map(params![session_id], feedback_row).map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
     // ---------------- runs & events
     pub fn start_run(&self, id: &str, session_id: Option<&str>) -> Result<()> {
         self.conn
@@ -261,6 +344,13 @@ impl Store {
             .map_err(db)?;
         Ok(())
     }
+    /// Ids of the runs of a session, newest first.
+    pub fn session_run_ids(&self, session_id: &str) -> Result<Vec<String>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT id FROM runs WHERE session_id=?1 ORDER BY started_at DESC").map_err(db)?;
+        let rows = st.query_map(params![session_id], |r| r.get::<_, String>(0)).map_err(db)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
     /// Runs still marked `running` when the process starts were interrupted by a crash or a kill:
     /// mark them failed (and the sessions that were running them), so nothing waits forever.
     pub fn fail_interrupted_runs(&self) -> Result<usize> {
@@ -269,6 +359,18 @@ impl Store {
             .execute("UPDATE runs SET status='failed', finished_at=?1 WHERE status='running'", params![aiw_core::now_rfc3339()])
             .map_err(db)?;
         Ok(n)
+    }
+    /// The top-level runs of a session, oldest first.
+    pub fn session_runs(&self, session_id: &str) -> Result<Vec<RunRow>> {
+        let c = self.conn.lock().unwrap();
+        let mut st =
+            c.prepare("SELECT id,status,started_at,finished_at FROM runs WHERE session_id=?1 ORDER BY started_at, rowid").map_err(db)?;
+        let rows = st
+            .query_map(params![session_id], |r| {
+                Ok(RunRow { id: r.get(0)?, status: r.get(1)?, started_at: r.get(2)?, finished_at: r.get(3)? })
+            })
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
     }
     pub fn save_events(&self, run_id: &str, evs: &[SeqEvent]) -> Result<()> {
         let mut c = self.conn.lock().unwrap();
@@ -313,6 +415,50 @@ impl Store {
         }
         Ok(out)
     }
+    /// The audit entries of one run, oldest first.
+    pub fn audit_for_run(&self, run_id: &str) -> Result<Vec<AuditEntry>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT json FROM audit WHERE json_extract(json,'$.run_id')=?1 ORDER BY ts, rowid").map_err(db)?;
+        let rows = st.query_map(params![run_id], |r| r.get::<_, String>(0)).map_err(db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(serde_json::from_str(&r.map_err(db)?)?);
+        }
+        Ok(out)
+    }
+    // ---------------- evaluation reports
+    pub fn save_eval_report<T: Serialize>(&self, id: &str, suite_id: &str, started_at: &str, report: &T) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT OR REPLACE INTO eval_runs(id,suite_id,started_at,json) VALUES(?1,?2,?3,?4)",
+                params![id, suite_id, started_at, serde_json::to_string(report)?],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+    pub fn eval_report<T: DeserializeOwned>(&self, id: &str) -> Result<Option<T>> {
+        let s: Option<String> = self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT json FROM eval_runs WHERE id=?1", params![id], |r| r.get(0))
+            .optional()
+            .map_err(db)?;
+        s.map(|s| serde_json::from_str(&s).map_err(Error::from)).transpose()
+    }
+    /// The most recent reports first.
+    pub fn eval_reports<T: DeserializeOwned>(&self, limit: usize) -> Result<Vec<T>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT json FROM eval_runs ORDER BY started_at DESC, rowid DESC LIMIT ?1").map_err(db)?;
+        let rows = st.query_map(params![limit as i64], |r| r.get::<_, String>(0)).map_err(db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(serde_json::from_str(&r.map_err(db)?)?);
+        }
+        Ok(out)
+    }
     pub fn save_workflow_run(&self, r: &WorkflowRun) -> Result<()> {
         self.conn
             .lock()
@@ -323,6 +469,42 @@ impl Store {
             )
             .map_err(db)?;
         Ok(())
+    }
+    pub fn workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
+        let s: Option<String> = self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT json FROM workflow_runs WHERE id=?1", params![id], |r| r.get(0))
+            .optional()
+            .map_err(db)?;
+        Ok(s.map(|j| serde_json::from_str(&j)).transpose()?)
+    }
+    /// The resumable state of a workflow run that has not finished.
+    pub fn save_workflow_state(&self, st: &WorkflowState) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("INSERT OR REPLACE INTO workflow_state(run_id,json) VALUES(?1,?2)", params![st.run.id, serde_json::to_string(st)?])
+            .map_err(db)?;
+        Ok(())
+    }
+    pub fn clear_workflow_state(&self, run_id: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute("DELETE FROM workflow_state WHERE run_id=?1", params![run_id]).map_err(db)?;
+        Ok(())
+    }
+    /// States that cannot be read (a format from another version) are skipped.
+    pub fn workflow_states(&self) -> Result<Vec<WorkflowState>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT json FROM workflow_state").map_err(db)?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0)).map_err(db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            if let Ok(s) = serde_json::from_str(&r.map_err(db)?) {
+                out.push(s);
+            }
+        }
+        Ok(out)
     }
     pub fn workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
         let c = self.conn.lock().unwrap();

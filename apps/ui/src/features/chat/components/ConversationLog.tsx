@@ -4,6 +4,7 @@ import type { A2uiAction } from "../a2ui";
 import type { ApprovalRequest } from "../../../shared/api/types";
 import { itemKey, type Item } from "../model/items";
 import type { RunNoticeInfo } from "../model/runNotice";
+import type { FeedbackController } from "../useFeedback";
 import { ItemView } from "./ItemView";
 import { RunNote } from "./RunNote";
 import { useStickToBottom } from "./useStickToBottom";
@@ -27,6 +28,8 @@ interface Props {
   empty: ReactNode;
   /** A different conversation: the view starts at its end. */
   sessionKey: string | null;
+  /** Thumbs up/down on the final answers. */
+  feedback?: FeedbackController;
 }
 
 /**
@@ -35,7 +38,7 @@ interface Props {
  * region of the view tells when a reply starts and ends.
  */
 export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function ConversationLog(
-  { items, state, onRetry, busy, respondingId, onRespond, onAction, notice, empty, sessionKey },
+  { items, state, onRetry, busy, respondingId, onRespond, onAction, notice, empty, sessionKey, feedback },
   ref,
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -51,7 +54,15 @@ export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function
           {state.status === "error" && <ErrorState title={state.title ?? "Impossibile caricare la conversazione"} error={state.error} onRetry={onRetry} />}
           {state.status === "ready" && items.length === 0 && empty}
           {state.status === "ready" && items.map((it, i) => (
-            <ItemView key={itemKey(it, i)} it={it} onRespond={onRespond} onAction={onAction} busy={busy} respondingId={respondingId} />
+            <ItemView
+              key={itemKey(it, i)} it={it} onRespond={onRespond} onAction={onAction} busy={busy} respondingId={respondingId}
+              {...(it.kind === "text" && feedback
+                ? {
+                    rateable: feedback.rateable.has(it.id), rating: feedback.ratings.get(it.id), ratePending: feedback.pendingId === it.id,
+                    onRate: feedback.onRate, onClear: feedback.onClear,
+                  }
+                : {})}
+            />
           ))}
           {state.status === "ready" && notice && <RunNote info={notice} />}
         </div>

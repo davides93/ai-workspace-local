@@ -7,7 +7,9 @@ use crate::hooks::{run_hooks, HookConfig};
 use crate::policy::{risk_level, Decision, Policy};
 use crate::skills::{self, Skill};
 use crate::think::{Piece, ThinkSplitter};
-use aiw_core::api::{AgentProfile, ApprovalRequest, AuditEntry, ChatMessage, InferenceProfile, RunState, Todo, ToolCall, Usage};
+use aiw_core::api::{
+    AgentProfile, ApprovalOutcome, ApprovalRequest, AuditEntry, ChatMessage, InferenceProfile, RunState, Todo, ToolCall, Usage,
+};
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use aiw_runtimes::{ChatBackend, ChatDelta, ChatRequest, ContentPart, ImageUrl, Msg, MsgContent, OaiFunctionCall, OaiToolCall, ToolSpec};
@@ -27,6 +29,14 @@ pub trait RunHost: Send + Sync {
     fn emit(&self, run_id: &str, ev: AgEvent);
     /// Registers the request, waits for the user's decision (true = allowed).
     async fn approve(&self, req: ApprovalRequest) -> bool;
+    /// Like [`RunHost::approve`], but tells a timeout (`approvals.timeout_s`) from a refusal.
+    async fn approve_outcome(&self, req: ApprovalRequest) -> ApprovalOutcome {
+        if self.approve(req).await {
+            ApprovalOutcome::Allowed
+        } else {
+            ApprovalOutcome::Denied
+        }
+    }
     fn audit(&self, entry: AuditEntry);
     async fn backend(&self, profile: &InferenceProfile) -> Result<Arc<dyn ChatBackend>>;
     fn tools(&self) -> Arc<ToolRegistry>;
@@ -520,13 +530,15 @@ impl AgentRunner {
                 }
             };
             input.budget.record_turn();
-            let (text, reasoning, mut calls, usage, stream_error) = Self::consume(stream, &ev, turn).await;
+            // The stored message keeps the id its live events carry, so that clients can refer to it (feedback).
+            let msg_id = new_id("msg");
+            let (text, reasoning, mut calls, usage, stream_error) = Self::consume(stream, &ev, turn, &msg_id).await;
             if let Some(e) = stream_error {
                 // Keep what the model had said before the stream broke (cancellation included);
                 // tool calls that were still being written are dropped.
                 if !text.trim().is_empty() {
                     outcome.new_messages.push(ChatMessage {
-                        id: new_id("msg"),
+                        id: msg_id.clone(),
                         role: "assistant".into(),
                         content: text,
                         reasoning: (!reasoning.is_empty()).then_some(reasoning),
@@ -593,7 +605,7 @@ impl AgentRunner {
                 ..Default::default()
             });
             outcome.new_messages.push(ChatMessage {
-                id: new_id("msg"),
+                id: msg_id,
                 role: "assistant".into(),
                 content: text.clone(),
                 reasoning: (!reasoning.is_empty()).then_some(reasoning),
@@ -819,8 +831,9 @@ impl AgentRunner {
         mut stream: aiw_runtimes::DeltaStream,
         ev: &Emitter<'_>,
         turn: u32,
+        msg_id: &str,
     ) -> (String, String, Vec<PendingCall>, Option<aiw_runtimes::TokenUsage>, Option<Error>) {
-        let msg_id = new_id("msg");
+        let msg_id = msg_id.to_string();
         let reason_id = format!("{msg_id}_r");
         let (mut text, mut reasoning) = (String::new(), String::new());
         let (mut text_open, mut reason_open) = (false, false);
@@ -1169,15 +1182,26 @@ impl AgentRunner {
                     risk: risk_level(tool.risk()).into(),
                 };
                 host.emit(&input.run_id, AgEvent::approval_request(&req));
-                let ok = tokio::select! {
-                    ok = host.approve(req.clone()) => ok,
-                    _ = input.tool_ctx.cancel.cancelled() => false,
+                let outcome = tokio::select! {
+                    o = host.approve_outcome(req.clone()) => o,
+                    _ = input.tool_ctx.cancel.cancelled() => ApprovalOutcome::Denied,
                 };
+                let ok = outcome == ApprovalOutcome::Allowed;
                 host.emit(&input.run_id, AgEvent::approval_resolved(&req.id, ok));
                 if !ok && input.tool_ctx.cancel.is_cancelled() {
                     // Stopped while waiting: nobody refused, the run is over.
                     audit("cancelled", subject.unwrap_or_default());
                     return (ToolOutput::error("Annullato: il run è stato fermato prima della conferma."), None);
+                }
+                if outcome == ApprovalOutcome::TimedOut {
+                    audit("timeout", subject.unwrap_or_default());
+                    return (
+                        ToolOutput::error(
+                            "Nessuna risposta alla richiesta entro il tempo limite (impostazione approvals.timeout_s): l'azione è stata negata. \
+                             Non ripeterla senza prima chiedere all'utente come procedere.",
+                        ),
+                        None,
+                    );
                 }
                 if !ok {
                     audit("rejected", subject.unwrap_or_default());

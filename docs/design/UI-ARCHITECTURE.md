@@ -36,7 +36,7 @@ src/
     model/                   logica pura del dominio (testata)
 ```
 
-Domini: `home`, `chat`, `agents`, `teams`, `workflows`, `capabilities` (tool, server MCP, browser e
+Domini: `home`, `chat`, `agents`, `teams`, `workflows`, `evals`, `capabilities` (tool, server MCP, browser e
 computer-use), `integrations`, `models`, `runtimes`, `devices`, `security`, `activity`,
 `settings`, `pairing`, `approvals`.
 
@@ -100,6 +100,7 @@ Router su hash scritto in casa (nessuna dipendenza). Percorsi:
 | agents | `#/agents`, `#/agents/:agentId` | |
 | teams | `#/teams`, `#/teams/:teamId` | `new` apre il modulo vuoto, `?from=` una copia; i team compaiono anche nel selettore dell'agente della chat (`team:<id>`) |
 | workflows | `#/workflows`, `#/workflows/:workflowId` | |
+| evals | `#/evals/:tab?` | `suites` (default; `?suite=` la suite aperta, `new` per crearne una), `reports` (`?report=` il report aperto, `?b=` quello con cui confrontarlo) |
 | capabilities | `#/capabilities/:tab?` | `tools` (default), `mcp`, `browser` |
 | integrations | `#/integrations` | oltre agli endpoint, il registro degli agenti remoti A2A |
 | models | `#/models/:tab?` | `installed` (default), `discover`, `downloads`, `catalog`; query `?provider=&q=&format=` |

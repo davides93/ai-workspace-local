@@ -261,7 +261,18 @@ sequenceDiagram
   `PreCompact`. `SessionStart` parte solo al primo messaggio di una conversazione e il suo output entra nel prompt di sistema;
   per gli eventi dei subagenti il filtro (`matcher`) è un glob sull'id dell'agente; `PreCompact` può saltare la compattazione.
   Un hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
-- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in `checkpoints/`.
+- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in
+  `checkpoints/<run_id>/<percorso>` (una volta per run). Accanto, `.aiw-run.json` registra la radice
+  del workspace e i file che il run ha *creato* (`write_file`, `edit_file` con `old_string` vuoto,
+  destinazione di `move_file`, che salva anche l'originale della sorgente); un file creato dal run non
+  ha un originale da salvare. I file fuori dal workspace stanno in `_esterni/`. Il **rewind**
+  (`aiw rewind <run_id> [--dry-run]`, `GET /api/runs/{id}/checkpoint`, `POST /api/runs/{id}/rewind`,
+  «Ripristina i file» nel pannello della chat) rimette gli originali ed elimina i file creati se
+  esistono ancora ed entro la radice registrata; i file esterni e quelli di un checkpoint senza radice
+  (precedente al rewind) sono solo elencati. È rifiutato (409) mentre il run è in corso, scrive in
+  audit `checkpoint.rewind`, e toglie dal checkpoint ciò che ha ripristinato, così un secondo rewind non
+  cancella le modifiche successive. Le cartelle spostate con `move_file` e i run dei sotto-agenti
+  (id propri) non sono coperti.
   Il rewind (ripristino dei file di un run) non è ancora implementato, né dalla UI né dalla CLI.
 
 ### Team
@@ -324,6 +335,131 @@ Tipi di step: `tool`, `agent`, `llm`, `approval`, `condition` (`if`), `foreach`,
 (sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
 ripresa dopo un'approvazione.
 
+**Segnaposto.** `{{inputs.x}}`, `{{now}}`, `{{steps.<id>.output}}` (anche `{{steps.<id>}}`),
+`{{steps.<id>.error}}` per un passo andato avanti con `on_error: continue`. L'output di un passo si
+legge come JSON con `{{steps.<id>.json}}` (riformattato compatto), `{{steps.<id>.json.a.b}}` e
+`{{steps.<id>.json.items.0.nome}}` (un numero indicizza un array): vale se l'output è JSON per
+intero o contiene un blocco ```json, altrimenti il segnaposto resta vuoto. Un valore stringa si
+inserisce senza virgolette, gli altri come JSON. Dentro un `foreach` ci sono anche `{{item}}`,
+`{{item.campo}}` e `{{index}}`. Le `condition` vedono il testo già sostituito.
+
+**Opzioni dei passi.** `tool`, `agent` e `llm` accettano `retry` (0–5 nuovi tentativi),
+`retry_delay_s` (attesa, default 2 s), `timeout_s` (limite per tentativo) e `on_error: continue`
+(il passo resta `failed`, il run prosegue e l'errore è in `{{steps.<id>.error}}`). Il timeout di un
+passo `agent` annulla anche il run dell'agente.
+
+**`foreach` e `parallel`.** `foreach` (`items`, `do`, `parallel` 1–8) esegue un passo inline
+`tool`/`agent`/`llm` per ogni voce di `items`: un array JSON (anche in un blocco ```json) oppure un
+testo con una voce per riga, al massimo 200. Nel passo valgono `{{item}}`, `{{item.campo}}` e
+`{{index}}`; l'output è l'array JSON degli output nell'ordine delle voci (`null` per una voce
+fallita con `on_error: continue`). Con `on_error: fail` il primo errore ferma il ciclo e annulla le
+voci ancora in corso. `parallel` (`steps`) esegue più passi inline insieme; l'output è l'oggetto
+`{id_interno: output}` e ogni output è leggibile anche come `{{steps.<id_interno>.output}}`. I passi
+interni possono essere solo `tool`, `agent` o `llm` (niente annidamento, `approval` o `condition`) e
+i loro id contano nell'unicità degli id del workflow. Gli agenti eseguiti insieme usano sessioni
+diverse. Durante l'esecuzione il passo mostra «3/5 completati».
+
+**Sotto-workflow.** `{kind: workflow, workflow: <id>, inputs: {…}}` avvia il workflow figlio (i
+valori di `inputs` accettano i segnaposto) e ne aspetta la fine. L'output del passo è l'output
+dell'ultimo passo `done` del figlio che non sia una `condition`; un figlio fallito o annullato è un
+errore del passo. Il figlio è un run normale, con `parent_run_id` che punta al padre, e può essere
+un workflow disattivato (l'attivazione riguarda solo i trigger). Profondità massima 3: un
+workflow che richiama se stesso è rifiutato dalla validazione, i cicli indiretti si fermano al
+limite. Se il padre smette di aspettare (timeout del passo) il figlio risulta annullato; dopo un
+riavvio un figlio non riprende da solo: il padre riparte dal passo e ne avvia uno nuovo.
+
+**Approvazioni con scadenza.** Il passo `approval` accetta `timeout_s` e `default` (`deny` o `allow`,
+default `deny`): allo scadere vale il default, l'output è «scaduto: approvato» oppure il passo
+fallisce con «scaduto: rifiutato» (e il run risulta annullato), l'audit registra `decision: "timeout"`.
+Per le richieste dei tool degli agenti vale l'impostazione globale `approvals.timeout_s` (0 = nessun
+limite, il default): allo scadere la richiesta è rifiutata e l'agente riceve un messaggio che spiega
+il timeout. Il livello *workspace* non può impostarla.
+
+**Durabilità.** Il motore tiene lo stato del run (`WorkflowState`: run, definizione, input, output,
+rami abilitati, passo corrente) e lo salva a ogni cambiamento nella tabella `workflow_state`; il run
+stesso è aggiornato in `workflow_runs`. All'avvio l'engine riprende i run `running` e
+`waiting_approval` dal passo salvato: quel passo ricomincia da capo (semantica *almeno una volta*,
+quindi un passo con effetti collaterali dovrebbe poter essere ripetuto), un'approvazione in attesa
+viene richiesta di nuovo, un run il cui workflow non esiste più diventa `failed`. L'audit registra
+`workflow.resume`.
+
+### 5.4 Valutazione e tracce
+
+Ogni sessione è già una traiettoria completa (messaggi, eventi AG-UI, run, audit). Il motore la
+esporta e la usa per misurare gli agenti:
+
+- **Export** (`aiw traces export`, `GET /api/traces/export`): una riga JSON (NDJSON) per sessione,
+  con i messaggi in formato OpenAI, i run, le decisioni sulle approvazioni (`signals`) e i
+  feedback. Le note interne (controlli automatici, errori del run, prompt bloccati) restano fuori
+  dai messaggi e sono contate in `notes`. I segreti sono mascherati di default (`[SEGRETO]`: chiavi
+  `sk-…`, token GitHub, `AKIA…`, `xox…`, `Bearer …`, chiavi private e i valori dei segreti MCP
+  salvati); `--no-redact` lo disattiva, `--exclude-path` sostituisce con `[escluso]` il contenuto
+  dei messaggi dei tool che citano i percorsi indicati.
+- **Feedback**: pollice su/giù (valore 1 o -1) con nota facoltativa (fino a 2000 caratteri) su un
+  messaggio dell'assistente, uno per messaggio (tabella `feedback`, sostituito a ogni nuova
+  valutazione). Il `run_id` è il run in corso quando il messaggio è stato scritto. Entra nel campo
+  `feedback` dei record dell'export e `--rated up|down|any` seleziona le sessioni valutate.
+- **Suite di valutazione** (crate `aiw-eval`, esempio in `docs/evals/esempio.yaml`): un file YAML o
+  JSON con i task da dare a un agente e i grader che dicono se ciascuno è riuscito.
+
+  ```yaml
+  id: base
+  name: Suite di base
+  agent: operator            # facoltativo, anche per task
+  profile: default           # facoltativo, sostituisce il profilo dell'agente
+  tasks:
+    - id: crea-nota
+      prompt: "Crea note.md con scritto ciao"
+      files: { "input.txt": "contenuto iniziale" }   # scritti nella cartella di lavoro prima del run
+      timeout_s: 300
+      graders:
+        - { kind: file_exists, path: note.md }
+        - { kind: file_contains, path: note.md, pattern: "(?i)ciao" }
+        - { kind: output_matches, pattern: "note\\.md" }
+        - { kind: json_schema, schema: { type: object, required: [ok] } }   # sulla risposta finale
+        - { kind: command, run: "test -s note.md", expect_exit: 0, timeout_s: 30 }
+        - { kind: judge, criteria: "La nota è cortese e breve", profile: default, threshold: 0.7 }
+  ```
+
+  Ogni task gira in una cartella temporanea sotto `~/.aiw/eval-work/` (cancellata alla fine, salvo
+  `--keep`) che è la radice del workspace dell'agente: modalità di policy `auto`, sandbox
+  `workspace-write`, nessuna conferma possibile (se il run ne chiedesse una, viene rifiutata), il
+  timeout del task come budget di tempo. Il run non appartiene a nessuna sessione; i suoi eventi
+  sono salvati come gli altri. Il punteggio di un task è la media dei suoi grader, e il task riesce
+  solo se tutti passano e il run non è finito in errore (o per limite di tempo). Con `--repeat N`
+  ogni task gira N volte; il report ha `summary` con riusciti, totale, score medio e pass rate.
+  I report sono nella tabella `eval_runs` e si aggiornano a ogni task.
+
+  Il grader `command` esegue un comando con `sh -c` (PowerShell su Windows) nella cartella del
+  task, con timeout, **fuori dalla sandbox dell'agente e con i permessi dell'utente**: la suite la
+  scrive sempre l'utente. Per questo le suite si leggono solo da `~/.aiw/evals` (e dal database);
+  quelle della cartella del workspace (`.aiw/evals`) **non** vengono caricate, perché un repository
+  sconosciuto non deve poter eseguire comandi. Dalla CLI si può comunque lanciare un file qualsiasi,
+  sapendo cosa contiene: `aiw eval run <file|id> [--agent] [--profile] [--repeat N] [--out report.json] [--keep]`,
+  `aiw eval suites`, `aiw eval list`.
+
+  Il grader `judge` chiede a un modello (il profilo `profile`, altrimenti `default`) di valutare il
+  lavoro rispetto ai `criteria`: gli mostra il prompt del task, la risposta finale e i file che il run
+  ha creato, modificato o eliminato, e si aspetta `{"score": 0..1, "reason": "…"}` (il JSON è letto
+  con tolleranza, anche dentro un blocco di codice). Passa se `score >= threshold` (default 0,7); lo
+  score del grader è quello del giudice. Una risposta senza JSON, senza punteggio o con un punteggio
+  fuori da 0–1 fa fallire il grader con la spiegazione. Il giudice non ha strumenti.
+
+  Confronto A/B: `aiw eval compare <report_a> <report_b>` (id salvati o file scritti da `--out`;
+  `--json` per la struttura) mostra per ogni task riusciti, pass rate e score di A e B e la differenza
+  B − A, più i totali, i token e la durata medi. `aiw eval run <suite> --profile a --profile b` esegue la
+  suite con ciascun profilo e stampa il confronto dei successivi con il primo (con `--out report.json`
+  scrive `report.json.a.json`, `report.json.b.json`). Nel motore: `Engine::compare_eval_runs(a, b)`.
+
+  Dall'API (`/api/evals`, `/api/eval-runs`) e dalla pagina **Valutazioni** della UI (`#/evals`: suite,
+  esecuzione, report, confronto) una suite parte in background (`Engine::start_eval`): la risposta è
+  il report `running`, che il motore aggiorna a ogni task e la UI legge a intervalli finché non è
+  `completed` o `failed`. I report ancora `running` all'avvio del motore sono di un run interrotto e
+  diventano `failed`. Poiché il grader `command` esegue comandi con i permessi dell'utente senza
+  alcuna conferma, l'API rifiuta di salvare suite che ne contengono: si scrivono solo nei file di
+  `~/.aiw/evals` (le suite già salvate si possono comunque eseguire) e il confronto via API legge solo
+  report salvati, mai percorsi di file.
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
@@ -355,6 +491,11 @@ ripresa dopo un'approvazione.
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
+| PUT/DELETE | `/api/sessions/{id}/messages/{mid}/feedback` · GET `/api/sessions/{id}/feedback` | Feedback sulle risposte |
+| GET/PUT/DELETE | `/api/evals[/{id}]` | Suite di valutazione (PUT: JSON della suite o `{"text": yaml|json}`; i grader `command` non si scrivono via API) |
+| POST | `/api/evals/{id}/runs` | Avvia la suite in background (`{agent?, profile?, repeat?}`); risponde con il report `running` |
+| GET | `/api/eval-runs` · `/api/eval-runs/{id}` · `/api/eval-runs/compare?a=&b=` | Report (aggiornati a ogni task), confronto A/B tra due report salvati |
+| GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
@@ -379,8 +520,9 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
 ## 9. Storage
 
 - `~/.aiw/` (desktop) o la sandbox dell'app (mobile): `config.json`, `aiw.db` (SQLite:
-  sessioni, messaggi, eventi, run, workflow, audit), `models/`, `runtimes/` (manifest utente),
-  `skills/`, `checkpoints/`.
+  sessioni, messaggi, eventi, run, workflow, audit, feedback, report di valutazione), `models/`,
+  `runtimes/` (manifest utente), `skills/`, `checkpoints/`, `evals/` (suite di valutazione),
+  `eval-work/` (cartelle temporanee dei task).
 - Workspace utente: `AGENTS.md`, `.aiw/config.json`, `.aiw/skills/`, `.aiw/workflows/`.
 
 ## 10. Piattaforme: cosa gira dove

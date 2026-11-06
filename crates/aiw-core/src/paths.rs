@@ -19,7 +19,9 @@ impl DataDirs {
         Self { root: root.into() }
     }
     pub fn ensure(&self) -> std::io::Result<()> {
-        for d in [self.models(), self.runtimes(), self.skills(), self.checkpoints(), self.logs(), self.devices(), self.workflows()] {
+        for d in
+            [self.models(), self.runtimes(), self.skills(), self.checkpoints(), self.logs(), self.devices(), self.workflows(), self.evals()]
+        {
             std::fs::create_dir_all(d)?;
         }
         Ok(())
@@ -54,6 +56,14 @@ impl DataDirs {
     }
     pub fn workflows(&self) -> PathBuf {
         self.root.join("workflows")
+    }
+    /// Evaluation suites written by the user, read at start (`<workspace>/.aiw` is not: a repository must not bring its own commands).
+    pub fn evals(&self) -> PathBuf {
+        self.root.join("evals")
+    }
+    /// Working folders of the evaluation tasks.
+    pub fn eval_work(&self) -> PathBuf {
+        self.root.join("eval-work")
     }
     pub fn device_config(&self, device_name: &str) -> PathBuf {
         let safe: String = device_name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();

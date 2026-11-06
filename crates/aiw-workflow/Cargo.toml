@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 aiw-core.workspace = true
 async-trait.workspace = true
+futures.workspace = true
 chrono.workspace = true
 cron.workspace = true
 regex.workspace = true
@@ -19,3 +20,4 @@ tracing.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }

@@ -263,6 +263,9 @@ new file mode 100644
 
 export const appliedWorktrees = new Set<string>();
 
+/** Runs whose files were put back (the demo checkpoint of the coder session is then empty). */
+export const rewoundRuns = new Set<string>();
+
 /**
  * A tiny PNG (256x160) standing for the screenshot of a web page: the scripted browser run sends it as the
  * `aiw.image` event of `browser_screenshot` (`value.data`: base64 without the `data:` prefix).
@@ -399,6 +402,7 @@ export const configSchema: SettingsSchema = {
     "ui.theme": { type: "string", title: "Tema", enum: ["system", "light", "dark"], default: "system" },
     "ui.language": { type: "string", title: "Lingua", enum: ["it", "en"], default: "it" },
     "agent.default": { type: "string", title: "Agente predefinito", default: "operator" },
+    "approvals.timeout_s": { type: "integer", title: "Tempo massimo per rispondere a una richiesta di approvazione (secondi)", description: "0 = nessun limite. Allo scadere la richiesta dell'agente viene rifiutata", default: 0, minimum: 0, maximum: 86400 },
     "policy.mode": { type: "string", title: "Modalità di approvazione", enum: ["plan", "ask", "auto-edit", "auto", "yolo"], default: "ask" },
     "sandbox.mode": { type: "string", title: "Sandbox", enum: ["read-only", "workspace-write", "off"], default: "workspace-write" },
     "agents.max_parallel_subagents": { type: "integer", title: "Subagenti in parallelo", default: 3, minimum: 1, maximum: 8 },

@@ -23,6 +23,7 @@ describe("query keys", () => {
     for (const k of [qk.runtimes.list(), qk.runtimes.logs("llama-server")]) expect(startsWith(k, qk.runtimes.all())).toBe(true);
     for (const k of [qk.sessions.list(), qk.sessions.detail("a"), qk.sessions.messages("a"), qk.sessions.worktree("a")]) expect(startsWith(k, qk.sessions.all())).toBe(true);
     for (const k of [qk.workflows.list(), qk.workflows.runs()]) expect(startsWith(k, qk.workflows.all())).toBe(true);
+    for (const k of [qk.evals.suites(), qk.evals.reports(), qk.evals.report("a"), qk.evals.compare("a", "b")]) expect(startsWith(k, qk.evals.all())).toBe(true);
   });
   it("keeps different domains apart", () => {
     expect(qk.models.installed()).not.toEqual(qk.runtimes.list());

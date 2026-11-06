@@ -76,6 +76,12 @@
 .ws-msg-tools .icon-btn { width: 26px; height: 22px; }
 .ws-assistant:hover .ws-msg-tools, .ws-assistant:focus-within .ws-msg-tools { opacity: 1; pointer-events: auto; }
 @media (pointer: coarse) { .ws-msg-tools { opacity: 1; pointer-events: auto; } }
+/* A rated reply keeps its choice visible; with the note open the row joins the flow, above the note. */
+.ws-msg-tools.is-rated { opacity: 1; pointer-events: auto; }
+.ws-msg-tools.is-open { position: static; margin-top: 2px; }
+.ws-rate.on { color: var(--accent-ink); background: var(--accent-soft); }
+.ws-rate-note { display: grid; gap: var(--space-2); max-width: min(480px, 100%); margin-top: var(--space-2); }
+.ws-rate-note-actions { display: flex; gap: var(--space-2); }
 
 .ws-reasoning { border-left: 2px solid var(--line-strong); padding: 4px 0 4px 12px; color: var(--fg-muted); font-size: var(--fs-sm); }
 .ws-reasoning summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; color: var(--fg-faint); font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; }

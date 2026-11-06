@@ -8,6 +8,7 @@ members = [
   "crates/aiw-tools",
   "crates/aiw-agent",
   "crates/aiw-workflow",
+  "crates/aiw-eval",
   "crates/aiw-engine",
   "crates/aiw-server",
   "crates/aiw-cli",
@@ -24,6 +25,7 @@ default-members = [
   "crates/aiw-tools",
   "crates/aiw-agent",
   "crates/aiw-workflow",
+  "crates/aiw-eval",
   "crates/aiw-engine",
   "crates/aiw-server",
   "crates/aiw-cli",
@@ -45,6 +47,7 @@ aiw-models = { path = "crates/aiw-models" }
 aiw-tools = { path = "crates/aiw-tools", default-features = false }
 aiw-agent = { path = "crates/aiw-agent" }
 aiw-workflow = { path = "crates/aiw-workflow" }
+aiw-eval = { path = "crates/aiw-eval" }
 aiw-engine = { path = "crates/aiw-engine", default-features = false }
 aiw-server = { path = "crates/aiw-server" }
 

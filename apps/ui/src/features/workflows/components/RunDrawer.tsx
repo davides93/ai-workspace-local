@@ -17,6 +17,7 @@ export function RunDrawer({ run, workflow, onClose }: { run: WorkflowRun; workfl
         <KeyValue items={[
           ["Stato", <StatusPill key="s" status={run.status} />],
           ["Avviata", formatDateTime(run.started_at)],
+          run.parent_run_id ? ["Sotto-workflow di", <span key="p" className="mono">{run.parent_run_id}</span>] : false,
           run.finished_at ? ["Conclusa", formatDateTime(run.finished_at)] : false,
           secs !== null && ["Durata", `${formatDuration(secs)}${active ? " finora" : ""}`],
           ["Passi", `${p.done} di ${p.total} completati`],

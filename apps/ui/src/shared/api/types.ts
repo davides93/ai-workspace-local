@@ -484,6 +484,158 @@ export interface WorktreeStatus extends WorktreeInfo {
   truncated: boolean;
 }
 
+/** What a rewind of a run would do (paths relative to the workspace of the run). */
+export interface CheckpointInfo {
+  run_id: string;
+  root?: string;
+  /** Put back to their original content. */
+  restore: string[];
+  /** Created by the run: deleted. */
+  delete: string[];
+  /** Outside the workspace: listed, never touched. */
+  external: string[];
+}
+
+export interface RewindResult {
+  run_id: string;
+  restored: string[];
+  deleted: string[];
+  external: string[];
+  failed: string[];
+}
+
+/** The user's rating of an assistant message (one per message). */
+export interface Feedback {
+  id: string;
+  session_id: string;
+  message_id: string;
+  /** The run that produced the message, when the engine could tell. */
+  run_id?: string;
+  /** 1 = thumbs up, -1 = thumbs down. */
+  rating: 1 | -1;
+  note?: string;
+  created_at: string;
+}
+
+/** Longest note the engine accepts with a rating. */
+export const MAX_FEEDBACK_NOTE_CHARS = 2000;
+
+/** One grader of an evaluation task: `kind` plus the fields of that kind (path, pattern, criteria…). */
+export interface EvalGraderSpec {
+  kind: "file_exists" | "file_contains" | "output_matches" | "json_schema" | "command" | "judge" | (string & {});
+  [field: string]: unknown;
+}
+
+export interface EvalTask {
+  id: string;
+  prompt: string;
+  agent?: string;
+  profile?: string;
+  /** Files written in the working folder before the run. */
+  files?: Record<string, string>;
+  timeout_s?: number;
+  graders: EvalGraderSpec[];
+}
+
+/** A set of tasks given to an agent, with the graders that say whether each one worked. */
+export interface EvalSuite {
+  id: string;
+  name: string;
+  description?: string;
+  agent?: string;
+  profile?: string;
+  tasks: EvalTask[];
+}
+
+export interface EvalGraderResult {
+  kind: string;
+  passed: boolean;
+  /** 0..1: 0 or 1 for the deterministic graders, the judge's own score for `judge`. */
+  score: number;
+  detail: string;
+}
+
+export interface EvalTaskResult {
+  task_id: string;
+  attempt: number;
+  passed: boolean;
+  score: number;
+  graders: EvalGraderResult[];
+  duration_ms: number;
+  tokens: number;
+  turns: number;
+  run_id?: string;
+  error?: string;
+  workdir?: string;
+}
+
+export interface EvalSummary {
+  passed: number;
+  total: number;
+  score: number;
+  pass_rate: number;
+}
+
+export type EvalStatus = "running" | "completed" | "failed";
+
+/** The outcome of running a suite; it is stored after every task, so it can be read while it goes on. */
+export interface EvalReport {
+  id: string;
+  suite_id: string;
+  suite_name: string;
+  status: EvalStatus;
+  started_at: string;
+  finished_at?: string;
+  agent?: string;
+  profile?: string;
+  repeat: number;
+  tasks: EvalTaskResult[];
+  summary: EvalSummary;
+  error?: string;
+}
+
+export interface EvalRunRequest {
+  agent?: string;
+  profile?: string;
+  repeat?: number;
+}
+
+/** What a report says about one task, all its attempts together. */
+export interface EvalSide {
+  attempts: number;
+  passed: number;
+  pass_rate: number;
+  score: number;
+  avg_tokens: number;
+  avg_duration_ms: number;
+}
+
+export interface EvalTaskDelta {
+  task_id: string;
+  a?: EvalSide | null;
+  b?: EvalSide | null;
+  /** `b - a`, only when both reports ran the task. */
+  pass_rate_delta?: number | null;
+  score_delta?: number | null;
+}
+
+export interface EvalReportRef {
+  id: string;
+  suite_id: string;
+  agent?: string | null;
+  profile?: string | null;
+}
+
+export interface EvalComparison {
+  a: EvalReportRef;
+  b: EvalReportRef;
+  tasks: EvalTaskDelta[];
+  total_a: EvalSide;
+  total_b: EvalSide;
+  pass_rate_delta: number;
+  score_delta: number;
+}
+
 export type RunStatus = "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled";
 
 export interface ToolCall {
@@ -559,11 +711,29 @@ export type WorkflowTrigger =
   | { kind: "file"; path: string }
   | { kind: "webhook"; secret?: string };
 
+/** Options of the executable steps; the defaults (0, 2 s, none, `fail`) are left out. */
+export interface StepOptions {
+  /** Extra attempts after a failure, 0..5. */
+  retry?: number;
+  /** Seconds between attempts, 0..300 (default 2). */
+  retry_delay_s?: number;
+  /** Time limit of each attempt in seconds, 1..86400. */
+  timeout_s?: number;
+  /** `continue`: the step stays failed but the run goes on; `{{steps.<id>.error}}` holds the error. */
+  on_error?: "fail" | "continue";
+}
+
 export type WorkflowStep =
-  | { id: string; kind: "tool"; tool: string; args: Record<string, unknown> }
-  | { id: string; kind: "agent"; agent: string; prompt: string }
-  | { id: string; kind: "llm"; profile: string; prompt: string }
-  | { id: string; kind: "approval"; message: string }
+  | ({ id: string; kind: "tool"; tool: string; args: Record<string, unknown> } & StepOptions)
+  | ({ id: string; kind: "agent"; agent: string; prompt: string } & StepOptions)
+  | ({ id: string; kind: "llm"; profile: string; prompt: string } & StepOptions)
+  /** `do` is one inline tool/agent/llm step that can use `{{item}}`, `{{item.field}}` and `{{index}}`; the output is the JSON array of its outputs. */
+  | ({ id: string; kind: "foreach"; items: string; do: WorkflowStep; parallel?: number } & StepOptions)
+  /** Inline tool/agent/llm steps that run together; the output is the JSON object `{inner_id: output}`. */
+  | ({ id: string; kind: "parallel"; steps: WorkflowStep[] } & StepOptions)
+  /** Starts another workflow (it can be disabled) and waits for it; the output is the one of its last step. */
+  | ({ id: string; kind: "workflow"; workflow: string; inputs?: Record<string, unknown> } & StepOptions)
+  | { id: string; kind: "approval"; message: string; timeout_s?: number; default?: "deny" | "allow" }
   | { id: string; kind: "condition"; if: string; then: string[]; else?: string[] };
 
 export interface WorkflowDef {
@@ -582,7 +752,9 @@ export interface WorkflowRun {
   status: RunStatus;
   started_at: string;
   finished_at?: string;
-  steps: { id: string; status: "pending" | "running" | "done" | "failed" | "skipped" | "waiting"; output?: string; error?: string }[];
+  /** The run of the workflow that started this one as a sub-workflow. */
+  parent_run_id?: string;
+  steps: { id: string; status: "pending" | "running" | "done" | "failed" | "skipped" | "waiting"; output?: string; error?: string; attempts?: number }[];
 }
 
 // ---------- Tools & MCP ----------
