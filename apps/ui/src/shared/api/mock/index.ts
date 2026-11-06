@@ -610,7 +610,7 @@ export class MockTransport implements Transport {
     if (sessionId !== undefined && !sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     return null;
   }
-  private update: UpdateStatus = { current: "0.5.0-beta.1", channel: "beta", configured: "auto", state: "idle", received: 0, total: 0 };
+  private update: UpdateStatus = { current: "0.5.0-beta.2", channel: "beta", configured: "auto", state: "idle", received: 0, total: 0 };
   async updateStatus() {
     const configured = String((effective() as Record<string, unknown>)["update.channel"] ?? "auto");
     this.update.configured = configured;
@@ -623,9 +623,9 @@ export class MockTransport implements Transport {
     await this.updateStatus();
     u.checked_at = new Date().toISOString();
     u.available = u.channel === "stable" ? null : {
-      tag: "v0.5.0-beta.2", version: "0.5.0-beta.2", channel: "beta", page: "https://github.com/davides93/ai-workspace-local/releases/tag/v0.5.0-beta.2",
+      tag: "v0.5.0-beta.3", version: "0.5.0-beta.3", channel: "beta", page: "https://github.com/davides93/ai-workspace-local/releases/tag/v0.5.0-beta.3",
       notes: "- Installazione automatica dei runtime.\n- Apple Foundation Models su macOS.\n- Aggiornamenti dalle release di GitHub.",
-      asset: { name: "AI_Workspace_Local_0.5.0-beta.2_universal.dmg", size: 96_000_000, url: "https://github.com/davides93/ai-workspace-local/releases/download/v0.5.0-beta.2/a.dmg" },
+      asset: { name: "AI_Workspace_Local_0.5.0-beta.3_universal.dmg", size: 96_000_000, url: "https://github.com/davides93/ai-workspace-local/releases/download/v0.5.0-beta.3/a.dmg" },
     };
     return this.updateStatus();
   }
@@ -1111,8 +1111,8 @@ export class MockTransport implements Transport {
       discovery: true,
       address: "http://192.168.1.10:7777",
       discovered: [
-        { id: "dev_nas", name: "Mini PC del soggiorno", os: "linux", tier: "m", version: "0.5.0-beta.1", address: "http://192.168.1.31:7777", last_seen: now() },
-        { id: "dev_mbp", name: "MacBook Pro M4 Max", os: "macos", tier: "xl", version: "0.5.0-beta.1", address: "http://192.168.1.42:7777", last_seen: now() },
+        { id: "dev_nas", name: "Mini PC del soggiorno", os: "linux", tier: "m", version: "0.5.0-beta.2", address: "http://192.168.1.31:7777", last_seen: now() },
+        { id: "dev_mbp", name: "MacBook Pro M4 Max", os: "macos", tier: "xl", version: "0.5.0-beta.2", address: "http://192.168.1.42:7777", last_seen: now() },
       ],
       peers: structuredClone(system.peers),
     };
