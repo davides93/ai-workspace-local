@@ -1,3 +1,4 @@
+import { Link } from "../../../app/router";
 import type { ReactNode } from "react";
 import { Icon, IconButton, Led, Pill, type PillTone } from "../../../shared/ui";
 import type { AgentProfile, InferenceProfile, Session } from "../../../shared/api/types";
@@ -49,7 +50,7 @@ export function ChatHeader({ session, agent, profile, running, sessionsButton, i
           <Meta icon="agent" label="Agente" title={agent.description || agent.name}>{agent.name}</Meta>
           {profile && (
             <Meta icon="cube" label="Modello" title={`Profilo ${profile.name} · ${profile.runtime_id} · ${profile.model || "nessun modello"}`}>
-              <span className="ws-meta-text">{profile.name}</span>
+              <Link className="ws-meta-text" to="/models/profiles" title="Gestisci i profili di inferenza">{profile.name}</Link>
               {profile.model && <span className="mono ws-meta-model">{profile.model}</span>}
             </Meta>
           )}

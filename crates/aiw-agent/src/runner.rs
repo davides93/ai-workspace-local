@@ -395,11 +395,14 @@ impl AgentRunner {
         let ev = Emitter { host: host.as_ref(), run_id: input.run_id.clone() };
         let skills = host.skills();
         let registry = host.tools();
-        let allowed = |n: &str| input.agent.tools.iter().any(|t| t == "*" || t == n);
         let mut specs: Vec<ToolSpec> = registry
             .all()
             .into_iter()
-            .filter(|t| registry.is_enabled(t.name()) && t.available().is_ok() && allowed(t.name()))
+            .filter(|t| {
+                registry.is_enabled(t.name())
+                    && t.available().is_ok()
+                    && input.agent.tools.iter().any(|n| n == t.name() || (n == "*" && !t.explicit_grant()))
+            })
             .map(|t| ToolSpec::function(t.name(), t.description(), t.parameters()))
             .collect();
         specs.extend(internal_specs(input, &skills));
@@ -1148,7 +1151,7 @@ impl AgentRunner {
         let Some(tool) = registry.get(&tc.name) else {
             return (ToolOutput::error(format!("Tool sconosciuto `{}`. Usa solo gli strumenti elencati.", tc.name)), None);
         };
-        if !input.agent.tools.iter().any(|t| t == "*" || t == &tc.name) || !registry.is_enabled(&tc.name) {
+        if !input.agent.tools.iter().any(|t| t == &tc.name || (t == "*" && !tool.explicit_grant())) || !registry.is_enabled(&tc.name) {
             audit("deny", "tool non abilitato per questo agente".into());
             return (ToolOutput::error(format!("Il tool `{}` non è abilitato per questo agente.", tc.name)), None);
         }

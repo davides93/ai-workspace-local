@@ -65,7 +65,7 @@ export function ProfilesPanel() {
       >
         {(list) => <DataTable label="Profili di inferenza" columns={columns} rows={list} rowKey={(p) => p.id} className="profiles-table" />}
       </QueryState>
-      <p className="faint text-sm row"><Icon name="info" size={14} /> Il modello va scaricato prima: lo trovi in <Link to="/models">Modelli</Link>. Un profilo usato da un agente non si può eliminare.</p>
+      <p className="faint text-sm row"><Icon name="info" size={14} /> Scegli un modello disponibile in <Link to="/models">Modelli</Link>. Un profilo usato da un agente non si può eliminare.</p>
 
       {editing !== undefined && runtimes.data && models.data && (
         <ProfileDialog

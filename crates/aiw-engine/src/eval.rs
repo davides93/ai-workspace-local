@@ -178,6 +178,16 @@ impl Engine {
     /// Runs `suite` to the end. The report is stored when the run starts and after every task, so it can be
     /// read while it is still going; `observer` hears about the same moments.
     pub async fn run_eval(&self, suite: &Suite, req: &EvalRequest, observer: &mut (dyn FnMut(EvalEvent<'_>) + Send)) -> Result<EvalReport> {
+        self.run_eval_with_cancel(suite, req, observer, CancellationToken::new()).await
+    }
+
+    pub(crate) async fn run_eval_with_cancel(
+        &self,
+        suite: &Suite,
+        req: &EvalRequest,
+        observer: &mut (dyn FnMut(EvalEvent<'_>) + Send),
+        cancel: CancellationToken,
+    ) -> Result<EvalReport> {
         suite.validate()?;
         self.check_suite_refs(suite)?;
         for name in req.agent.iter() {
@@ -193,6 +203,7 @@ impl Engine {
         opts.repeat = req.repeat.unwrap_or(1);
         opts.keep = req.keep;
         opts.report_id = req.report_id.clone();
+        opts.cancel = cancel;
         self.audit_user("eval.run", &format!("{} ({} task × {})", suite.name, suite.tasks.len(), opts.repeat));
         let engine = self.clone();
         let result = aiw_eval::run_suite(self, suite, &opts, &mut |ev| {
@@ -206,7 +217,9 @@ impl Engine {
         .await;
         if let Ok(report) = &result {
             self.save_eval_report(report);
-            self.rewards_from_report(suite, req.agent.as_deref(), req.profile.as_deref(), report);
+            if report.status == "completed" {
+                self.rewards_from_report(suite, req.agent.as_deref(), req.profile.as_deref(), report);
+            }
         }
         result
     }
@@ -229,6 +242,7 @@ impl EvalHost for Engine {
     /// task as the budget. The run is not part of any session; its events are stored like the others.
     async fn run_task(&self, req: TaskRequest) -> Result<TaskRun> {
         let mut agent = self.agent(&req.agent)?;
+        agent.tools.retain(|name| name != "training_harness");
         if let Some(p) = &req.profile {
             agent.inference_profile = self.profile(p)?.id;
         }
@@ -244,7 +258,7 @@ impl EvalHost for Engine {
             )));
         }
         let run_id = new_id("run");
-        let cancel = CancellationToken::new();
+        let cancel = req.cancel;
         self.0
             .runs
             .lock()

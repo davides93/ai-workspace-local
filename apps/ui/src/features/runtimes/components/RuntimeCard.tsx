@@ -1,13 +1,15 @@
+import { Link } from "../../../app/router";
 import type { RuntimeInfo } from "../../../shared/api/types";
 import { cx } from "../../../shared/lib/cx";
 import { Button, Chip, Chips, InlineText, StatusPill } from "../../../shared/ui";
 
 /** One runtime of the catalog: what it is, where it can run, its state and the main action. */
-export function RuntimeCard({ runtime: r, deviceAccels, busy, onAct, onOpen }: {
+export function RuntimeCard({ runtime: r, deviceAccels, busy, error, onAct, onOpen }: {
   runtime: RuntimeInfo;
   /** Accelerators of this device: a runtime accelerator that is present is highlighted. */
   deviceAccels: Set<string>;
   busy: boolean;
+  error?: string;
   onAct: (action: "start" | "stop") => void;
   onOpen: () => void;
 }) {
@@ -35,8 +37,11 @@ export function RuntimeCard({ runtime: r, deviceAccels, busy, onAct, onOpen }: {
         {r.formats.map((f) => <Chip key={f}>.{f}</Chip>)}
       </Chips>
       {r.loaded_models.length > 0 && <div className="mono faint ellipsis text-xs" title={r.loaded_models.join(", ")}>caricato: {r.loaded_models.join(", ")}</div>}
+      {error && <p role="alert" className="crit-text text-sm">{error}</p>}
       <div className="rt-foot">
-        {active ? (
+        {active && r.kind === "system" ? (
+          <Link to="/models?origin=system" className="btn primary">Vedi i modelli di sistema</Link>
+        ) : active ? (
           <Button icon="stop" disabled={busy} aria-label={`Ferma ${r.name}`} onClick={() => onAct("stop")}>Ferma</Button>
         ) : r.status === "installable" && r.install_auto ? (
           <Button variant="primary" icon="download" aria-label={`Installa ${r.name}`} onClick={onOpen}>Installa</Button>

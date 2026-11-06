@@ -269,6 +269,61 @@ async fn ready_to_train(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, te
     (e, d, w, ds.id)
 }
 
+#[tokio::test]
+async fn imported_examples_are_validated_and_redacted_before_splitting() {
+    let (engine, _data, _workspace) = engine(vec![]).await;
+    let examples = (0..10)
+        .map(|i| {
+            json!({"messages": [
+                {"role": "user", "content": format!("Esempio {i}. Token sk-abcdefghijklmnopqrst")},
+                {"role": "assistant", "content": "Risposta di esempio"}
+            ]})
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let broken = format!("{examples}\n{}", json!({"messages": [{"role": "assistant", "content": "no"}]}));
+    assert!(engine.import_sft_dataset("Prova", &broken).is_err());
+    assert!(engine.datasets().unwrap().is_empty());
+    let dataset = engine.import_sft_dataset("Prova", &examples).unwrap();
+    assert_eq!((dataset.train, dataset.valid), (9, 1));
+    assert_eq!(dataset.sources, ["import"]);
+    for split in ["train.jsonl", "valid.jsonl"] {
+        let path = std::path::Path::new(&dataset.path).join(split);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[SEGRETO]") && !text.contains("sk-"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn training_harness_requires_an_explicit_grant_and_prepares_approved_examples() {
+    use aiw_runtimes::ScriptedBackend;
+    for (allow, expected_datasets) in [(false, 1), (true, 2)] {
+        let turns = vec![
+            ScriptedBackend::tool_turn("prepare", "training_harness", json!({"action": "prepare", "agent": "operator"})),
+            ScriptedBackend::text_turn("Fine."),
+        ];
+        let (e, _d, _w, _) = ready_to_train(turns).await;
+        let mut agent = e.agent("operator").unwrap();
+        agent.mode = "yolo".into();
+        agent.tools = vec!["*".into()];
+        if allow {
+            agent.tools.push("training_harness".into());
+        }
+        e.save_agent(agent.clone()).unwrap();
+        let session = e.create_session("operator", None).unwrap();
+        let run = e.start_run(&session.id, "Prepara il dataset di feedback".into()).await.unwrap();
+        super::tests::wait_finished(&e, &run).await;
+        assert_eq!(e.datasets().unwrap().len(), expected_datasets, "{:?}", e.messages(&session.id).unwrap());
+    }
+}
+
 fn sft_request(dataset: &str, model: &str) -> TrainJobRequest {
     TrainJobRequest {
         method: "sft".into(),
@@ -334,7 +389,8 @@ async fn a_failing_trainer_leaves_no_adapter_and_says_why() {
     let done = wait_job(&e, &job.id).await;
     assert_eq!(done.status, "failed");
     let why = done.error.unwrap();
-    assert!(why.contains("codice 3") && why.contains("out of memory"), "{why}");
+    assert!(why.contains("codice 3") && !why.contains("out of memory"), "{why}");
+    assert!(e.train_job_log(&job.id, 10).unwrap().iter().any(|line| line.contains("out of memory")));
     assert!(e.adapters().unwrap().is_empty());
     assert_eq!(std::fs::read_dir(e.0.dirs.adapters()).map(|d| d.count()).unwrap_or(0), 0, "the partial folder is removed");
 }

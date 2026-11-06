@@ -23,7 +23,7 @@ function UseButton({ a }: { a: AdapterInfo }) {
         onClick={() =>
           save.mutate(
             { id: `ft-${a.id}`, name: a.name, description: `${a.base_model} con l'adapter ${a.name}`, runtime_id: runtime, model: a.base_model, params: { adapters: [{ path: a.path }] } },
-            { onSuccess: () => navigate("/agents") },
+            { onSuccess: () => navigate("/models/profiles") },
           )}
       >
         Usa in un profilo

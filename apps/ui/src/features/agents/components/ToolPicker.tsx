@@ -4,7 +4,7 @@ import { RISK_META } from "../../../shared/lib/policyModes";
 import type { PolicyMode, SandboxMode, ToolRisk } from "../../../shared/api/types";
 import {
   blockedTools, groupState, groupTools, isAllTools, isSelected, orphanTools, setAllTools, setGroup, summarizeTools, toggleTool,
-  type PickerTool, type ToolGroup,
+  TRAINING_TOOL, type PickerTool, type ToolGroup,
 } from "../model/tools";
 
 const RISKS: ToolRisk[] = ["read", "network", "write", "exec", "computer"];
@@ -80,7 +80,9 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
 }) {
   const [query, setQuery] = useState("");
   const all = isAllTools(value);
-  const groups = groupTools(catalog, query);
+  const ordinaryTools = catalog.filter((tool) => tool.name !== TRAINING_TOOL);
+  const training = catalog.find((tool) => tool.name === TRAINING_TOOL);
+  const groups = groupTools(ordinaryTools, query);
   const summary = summarizeTools(value, catalog);
   const orphans = all ? [] : orphanTools(value, catalog);
   const blocked = blockedTools(value, catalog, mode, sandbox);
@@ -89,7 +91,7 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
     <div className="tool-picker">
       <div className="tool-top">
         <div className="tool-all">
-          <Toggle id="tools-all" label="Tutti i tool" checked={all} onChange={(on) => onChange(setAllTools(value, on, catalog))} />
+          <Toggle id="tools-all" label="Tutti i tool" checked={all} onChange={(on) => onChange([...setAllTools(value.filter((name) => name !== TRAINING_TOOL), on, ordinaryTools), ...value.filter((name) => name === TRAINING_TOOL)])} />
           <label htmlFor="tools-all"><b>Tutti i tool</b> <span className="muted text-sm">(<code>*</code>) anche quelli aggiunti in futuro, MCP compresi</span></label>
         </div>
         <div className="tool-summary" role="status">
@@ -100,7 +102,15 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
         </div>
       </div>
 
-      {all && <p className="tool-note text-sm"><Icon name="info" size={14} /> Con «Tutti i tool» l'agente usa ogni tool attivo. Disattiva l'interruttore per sceglierne alcuni: l'elenco parte da tutti, nulla va perso.</p>}
+      {all && <p className="tool-note text-sm"><Icon name="info" size={14} /> Con «Tutti i tool» l'agente usa i tool ordinari attivi. Disattiva l'interruttore per sceglierne alcuni: l'elenco parte da tutti, nulla va perso.</p>}
+
+      {training && (
+        <label className="row">
+          <Toggle label="Consenti addestramento" checked={value.includes(TRAINING_TOOL)}
+            onChange={(on) => onChange(on ? [...value, TRAINING_TOOL] : value.filter((name) => name !== TRAINING_TOOL))} />
+          <span>Consenti addestramento <span className="muted text-sm">Dataset approvati, job e valutazione.</span></span>
+        </label>
+      )}
 
       <Input type="search" aria-label="Cerca un tool" className="input-search" placeholder="Cerca per nome, descrizione o gruppo…" value={query} onChange={(e) => setQuery(e.target.value)} />
 

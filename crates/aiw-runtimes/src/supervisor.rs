@@ -81,6 +81,7 @@ pub(crate) fn kill_group(pid: u32, force: bool) {
 
 #[derive(Default)]
 pub struct Supervisor {
+    last_logs: Mutex<HashMap<String, Arc<Mutex<VecDeque<String>>>>>,
     running: tokio::sync::Mutex<HashMap<String, SidecarHandle>>,
 }
 
@@ -156,7 +157,34 @@ fn push_log(logs: &Arc<Mutex<VecDeque<String>>>, line: String) {
     if l.len() >= LOG_LINES {
         l.pop_front();
     }
-    l.push_back(line);
+    l.push_back(clean_log_line(&line));
+}
+
+pub(crate) fn clean_log_line(line: &str) -> String {
+    let mut chars = line.chars();
+    let mut clean = String::with_capacity(line.len());
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            match chars.next() {
+                Some('[') => {
+                    chars.by_ref().find(|c| ('@'..='~').contains(c));
+                }
+                Some(']') => {
+                    let mut escape = false;
+                    for c in chars.by_ref() {
+                        if c == '\u{7}' || (escape && c == '\\') {
+                            break;
+                        }
+                        escape = c == '\u{1b}';
+                    }
+                }
+                _ => {}
+            }
+        } else if ch == '\t' || !ch.is_control() {
+            clean.push(ch);
+        }
+    }
+    clean
 }
 
 impl Supervisor {
@@ -195,10 +223,7 @@ impl Supervisor {
     }
 
     pub async fn logs(&self, id: &str) -> Vec<String> {
-        match self.running.lock().await.get(id) {
-            Some(h) => h.logs.lock().unwrap().iter().cloned().collect(),
-            None => vec![],
-        }
+        self.last_logs.lock().unwrap().get(id).map(|logs| logs.lock().unwrap().iter().cloned().collect()).unwrap_or_default()
     }
 
     pub async fn running_ids(&self) -> Vec<String> {
@@ -206,7 +231,7 @@ impl Supervisor {
     }
 
     /// Starts the sidecar and waits until its health endpoint answers.
-    pub async fn start(&self, spec: LaunchSpec<'_>, http: &reqwest::Client) -> Result<String> {
+    pub async fn start(&self, mut spec: LaunchSpec<'_>, http: &reqwest::Client) -> Result<String> {
         let id = spec.manifest.id.clone();
         if self.is_running(&id).await {
             self.stop(&id).await?;
@@ -221,9 +246,30 @@ impl Supervisor {
         }
         let configured_port = spec.settings.get("port").and_then(|v| v.as_u64()).filter(|p| *p > 0).map(|p| p as u16);
         let port = launch.fixed_port.or(configured_port).map(Ok).unwrap_or_else(free_port)?;
+        let workdir = if id == "localai" {
+            let path = &spec.models_dir;
+            let directory = async {
+                tokio::fs::create_dir_all(path).await?;
+                tokio::fs::canonicalize(path).await
+            }
+            .await
+            .map_err(|e| {
+                Error::Runtime(format!(
+                    "LocalAI non riesce ad aprire la cartella dei modelli ({}). Verifica il percorso e i permessi nelle impostazioni: {e}",
+                    path.display()
+                ))
+            })?;
+            spec.models_dir = directory.clone();
+            Some(directory)
+        } else {
+            None
+        };
         let plan = plan_launch(&spec, launch, port);
         let args = plan.args;
         let mut cmd = tokio::process::Command::new(&spec.binary);
+        if let Some(workdir) = workdir {
+            cmd.current_dir(workdir);
+        }
         cmd.args(&args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -253,6 +299,7 @@ impl Supervisor {
         let mut child = cmd.spawn().map_err(|e| Error::Runtime(format!("impossibile avviare {}: {e}", spec.binary.display())))?;
         let pid = child.id();
         let logs = Arc::new(Mutex::new(VecDeque::new()));
+        self.last_logs.lock().unwrap().insert(id.clone(), logs.clone());
         for pipe in [
             child.stdout.take().map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
             child.stderr.take().map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
@@ -279,8 +326,10 @@ impl Supervisor {
                     if let Some(pid) = pid {
                         kill_group(pid, true);
                     }
-                    let tail: Vec<String> = logs.lock().unwrap().iter().rev().take(12).rev().cloned().collect();
-                    return Err(Error::Runtime(format!("{} si è chiuso ({status}).\n{}", spec.manifest.name, tail.join("\n"))));
+                    return Err(Error::Runtime(format!(
+                        "{} si è chiuso durante l’avvio ({status}). Apri i log nei dettagli e riprova.",
+                        spec.manifest.name
+                    )));
                 }
             }
             // `health: "tcp"` = the port accepts connections (servers without HTTP, e.g. rpc-server).

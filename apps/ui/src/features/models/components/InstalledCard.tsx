@@ -1,5 +1,8 @@
+import { useMutation } from "@tanstack/react-query";
 import { useId, useState } from "react";
-import { Button, Chip, CopyField, Icon } from "../../../shared/ui";
+import { Button, Chip, CopyField, Dialog, Field, Icon, Input } from "../../../shared/ui";
+import { useApi } from "../../../shared/api/context";
+import { errorMessage } from "../../../shared/lib/errors";
 import { formatBytes, formatContext, formatParams } from "../../../shared/lib/format";
 import type { LocalModel } from "../../../shared/api/types";
 import { originInfo } from "../model/origin";
@@ -7,6 +10,7 @@ import { CapabilityChips, ChipRow, FitPill, OriginChip, RuntimeChips, Stat, Stat
 
 /** One installed model as an instrument module: identity, readouts, fit, runtimes and the three actions. */
 export function InstalledCard({ model: m, onUse, onDelete }: { model: LocalModel; onUse: () => void; onDelete: () => void }) {
+  const [preview, setPreview] = useState(false);
   const [details, setDetails] = useState(false);
   const detailsId = useId();
   const origin = originInfo(m.origin);
@@ -38,10 +42,12 @@ export function InstalledCard({ model: m, onUse, onDelete }: { model: LocalModel
       <RuntimeChips runtimes={m.runtime_compat} explain />
 
       <div className="mh-card-foot">
-        <Button variant="primary" size="sm" icon="link" onClick={onUse}>Usa nel profilo</Button>
-        <Button size="sm" icon="file" aria-expanded={details} aria-controls={detailsId} onClick={() => setDetails((v) => !v)}>
+        {m.origin === "system" && <Button variant="primary" size="sm" onClick={() => setPreview(true)}>Prova in chat</Button>}
+        {preview && <SystemPreview model={m} onClose={() => setPreview(false)} />}
+        <Button variant={m.origin === "system" ? undefined : "primary"} size="sm" icon="link" onClick={onUse}>Usa nel profilo</Button>
+        {m.origin !== "system" && <Button size="sm" icon="file" aria-expanded={details} aria-controls={detailsId} onClick={() => setDetails((v) => !v)}>
           {details ? "Nascondi percorso" : "Mostra percorso"}
-        </Button>
+        </Button>}
         {m.removable ? (
           <Button size="sm" variant="danger" icon="trash" onClick={onDelete} aria-label={`Elimina ${m.name}`}>Elimina</Button>
         ) : (
@@ -59,5 +65,32 @@ export function InstalledCard({ model: m, onUse, onDelete }: { model: LocalModel
         </div>
       )}
     </article>
+  );
+}
+
+function SystemPreview({ model, onClose }: { model: LocalModel; onClose: () => void }) {
+  const [prompt, setPrompt] = useState("");
+  const api = useApi();
+  const run = useMutation({
+    mutationFn: (input: string) => api.previewSystemModel(model.id, input),
+    meta: { handled: true },
+  });
+  return (
+    <Dialog title={`Prova ${model.name}`} onClose={onClose} footer={<Button onClick={onClose}>Chiudi</Button>}>
+      <form className="stack" onSubmit={(event) => {
+        event.preventDefault();
+        if (prompt.trim() && !run.isPending) run.mutate(prompt.trim());
+      }}>
+        <Field label="Messaggio" htmlFor="system-preview-prompt">
+          <Input id="system-preview-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)}
+            maxLength={2000} data-autofocus />
+        </Field>
+        <Button type="submit" variant="primary" disabled={!prompt.trim() || run.isPending}>
+          {run.isPending ? "Attendo la risposta…" : "Invia"}
+        </Button>
+        {run.isError && <p role="alert" className="crit-text">{errorMessage(run.error)}</p>}
+        {run.data && <p className="prewrap" aria-live="polite">{run.data}</p>}
+      </form>
+    </Dialog>
   );
 }

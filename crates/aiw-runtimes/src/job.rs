@@ -72,7 +72,7 @@ pub async fn run_logged(spec: JobSpec, cancel: CancellationToken, mut on_line: i
         tokio::spawn(async move {
             let mut lines = BufReader::new(pipe).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if tx.send(line).is_err() {
+                if tx.send(crate::supervisor::clean_log_line(&line)).is_err() {
                     break;
                 }
             }

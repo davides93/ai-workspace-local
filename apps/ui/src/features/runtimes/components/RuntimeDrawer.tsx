@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { errorMessage } from "../../../shared/lib/errors";
 import { Link } from "../../../app/router";
 import type { LocalModel, RuntimeInfo } from "../../../shared/api/types";
 import { Button, Chip, Chips, CopyField, Drawer, Field, KeyValue, Pill, SchemaForm, Select, StatusPill, Toggle } from "../../../shared/ui";
@@ -16,7 +17,7 @@ export function RuntimeDrawer({ runtime: r, models, deviceAccels, onClose }: {
   onClose: () => void;
 }) {
   const update = useUpdateRuntimeSettings();
-  const action = useRuntimeAction();
+  const action = useRuntimeAction(true);
   const [draft, setDraft] = useState<Record<string, unknown>>(r.settings);
   const [advanced, setAdvanced] = useState(false);
   const options = compatibleModels(models, r.id);
@@ -61,11 +62,13 @@ export function RuntimeDrawer({ runtime: r, models, deviceAccels, onClose }: {
         {r.status !== "installable" && r.install_hint && <CopyField label="Installazione" value={r.install_hint} />}
       </section>
 
-      {r.status === "installable" && <RuntimeInstall runtime={r} />}
+      {(r.status === "installable" || r.id === "localai") && <RuntimeInstall runtime={r} />}
 
       <section className="stack" aria-label="Avvio">
         <h3>{active ? "In esecuzione" : "Avvia con un modello"}</h3>
-        {active ? (
+        {active && r.kind === "system" ? (
+          <Link to="/models?origin=system">Vedi i modelli di sistema</Link>
+        ) : active ? (
           <div className="row">
             <Button icon="stop" disabled={pending} onClick={() => action.mutate({ runtime: r, action: "stop" })}>Ferma {r.name}</Button>
             {r.status === "starting" && <span className="faint text-sm">Avvio in corso…</span>}
@@ -102,6 +105,7 @@ export function RuntimeDrawer({ runtime: r, models, deviceAccels, onClose }: {
         )}
       </section>
 
+      {action.isError && <p role="alert" className="crit-text">{errorMessage(action.error)}</p>}
       <RuntimeLogs runtimeId={r.id} />
     </Drawer>
   );

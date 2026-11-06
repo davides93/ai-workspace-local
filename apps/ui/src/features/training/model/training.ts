@@ -25,6 +25,7 @@ export const METHOD_HINT: Record<TrainMethod, string> = {
 };
 
 export const SOURCE_LABEL: Record<string, string> = {
+  import: "File JSONL importato",
   feedback: "Pollice in su",
   succeeded: "Sessioni riuscite",
   eval: "Task superati nelle valutazioni",

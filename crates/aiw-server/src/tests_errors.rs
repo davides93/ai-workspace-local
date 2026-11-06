@@ -575,6 +575,12 @@ mod updates {
         let (_, s) = dispatch(app.clone(), "POST", "/api/update/check", None).await;
         assert_eq!(s["channel"], "beta");
         assert!(s["available"].is_null(), "{s}");
+        // A beta user can browse older stable releases without receiving a downgrade offer.
+        let (app, _e, _d) = engine_on(&base, "0.5.0-beta.1", "stable").await;
+        let (_, s) = dispatch(app, "POST", "/api/update/check", None).await;
+        assert!(s["available"].is_null());
+        assert_eq!(s["releases"][0]["version"], "0.4.0");
+        assert_eq!(s["releases"][1]["version"], "0.3.0");
         // A build older than every release, on auto = stable.
         let (app, _e, _d) = engine_on(&base, "0.1.0", "auto").await;
         let (_, s) = dispatch(app.clone(), "POST", "/api/update/check", None).await;
