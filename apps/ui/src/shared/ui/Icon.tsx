@@ -1,6 +1,7 @@
 // Icons: 1.6px stroke on a 20px grid.
 const paths = {
   chat: "M4 5h12v8H9l-4 3v-3H4z",
+  team: "M7 4a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5zM13.5 6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM2.5 16c0-2.6 2-4.2 4.5-4.2s4.5 1.6 4.5 4.2M12.5 12c2.4 0 5 1 5 4",
   agent: "M10 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM4 17c0-3 2.7-5 6-5s6 2 6 5",
   flow: "M5 4h4v4H5zM11 12h4v4h-4zM7 8v4h4",
   chip: "M6 6h8v8H6zM8 3v3M12 3v3M8 14v3M12 14v3M3 8h3M3 12h3M14 8h3M14 12h3",

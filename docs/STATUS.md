@@ -37,18 +37,19 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 
 | Funzione | Stato | Note |
 |---|---|---|
-| Agenti (5 predefiniti: operator, coder, browser, desktop, planner) e loop con streaming AG-UI | ✅ | tool read-only in parallelo, max turni, self-check sugli errori dei tool |
-| Subagenti (tool `agent`, contesto isolato, profondità 2) | ✅ | nessun subagente in parallelo |
+| Agenti (5 predefiniti: operator, coder, browser, desktop, planner) e loop con streaming AG-UI | ✅ | tool read-only in parallelo, max turni, self-check sugli errori dei tool; **budget per run** (token, turni del modello, secondi) condiviso con i subagenti, per agente (`budget`) o dalle impostazioni `agents.budget.*`: a limite esaurito il run si chiude con l'avviso `aiw.budget_exceeded`; **output strutturato**: un agente può avere `output_schema` (sottoinsieme di JSON Schema), la risposta finale viene estratta e validata con un tentativo di correzione, il JSON valido è in `RunFinished.result.json`; nessun `response_format` verso i runtime |
+| Subagenti (tool `agent`, contesto isolato, profondità 2) | ✅ | modalità di approvazione, sandbox e tool del subagente non sono mai più ampi di quelli del padre; più chiamate `agent` nello stesso turno girano in parallelo (limite `agents.max_parallel_subagents`, default 3; attenzione a subagenti che scrivono negli stessi file) |
 | Skill `SKILL.md`, memoria `AGENTS.md` | ✅ | nessuna UI per le skill |
-| Hook (UserPromptSubmit, PreToolUse, PostToolUse, Stop) | 🟡 | SessionStart mai invocato; **v0.4** editor degli hook nella UI; un prompt bloccato da `UserPromptSubmit` resta visibile in chat ma non arriva al modello |
+| Hook (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SubagentStart, SubagentStop, PreCompact) | ✅ | SessionStart parte al primo messaggio di una conversazione e aggiunge contesto al prompt di sistema; SubagentStart/SubagentStop usano il filtro sul nome dell'agente; PreCompact può saltare la compattazione; **v0.4** editor degli hook nella UI; un prompt bloccato da `UserPromptSubmit` resta visibile in chat ma non arriva al modello |
 | Policy (plan/ask/auto-edit/auto/yolo), regole, approvazioni, audit, kill switch | ✅ | regole solo globali; **v0.4** editor delle regole, kill switch raggiungibile da telefono; una conferma in attesa viene ritirata quando il run smette di aspettarla e uno stop durante la conferma conta come annullamento, non come rifiuto; validazione di policy, hook e agenti prima del salvataggio |
 | Code mode (Rhai), A2UI `render_ui`, worktree git per sessione | ✅ | |
 | Messaggi dei run annullati o falliti | ✅ **v0.4** | prima andavano persi; l'errore resta nella cronologia (messaggio `aiw.run_error`, mai inviato al modello) |
 | Esecuzione dei run | ✅ **v0.4** | un solo run per sessione (il secondo risponde 409); eliminare la sessione ferma il run; agente, profilo o runtime spariti → 409; i run rimasti `running` dopo un crash sono segnati falliti all'avvio; senza il profilo `default` il gateway ripiega sul profilo dell'agente predefinito |
 | Checkpoint prima delle scritture e rewind | ✅ | `aiw rewind <run>` (`--dry-run`), `GET /api/runs/{id}/checkpoint`, `POST /api/runs/{id}/rewind` e «Ripristina i file» nella chat; i file fuori dal workspace sono solo elencati |
 | Workflow (tool, agent, llm, approval, condition, foreach, parallel, sotto-workflow) e trigger (manuale, cron, intervallo, file, webhook) | ✅ | retry, timeout e `on_error` per passo, approvazioni con scadenza, segnaposto JSON, stato salvato a ogni passo e ripresa dopo il riavvio (passo in corso rieseguito: almeno una volta); **v0.4** editor visuale dei passi |
-| A2A 1.0 server, server MCP, delega ai peer via MCP | 🟡 | A2A senza streaming, task in memoria |
-| Team multi-agente (supervisor, handoff) | ❌ | |
+| A2A 1.0 server, server MCP, delega ai peer via MCP | 🟡 | A2A senza streaming (`SendStreamingMessage` non c'è: il client interroga `GetTask`); i task sono in SQLite (`a2a_tasks`) e scadono dopo 24 ore |
+| Agenti remoti A2A | ✅ | registro `remote_agent` in Integrazioni (token mascherato come i segreti MCP) e dispositivi accoppiati, usabili come `remote:<id>` nei team e come subagenti; client A2A in `aiw-engine` (Agent Card, `SendMessage`, polling di `GetTask` con attesa crescente e timeout `a2a.timeout_seconds`, default 10 minuti, `CancelTask` se il run padre viene annullato); si parla solo con gli indirizzi registrati (l'Agent Card deve restare sulla stessa origine, nessun redirect) e ogni delega è nel registro delle attività |
+| Team multi-agente | ✅ | team (`/api/teams`, pagina Team, sessione `team:<id>`) con strategie supervisor, parallelo e catena, budget e schema di risposta, 1-8 membri locali o remoti; **handoff** (tool `handoff`: la conversazione passa a un altro agente, al massimo 3 passaggi per messaggio, mai verso una modalità più permissiva), **stato condiviso** (tool `team_state`, 64 chiavi e 32 KB, visibile nell'Inspector) e traccia annidata dei subagenti in chat (`GET /api/runs/{id}/events.json`). Limite: dopo un ricaricamento la traccia annidata non c'è più (la cronologia mostra le schede dei tool); un team di soli agenti remoti non si apre in chat |
 | Bot e canali (Telegram, Slack, email) | ❌ | |
 | Documenti e RAG (knowledge base, embeddings) | ❌ | la capacità `embeddings` è solo un'etichetta nei manifest |
 | Memoria a lungo termine | ❌ | |
@@ -197,7 +198,7 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 10. Client MCP completo: resources, prompts, sampling, OAuth, riconnessione.
 11. Rewind dei checkpoint, workflow durevoli (ripresa, foreach, retry, timeout), approvazioni con
     timeout e notifiche desktop.
-12. Team multi-agente (supervisor e handoff), canali (Telegram, Slack, email) e voce neurale locale
+12. Canali (Telegram, Slack, email) e voce neurale locale
     (Kokoro/Piper al posto delle voci di sistema; la trascrizione con whisper.cpp c'è già).
 
 **P3 · Sicurezza e distribuzione**

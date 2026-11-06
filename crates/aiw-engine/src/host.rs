@@ -1,7 +1,7 @@
 //! The engine side of [`aiw_agent::RunHost`] and [`aiw_workflow::WorkflowHost`].
 
 use crate::Engine;
-use aiw_agent::{AgentRunner, RunHost, RunInput, Skill};
+use aiw_agent::{narrow_sandbox, narrow_tools, AgentRunner, RunHost, RunInput, Skill};
 use aiw_core::api::{ApprovalOutcome, ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun, WorkflowStep};
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
@@ -114,13 +114,15 @@ impl RunHost for EngineHost {
         self.engine.skills()
     }
 
-    async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str) -> Result<String> {
+    async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str, run_id: &str) -> Result<String> {
+        if agent_id.starts_with(crate::REMOTE_PREFIX) {
+            return self.engine.delegate_remote(agent_id, task, &parent.tool_ctx.cancel, Some(&parent.run_id)).await;
+        }
         let agent = self.engine.agent(agent_id)?;
         let profile = self.engine.profile(&agent.inference_profile)?;
-        let run_id = new_id("run");
         let cancel = parent.tool_ctx.cancel.child_token();
         let mut input = self.engine.build_input(
-            &run_id,
+            run_id,
             &parent.thread_id,
             agent,
             profile,
@@ -134,13 +136,40 @@ impl RunHost for EngineHost {
         if mode_rank(&input.policy.mode) > mode_rank(&parent.policy.mode) {
             input.policy.mode = parent.policy.mode.clone();
         }
+        // The run budget is shared with the parent: delegating does not buy more.
+        input.budget = parent.budget.clone();
+        // Same for the sandbox and the tool list.
+        input.tool_ctx.sandbox = narrow_sandbox(parent.tool_ctx.sandbox, input.tool_ctx.sandbox);
+        input.agent.tools = narrow_tools(&parent.agent.tools, &input.agent.tools);
+        // The members of a team share its state (the tool is harmless: it touches nothing outside the run).
+        input.in_team = parent.in_team;
+        input.shared = parent.shared.clone();
+        input.root_run = parent.root_run.clone();
+        if input.in_team && !input.agent.tools.iter().any(|t| t == "*" || t == aiw_agent::internal::TEAM_STATE) {
+            input.agent.tools.push(aiw_agent::internal::TEAM_STATE.into());
+        }
         let host = Arc::new(EngineHost::new(self.engine.clone(), self.session_id.clone(), Some(parent.run_id.clone())));
         let out = AgentRunner::run(input, host).await?;
         Ok(if out.final_text.is_empty() { "(nessuna risposta)".into() } else { out.final_text })
     }
+
+    fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {
+        if agent_id.starts_with(crate::REMOTE_PREFIX) {
+            return Err(Error::Denied("la conversazione non può passare a un agente remoto: delegagli il lavoro".into()));
+        }
+        let target = self.engine.agent(agent_id)?;
+        // The conversation never moves to an agent with more freedom than the one that started it.
+        if mode_rank(&target.mode) > mode_rank(&from.policy.mode) {
+            return Err(Error::Denied(format!(
+                "«{}» ha una modalità più permissiva ({}) di quella di partenza ({})",
+                target.name, target.mode, from.policy.mode
+            )));
+        }
+        Ok(target.name)
+    }
 }
 
-fn mode_rank(m: &str) -> u8 {
+pub(crate) fn mode_rank(m: &str) -> u8 {
     match m {
         "plan" => 0,
         "ask" => 1,

@@ -1,6 +1,6 @@
 import type {
   AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, Fit, HookConfig, InferenceProfile, LocalModel, McpServer,
-  PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, ToolInfo, WorkflowDef, WorkflowRun,
+  PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, RemoteAgent, TeamDef, ToolInfo, WorkflowDef, WorkflowRun,
 } from "../types";
 import { RUN_ERROR_MESSAGE } from "../types";
 
@@ -206,6 +206,25 @@ export const agents: AgentProfile[] = [
   { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "todo"], mode: "plan", sandbox: "read-only", max_turns: 20 },
 ];
 
+/** Teams of the demo: a supervisor with two members, and a chain. */
+/** Remote agents (A2A). The token of a stored one is kept here and masked by the mock API. */
+export const remoteAgents: RemoteAgent[] = [
+  { id: "studio", name: "PC dello studio", url: "http://192.168.1.20:7777", token: "demo-token", skill: "operator", description: "Il portatile dello studio, con i documenti del cliente." },
+];
+
+export const teams: TeamDef[] = [
+  {
+    id: "revisione", name: "Revisione del codice", description: "Il Coder implementa, il Pianificatore rivede: il supervisore li coordina.",
+    strategy: "supervisor", supervisor: "operator",
+    members: [{ agent: "coder", role: "Scrive e verifica le modifiche" }, { agent: "planner", role: "Rivede il piano e i rischi, senza modificare" }],
+    budget: { max_turns: 40 },
+  },
+  {
+    id: "ricerca", name: "Ricerca e sintesi", description: "Il Navigatore raccoglie, il Pianificatore riassume.",
+    strategy: "pipeline", members: [{ agent: "browser", role: "Raccoglie le fonti" }, { agent: "planner", role: "Riassume in un piano" }],
+  },
+];
+
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
 export const sessions: Session[] = [
@@ -313,7 +332,7 @@ tools.push(
  * The tools of the agent loop, as `GET /api/tools` lists them after the built-in and MCP ones: `source: "internal"`,
  * always on, risk `read`, no switch (crates/aiw-agent/src/internal.rs).
  */
-export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code"] as const;
+export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state"] as const;
 tools.push(
   ...([
     ["todo", "Pubblica e aggiorna il piano di lavoro dell'agente: elenco di passi con il loro stato."],
@@ -321,6 +340,8 @@ tools.push(
     ["skill", "Carica le istruzioni complete di una skill elencata nel prompt di sistema."],
     ["render_ui", "Mostra all'utente un'interfaccia interattiva (A2UI): moduli, scelte, riepiloghi, tabelle di card."],
     ["code", "Esegue uno script Rhai che orchestra più strumenti in un solo passo (cicli, filtri, conteggi)."],
+    ["handoff", "Passa la conversazione a un altro agente: il run termina e il nuovo agente prosegue con il tuo riassunto."],
+    ["team_state", "Legge e scrive lo stato condiviso tra gli agenti di un team (solo nei run di team)."],
   ] as const).map(([name, description]): ToolInfo => ({ name, description, source: "internal", risk: "read", enabled: true, available: true, parameters: {} })),
 );
 
@@ -384,6 +405,10 @@ export const configSchema: SettingsSchema = {
     "approvals.timeout_s": { type: "integer", title: "Tempo massimo per rispondere a una richiesta di approvazione (secondi)", description: "0 = nessun limite. Allo scadere la richiesta dell'agente viene rifiutata", default: 0, minimum: 0, maximum: 86400 },
     "policy.mode": { type: "string", title: "Modalità di approvazione", enum: ["plan", "ask", "auto-edit", "auto", "yolo"], default: "ask" },
     "sandbox.mode": { type: "string", title: "Sandbox", enum: ["read-only", "workspace-write", "off"], default: "workspace-write" },
+    "agents.max_parallel_subagents": { type: "integer", title: "Subagenti in parallelo", default: 3, minimum: 1, maximum: 8 },
+    "agents.budget.max_tokens": { type: "integer", title: "Budget di token per run (0 = nessun limite)", default: 0, minimum: 0 },
+    "agents.budget.max_turns": { type: "integer", title: "Budget di turni per run (0 = nessun limite)", default: 0, minimum: 0 },
+    "agents.budget.max_seconds": { type: "integer", title: "Tempo massimo per run, in secondi (0 = nessun limite)", default: 0, minimum: 0 },
     "context.compact_at": { type: "number", title: "Compatta il contesto al", default: 0.8, minimum: 0.3, maximum: 0.95, step: 0.05 },
     "network.allow_domains": { type: "array", title: "Domini consentiti a web/browser (vuoto = tutti i pubblici)", items: { type: "string" }, default: [] },
     "server.lan": { type: "boolean", title: "Accesso dalla LAN (richiede pairing)", default: false },

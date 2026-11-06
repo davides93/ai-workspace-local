@@ -238,16 +238,29 @@ sequenceDiagram
   `STATE_SNAPSHOT`, `SUBAGENT_*`, `RUN_FINISHED`/`RUN_ERROR`) più `CUSTOM` con nome
   `aiw.approval_request`, `aiw.todo`, `aiw.usage`. Ogni evento viene salvato (P17), così i run
   sono riproducibili.
-- **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo.
+- **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo; le chiamate `agent`
+  consecutive formano un gruppo a sé, eseguito in parallelo fino a `agents.max_parallel_subagents` (default 3).
 - **Subagenti** (P09): il tool `agent` avvia un run figlio con un profilo diverso e contesto
-  isolato; al padre torna solo il risultato.
+  isolato; al padre torna solo il risultato. Modalità di approvazione, sandbox e tool del figlio
+  non sono mai più ampi di quelli del padre.
+- **Budget del run**: `RunBudget` (token, turni del modello, tempo) è creato dall'engine per il run di primo livello
+  dai limiti dell'agente (`budget`) o dalle impostazioni `agents.budget.*` (0 = nessun limite) ed è condiviso con tutti i
+  subagenti. All'inizio di ogni turno, se è esaurito, il run termina normalmente con l'evento `aiw.budget_exceeded` e
+  una risposta che riporta il motivo; ogni chiamata al modello conta un turno e prompt + completion contano come token.
+- **Output strutturato**: se il profilo dell'agente ha `output_schema` (sottoinsieme di JSON Schema: `type`,
+  `properties`, `required`, `items`, `enum`, `additionalProperties: false`, `minItems`/`maxItems`), il prompt di
+  sistema lo riporta e la risposta finale viene estratta e validata. Una risposta non conforme torna al modello una
+  sola volta (nota `aiw.format_check`); se resta errata il testo si conserva e si emette `aiw.format_error`. Il JSON
+  valido finisce in `RunFinished.result.json`. Lo schema non viene passato ai runtime come `response_format`.
 - **Contesto** (P10): un budget di token per profilo; oltre la soglia i turni più vecchi vengono
   riassunti con il modello attivo o con uno dedicato.
 - **Memoria e skill** (P11): `AGENTS.md` del workspace entra nel system prompt; le skill
   (`SKILL.md` con frontmatter `name`/`description`) sono elencate solo con la descrizione e il
   modello le carica su richiesta con il tool `skill`.
-- **Hook** (P08): `SessionStart` (dichiarato, non ancora invocato), `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Un
-  hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
+- **Hook** (P08): `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStart`, `SubagentStop`,
+  `PreCompact`. `SessionStart` parte solo al primo messaggio di una conversazione e il suo output entra nel prompt di sistema;
+  per gli eventi dei subagenti il filtro (`matcher`) è un glob sull'id dell'agente; `PreCompact` può saltare la compattazione.
+  Un hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
 - **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in
   `checkpoints/<run_id>/<percorso>` (una volta per run). Accanto, `.aiw-run.json` registra la radice
   del workspace e i file che il run ha *creato* (`write_file`, `edit_file` con `old_string` vuoto,
@@ -261,6 +274,31 @@ sequenceDiagram
   cancella le modifiche successive. Le cartelle spostate con `move_file` e i run dei sotto-agenti
   (id propri) non sono coperti.
   Il rewind (ripristino dei file di un run) non è ancora implementato, né dalla UI né dalla CLI.
+
+### Team
+
+Un **team** (`TeamDef`, documento `team`) raggruppa da 1 a 8 agenti, locali o remoti (`remote:<id>`), e si usa in
+chat come un agente: l'id della sessione è `team:<id>`. Tre strategie:
+
+- `supervisor`: la sessione gira come l'agente supervisore (che non è anche un membro), con il tool `agent` ristretto
+  ai membri; il budget e lo schema di risposta del team hanno la precedenza.
+- `parallel`: tutti i membri lavorano sulla stessa richiesta (al massimo `agents.max_parallel_subagents` alla volta); un
+  aggregatore facoltativo unisce i risultati.
+- `pipeline` (catena): ogni membro riceve la richiesta e il risultato del precedente.
+
+Le strategie senza supervisore sono eseguite da `aiw-agent::team` (nessun modello in testa). Ogni membro gira come un
+subagente: stessi limiti del padre (modalità, sandbox, tool), budget condiviso con il run radice, un run figlio con il
+proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs/{id}/events.json`.
+
+- **Handoff**: il tool `handoff` chiude il run e passa la sessione a un altro agente (nota `aiw.handoff` in chat);
+  al massimo 3 passaggi per messaggio dell'utente, mai verso una modalità più permissiva.
+- **Stato condiviso**: il tool `team_state` (leggi, scrivi, elimina; 64 chiavi, 32 KB) vive nel `RunState.shared` del run
+  radice ed è pubblicato con `STATE_SNAPSHOT`.
+- **Agenti remoti**: il registro (`remote_agent`, API `/api/remote-agents`) e i dispositivi accoppiati. Il client A2A
+  (`aiw-engine/src/a2a_client.rs`) legge l'Agent Card, invia `SendMessage` non bloccante, interroga `GetTask` con
+  attesa crescente fino a `completed`, `failed` o `canceled` (o al timeout `a2a.timeout_seconds`) e invia `CancelTask`
+  se il run viene annullato. Rete solo verso gli URL registrati; ogni delega è nell'audit (`a2a.delegate`, `a2a.result`).
+  Il server A2A (`aiw-server/src/a2a.rs`) tiene i task in SQLite (`a2a_tasks`, scadenza 24 ore, pulizia all'avvio).
 
 ### 5.2 Policy, sandbox, audit
 
@@ -377,6 +415,7 @@ viene richiesta di nuovo, un run il cui workflow non esiste più diventa `failed
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
 | GET/POST | `/api/mcp/servers` | Server MCP |
+| GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
 | POST | `/api/kill` | Kill switch |
 | — | `/v1/models`, `/v1/chat/completions` | Gateway OpenAI-compatibile verso i runtime locali |

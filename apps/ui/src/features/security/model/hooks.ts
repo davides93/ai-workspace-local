@@ -38,9 +38,24 @@ export const HOOK_EVENTS: HookEventInfo[] = [
     can: "Solo osservare (notifiche, log): un blocco viene registrato ma l'agente non riprende.",
   },
   {
-    id: "SessionStart", label: "Avvio sessione", tools: false, active: false,
-    stdin: "—",
-    can: "Il formato lo prevede, ma oggi il backend non esegue questo evento.",
+    id: "SessionStart", label: "Avvio sessione", tools: false, active: true,
+    stdin: '{ "session_id", "run_id", "agent" }',
+    can: "Aggiungere contesto al prompt di sistema (testo su stdout); parte solo al primo messaggio di una conversazione e non può bloccare.",
+  },
+  {
+    id: "SubagentStart", label: "Avvio di un subagente", tools: true, active: true,
+    stdin: '{ "agent", "task", "run_id", "depth" }',
+    can: "Bloccare la delega (codice 2), riscrivere il compito ({\"updatedInput\":{\"task\":\"…\"}}) o aggiungere contesto. Il filtro si applica al nome dell'agente, non a un tool.",
+  },
+  {
+    id: "SubagentStop", label: "Fine di un subagente", tools: true, active: true,
+    stdin: '{ "agent", "task", "result", "is_error", "run_id" }',
+    can: "Aggiungere contesto al risultato del subagente ({\"additionalContext\":\"…\"}). Il filtro si applica al nome dell'agente.",
+  },
+  {
+    id: "PreCompact", label: "Prima della compattazione", tools: false, active: true,
+    stdin: '{ "run_id", "messages", "estimated_tokens" }',
+    can: "Saltare la compattazione del contesto in quel turno (codice 2).",
   },
 ];
 

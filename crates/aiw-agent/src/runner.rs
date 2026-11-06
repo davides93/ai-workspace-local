@@ -1,6 +1,7 @@
 //! The agent loop (architecture §5.1): stream → tool calls → policy/hooks/approval → tools → repeat,
 //! emitting AG-UI events and returning the messages to persist.
 
+use crate::budget::RunBudget;
 use crate::fallback::extract_text_tool_calls;
 use crate::hooks::{run_hooks, HookConfig};
 use crate::policy::{risk_level, Decision, Policy};
@@ -41,7 +42,14 @@ pub trait RunHost: Send + Sync {
     fn tools(&self) -> Arc<ToolRegistry>;
     fn skills(&self) -> Vec<Skill>;
     /// Runs `task` with another agent profile in an isolated context; returns its final answer.
-    async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str) -> Result<String>;
+    /// `run_id` is the id the sub-agent's run must use (announced in SUBAGENT_STARTED).
+    async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str, run_id: &str) -> Result<String>;
+    /// Checks that the conversation may be handed over to `agent_id` (the `handoff` tool) and
+    /// returns the name to show for it.
+    fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {
+        let _ = from;
+        Ok(agent_id.to_string())
+    }
 }
 
 pub struct RunInput {
@@ -62,6 +70,17 @@ pub struct RunInput {
     pub session_allow: Arc<Mutex<HashSet<String>>>,
     /// Other agents that can be delegated to (id → description).
     pub subagents: Vec<(String, String)>,
+    /// How many `agent` calls of one turn may run at the same time (at least 1).
+    pub max_parallel_subagents: usize,
+    /// Tokens, model turns and time of the whole run; sub-agents share the parent's.
+    pub budget: Arc<RunBudget>,
+    /// Is this run part of a team run (the team's own run, or a member of it)? Only then the
+    /// `team_state` tool is offered.
+    pub in_team: bool,
+    /// State shared with the sub-agents like the budget: the `team_state` tool reads and writes it.
+    pub shared: Arc<Mutex<serde_json::Map<String, Value>>>,
+    /// The run at the top of the delegation chain: where the state snapshots of the shared state go.
+    pub root_run: String,
 }
 
 #[derive(Debug, Default)]
@@ -69,11 +88,18 @@ pub struct RunOutcome {
     pub final_text: String,
     pub new_messages: Vec<ChatMessage>,
     pub usage: Usage,
+    /// The final answer parsed and validated against the agent's `output_schema`.
+    pub structured: Option<Value>,
+    /// `(agent id, summary)` when the agent handed the conversation over (the `handoff` tool): the
+    /// run ended with that request, and the engine starts the next agent.
+    pub handoff: Option<(String, String)>,
 }
 
 const MAX_SELF_CHECKS: u32 = 2;
 /// `name` of the stored user messages written by the self-check (the UI shows them as notes).
 pub const SELF_CHECK_NAME: &str = "aiw.self_check";
+/// `name` of the stored user messages that hand a malformed structured answer back to the model.
+pub const FORMAT_CHECK_NAME: &str = "aiw.format_check";
 
 fn self_check_note(failed: &[(String, String)]) -> String {
     let list = failed.iter().map(|(n, e)| format!("- {n}: {e}")).collect::<Vec<_>>().join("\n");
@@ -120,9 +146,15 @@ fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
         let desc: Vec<String> = input.subagents.iter().map(|(id, d)| format!("{id}: {d}")).collect();
         v.push(ToolSpec::function(
             "agent",
-            format!("Delega un sotto-compito a un altro agente con contesto separato; restituisce solo la sua risposta finale. Agenti: {}", desc.join("; ")),
+            format!("Delega un sotto-compito a un altro agente con contesto separato; restituisce solo la sua risposta finale. Puoi chiamarlo più volte nello stesso turno per lavori indipendenti: girano in parallelo. Agenti: {}", desc.join("; ")),
             json!({"type":"object","properties":{"agent":{"type":"string","enum":names},"task":{"type":"string","description":"Istruzioni complete e autosufficienti"}},"required":["agent","task"]}),
         ));
+    }
+    if allowed(crate::internal::HANDOFF) && input.depth == 0 && !input.subagents.is_empty() {
+        v.push(crate::internal::handoff_spec(&input.subagents));
+    }
+    if input.in_team && allowed(crate::internal::TEAM_STATE) {
+        v.push(crate::internal::team_state_spec());
     }
     if allowed(crate::a2ui::TOOL) {
         v.push(crate::a2ui::spec());
@@ -161,6 +193,12 @@ fn system_prompt(input: &RunInput, skills: &[Skill]) -> String {
         s.push('\n');
         s.push_str(crate::a2ui::prompt_hint());
     }
+    if let Some(schema) = &input.agent.output_schema {
+        s.push_str(&format!(
+            "\n# Formato della risposta finale\nLa risposta finale deve essere solo un JSON conforme a questo JSON Schema, senza testo prima o dopo:\n{}\n",
+            serde_json::to_string_pretty(schema).unwrap_or_default()
+        ));
+    }
     if !skills.is_empty() {
         s.push_str("\n# Skill disponibili (caricale con il tool `skill` quando servono)\n");
         for sk in skills {
@@ -197,6 +235,17 @@ struct PendingCall {
     name: String,
     args: String,
     started: bool,
+}
+
+/// How the tool calls of one turn are grouped for execution.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BatchKind {
+    /// Runs alone, in order (anything with side effects, and the other internal tools).
+    Single,
+    /// Consecutive read-only registry tools run concurrently.
+    Reads,
+    /// Consecutive `agent` calls run concurrently, up to `max_parallel_subagents`.
+    Subagents,
 }
 
 /// Name of the AG-UI CUSTOM event that carries a tool's image (screenshot) to the UI.
@@ -262,6 +311,66 @@ fn seal_dangling_tool_calls(msgs: &mut Vec<ChatMessage>) {
     msgs.extend(missing);
 }
 
+/// Delegates `task` to another agent in an isolated context: SubagentStart/Stop hooks, the
+/// SUBAGENT_* events and the audit entry. Used by the `agent` tool and by the team strategies.
+pub(crate) async fn delegate(input: &RunInput, host: &Arc<dyn RunHost>, agent_id: &str, task: &str) -> ToolOutput {
+    let audit = |decision: &str, detail: String| {
+        host.audit(AuditEntry {
+            id: new_id("aud"),
+            ts: now_rfc3339(),
+            run_id: Some(input.run_id.clone()),
+            actor: "agent".into(),
+            action: "tool".into(),
+            tool: Some("agent".into()),
+            decision: Some(decision.into()),
+            detail,
+        });
+    };
+    let mut task = task.to_string();
+    // SubagentStart hooks: the matcher applies to the agent id.
+    let start = run_hooks(
+        &input.hooks,
+        "SubagentStart",
+        Some(agent_id),
+        &json!({"agent": agent_id, "task": task, "run_id": input.run_id, "depth": input.depth}),
+    )
+    .await;
+    if let Some(reason) = start.block {
+        audit("deny", format!("hook: {reason}"));
+        return ToolOutput::error(format!("Negato da un hook: {reason}"));
+    }
+    if let Some(t) = start.updated_input.as_ref().and_then(|u| u.get("task")).and_then(|t| t.as_str()) {
+        task = t.to_string();
+    }
+    for c in start.context {
+        task.push_str(&format!("\n\n[contesto aggiunto da un hook]\n{c}"));
+    }
+    let sub_id = new_id("sub");
+    let sub_run = new_id("run");
+    host.emit(
+        &input.run_id,
+        AgEvent::SubagentStarted { subagent_id: sub_id.clone(), name: agent_id.to_string(), run_id: Some(sub_run.clone()) },
+    );
+    audit("allow", format!("subagente {agent_id}: {}", task.chars().take(120).collect::<String>()));
+    let r = host.subagent(input, agent_id, &task, &sub_run).await;
+    let (mut out, res) = match r {
+        Ok(t) => (ToolOutput::text(t.clone()), Some(t)),
+        Err(e) => (ToolOutput::error(format!("subagente fallito: {e}")), None),
+    };
+    let stop = run_hooks(
+        &input.hooks,
+        "SubagentStop",
+        Some(agent_id),
+        &json!({"agent": agent_id, "task": task, "result": out.content, "is_error": out.is_error, "run_id": input.run_id}),
+    )
+    .await;
+    for c in stop.context {
+        out.content.push_str(&format!("\n\n[hook] {c}"));
+    }
+    host.emit(&input.run_id, AgEvent::SubagentFinished { subagent_id: sub_id, result: res.map(|r| r.chars().take(300).collect()) });
+    out
+}
+
 pub struct AgentRunner;
 
 impl AgentRunner {
@@ -300,6 +409,7 @@ impl AgentRunner {
             model: Some(input.profile.model.clone()),
             todos: None,
             usage: None,
+            shared: None,
         };
         ev.emit(AgEvent::RunStarted { thread_id: input.thread_id.clone(), run_id: input.run_id.clone() });
         ev.emit(AgEvent::StateSnapshot { snapshot: state.clone() });
@@ -310,7 +420,30 @@ impl AgentRunner {
             ev.emit(AgEvent::RunError { message: format!("Prompt bloccato da un hook: {reason}"), code: Some("hook_blocked".into()) });
             return Err(Error::Denied(reason));
         }
-        let mut messages = vec![Msg::system(system_prompt(input, &skills))];
+        // SessionStart hooks run once, when a top-level run opens a conversation. They cannot block.
+        let mut start_context = Vec::new();
+        if input.depth == 0 && input.history.is_empty() {
+            let start = run_hooks(
+                &input.hooks,
+                "SessionStart",
+                None,
+                &json!({"session_id": input.thread_id, "run_id": input.run_id, "agent": input.agent.id}),
+            )
+            .await;
+            if let Some(reason) = start.block {
+                tracing::info!("SessionStart hook asked to block: {reason} (ignored: a session start cannot be blocked)");
+            }
+            start_context = start.context;
+        }
+        let mut system = system_prompt(input, &skills);
+        if !start_context.is_empty() {
+            system.push_str("\n# Contesto di avvio sessione\n");
+            for c in &start_context {
+                system.push_str(c.trim());
+                system.push('\n');
+            }
+        }
+        let mut messages = vec![Msg::system(system)];
         messages.extend(input.history.iter().cloned());
         let mut user_text = input.user_input.clone();
         for c in hook.context {
@@ -340,15 +473,33 @@ impl AgentRunner {
         // Tool errors of the latest batch that the model has not retried yet (self-check, below).
         let mut unresolved: Vec<(String, String)> = Vec::new();
         let mut self_checks = 0u32;
+        let mut format_retried = false;
+        // Text of the previous turn, kept for the answer when the budget runs out.
+        let mut last_text = String::new();
 
         for turn in 0..input.agent.max_turns.max(1) {
             if input.tool_ctx.cancel.is_cancelled() {
                 ev.emit(AgEvent::RunError { message: "Run annullato".into(), code: Some("cancelled".into()) });
                 return Err(Error::Cancelled);
             }
+            if let Some(reason) = input.budget.exceeded() {
+                ev.emit(AgEvent::Custom { name: "aiw.budget_exceeded".into(), value: json!({"reason": reason}) });
+                outcome.final_text =
+                    format!("{last_text}\n\n(Budget del run esaurito: {reason}. Dimmi se devo continuare.)").trim().to_string();
+                break;
+            }
             // Context compaction (P10).
             if estimate_tokens(&messages) as f64 > input.compact_at * ctx_max as f64 && messages.len() > 6 {
-                if let Some(n) = compact(&mut messages, backend.as_ref(), input).await {
+                let pre = run_hooks(
+                    &input.hooks,
+                    "PreCompact",
+                    None,
+                    &json!({"run_id": input.run_id, "messages": messages.len(), "estimated_tokens": estimate_tokens(&messages)}),
+                )
+                .await;
+                if let Some(reason) = pre.block {
+                    tracing::info!("PreCompact hook blocked the compaction for this turn: {reason}");
+                } else if let Some(n) = compact(&mut messages, backend.as_ref(), input).await {
                     ev.emit(AgEvent::Custom { name: "aiw.compacted".into(), value: json!({"removed_messages": n}) });
                 }
             }
@@ -378,6 +529,7 @@ impl AgentRunner {
                     return Err(e);
                 }
             };
+            input.budget.record_turn();
             let (text, reasoning, mut calls, usage, stream_error) = Self::consume(stream, &ev, turn).await;
             if let Some(e) = stream_error {
                 // Keep what the model had said before the stream broke (cancellation included);
@@ -402,6 +554,7 @@ impl AgentRunner {
                 return Err(e);
             }
             if let Some(u) = usage {
+                input.budget.record_tokens(u.prompt_tokens + u.completion_tokens);
                 let mut acc = outcome.usage.clone();
                 acc.prompt_tokens = u.prompt_tokens.max(acc.prompt_tokens);
                 acc.completion_tokens += u.completion_tokens;
@@ -425,6 +578,7 @@ impl AgentRunner {
                     calls.push(PendingCall { id, name, args: args.to_string(), started: true });
                 }
             }
+            last_text.clone_from(&text);
             let tool_calls: Vec<ToolCall> = calls
                 .iter()
                 .map(|c| ToolCall {
@@ -489,6 +643,41 @@ impl AgentRunner {
                     unresolved.clear();
                     continue;
                 }
+                // Structured output: the answer must be JSON that conforms to the schema. The model
+                // gets one chance to fix it; after that the text is kept as it is.
+                if let Some(schema) = &input.agent.output_schema {
+                    let checked = crate::schema::extract_json(&text)
+                        .ok_or_else(|| vec!["la risposta non contiene un JSON valido".to_string()])
+                        .and_then(|v| crate::schema::validate(schema, &v).map(|()| v));
+                    match checked {
+                        Ok(v) => {
+                            outcome.final_text = v.to_string();
+                            outcome.structured = Some(v);
+                            break;
+                        }
+                        Err(errors) if !format_retried && turn + 1 < input.agent.max_turns => {
+                            format_retried = true;
+                            let note = format!(
+                                "[Controllo del formato] La risposta non rispetta lo schema richiesto:\n{}\nRispondi di nuovo solo con il JSON corretto.",
+                                errors.iter().map(|e| format!("- {e}")).collect::<Vec<_>>().join("\n")
+                            );
+                            ev.emit(AgEvent::Custom { name: FORMAT_CHECK_NAME.into(), value: json!({"errors": errors}) });
+                            messages.push(Msg::user(note.clone()));
+                            outcome.new_messages.push(ChatMessage {
+                                id: new_id("msg"),
+                                role: "user".into(),
+                                content: note,
+                                reasoning: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                                name: Some(FORMAT_CHECK_NAME.into()),
+                                created_at: now_rfc3339(),
+                            });
+                            continue;
+                        }
+                        Err(errors) => ev.emit(AgEvent::Custom { name: "aiw.format_error".into(), value: json!({"errors": errors}) }),
+                    }
+                }
                 outcome.final_text = text;
                 break;
             }
@@ -497,17 +686,23 @@ impl AgentRunner {
             // run concurrently as one batch; anything with side effects (and internal tools such
             // as todo/agent/skill) runs alone, so a later read sees the effect of an earlier write.
             let mut results: BTreeMap<usize, (ToolCall, ToolOutput)> = BTreeMap::new();
-            let mut batches: Vec<Vec<(usize, ToolCall)>> = Vec::new();
-            let mut last_parallel = false;
+            // Consecutive `agent` calls form a batch of their own (independent jobs), run with
+            // limited concurrency.
+            let mut batches: Vec<(BatchKind, Vec<(usize, ToolCall)>)> = Vec::new();
             for (i, tc) in tool_calls.iter().enumerate() {
-                let parallel = registry.get(&tc.name).map(|t| t.risk() == Risk::Read).unwrap_or(false);
+                let kind = if tc.name == "agent" {
+                    BatchKind::Subagents
+                } else if registry.get(&tc.name).map(|t| t.risk() == Risk::Read).unwrap_or(false) {
+                    BatchKind::Reads
+                } else {
+                    BatchKind::Single
+                };
                 match batches.last_mut() {
-                    Some(b) if parallel && last_parallel => b.push((i, tc.clone())),
-                    _ => batches.push(vec![(i, tc.clone())]),
+                    Some((k, b)) if kind != BatchKind::Single && *k == kind => b.push((i, tc.clone())),
+                    _ => batches.push((kind, vec![(i, tc.clone())])),
                 }
-                last_parallel = parallel;
             }
-            'batches: for batch in batches {
+            'batches: for (kind, batch) in batches {
                 let futs = batch.into_iter().map(|(i, tc)| {
                     let host = host.clone();
                     let skills = &skills;
@@ -517,7 +712,12 @@ impl AgentRunner {
                         (i, tc, out)
                     }
                 });
-                for (i, tc, (out, new_todos)) in futures::future::join_all(futs).await {
+                let done: Vec<_> = if kind == BatchKind::Subagents {
+                    futures::stream::iter(futs).buffer_unordered(input.max_parallel_subagents.max(1)).collect().await
+                } else {
+                    futures::future::join_all(futs).await
+                };
+                for (i, tc, (out, new_todos)) in done {
                     if let Some(t) = new_todos {
                         state.todos = Some(t);
                         ev.emit(AgEvent::StateSnapshot { snapshot: state.clone() });
@@ -529,7 +729,13 @@ impl AgentRunner {
                 }
             }
             let mut images = Vec::new();
+            let mut handoff: Option<(String, String)> = None;
             for (_, (tc, out)) in results {
+                if tc.name == crate::internal::HANDOFF && !out.is_error && handoff.is_none() {
+                    let a: Value = serde_json::from_str(&tc.arguments).unwrap_or_default();
+                    let to = a["agent"].as_str().unwrap_or_default().to_string();
+                    handoff = Some((to, a["summary"].as_str().unwrap_or_default().trim().to_string()));
+                }
                 let content = aiw_tools::truncate_middle(&out.content, MAX_TOOL_OUTPUT);
                 // User/policy denials are final: they are not handed back by the self-check.
                 if out.is_error && !content.starts_with("Negato") && content != "annullato" {
@@ -560,6 +766,32 @@ impl AgentRunner {
                     images.push((tc.name.clone(), img));
                 }
             }
+            // A handoff ends the run: the answer says who continues, the engine starts that agent.
+            if let Some((to, summary)) = handoff {
+                let name = host.handoff_target(input, &to).unwrap_or_else(|_| to.clone());
+                let note = format!("Passo la conversazione a {name}: {summary}");
+                let msg_id = new_id("msg");
+                ev.emit(AgEvent::TextMessageStart { message_id: msg_id.clone(), role: "assistant".into() });
+                ev.emit(AgEvent::TextMessageContent { message_id: msg_id.clone(), delta: note.clone() });
+                ev.emit(AgEvent::TextMessageEnd { message_id: msg_id });
+                ev.emit(AgEvent::Custom {
+                    name: "aiw.handoff".into(),
+                    value: json!({"from": input.agent.id, "to": to, "to_name": name, "summary": summary}),
+                });
+                outcome.new_messages.push(ChatMessage {
+                    id: new_id("msg"),
+                    role: "assistant".into(),
+                    content: note.clone(),
+                    reasoning: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                    created_at: now_rfc3339(),
+                });
+                outcome.final_text = note;
+                outcome.handoff = Some((to, summary));
+                break;
+            }
             if !images.is_empty() {
                 let mut parts = vec![ContentPart::Text {
                     text: format!(
@@ -583,7 +815,10 @@ impl AgentRunner {
         ev.emit(AgEvent::RunFinished {
             thread_id: input.thread_id.clone(),
             run_id: input.run_id.clone(),
-            result: Some(json!({"text": outcome.final_text})),
+            result: Some(match &outcome.structured {
+                Some(j) => json!({"text": outcome.final_text, "json": j}),
+                None => json!({"text": outcome.final_text}),
+            }),
         });
         Ok(())
     }
@@ -851,25 +1086,58 @@ impl AgentRunner {
                     None => (ToolOutput::error(format!("skill `{name}` non trovata")), None),
                 };
             }
+            crate::internal::TEAM_STATE => {
+                if !input.in_team {
+                    return (ToolOutput::error("lo stato condiviso esiste solo nei run di un team"), None);
+                }
+                let (res, snapshot) = {
+                    let mut map = input.shared.lock().unwrap();
+                    let res = crate::team::apply_state_op(&mut map, &args);
+                    let changed = matches!(res, Ok((_, true)));
+                    (res, changed.then(|| Value::Object(map.clone())))
+                };
+                return match res {
+                    Ok((text, _)) => {
+                        if let Some(shared) = snapshot {
+                            // The root run carries its own state; a member only adds the shared object.
+                            let base = if input.root_run == input.run_id { state.clone() } else { RunState::default() };
+                            host.emit(&input.root_run, AgEvent::StateSnapshot { snapshot: RunState { shared: Some(shared), ..base } });
+                        }
+                        (ToolOutput::text(text), None)
+                    }
+                    Err(e) => (ToolOutput::error(e), None),
+                };
+            }
+            crate::internal::HANDOFF => {
+                let to = args["agent"].as_str().unwrap_or_default();
+                let summary = args["summary"].as_str().unwrap_or_default().trim();
+                if input.depth > 0 {
+                    return (ToolOutput::error("il passaggio di conversazione è possibile solo dall'agente della sessione"), None);
+                }
+                if summary.is_empty() {
+                    return (ToolOutput::error("`summary` mancante: riassumi all'agente successivo cosa serve"), None);
+                }
+                if !input.subagents.iter().any(|(id, _)| id == to) {
+                    return (ToolOutput::error(format!("agente `{to}` sconosciuto: scegli tra quelli elencati")), None);
+                }
+                return match host.handoff_target(input, to) {
+                    Ok(name) => {
+                        audit("allow", format!("passaggio a {name} ({to})"));
+                        (ToolOutput::text(format!("Passaggio a {name} richiesto: la conversazione continua con lui.")), None)
+                    }
+                    Err(e) => {
+                        audit("deny", format!("passaggio a {to}: {e}"));
+                        (ToolOutput::error(format!("Passaggio rifiutato: {e}")), None)
+                    }
+                };
+            }
             "agent" => {
                 let agent_id = args["agent"].as_str().unwrap_or_default().to_string();
                 let task = args["task"].as_str().unwrap_or_default().to_string();
                 if input.depth >= MAX_DEPTH {
                     return (ToolOutput::error("profondità massima dei subagenti raggiunta"), None);
                 }
-                let sub_id = new_id("sub");
-                host.emit(&input.run_id, AgEvent::SubagentStarted { subagent_id: sub_id.clone(), name: agent_id.clone() });
-                audit("allow", format!("subagente {agent_id}: {}", task.chars().take(120).collect::<String>()));
-                let r = host.subagent(input, &agent_id, &task).await;
-                let (out, res) = match r {
-                    Ok(t) => (ToolOutput::text(t.clone()), Some(t)),
-                    Err(e) => (ToolOutput::error(format!("subagente fallito: {e}")), None),
-                };
-                host.emit(
-                    &input.run_id,
-                    AgEvent::SubagentFinished { subagent_id: sub_id, result: res.map(|r| r.chars().take(300).collect()) },
-                );
-                return (out, None);
+                return (delegate(input, &host, &agent_id, &task).await, None);
             }
             _ => {}
         }

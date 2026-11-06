@@ -36,7 +36,7 @@ src/
     model/                   logica pura del dominio (testata)
 ```
 
-Domini: `home`, `chat`, `agents`, `workflows`, `capabilities` (tool, server MCP, browser e
+Domini: `home`, `chat`, `agents`, `teams`, `workflows`, `capabilities` (tool, server MCP, browser e
 computer-use), `integrations`, `models`, `runtimes`, `devices`, `security`, `activity`,
 `settings`, `pairing`, `approvals`.
 
@@ -98,9 +98,10 @@ Router su hash scritto in casa (nessuna dipendenza). Percorsi:
 | home | `#/` | Panoramica |
 | chat | `#/chat`, `#/chat/:sessionId` | la sessione attiva sta nell'URL |
 | agents | `#/agents`, `#/agents/:agentId` | |
+| teams | `#/teams`, `#/teams/:teamId` | `new` apre il modulo vuoto, `?from=` una copia; i team compaiono anche nel selettore dell'agente della chat (`team:<id>`) |
 | workflows | `#/workflows`, `#/workflows/:workflowId` | |
 | capabilities | `#/capabilities/:tab?` | `tools` (default), `mcp`, `browser` |
-| integrations | `#/integrations` | |
+| integrations | `#/integrations` | oltre agli endpoint, il registro degli agenti remoti A2A |
 | models | `#/models/:tab?` | `installed` (default), `discover`, `downloads`, `catalog`; query `?provider=&q=&format=` |
 | runtimes | `#/runtimes`, `#/runtimes/:runtimeId` | |
 | devices | `#/devices` | |
@@ -227,7 +228,7 @@ corretto:
   non disponibile…", "Prompt bloccato da un hook…", "Run annullato"). La nota sotto lo storico, ricavata
   da `last_status`, non compare se l'ultima riga è già l'errore: lo stesso errore non si legge due volte.
 - **Tool interni.** `ToolInfo.source` ha tre valori: `builtin`, `mcp`, `internal`. I tool interni
-  (`todo`, `agent`, `skill`, `render_ui`, `code`) sono sempre attivi, di rischio `read`, e
+  (`todo`, `agent`, `skill`, `render_ui`, `code`, `handoff`, `team_state`) sono sempre attivi, di rischio `read`, e
   `PUT /api/tools/{name}` risponde 400: nella tabella dei tool formano il gruppo **Interni** con
   l'etichetta "Interno" al posto dell'interruttore, nel selettore dei tool di un agente lo stesso
   gruppo. L'elenco fisso del selettore resta solo come ripiego per un backend che non li elenca: la
@@ -273,6 +274,13 @@ cancelDownload(id: string): Promise<DownloadProgress>;
 clearDownload(id: string): Promise<void>;
 deleteModel(id: string): Promise<void>;
 deleteAgent(id: string): Promise<void>;               // DELETE /api/agents/{id}
+remoteAgents(): Promise<RemoteAgent[]>;              // GET /api/remote-agents (token sempre mascherato)
+saveRemoteAgent(r: RemoteAgent): Promise<RemoteAgent>; // PUT /api/remote-agents/{id}
+deleteRemoteAgent(id: string): Promise<void>;         // DELETE /api/remote-agents/{id} (409 se un team lo usa)
+teams(): Promise<TeamDef[]>;                          // GET /api/teams
+saveTeam(t: TeamDef): Promise<TeamDef>;               // PUT /api/teams/{id}
+deleteTeam(id: string): Promise<void>;                // DELETE /api/teams/{id}
+runEvents(runId: string): Promise<AgEvent[]>;         // GET /api/runs/{id}/events.json: la traccia di un subagente
 deleteProfile(id: string): Promise<void>;             // DELETE /api/profiles/{id}
 renameSession(id: string, title: string): Promise<Session>;  // PATCH /api/sessions/{id}
 getSession(id: string): Promise<Session>;
@@ -284,7 +292,7 @@ setHooks(hooks: HookConfig[]): Promise<{ hooks: HookConfig[] }>;
 ```
 
 `PolicyRule = { tool: string; pattern?: string | null; action: "allow" | "ask" | "deny" }`,
-`HookConfig = { event: "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop"; matcher?: string | null; command: string; timeout_s: number }`.
+`HookConfig = { event: "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop" | "SubagentStart" | "SubagentStop" | "PreCompact"; matcher?: string | null; command: string; timeout_s: number }`.
 
 Eventi: il runner emette `CUSTOM` con `name: "aiw.image"` e
 `value: { toolCallId, mime, data }` (base64, senza prefisso `data:`) per gli screenshot di browser e

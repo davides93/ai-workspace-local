@@ -1,6 +1,6 @@
 import { RUN_ERROR_MESSAGE, type ChatMessage } from "../../../shared/api/types";
 import { A2UI_ACTION_NAME, applyA2ui, describeAction, renderUiToMessages } from "../a2ui";
-import { SELF_CHECK, selfCheckText, type Item, type ToolImage, type ToolItem } from "./items";
+import { FORMAT_CHECK, formatCheckText, HANDOFF, handoffText, SELF_CHECK, selfCheckText, type Item, type ToolImage, type ToolItem } from "./items";
 import { runErrorCode } from "./runNotice";
 import { resultStatus } from "./tools";
 
@@ -27,6 +27,11 @@ export function historyToItems(msgs: ChatMessage[], opts: HistoryOptions = {}): 
     } else if (m.role === "user" && m.name === SELF_CHECK) {
       const failed = [...m.content.matchAll(/^- ([\w.-]+):/gm)].map((x) => x[1]);
       items.push({ kind: "note", id: m.id, text: selfCheckText(failed) });
+    } else if (m.role === "user" && m.name === FORMAT_CHECK) {
+      const errors = [...m.content.matchAll(/^- (.+)$/gm)].map((x) => x[1]);
+      items.push({ kind: "note", id: m.id, text: formatCheckText(errors) });
+    } else if (m.role === "user" && m.name === HANDOFF) {
+      items.push({ kind: "note", id: m.id, text: handoffText(m.content) });
     } else if (m.role === "user") items.push({ kind: "user", id: m.id, text: m.content });
     else if (m.role === "assistant") {
       if (m.reasoning) items.push({ kind: "reasoning", id: `${m.id}-r`, text: m.reasoning, streaming: false });
@@ -37,6 +42,7 @@ export function historyToItems(msgs: ChatMessage[], opts: HistoryOptions = {}): 
       }
     } else if (m.role === "system") {
       if (m.name === RUN_ERROR_MESSAGE) items.push({ kind: "error", id: m.id, message: m.content, code: runErrorCode(m.content), stored: true });
+      else if (m.name === HANDOFF) items.push({ kind: "note", id: m.id, text: m.content });
     } else if (m.role === "tool") {
       const idx = items.findIndex((i) => i.kind === "tool" && i.id === m.tool_call_id);
       const card = items[idx] as ToolItem | undefined;

@@ -102,6 +102,26 @@ pub struct PeerDevice {
     pub shared_runtimes: Vec<String>,
 }
 
+/// An agent that runs elsewhere and speaks A2A (another device, an orchestrator, a cloud agent). Teams and
+/// agents delegate to it as `remote:<id>`. The API shows [`SECRET_MASK`] in place of the token.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteAgent {
+    pub id: String,
+    pub name: String,
+    /// A2A base URL (`http://host:7777`) or the URL of its Agent Card.
+    pub url: String,
+    #[serde(default)]
+    pub token: String,
+    /// The skill (agent) to ask for: sent as `metadata.agent`. Empty: the remote default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    /// True for a paired device, which is offered automatically and is managed from the devices list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paired: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub version: String,
@@ -447,6 +467,59 @@ pub struct AgentProfile {
     /// read-only | workspace-write | off
     pub sandbox: String,
     pub max_turns: u32,
+    /// JSON Schema (a subset, see `aiw_agent::schema`) of the final answer: when set, the answer
+    /// must be JSON that conforms to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+    /// Limits of one run of this agent, sub-agents included; a missing value falls back to the
+    /// `agents.budget.*` settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetLimits>,
+}
+
+/// Run budget: every limit is optional, and a set one is at least 1.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BudgetLimits {
+    /// Prompt + completion tokens summed over every model call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    /// Model calls, summed over the run and its sub-agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_seconds: Option<u64>,
+}
+
+/// A team of agents used in chat like a single agent (session agent id `team:<id>`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TeamDef {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// supervisor | parallel | pipeline
+    pub strategy: String,
+    /// Agent id that orchestrates the members; required for the `supervisor` strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor: Option<String>,
+    pub members: Vec<TeamMember>,
+    /// Agent that merges the member results for the `parallel` strategy (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetLimits>,
+    /// Schema of the final answer, same subset as [`AgentProfile::output_schema`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TeamMember {
+    /// A local agent id, or `remote:<id>` for a remote agent.
+    pub agent: String,
+    /// What this member is for; shown to the supervisor as the sub-agent description.
+    #[serde(default)]
+    pub role: String,
 }
 
 // ---------------------------------------------------------------- sessions & messages
@@ -513,6 +586,10 @@ pub const RUN_ERROR_MESSAGE: &str = "aiw.run_error";
 /// `name` of a user message that a `UserPromptSubmit` hook blocked: kept for the chat history,
 /// never sent to the model.
 pub const BLOCKED_PROMPT_MESSAGE: &str = "aiw.blocked_prompt";
+/// `name` of the messages written by a handoff to another agent: the user message that opens the
+/// next agent's run (`[Passaggio da …] summary`, sent to the model) and the `system` notes about a
+/// handoff that was not carried out (history only).
+pub const HANDOFF_MESSAGE: &str = "aiw.handoff";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
@@ -561,6 +638,9 @@ pub struct RunState {
     pub runtime: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// State shared by the agents of a team run (the `team_state` tool): a JSON object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

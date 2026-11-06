@@ -1,6 +1,6 @@
 import type { AgEvent, AiwImage, ApprovalRequest } from "../../../shared/api/types";
 import { applyA2ui, type A2uiMessage } from "../a2ui";
-import { SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
+import { FORMAT_CHECK, formatCheckText, HANDOFF, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
 import { resultStatus } from "./tools";
 
 type Of<K extends Item["kind"]> = Extract<Item, { kind: K }>;
@@ -85,7 +85,7 @@ export function reduce(items: Item[], e: AgEvent): Item[] {
     case "TOOL_CALL_RESULT":
       return update(items, "tool", e.toolCallId, (it) => ({ ...it, result: e.content, status: resultStatus(e.content), endedAt: e.timestamp }));
     case "SUBAGENT_STARTED":
-      return [...items, { kind: "subagent", id: e.subagentId, name: e.name }];
+      return [...items, { kind: "subagent", id: e.subagentId, name: e.name, ...(e.runId ? { runId: e.runId } : {}) }];
     case "SUBAGENT_FINISHED":
       return update(items, "subagent", e.subagentId, (it) => ({ ...it, result: e.result ?? "completato" }));
     case "CUSTOM":
@@ -117,6 +117,18 @@ function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
     }
     case SELF_CHECK:
       return [...items, { kind: "note", id: `sc-${items.length}`, text: selfCheckText((value as { failed?: string[] }).failed ?? []) }];
+    case FORMAT_CHECK:
+      return [...items, { kind: "note", id: `fc-${items.length}`, text: formatCheckText((value as { errors?: string[] }).errors ?? []) }];
+    case HANDOFF: {
+      const v = value as { to?: string; to_name?: string };
+      return [...items, { kind: "note", id: `ho-${items.length}`, text: `La conversazione passa a ${v.to_name ?? v.to ?? "un altro agente"}.` }];
+    }
+    case "aiw.budget_exceeded": {
+      const reason = (value as { reason?: string }).reason;
+      return [...items, { kind: "note", id: `bx-${items.length}`, text: `Budget del run esaurito${reason ? `: ${reason}` : ""}. L'agente si è fermato.` }];
+    }
+    case "aiw.format_error":
+      return [...items, { kind: "note", id: `fe-${items.length}`, text: "La risposta non rispetta lo schema richiesto dall'agente: è mostrata così com'è." }];
     case "aiw.approval_request":
       return [...items, { kind: "approval", req: value as ApprovalRequest }];
     case "aiw.approval_resolved": {

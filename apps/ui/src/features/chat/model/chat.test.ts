@@ -5,6 +5,7 @@ import { historyToItems } from "./history";
 import { lastRunNotice } from "./runNotice";
 import type { Item, ToolItem } from "./items";
 import { parseImageEvent, reduce, settle } from "./reduce";
+import { traceItems } from "./trace";
 
 const fold = (events: AgEvent[], from: Item[] = []): Item[] => events.reduce<Item[]>((items, e) => reduce(items, e), from);
 
@@ -97,6 +98,67 @@ describe("run end", () => {
     const done = reduce(running(), { type: "RUN_FINISHED", threadId: "t", runId: "r" });
     expect(done.find((i) => i.kind === "tool")).toMatchObject({ status: "interrupted" });
     expect(settle(done)).toBe(done);
+  });
+});
+
+describe("structured answers", () => {
+  it("shows the format check, live and from the stored history, as a note", () => {
+    const live = fold([{ type: "CUSTOM", name: "aiw.format_check", value: { errors: ["$.totale: manca il campo obbligatorio"] } }]);
+    expect(live[0]).toMatchObject({ kind: "note", text: expect.stringContaining("$.totale: manca il campo obbligatorio") });
+    const stored = historyToItems([
+      { id: "1", role: "user", name: "aiw.format_check", content: "[Controllo del formato] La risposta non rispetta lo schema richiesto:\n- $.totale: manca il campo obbligatorio\nRispondi di nuovo.", created_at: "2026-11-02T10:00:00Z" },
+    ]);
+    expect(stored).toEqual([{ kind: "note", id: "1", text: live[0].kind === "note" ? live[0].text : "" }]);
+    expect(fold([{ type: "CUSTOM", name: "aiw.format_error", value: { errors: ["x"] } }])[0]).toMatchObject({ kind: "note" });
+  });
+});
+
+describe("aiw.budget_exceeded", () => {
+  it("becomes a note that names the reason", () => {
+    const items = fold([{ type: "CUSTOM", name: "aiw.budget_exceeded", value: { reason: "2 turni del modello usati" } }]);
+    expect(items[0]).toMatchObject({ kind: "note", text: expect.stringContaining("2 turni del modello usati") });
+  });
+});
+
+describe("sub-agent traces", () => {
+  it("keeps the id of the sub-agent's run on its row", () => {
+    const items = fold([
+      { type: "SUBAGENT_STARTED", subagentId: "s1", name: "Lettore", runId: "run_x" },
+      { type: "SUBAGENT_STARTED", subagentId: "s2", name: "Vecchio" },
+    ]);
+    expect(items[0]).toMatchObject({ kind: "subagent", runId: "run_x" });
+    expect(items[1]).not.toHaveProperty("runId");
+  });
+  it("rebuilds the rows of a child run, without confirmations or its own error", () => {
+    const rows = traceItems([
+      { type: "RUN_STARTED", threadId: "t", runId: "run_x" },
+      { type: "TEXT_MESSAGE_START", messageId: "m", role: "assistant" },
+      { type: "TEXT_MESSAGE_CONTENT", messageId: "m", delta: "Leggo il file" },
+      { type: "TEXT_MESSAGE_END", messageId: "m" },
+      { type: "TOOL_CALL_START", toolCallId: "c", toolCallName: "read_file" },
+      { type: "TOOL_CALL_ARGS", toolCallId: "c", delta: '{"path":"a"}' },
+      { type: "TOOL_CALL_RESULT", messageId: "r", toolCallId: "c", content: "contenuto" },
+      { type: "CUSTOM", name: "aiw.approval_request", value: { id: "a1", run_id: "run_x", tool: "shell", args: {}, reason: "x", risk: "high" } },
+      { type: "RUN_ERROR", message: "Run annullato", code: "cancelled" },
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["text", "tool"]);
+    expect(rows[1]).toMatchObject({ name: "read_file", result: "contenuto", status: "done" });
+  });
+});
+
+describe("aiw.handoff", () => {
+  it("becomes a note live, and the stored messages of the handoff become notes too", () => {
+    const live = fold([{ type: "CUSTOM", name: "aiw.handoff", value: { from: "a", to: "b", to_name: "Revisore", summary: "Controlla" } }]);
+    expect(live[0]).toMatchObject({ kind: "note", text: expect.stringContaining("Revisore") });
+    const at = "2026-11-02T10:00:00Z";
+    const stored = historyToItems([
+      { id: "1", role: "user", name: "aiw.handoff", content: "[Passaggio da Pianificatore] Controlla il lavoro", created_at: at },
+      { id: "2", role: "system", name: "aiw.handoff", content: "Limite di 3 passaggi tra agenti raggiunto: la conversazione si ferma qui.", created_at: at },
+    ]);
+    expect(stored).toEqual([
+      { kind: "note", id: "1", text: "Passaggio di conversazione da Pianificatore: Controlla il lavoro" },
+      { kind: "note", id: "2", text: "Limite di 3 passaggi tra agenti raggiunto: la conversazione si ferma qui." },
+    ]);
   });
 });
 
