@@ -112,7 +112,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
+        os: [macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -132,12 +132,26 @@ jobs:
           # see the `daemon-gpu` job below.
           - { os: ubuntu-22.04, features: llama-embedded, asset: aiw-linux-x64 }
           - { os: windows-latest, features: llama-embedded, asset: aiw-windows-x64.exe }
-          - { os: macos-14, features: llama-metal, asset: aiw-macos-arm64 }
+          - { os: macos-15, features: llama-metal, asset: aiw-macos-arm64 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Same fix as the desktop job: the clang of Xcode 16+ (macos-15) compiles llama.cpp's
+      # `@available` checks to `___isPlatformVersionAtLeast`, which lives in the clang runtime that
+      # Rust does not link (`-nodefaultlibs`).
+      - name: Link the clang runtime (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          rt="$(clang --print-resource-dir)/lib/darwin/libclang_rt.osx.a"
+          if [ ! -f "$rt" ]; then
+            echo "::error::libclang_rt.osx.a non trovata in $rt"
+            exit 1
+          fi
+          echo "clang runtime: $rt"
+          echo "RUSTFLAGS=-C link-arg=$rt" >> "$GITHUB_ENV"
       - run: cargo build --release -p aiw-cli --features ${{ matrix.features }}
       # Distinct file names per platform, so the artifacts can be merged without collisions.
       - name: Name the binary
