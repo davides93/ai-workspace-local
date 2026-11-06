@@ -1,6 +1,6 @@
 # Changelog
 
-## Non rilasciato
+## 0.5.0-beta.1 - pre-release
 
 - Workflow: passo `team` (`{kind: team, team, prompt}`) che affida il compito a un team e ne usa la risposta finale; accetta `retry`, `timeout_s` e `on_error`, si può usare dentro `foreach` e `parallel`, ha il suo selettore nell'editor dei workflow. Un team usato da un workflow non si può eliminare (409).
 - Team multi-agente: nuova pagina Team (editor con strategie supervisore, parallelo e catena, membri, budget e schema di risposta); un team si sceglie in chat come un agente. I membri lavorano con i limiti del padre, con budget condiviso, e la loro traccia (testo, tool, risultati) si apre dentro la scheda del subagente.
@@ -9,7 +9,6 @@
 - Agenti remoti A2A: registro in Integrazioni (token mascherato) più i dispositivi accoppiati; si usano come membri di un team (`remote:<id>`) o subagenti. Il client interroga il task fino alla fine, rispetta il timeout (`a2a.timeout_seconds`), annulla il task remoto se annulli il run e scrive ogni delega nel registro delle attività.
 - A2A server: i task sono salvati nel database (`a2a_tasks`) e scadono dopo 24 ore, invece di stare in memoria. Il flusso `SendStreamingMessage` non c'è ancora.
 - `DELETE /api/agents/{id}` risponde 409 se l'agente è usato da un team.
-
 - Hook: nuovi eventi `SessionStart` (contesto di avvio nel prompt di sistema), `SubagentStart`, `SubagentStop` e `PreCompact`, anche nell'editor degli hook.
 - Subagenti: sandbox e tool del subagente sono ristretti a quelli dell'agente padre (oltre alla modalità di approvazione, già limitata).
 - Subagenti in parallelo: più chiamate `agent` nello stesso turno girano insieme, fino a `agents.max_parallel_subagents` (default 3, impostazione nella sezione Agenti).
@@ -34,6 +33,8 @@
 - DPO dalle preferenze: `aiw train dpo --base <modello>` costruisce coppie `prompt / chosen / rejected` dalla stessa domanda con pollice in su e in giù (nella stessa sessione dopo una rigenerazione o in sessioni diverse) e dai tentativi riusciti e falliti dei task ripetuti (`--source eval --eval-report`); almeno 10 coppie, segreti mascherati. Solo con TRL o Unsloth (`DPOTrainer` + PEFT). Nella UI il metodo DPO è selezionabile.
 - Router a bandit: un agente può elencare `candidate_profiles` e, con l'impostazione `routing.bandit`, ogni run sceglie il profilo con UCB1 (uno mai provato va per primo) usando come reward i pollici su/giù e i task di valutazione superati/falliti. Il profilo scelto compare nello `STATE_SNAPSHOT` e in un evento `aiw.route`. `GET`/`DELETE /api/agents/{id}/routing` per le statistiche e l'azzeramento; nell'editor dell'agente i profili candidati e una tabella con le valutazioni e la reward media.
 - RL con reward verificabili: `aiw train grpo --suite <id> --base <modello>` usa i prompt dei task di una suite e come reward la media dei suoi grader che guardano la risposta (`output_matches`, `json_schema`, `judge`; gli altri sono rifiutati). Nuovo `POST /api/evals/{id}/reward {task_id, output}` → `{score, passed, graders}`, protetto come il resto dell'API e documentato in `docs/training.md` per altri framework RL. Metodo `grpo` in `trl_train.py` (`GRPOTrainer`), solo su dispositivi di classe L o superiore.
+
+Note complete: [docs/release-notes/v0.5.0-beta.1.md](docs/release-notes/v0.5.0-beta.1.md).
 
 ## 0.4.0-rc.2 - release candidate
 
