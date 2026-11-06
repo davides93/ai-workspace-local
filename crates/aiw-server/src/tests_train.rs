@@ -82,3 +82,33 @@ async fn the_reward_endpoint_scores_answers_and_refuses_graders_that_need_files(
     let (st, _) = dispatch(app, "POST", "/api/evals/somme/reward", Some(json!({"task_id": "due"}))).await;
     assert_eq!(st, 400);
 }
+
+#[tokio::test]
+async fn routing_statistics_are_served_and_can_be_reset() {
+    let (app, e, _d, _w) = super::tests::app().await;
+    let (st, agent) = dispatch(app.clone(), "GET", "/api/agents", None).await;
+    assert_eq!(st, 200);
+    let mut op = agent.as_array().unwrap().iter().find(|a| a["id"] == "operator").unwrap().clone();
+    op["id"] = json!("mio");
+    op["candidate_profiles"] = json!(["default", "fantasma"]);
+    let (st, err) = dispatch(app.clone(), "PUT", "/api/agents/mio", Some(op.clone())).await;
+    assert_eq!(st, 400, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("fantasma"));
+    op["candidate_profiles"] = json!(["default"]);
+    let (st, saved) = dispatch(app.clone(), "PUT", "/api/agents/mio", Some(op)).await;
+    assert_eq!((st, saved["candidate_profiles"].clone()), (200, json!(["default"])), "{saved}");
+
+    let (st, stats) = dispatch(app.clone(), "GET", "/api/agents/mio/routing", None).await;
+    assert_eq!(st, 200, "{stats}");
+    assert_eq!(stats, json!({"enabled": false, "candidates": [{"profile": "default", "n": 0, "reward_sum": 0.0}]}));
+    e.set_config("global", "routing.bandit", json!(true)).unwrap();
+    let (_, stats) = dispatch(app.clone(), "GET", "/api/agents/mio/routing", None).await;
+    assert_eq!(stats["enabled"], true);
+
+    let (st, _) = dispatch(app.clone(), "DELETE", "/api/agents/mio/routing", None).await;
+    assert_eq!(st, 200);
+    let (_, stats) = dispatch(app.clone(), "GET", "/api/agents/mio/routing", None).await;
+    assert_eq!(stats["candidates"][0]["n"], 0);
+    let (st, _) = dispatch(app, "GET", "/api/agents/nessuno/routing", None).await;
+    assert_eq!(st, 404);
+}

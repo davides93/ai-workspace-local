@@ -124,6 +124,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/profiles/{id}", put(save_profile).delete(delete_profile))
         .route("/api/agents", get(agents))
         .route("/api/agents/{id}", put(save_agent).delete(delete_agent))
+        .route("/api/agents/{id}/routing", get(agent_routing).delete(reset_agent_routing))
         .route("/api/policy", get(get_policy).put(put_policy))
         .route("/api/hooks", get(get_hooks).put(put_hooks))
         .route("/api/sessions", get(sessions).post(create_session))
@@ -886,6 +887,13 @@ async fn eval_reward(
     Json(b): Json<RewardBody>,
 ) -> ApiResult<aiw_engine::reward::RewardResult> {
     ok(s.engine.reward(&id, &b.task_id, &b.output).await?)
+}
+async fn agent_routing(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::RoutingStats> {
+    ok(s.engine.routing_stats(&id)?)
+}
+async fn reset_agent_routing(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.reset_routing(&id)?;
+    ok(json!({"reset": true}))
 }
 async fn eval_runs(State(s): State<AppState>) -> ApiResult<Vec<aiw_eval::EvalReport>> {
     ok(s.engine.eval_reports()?)

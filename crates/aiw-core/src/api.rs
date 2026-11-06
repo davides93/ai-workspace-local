@@ -489,6 +489,31 @@ pub struct AgentProfile {
     /// `agents.budget.*` settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<BudgetLimits>,
+    /// Inference profiles the router may choose from, one per run, when the setting `routing.bandit`
+    /// is on (UCB1 over the thumbs and the evaluation results). Empty: the agent always uses
+    /// `inference_profile`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_profiles: Vec<String>,
+}
+
+/// What the bandit router knows about one candidate profile of an agent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RoutingCandidate {
+    pub profile: String,
+    /// Rewards received: thumbs up/down on its answers and passed/failed evaluation tasks.
+    pub n: u64,
+    pub reward_sum: f64,
+    /// `reward_sum / n`; missing while it was never rewarded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mean: Option<f64>,
+}
+
+/// `GET /api/agents/{id}/routing`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RoutingStats {
+    /// The setting `routing.bandit`.
+    pub enabled: bool,
+    pub candidates: Vec<RoutingCandidate>,
 }
 
 /// Run budget: every limit is optional, and a set one is at least 1.

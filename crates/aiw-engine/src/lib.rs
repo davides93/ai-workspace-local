@@ -8,6 +8,7 @@ mod models;
 pub mod pairing;
 pub mod peers;
 pub mod reward;
+pub mod routing;
 mod secrets;
 pub mod store;
 pub mod traces;
@@ -629,6 +630,7 @@ impl Engine {
                 unknown.join(", ")
             )));
         }
+        routing::check_candidates(self, &a)?;
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
     }
@@ -661,6 +663,7 @@ impl Engine {
             )));
         }
         self.0.store.delete_doc("agent", id)?;
+        self.0.store.reset_profile_rewards(id)?;
         self.audit_user("agent.delete", &format!("{} ({id})", agent.name));
         Ok(())
     }
@@ -866,7 +869,7 @@ impl Engine {
             .rev()
             .find(|r| r.started_at <= msg.created_at && r.finished_at.as_ref().is_none_or(|f| msg.created_at <= *f))
             .map(|r| r.id);
-        self.0.store.upsert_feedback(&Feedback {
+        let saved = self.0.store.upsert_feedback(&Feedback {
             id: new_id("fbk"),
             session_id: session_id.into(),
             message_id: message_id.into(),
@@ -874,12 +877,15 @@ impl Engine {
             rating,
             note,
             created_at: now_rfc3339(),
-        })
+        })?;
+        self.reward_from_feedback(session_id, message_id, saved.run_id.as_deref(), rating);
+        Ok(saved)
     }
     /// Removes the rating of a message (no error when there is none).
     pub fn delete_feedback(&self, session_id: &str, message_id: &str) -> Result<()> {
         self.0.store.session(session_id)?;
         self.0.store.delete_feedback(session_id, message_id)?;
+        self.forget_feedback_reward(session_id, message_id);
         Ok(())
     }
     pub fn session_feedback(&self, session_id: &str) -> Result<Vec<Feedback>> {
@@ -1081,7 +1087,12 @@ impl Engine {
             other => other,
         };
         let agent = self.agent(&session.agent_id).map_err(|e| gone("l'agente", e))?;
-        let profile = self.profile(&agent.inference_profile).map_err(|e| gone("il profilo", e))?;
+        // The router (top-level runs of agents with candidate profiles) may replace the agent's own profile.
+        let routed = self.route_profile(&agent);
+        let profile = match &routed {
+            Some((p, _)) => p.clone(),
+            None => self.profile(&agent.inference_profile).map_err(|e| gone("il profilo", e))?,
+        };
         let manifest = self.0.runtimes.manifest(&profile.runtime_id).map_err(|e| gone("il runtime", e))?;
         if profile.model.is_empty() && manifest.launch.as_ref().map(|l| l.requires_model).unwrap_or(false) {
             return Err(Error::Invalid(format!(
@@ -1104,6 +1115,13 @@ impl Engine {
             );
         }
         self.0.store.start_run(&run_id, Some(session_id))?;
+        if let Some((p, choice)) = &routed {
+            self.remember_route(&run_id, &agent.id, &p.id);
+            self.emit(
+                &run_id,
+                AgEvent::Custom { name: "aiw.route".into(), value: json!({"profile": choice.profile, "reason": choice.reason}) },
+            );
+        }
         let history = to_msgs(&self.0.store.messages(session_id)?);
         let user_msg = ChatMessage {
             id: new_id("msg"),
@@ -1657,6 +1675,8 @@ mod tests_eval;
 mod tests_hardening;
 #[cfg(test)]
 mod tests_inference;
+#[cfg(test)]
+mod tests_routing;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]

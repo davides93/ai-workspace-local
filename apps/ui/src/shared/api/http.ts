@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
+  AgEvent, AgentProfile, RoutingStats, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -110,6 +110,8 @@ export class HttpTransport implements Transport {
   agents = () => this.req<AgentProfile[]>("GET", "/agents");
   saveAgent = (a: AgentProfile) => this.req<AgentProfile>("PUT", `/agents/${enc(a.id)}`, a);
   deleteAgent = (id: string) => this.req<void>("DELETE", `/agents/${enc(id)}`);
+  agentRouting = (id: string) => this.req<RoutingStats>("GET", `/agents/${enc(id)}/routing`);
+  resetAgentRouting = (id: string) => this.req<void>("DELETE", `/agents/${enc(id)}/routing`);
 
   sessions = () => this.req<Session[]>("GET", "/sessions");
   getSession = (id: string) => this.req<Session>("GET", `/sessions/${enc(id)}`);

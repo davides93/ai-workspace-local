@@ -53,6 +53,8 @@ describe("HttpTransport", () => {
     await t.clearDownload("dl_1");
     await t.deleteModel("ollama:qwen3:4b");
     await t.deleteAgent("a");
+    await t.agentRouting("a/1");
+    await t.resetAgentRouting("a/1");
     await t.deleteProfile("p");
     await t.renameSession("s", "Titolo");
     await t.getSession("s");
@@ -96,6 +98,8 @@ describe("HttpTransport", () => {
       "DELETE /models/downloads/dl_1",
       "DELETE /models/ollama%3Aqwen3%3A4b",
       "DELETE /agents/a",
+      "GET /agents/a%2F1/routing",
+      "DELETE /agents/a%2F1/routing",
       "DELETE /profiles/p",
       "PATCH /sessions/s",
       "GET /sessions/s",
@@ -130,14 +134,14 @@ describe("HttpTransport", () => {
     ]);
     expect(JSON.parse(calls[2].body!)).toEqual({ token: "t0k", endpoint: "https://mirror" });
     expect(JSON.parse(calls[5].body!)).toEqual({ id: "some-id" });
-    expect(JSON.parse(calls[11].body!)).toEqual({ title: "Titolo" });
-    expect(JSON.parse(calls[15].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
-    expect(JSON.parse(calls[19].body!)).toEqual({ rating: -1, note: "troppo lunga" });
-    expect(JSON.parse(calls[20].body!)).toEqual({ rating: 1 });
-    expect(JSON.parse(calls[23].body!)).toMatchObject({ id: "s/1", name: "S" });
-    expect(JSON.parse(calls[25].body!)).toEqual({ profile: "veloce", repeat: 3 });
-    expect(JSON.parse(calls[33].body!)).toEqual({ method: "sft", sources: ["feedback"] });
-    expect(JSON.parse(calls[36].body!)).toEqual({ method: "sft", base_model: "m", dataset_id: "ds_1" });
+    expect(JSON.parse(calls[13].body!)).toEqual({ title: "Titolo" });
+    expect(JSON.parse(calls[17].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
+    expect(JSON.parse(calls[21].body!)).toEqual({ rating: -1, note: "troppo lunga" });
+    expect(JSON.parse(calls[22].body!)).toEqual({ rating: 1 });
+    expect(JSON.parse(calls[25].body!)).toMatchObject({ id: "s/1", name: "S" });
+    expect(JSON.parse(calls[27].body!)).toEqual({ profile: "veloce", repeat: 3 });
+    expect(JSON.parse(calls[35].body!)).toEqual({ method: "sft", sources: ["feedback"] });
+    expect(JSON.parse(calls[38].body!)).toEqual({ method: "sft", base_model: "m", dataset_id: "ds_1" });
   });
 });
 

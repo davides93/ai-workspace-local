@@ -3,7 +3,7 @@ import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
   DatasetSpec, TrainJobRequest,
@@ -83,6 +83,9 @@ function validateMcp(s: { name: string; transport: string; command?: string; url
 
 /** What the demo "hears", one sentence per request. */
 const VOICE_DEMO_SENTENCES = ["Quali file ho modificato oggi nel workspace?", "Riassumi in due righe il preventivo più recente", "Grazie, per ora è tutto"];
+
+/** Demo statistics of the router, by `agent|profile`. */
+const routingStats = new Map<string, RoutingCandidate>([["operator|balanced", { profile: "balanced", n: 12, reward_sum: 9, mean: 0.75 }]]);
 
 export class MockTransport implements Transport {
   readonly kind = "mock" as const;
@@ -384,9 +387,23 @@ export class MockTransport implements Transport {
     if (!profiles.some((p) => p.id === a.inference_profile)) throw new ApiError(400, `il profilo di inferenza \`${a.inference_profile}\` non esiste`);
     const unknown = a.tools.filter((t) => t !== "*" && !t.startsWith("mcp__") && !tools.some((x) => x.name === t));
     if (unknown.length > 0) throw new ApiError(400, `strumenti sconosciuti: ${unknown.join(", ")} (usa "*" oppure i nomi elencati in Strumenti)`);
+    const dup = (a.candidate_profiles ?? []).find((p, i, all) => all.indexOf(p) !== i);
+    if (dup) throw new ApiError(400, `il profilo candidato \`${dup}\` è elencato due volte`);
+    const missing = (a.candidate_profiles ?? []).find((p) => !profiles.some((x) => x.id === p));
+    if (missing) throw new ApiError(400, `il profilo candidato \`${missing}\` non esiste`);
     const i = agents.findIndex((x) => x.id === a.id);
     if (i >= 0) agents[i] = a; else agents.push(a);
     return a;
+  }
+
+  async agentRouting(id: string): Promise<RoutingStats> {
+    const a = agents.find((x) => x.id === id);
+    if (!a) throw new ApiError(404, `agente ${id} non trovato`);
+    return { enabled: false, candidates: (a.candidate_profiles ?? []).filter((p) => profiles.some((x) => x.id === p)).map((p) => routingStats.get(`${id}|${p}`) ?? { profile: p, n: 0, reward_sum: 0 }) };
+  }
+  async resetAgentRouting(id: string) {
+    if (!agents.some((x) => x.id === id)) throw new ApiError(404, `agente ${id} non trovato`);
+    for (const k of [...routingStats.keys()]) if (k.startsWith(`${id}|`)) routingStats.delete(k);
   }
 
   async deleteAgent(id: string) {

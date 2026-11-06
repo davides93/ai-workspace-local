@@ -16,6 +16,7 @@ pub fn agents() -> Vec<AgentProfile> {
         max_turns: turns,
         output_schema: None,
         budget: None,
+        candidate_profiles: vec![],
     };
     vec![
         a(

@@ -416,6 +416,24 @@ dal formato, e registrato; con una suite di valutazione il job la esegue con il 
 prima senza e poi con l'adapter (profilo temporaneo) e riporta la differenza nelle metriche. Un job rimasto
 `running` quando l'app si riavvia risulta `failed`. Il file di configurazione dello script TRL è `0600`.
 
+**DPO e GRPO.** Il dataset DPO (`dataset.rs`) è fatto di coppie `{prompt, chosen, rejected}`: la stessa
+domanda (ultimo messaggio dell'utente normalizzato) con una risposta col pollice in su e una in giù, nella
+stessa sessione o in sessioni diverse, e i tentativi riusciti e falliti dello stesso task in report con
+`--repeat`. Per GRPO i prompt sono i task di una suite e la reward di una risposta la calcola
+`Engine::reward` (`reward.rs`) con i grader del task che guardano solo la risposta (`output_matches`,
+`json_schema`, `judge`): è la stessa funzione di `POST /api/evals/{id}/reward`, che lo script
+`trl_train.py` chiama durante l'addestramento con l'indirizzo e il token scritti nella configurazione del
+job (mai nel log). L'engine ricorda l'indirizzo del server che lo ospita (`set_local_url`); `aiw train
+grpo` ne avvia uno su una porta locale libera.
+
+**Router a bandit.** Un agente con `candidate_profiles` e l'impostazione `routing.bandit` attiva sceglie il
+profilo a ogni run di primo livello con UCB1 (`routing.rs`): un profilo mai valutato va per primo, poi
+vince `media + sqrt(2 ln N / n)`. Le reward stanno in `profile_rewards`, una riga per pollice o tentativo di
+valutazione (chiave `fb:<sessione>:<messaggio>` o `eval:<report>:<task>:<tentativo>`: cambiare un pollice
+sostituisce la reward, toglierlo la rimuove). Il profilo scelto è nello `STATE_SNAPSHOT` (`runtime`,
+`model`) e in un evento `CUSTOM aiw.route {profile, reason}`; il run ricorda il suo profilo, così un
+pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e azzerano le statistiche.
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |

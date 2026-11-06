@@ -30,6 +30,7 @@ export const qk = {
 
   profiles: () => ["profiles"] as const,
   agents: () => ["agents"] as const,
+  agentRouting: (id: string) => ["agents", "routing", id] as const,
 
   sessions: {
     all: () => ["sessions"] as const,

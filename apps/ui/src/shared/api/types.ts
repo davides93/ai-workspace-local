@@ -418,6 +418,23 @@ export interface AgentProfile {
   output_schema?: unknown;
   /** Limits of one run (sub-agents included); a missing value falls back to the `agents.budget.*` settings. */
   budget?: BudgetLimits;
+  /** Profiles the router may choose from, one per run, when the setting `routing.bandit` is on. */
+  candidate_profiles?: string[];
+}
+
+/** What the bandit router knows about a candidate profile: the rewards (thumbs, evaluation tasks) it earned. */
+export interface RoutingCandidate {
+  profile: string;
+  n: number;
+  reward_sum: number;
+  /** Missing while it was never rewarded. */
+  mean?: number;
+}
+
+export interface RoutingStats {
+  /** The setting `routing.bandit`. */
+  enabled: boolean;
+  candidates: RoutingCandidate[];
 }
 
 /** Each limit is optional; a set one is at least 1 (the backend refuses 0). */

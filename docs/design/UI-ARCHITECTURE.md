@@ -275,6 +275,8 @@ cancelDownload(id: string): Promise<DownloadProgress>;
 clearDownload(id: string): Promise<void>;
 deleteModel(id: string): Promise<void>;
 deleteAgent(id: string): Promise<void>;               // DELETE /api/agents/{id}
+agentRouting(id: string): Promise<RoutingStats>;       // GET /api/agents/{id}/routing
+resetAgentRouting(id: string): Promise<void>;          // DELETE /api/agents/{id}/routing
 deleteProfile(id: string): Promise<void>;             // DELETE /api/profiles/{id}
 renameSession(id: string, title: string): Promise<Session>;  // PATCH /api/sessions/{id}
 getSession(id: string): Promise<Session>;

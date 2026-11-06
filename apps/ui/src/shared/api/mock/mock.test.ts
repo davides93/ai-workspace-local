@@ -608,6 +608,19 @@ describe("fine-tuning", () => {
     await expect(api.deleteDataset(ds.id)).rejects.toThrow(/non trovato/);
   });
 
+  it("serves the router statistics of the candidates and refuses wrong ones", async () => {
+    const base = (await api.agents()).find((a) => a.id === "operator")!;
+    await expect(api.saveAgent({ ...base, candidate_profiles: ["balanced", "balanced"] })).rejects.toThrow(/due volte/);
+    await expect(api.saveAgent({ ...base, candidate_profiles: ["fantasma"] })).rejects.toThrow(/non esiste/);
+    await api.saveAgent({ ...base, candidate_profiles: ["balanced", "fast-local"] });
+    const stats = await api.agentRouting("operator");
+    expect(stats.candidates).toEqual([{ profile: "balanced", n: 12, reward_sum: 9, mean: 0.75 }, { profile: "fast-local", n: 0, reward_sum: 0 }]);
+    await api.resetAgentRouting("operator");
+    expect((await api.agentRouting("operator")).candidates[0]).toMatchObject({ n: 0 });
+    await expect(api.agentRouting("nessuno")).rejects.toThrow(/non trovato/);
+    await api.saveAgent(base);
+  });
+
   it("builds a GRPO dataset from the prompts of a suite", async () => {
     await expect(api.buildDataset({ method: "grpo" })).rejects.toThrow(/suite/);
     await expect(api.buildDataset({ method: "grpo", suite: "esempio" })).rejects.toThrow(/ne ho trovati 5.*repeat/);

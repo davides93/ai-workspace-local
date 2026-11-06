@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
+  AgEvent, AgentProfile, RoutingStats, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -81,6 +81,10 @@ export interface Transport {
   agents(): Promise<AgentProfile[]>;
   saveAgent(a: AgentProfile): Promise<AgentProfile>;
   deleteAgent(id: string): Promise<void>;
+  /** What the bandit router learned about the candidate profiles of an agent. */
+  agentRouting(id: string): Promise<RoutingStats>;
+  /** Forgets it. */
+  resetAgentRouting(id: string): Promise<void>;
 
   sessions(): Promise<Session[]>;
   getSession(id: string): Promise<Session>;
