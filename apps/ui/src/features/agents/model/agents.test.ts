@@ -3,7 +3,7 @@ import { agents, profiles } from "../../../shared/api/mock/fixtures";
 import type { AgentProfile } from "../../../shared/api/types";
 import {
   BUILTIN_AGENT_IDS, NEW_AGENT, agentsUsingProfile, blankAgent, copyName, duplicateAgent, estimateTokens, hasErrors, idForNew, isBuiltinAgent,
-  normalizeAgent, slugify, uniqueId, unknownTools, validateAgent,
+  cleanBudget, normalizeAgent, parseSchemaText, schemaToText, slugify, uniqueId, unknownTools, validateAgent,
 } from "./agents";
 
 const ctx = { profileIds: profiles.map((p) => p.id), otherNames: [] as string[] };
@@ -120,5 +120,36 @@ describe("helpers", () => {
   it("finds the agents on a profile", () => {
     expect(agentsUsingProfile(agents, "balanced").map((a) => a.id)).toEqual(["operator", "coder"]);
     expect(agentsUsingProfile(agents, "nope")).toEqual([]);
+  });
+});
+
+describe("response schema text", () => {
+  it("is empty when there is no schema, and an object otherwise", () => {
+    expect(parseSchemaText("  ")).toEqual({});
+    expect(parseSchemaText('{"type":"object"}')).toEqual({ value: { type: "object" } });
+    expect(schemaToText(undefined)).toBe("");
+    expect(parseSchemaText(schemaToText({ type: "array" })).value).toEqual({ type: "array" });
+  });
+  it("refuses text that is not a JSON object", () => {
+    expect(parseSchemaText("{type:").error).toMatch(/^JSON non valido/);
+    for (const text of ["[]", '"x"', "3", "null"]) expect(parseSchemaText(text).error, text).toMatch(/oggetto JSON/);
+  });
+});
+
+describe("run budget", () => {
+  it("keeps only the limits that are set, and drops an empty budget", () => {
+    expect(cleanBudget(undefined)).toBeUndefined();
+    expect(cleanBudget({})).toBeUndefined();
+    expect(cleanBudget({ max_tokens: Number.NaN, max_turns: 10 })).toEqual({ max_turns: 10 });
+    expect(normalizeAgent(valid({ budget: { max_seconds: Number.NaN } })).budget).toBeUndefined();
+    expect("budget" in normalizeAgent(valid({ budget: {} }))).toBe(false);
+    expect(normalizeAgent(valid({ budget: { max_tokens: 5000 } })).budget).toEqual({ max_tokens: 5000 });
+  });
+  it("blocks saving on a limit the backend would refuse", () => {
+    for (const bad of [{ max_turns: 0 }, { max_tokens: -5 }, { max_seconds: 1.5 }]) {
+      expect(validateAgent(valid({ budget: bad }), ctx).filter((i) => i.field === "budget" && i.level === "error"), JSON.stringify(bad)).toHaveLength(1);
+    }
+    expect(validateAgent(valid({ budget: { max_tokens: 1, max_turns: 3, max_seconds: 60 } }), ctx).filter((i) => i.field === "budget")).toEqual([]);
+    expect(validateAgent(valid(), ctx).filter((i) => i.field === "budget")).toEqual([]);
   });
 });

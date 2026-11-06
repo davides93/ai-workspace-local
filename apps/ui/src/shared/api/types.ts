@@ -394,6 +394,17 @@ export interface AgentProfile {
   mode: PolicyMode;
   sandbox: SandboxMode;
   max_turns: number;
+  /** JSON Schema of the final answer (subset: type, properties, required, items, enum, additionalProperties, minItems, maxItems). */
+  output_schema?: unknown;
+  /** Limits of one run (sub-agents included); a missing value falls back to the `agents.budget.*` settings. */
+  budget?: BudgetLimits;
+}
+
+/** Each limit is optional; a set one is at least 1 (the backend refuses 0). */
+export interface BudgetLimits {
+  max_tokens?: number;
+  max_turns?: number;
+  max_seconds?: number;
 }
 
 // ---------- Sessions, messages, runs ----------
@@ -608,11 +619,11 @@ export interface PolicyRule {
   action: PolicyAction;
 }
 
-export type HookEvent = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop";
+export type HookEvent = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop" | "SubagentStart" | "SubagentStop" | "PreCompact";
 
 export interface HookConfig {
   event: HookEvent;
-  /** Glob on the tool name (tool events only). */
+  /** Glob on the tool name (tool events) or on the agent id (subagent events). */
   matcher?: string | null;
   command: string;
   timeout_s: number;

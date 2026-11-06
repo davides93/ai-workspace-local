@@ -1,7 +1,7 @@
 //! The engine side of [`aiw_agent::RunHost`] and [`aiw_workflow::WorkflowHost`].
 
 use crate::Engine;
-use aiw_agent::{AgentRunner, RunHost, RunInput, Skill};
+use aiw_agent::{narrow_sandbox, narrow_tools, AgentRunner, RunHost, RunInput, Skill};
 use aiw_core::api::{ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun};
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, Error, Result};
@@ -127,6 +127,11 @@ impl RunHost for EngineHost {
         if mode_rank(&input.policy.mode) > mode_rank(&parent.policy.mode) {
             input.policy.mode = parent.policy.mode.clone();
         }
+        // The run budget is shared with the parent: delegating does not buy more.
+        input.budget = parent.budget.clone();
+        // Same for the sandbox and the tool list.
+        input.tool_ctx.sandbox = narrow_sandbox(parent.tool_ctx.sandbox, input.tool_ctx.sandbox);
+        input.agent.tools = narrow_tools(&parent.agent.tools, &input.agent.tools);
         let host = Arc::new(EngineHost::new(self.engine.clone(), self.session_id.clone(), Some(parent.run_id.clone())));
         let out = AgentRunner::run(input, host).await?;
         Ok(if out.final_text.is_empty() { "(nessuna risposta)".into() } else { out.final_text })

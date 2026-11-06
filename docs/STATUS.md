@@ -37,10 +37,10 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 
 | Funzione | Stato | Note |
 |---|---|---|
-| Agenti (5 predefiniti: operator, coder, browser, desktop, planner) e loop con streaming AG-UI | ✅ | tool read-only in parallelo, max turni, self-check sugli errori dei tool |
-| Subagenti (tool `agent`, contesto isolato, profondità 2) | ✅ | nessun subagente in parallelo |
+| Agenti (5 predefiniti: operator, coder, browser, desktop, planner) e loop con streaming AG-UI | ✅ | tool read-only in parallelo, max turni, self-check sugli errori dei tool; **budget per run** (token, turni del modello, secondi) condiviso con i subagenti, per agente (`budget`) o dalle impostazioni `agents.budget.*`: a limite esaurito il run si chiude con l'avviso `aiw.budget_exceeded`; **output strutturato**: un agente può avere `output_schema` (sottoinsieme di JSON Schema), la risposta finale viene estratta e validata con un tentativo di correzione, il JSON valido è in `RunFinished.result.json`; nessun `response_format` verso i runtime |
+| Subagenti (tool `agent`, contesto isolato, profondità 2) | ✅ | modalità di approvazione, sandbox e tool del subagente non sono mai più ampi di quelli del padre; più chiamate `agent` nello stesso turno girano in parallelo (limite `agents.max_parallel_subagents`, default 3; attenzione a subagenti che scrivono negli stessi file) |
 | Skill `SKILL.md`, memoria `AGENTS.md` | ✅ | nessuna UI per le skill |
-| Hook (UserPromptSubmit, PreToolUse, PostToolUse, Stop) | 🟡 | SessionStart mai invocato; **v0.4** editor degli hook nella UI; un prompt bloccato da `UserPromptSubmit` resta visibile in chat ma non arriva al modello |
+| Hook (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SubagentStart, SubagentStop, PreCompact) | ✅ | SessionStart parte al primo messaggio di una conversazione e aggiunge contesto al prompt di sistema; SubagentStart/SubagentStop usano il filtro sul nome dell'agente; PreCompact può saltare la compattazione; **v0.4** editor degli hook nella UI; un prompt bloccato da `UserPromptSubmit` resta visibile in chat ma non arriva al modello |
 | Policy (plan/ask/auto-edit/auto/yolo), regole, approvazioni, audit, kill switch | ✅ | regole solo globali; **v0.4** editor delle regole, kill switch raggiungibile da telefono; una conferma in attesa viene ritirata quando il run smette di aspettarla e uno stop durante la conferma conta come annullamento, non come rifiuto; validazione di policy, hook e agenti prima del salvataggio |
 | Code mode (Rhai), A2UI `render_ui`, worktree git per sessione | ✅ | |
 | Messaggi dei run annullati o falliti | ✅ **v0.4** | prima andavano persi; l'errore resta nella cronologia (messaggio `aiw.run_error`, mai inviato al modello) |

@@ -100,6 +100,25 @@ describe("run end", () => {
   });
 });
 
+describe("structured answers", () => {
+  it("shows the format check, live and from the stored history, as a note", () => {
+    const live = fold([{ type: "CUSTOM", name: "aiw.format_check", value: { errors: ["$.totale: manca il campo obbligatorio"] } }]);
+    expect(live[0]).toMatchObject({ kind: "note", text: expect.stringContaining("$.totale: manca il campo obbligatorio") });
+    const stored = historyToItems([
+      { id: "1", role: "user", name: "aiw.format_check", content: "[Controllo del formato] La risposta non rispetta lo schema richiesto:\n- $.totale: manca il campo obbligatorio\nRispondi di nuovo.", created_at: "2026-11-02T10:00:00Z" },
+    ]);
+    expect(stored).toEqual([{ kind: "note", id: "1", text: live[0].kind === "note" ? live[0].text : "" }]);
+    expect(fold([{ type: "CUSTOM", name: "aiw.format_error", value: { errors: ["x"] } }])[0]).toMatchObject({ kind: "note" });
+  });
+});
+
+describe("aiw.budget_exceeded", () => {
+  it("becomes a note that names the reason", () => {
+    const items = fold([{ type: "CUSTOM", name: "aiw.budget_exceeded", value: { reason: "2 turni del modello usati" } }]);
+    expect(items[0]).toMatchObject({ kind: "note", text: expect.stringContaining("2 turni del modello usati") });
+  });
+});
+
 describe("aiw.image", () => {
   const png = { toolCallId: "c1", mime: "image/png", data: "iVBORw0KGgo=" };
   const tool = (): Item[] => fold([{ type: "TOOL_CALL_START", toolCallId: "c1", toolCallName: "computer_screenshot" }]);

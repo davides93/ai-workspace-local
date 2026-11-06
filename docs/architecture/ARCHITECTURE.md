@@ -238,16 +238,29 @@ sequenceDiagram
   `STATE_SNAPSHOT`, `SUBAGENT_*`, `RUN_FINISHED`/`RUN_ERROR`) più `CUSTOM` con nome
   `aiw.approval_request`, `aiw.todo`, `aiw.usage`. Ogni evento viene salvato (P17), così i run
   sono riproducibili.
-- **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo.
+- **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo; le chiamate `agent`
+  consecutive formano un gruppo a sé, eseguito in parallelo fino a `agents.max_parallel_subagents` (default 3).
 - **Subagenti** (P09): il tool `agent` avvia un run figlio con un profilo diverso e contesto
-  isolato; al padre torna solo il risultato.
+  isolato; al padre torna solo il risultato. Modalità di approvazione, sandbox e tool del figlio
+  non sono mai più ampi di quelli del padre.
+- **Budget del run**: `RunBudget` (token, turni del modello, tempo) è creato dall'engine per il run di primo livello
+  dai limiti dell'agente (`budget`) o dalle impostazioni `agents.budget.*` (0 = nessun limite) ed è condiviso con tutti i
+  subagenti. All'inizio di ogni turno, se è esaurito, il run termina normalmente con l'evento `aiw.budget_exceeded` e
+  una risposta che riporta il motivo; ogni chiamata al modello conta un turno e prompt + completion contano come token.
+- **Output strutturato**: se il profilo dell'agente ha `output_schema` (sottoinsieme di JSON Schema: `type`,
+  `properties`, `required`, `items`, `enum`, `additionalProperties: false`, `minItems`/`maxItems`), il prompt di
+  sistema lo riporta e la risposta finale viene estratta e validata. Una risposta non conforme torna al modello una
+  sola volta (nota `aiw.format_check`); se resta errata il testo si conserva e si emette `aiw.format_error`. Il JSON
+  valido finisce in `RunFinished.result.json`. Lo schema non viene passato ai runtime come `response_format`.
 - **Contesto** (P10): un budget di token per profilo; oltre la soglia i turni più vecchi vengono
   riassunti con il modello attivo o con uno dedicato.
 - **Memoria e skill** (P11): `AGENTS.md` del workspace entra nel system prompt; le skill
   (`SKILL.md` con frontmatter `name`/`description`) sono elencate solo con la descrizione e il
   modello le carica su richiesta con il tool `skill`.
-- **Hook** (P08): `SessionStart` (dichiarato, non ancora invocato), `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Un
-  hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
+- **Hook** (P08): `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStart`, `SubagentStop`,
+  `PreCompact`. `SessionStart` parte solo al primo messaggio di una conversazione e il suo output entra nel prompt di sistema;
+  per gli eventi dei subagenti il filtro (`matcher`) è un glob sull'id dell'agente; `PreCompact` può saltare la compattazione.
+  Un hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
 - **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in `checkpoints/`.
   Il rewind (ripristino dei file di un run) non è ancora implementato, né dalla UI né dalla CLI.
 

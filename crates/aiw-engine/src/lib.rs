@@ -15,7 +15,7 @@ pub mod worktree;
 pub use host::EngineHost;
 pub use pairing::PairOutcome;
 
-use aiw_agent::{to_msgs, AgentRunner, HookConfig, Policy, PolicyRule, RunInput};
+use aiw_agent::{to_msgs, AgentRunner, HookConfig, Policy, PolicyRule, RunBudget, RunInput};
 use aiw_core::api::*;
 use aiw_core::config::{app_schema, Layer, LayeredConfig};
 use aiw_core::events::{AgEvent, SeqEvent, TimedEvent};
@@ -572,6 +572,16 @@ impl Engine {
         if a.max_turns < 1 {
             return Err(Error::Invalid("max_turns deve essere almeno 1".into()));
         }
+        if let Some(b) = &a.budget {
+            for (name, v) in [("max_tokens", b.max_tokens), ("max_turns", b.max_turns.map(u64::from)), ("max_seconds", b.max_seconds)] {
+                if v == Some(0) {
+                    return Err(Error::Invalid(format!("budget.{name} deve essere almeno 1 (ometti il campo per nessun limite)")));
+                }
+            }
+        }
+        if let Some(schema) = &a.output_schema {
+            aiw_agent::schema::check_schema(schema).map_err(|e| Error::Invalid(format!("output_schema non valido: {e}")))?;
+        }
         if self.0.store.get_doc::<InferenceProfile>("profile", &a.inference_profile)?.is_none() {
             return Err(Error::Invalid(format!("il profilo di inferenza `{}` non esiste", a.inference_profile)));
         }
@@ -897,6 +907,7 @@ impl Engine {
             profile.model
         );
         let subagents = self.agents().unwrap_or_default().into_iter().filter(|a| a.id != agent.id).map(|a| (a.id, a.description)).collect();
+        let agent_budget = agent.budget.clone().unwrap_or_default();
         RunInput {
             run_id: run_id.into(),
             thread_id: thread_id.into(),
@@ -916,7 +927,21 @@ impl Engine {
             depth,
             session_allow,
             subagents,
+            budget: Arc::new(if depth == 0 { self.run_budget(&agent_budget) } else { RunBudget::unlimited() }),
+            max_parallel_subagents: self.0.config.get("agents.max_parallel_subagents").and_then(|v| v.as_u64()).unwrap_or(3).max(1)
+                as usize,
         }
+    }
+
+    /// The budget of a new top-level run: the agent's own limits, else the `agents.budget.*` settings
+    /// (0 there means no limit).
+    fn run_budget(&self, own: &aiw_core::api::BudgetLimits) -> RunBudget {
+        let setting = |key: &str| self.0.config.get(key).and_then(|v| v.as_u64()).filter(|n| *n > 0);
+        RunBudget::new(
+            own.max_tokens.or_else(|| setting("agents.budget.max_tokens")),
+            own.max_turns.or_else(|| setting("agents.budget.max_turns").map(|n| n.min(u32::MAX as u64) as u32)),
+            own.max_seconds.or_else(|| setting("agents.budget.max_seconds")),
+        )
     }
 
     pub(crate) fn skills(&self) -> Vec<aiw_agent::Skill> {
