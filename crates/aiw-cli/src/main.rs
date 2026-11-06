@@ -90,6 +90,73 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TrainCmd,
     },
+    /// Adapter LoRA addestrati da AIW
+    Adapters {
+        #[command(subcommand)]
+        cmd: Option<AdaptersCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdaptersCmd {
+    /// Elenca gli adapter (predefinito)
+    List,
+    /// Elimina un adapter e i suoi file
+    Rm { id: String },
+}
+
+/// What a fine-tuning needs, whatever the method.
+#[derive(clap::Args)]
+struct TrainArgs {
+    /// Modello base: id o nome di un modello locale, oppure un repository Hugging Face
+    #[arg(long)]
+    base: String,
+    /// Trainer da usare (default: il primo pronto che conosce il metodo)
+    #[arg(long)]
+    trainer: Option<String>,
+    /// Dataset già creato (id); senza, ne creo uno dalle sessioni con i filtri qui sotto
+    #[arg(long)]
+    dataset: Option<String>,
+    /// Nome del dataset creato e dell'adapter
+    #[arg(long)]
+    name: Option<String>,
+    /// Solo le sessioni di questo agente
+    #[arg(long)]
+    agent: Option<String>,
+    /// Solo le sessioni con attività da questa data (RFC 3339 o AAAA-MM-GG)
+    #[arg(long)]
+    since: Option<String>,
+    /// Solo le sessioni con attività fino a questa data
+    #[arg(long)]
+    until: Option<String>,
+    /// Al massimo questi esempi
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Da dove prendere gli esempi: feedback, succeeded, eval (ripetibile; default feedback)
+    #[arg(long)]
+    source: Vec<String>,
+    /// Report di valutazione da cui prendere i task riusciti (ripetibile)
+    #[arg(long)]
+    eval_report: Vec<String>,
+    /// Passi dell'ottimizzatore (ha la precedenza su --epochs)
+    #[arg(long)]
+    iters: Option<u32>,
+    #[arg(long)]
+    epochs: Option<f32>,
+    /// Rango LoRA
+    #[arg(long)]
+    rank: Option<u32>,
+    /// Learning rate
+    #[arg(long)]
+    lr: Option<f64>,
+    #[arg(long)]
+    batch: Option<u32>,
+    /// Suite da eseguire, con e senza adapter, quando l'addestramento finisce (serve --eval-profile)
+    #[arg(long)]
+    eval: Option<String>,
+    /// Profilo di inferenza da cui parte il confronto (il suo modello, con e senza adapter)
+    #[arg(long)]
+    eval_profile: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -98,6 +165,21 @@ enum TrainCmd {
     Doctor,
     /// Installa un trainer nell'ambiente Python di AIW (~/.aiw/pyenv)
     Install { id: String },
+    /// Addestra un adapter LoRA con SFT sulle conversazioni approvate (pollice in su, riuscite o task superati)
+    Sft(Box<TrainArgs>),
+    /// Elenca gli addestramenti
+    Jobs,
+    /// Mostra il log di un addestramento
+    Logs {
+        id: String,
+        /// Quante righe (le ultime)
+        #[arg(long, default_value_t = 200)]
+        lines: usize,
+    },
+    /// Interrompe un addestramento in corso
+    Cancel { id: String },
+    /// Elenca i dataset creati
+    Datasets,
 }
 
 #[derive(Subcommand)]
@@ -373,6 +455,18 @@ async fn main() -> Result<()> {
         }
         Cmd::Eval { cmd } => eval_cmd(&engine, cmd).await?,
         Cmd::Train { cmd } => train_cmd(&engine, cmd).await?,
+        Cmd::Adapters { cmd } => match cmd.unwrap_or(AdaptersCmd::List) {
+            AdaptersCmd::List => {
+                for a in engine.adapters()? {
+                    println!("{:<22} {:<5} {:<10} {:<28} {}", a.id, a.method, a.trainer, a.name, a.base_model);
+                    println!("    {}", a.path);
+                }
+            }
+            AdaptersCmd::Rm { id } => {
+                engine.delete_adapter(&id)?;
+                println!("Adapter {id} eliminato.");
+            }
+        },
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Workflow { id } => {
             let first = engine.run_workflow(&id, Default::default(), "user").await?;
@@ -409,8 +503,105 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Starts a fine-tuning (creating the dataset when none is given), follows it and registers the adapter.
+async fn train_run(engine: &Engine, method: &str, a: TrainArgs, reward_suite: Option<String>) -> Result<()> {
+    use aiw_core::api::{DatasetSpec, TrainJobRequest, TrainParams};
+    let dataset_id = match a.dataset {
+        Some(id) => id,
+        None => {
+            let ds = engine.build_dataset(&DatasetSpec {
+                name: a.name.clone(),
+                method: method.into(),
+                agent: a.agent,
+                since: a.since,
+                until: a.until,
+                limit: a.limit,
+                sources: a.source,
+                eval_reports: a.eval_report,
+                suite: reward_suite.clone(),
+                ..Default::default()
+            })?;
+            println!(
+                "Dataset {} ({}): {} esempi ({} per l'addestramento, {} per la validazione), ~{} token",
+                ds.id, ds.name, ds.examples, ds.train, ds.valid, ds.tokens_est
+            );
+            ds.id
+        }
+    };
+    let job = engine
+        .start_train_job(TrainJobRequest {
+            method: method.into(),
+            trainer: a.trainer,
+            base_model: a.base,
+            dataset_id,
+            params: TrainParams { epochs: a.epochs, iters: a.iters, learning_rate: a.lr, rank: a.rank, batch_size: a.batch },
+            name: a.name,
+            eval_suite: a.eval,
+            eval_profile: a.eval_profile,
+            reward_suite,
+        })
+        .await?;
+    println!("Addestramento {} avviato con {}. Ctrl+C lo interrompe.", job.id, job.trainer);
+    let mut shown = 0usize;
+    let mut cancelled = false;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(700)) => {}
+            _ = tokio::signal::ctrl_c(), if !cancelled => {
+                cancelled = true;
+                let _ = engine.cancel_train_job(&job.id);
+                eprintln!("Interruzione richiesta…");
+            }
+        }
+        let log = engine.train_job_log(&job.id, 5000)?;
+        for l in log.iter().skip(shown) {
+            println!("{l}");
+        }
+        shown = log.len();
+        let j = engine.train_job(&job.id)?;
+        match j.status.as_str() {
+            "queued" | "running" => {}
+            "succeeded" => {
+                if let Some(id) = &j.adapter_id {
+                    let ad = engine.adapter(id)?;
+                    println!("\nAdapter {} pronto: {}", ad.id, ad.path);
+                    println!("Usalo con: aiw profile --adapter {}", ad.path);
+                }
+                if let Some(m) = &j.metrics {
+                    println!("Metriche: {m}");
+                }
+                break;
+            }
+            "cancelled" => bail!("addestramento interrotto"),
+            _ => bail!("{}", j.error.unwrap_or_else(|| "addestramento fallito".into())),
+        }
+    }
+    Ok(())
+}
+
 async fn train_cmd(engine: &Engine, cmd: TrainCmd) -> Result<()> {
     match cmd {
+        TrainCmd::Sft(a) => train_run(engine, "sft", *a, None).await?,
+        TrainCmd::Jobs => {
+            for j in engine.train_jobs()? {
+                let pct = j.progress.map(|p| format!("{:.0}%", p * 100.0)).unwrap_or_default();
+                println!("{:<22} {:<4} {:<10} {:<9} {:>4}  {}", j.id, j.method, j.trainer, j.status, pct, j.base_model);
+            }
+        }
+        TrainCmd::Logs { id, lines } => {
+            for l in engine.train_job_log(&id, lines)? {
+                println!("{l}");
+            }
+        }
+        TrainCmd::Cancel { id } => {
+            engine.cancel_train_job(&id)?;
+            println!("Interruzione richiesta per {id}.");
+        }
+        TrainCmd::Datasets => {
+            for d in engine.datasets()? {
+                println!("{:<22} {:<5} {:>5} esempi  {:<24} {}", d.id, d.method, d.examples, d.name, d.created_at);
+            }
+        }
         TrainCmd::Doctor => {
             let d = engine.train_doctor().await;
             let dev = &d.device;

@@ -87,6 +87,16 @@ export interface Transcript {
   elapsed_ms: number;
 }
 
+/** What a paired device tells about itself when pairing (absent for peers paired before it existed). */
+export interface PeerHardware {
+  arch: string;
+  tier: string;
+  memory_mb: number;
+  vram_mb: number;
+  accelerators: string[];
+  unified_memory: boolean;
+}
+
 export interface PeerDevice {
   id: string;
   name: string;
@@ -94,6 +104,7 @@ export interface PeerDevice {
   address: string;
   status: "online" | "offline";
   shared_runtimes: string[];
+  hardware?: PeerHardware;
 }
 
 // ---------- Settings schema (JSON Schema subset → generated forms) ----------
@@ -776,4 +787,127 @@ export interface AiwImage {
   mime: string;
   /** Base64 data. */
   data: string;
+}
+
+// ---------- Fine-tuning ----------
+export type TrainMethod = "sft" | "dpo" | "grpo";
+
+export interface TrainMethodFit {
+  method: TrainMethod;
+  /** Largest model, in billions of parameters, that fits when the method can run at all. */
+  max_params_b?: number;
+  /** Why it cannot run here. */
+  blocked?: string;
+}
+
+/** `ready` can train and is installed; `missing` could train but is not installed; `unsupported` cannot run here. */
+export interface TrainerInfo {
+  id: string;
+  name: string;
+  description: string;
+  state: "ready" | "missing" | "unsupported";
+  reason?: string;
+  methods: TrainMethodFit[];
+  adapter_format: "mlx" | "peft";
+  install_auto: boolean;
+  install_hint?: string;
+  homepage?: string;
+}
+
+export interface TrainDoctor {
+  device: {
+    name: string; os: string; arch: string; tier: string; memory_mb: number; vram_mb: number; unified_memory: boolean; accelerators: string[];
+  };
+  trainers: TrainerInfo[];
+  can_train: string[];
+  remote: string[];
+  advice: string[];
+}
+
+export interface DatasetSpec {
+  name?: string;
+  method: TrainMethod;
+  agent?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  /** `feedback`, `succeeded`, `eval`. */
+  sources?: string[];
+  eval_reports?: string[];
+  suite?: string;
+  repeat?: number;
+}
+
+export interface DatasetInfo {
+  id: string;
+  name: string;
+  method: TrainMethod;
+  created_at: string;
+  examples: number;
+  train: number;
+  valid: number;
+  tokens_est: number;
+  agents: string[];
+  sources: string[];
+  path: string;
+}
+
+export interface TrainParams {
+  epochs?: number;
+  iters?: number;
+  learning_rate?: number;
+  rank?: number;
+  batch_size?: number;
+}
+
+export interface TrainJobRequest {
+  method: TrainMethod;
+  trainer?: string;
+  base_model: string;
+  dataset_id: string;
+  params?: TrainParams;
+  name?: string;
+  eval_suite?: string;
+  eval_profile?: string;
+  reward_suite?: string;
+}
+
+export type TrainJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface TrainJob {
+  id: string;
+  method: TrainMethod;
+  trainer: string;
+  base_model: string;
+  dataset_id: string;
+  params: TrainParams;
+  status: TrainJobStatus;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  log_path: string;
+  /** 0..1, when the trainer prints it. */
+  progress?: number;
+  adapter_id?: string;
+  metrics?: Record<string, unknown>;
+  error?: string;
+  name?: string;
+  eval_suite?: string;
+  eval_profile?: string;
+  reward_suite?: string;
+}
+
+export interface AdapterInfo {
+  id: string;
+  name: string;
+  base_model: string;
+  method: TrainMethod;
+  trainer: string;
+  dataset_id: string;
+  created_at: string;
+  /** What a profile names in `params.adapters[].path`. */
+  path: string;
+  metrics?: Record<string, unknown>;
+  format: "mlx" | "peft" | "gguf";
+  job_id?: string;
 }

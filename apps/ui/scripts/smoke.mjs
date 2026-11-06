@@ -44,6 +44,7 @@ const SAMPLES = {
   "agents/agentId": ["coder"],
   "workflows/workflowId": ["inbox-digest"],
   "evals/tab": ["suites", "reports"],
+  "training/tab": ["jobs", "datasets", "adapters"],
   "capabilities/tab": ["tools", "mcp", "browser"],
   "models/tab": ["installed", "discover", "downloads", "catalog"],
   "runtimes/runtimeId": ["llama-server", "vllm"],

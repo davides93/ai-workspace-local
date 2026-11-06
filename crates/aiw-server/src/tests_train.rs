@@ -29,3 +29,31 @@ async fn trainers_and_the_doctor_are_served_and_are_not_runtimes() {
     let (st, _) = dispatch(app, "GET", "/api/trainers/trl/install", None).await;
     assert_eq!(st, 200);
 }
+
+#[tokio::test]
+async fn datasets_jobs_and_adapters_are_served_and_their_errors_are_http_errors() {
+    let (app, _e, _d, _w) = super::tests::app().await;
+    for path in ["/api/datasets", "/api/train/jobs", "/api/adapters"] {
+        let (st, list) = dispatch(app.clone(), "GET", path, None).await;
+        assert_eq!((st, list), (200, json!([])), "{path}");
+    }
+    // Too few sessions: the request is wrong, not the server.
+    let (st, err) = dispatch(app.clone(), "POST", "/api/datasets", Some(json!({"method": "sft"}))).await;
+    assert_eq!(st, 400, "{err}");
+    assert!(err.to_string().contains("almeno 10"), "{err}");
+    let (st, _) = dispatch(app.clone(), "POST", "/api/datasets", Some(json!({"method": "boh"}))).await;
+    assert_eq!(st, 400);
+    for path in ["/api/datasets/ds_none", "/api/train/jobs/trn_none", "/api/train/jobs/trn_none/log", "/api/adapters/ad_none"] {
+        let (st, _) = dispatch(app.clone(), "GET", path, None).await;
+        assert_eq!(st, 404, "{path}");
+    }
+    let (st, _) = dispatch(app.clone(), "DELETE", "/api/datasets/ds_none", None).await;
+    assert_eq!(st, 404);
+    let (st, _) = dispatch(app.clone(), "DELETE", "/api/adapters/ad_none", None).await;
+    assert_eq!(st, 404);
+    let (st, _) = dispatch(app.clone(), "POST", "/api/train/jobs/trn_none/cancel", None).await;
+    assert_eq!(st, 404);
+    let body = json!({"method": "sft", "base_model": "m", "dataset_id": "ds_none"});
+    let (st, _) = dispatch(app, "POST", "/api/train/jobs", Some(body)).await;
+    assert_eq!(st, 404);
+}

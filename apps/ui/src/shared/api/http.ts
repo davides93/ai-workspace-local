@@ -4,6 +4,7 @@ import type {
   AgEvent, AgentProfile, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
+  AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
 } from "./types";
@@ -230,6 +231,19 @@ export class HttpTransport implements Transport {
   evalReports = () => this.req<EvalReport[]>("GET", "/eval-runs");
   evalReport = (id: string) => this.req<EvalReport>("GET", `/eval-runs/${enc(id)}`);
   compareEvalReports = (a: string, b: string) => this.req<EvalComparison>("GET", `/eval-runs/compare?a=${enc(a)}&b=${enc(b)}`);
+
+  trainDoctor = () => this.req<TrainDoctor>("GET", "/train/doctor");
+  installTrainer = (id: string) => this.req<InstallJob>("POST", `/trainers/${enc(id)}/install`);
+  trainerInstall = (id: string) => this.req<InstallJob | null>("GET", `/trainers/${enc(id)}/install`);
+  datasets = () => this.req<DatasetInfo[]>("GET", "/datasets");
+  buildDataset = (spec: DatasetSpec) => this.req<DatasetInfo>("POST", "/datasets", spec);
+  deleteDataset = (id: string) => this.req<void>("DELETE", `/datasets/${enc(id)}`);
+  trainJobs = () => this.req<TrainJob[]>("GET", "/train/jobs");
+  startTrainJob = (req: TrainJobRequest) => this.req<TrainJob>("POST", "/train/jobs", req);
+  cancelTrainJob = (id: string) => this.req<TrainJob>("POST", `/train/jobs/${enc(id)}/cancel`);
+  trainJobLog = async (id: string, lines = 200) => (await this.req<{ lines: string[] }>("GET", `/train/jobs/${enc(id)}/log?lines=${lines}`)).lines;
+  adapters = () => this.req<AdapterInfo[]>("GET", "/adapters");
+  deleteAdapter = (id: string) => this.req<void>("DELETE", `/adapters/${enc(id)}`);
 
   tools = () => this.req<ToolInfo[]>("GET", "/tools");
   setToolEnabled = (name: string, enabled: boolean) => this.req<void>("PUT", `/tools/${enc(name)}`, { enabled });

@@ -49,7 +49,7 @@ impl Drop for SidecarHandle {
 /// its own process-group leader (`process_group(0)`), so the signal goes to the whole group;
 /// on Windows `taskkill /T` walks the process tree. `force`: SIGKILL / `/F` instead of SIGTERM.
 /// Best effort, errors are ignored (the group may already be gone).
-fn kill_group(pid: u32, force: bool) {
+pub(crate) fn kill_group(pid: u32, force: bool) {
     #[cfg(unix)]
     {
         let sig = if force { "KILL" } else { "TERM" };

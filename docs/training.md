@@ -64,3 +64,55 @@ La forma scelta è il **percorso**: l'adapter registrato da AIW (registro degli 
   fermalo e lascia che lo avvii AIW.
 - vLLM (`--enable-lora --lora-modules`) non è collegato: richiede di scegliere l'adapter per nome a ogni
   richiesta, cosa che i profili non esprimono.
+
+## SFT dalle tue conversazioni
+
+Il percorso completo, dalla chat all'adapter:
+
+1. **Dai un pollice in su** alle risposte buone (sotto la risposta finale dell'assistente). Una sessione con
+   un pollice in giù non entra mai nel dataset.
+2. **Crea il dataset**. Le sorgenti (`--source`, ripetibile) sono `feedback` (sessioni con un pollice in su,
+   il predefinito), `succeeded` (sessioni il cui ultimo run è riuscito) ed `eval` (i task superati dei report
+   indicati con `--eval-report`; un solo turno: prompt e risposta finale). Filtri: `--agent`, `--since`,
+   `--until`, `--limit`. I segreti (chiavi, token, valori dei server MCP) sono mascherati come
+   nell'export delle traiettorie. Servono **almeno 10 esempi**; il 10% va nel file di validazione.
+3. **Addestra**.
+
+```
+aiw train sft --base Qwen/Qwen3-4B --name "Operator v1"
+aiw train sft --base Qwen3-4B-MLX --source feedback --source succeeded --agent operator --since 2026-01-01
+aiw train sft --base Qwen/Qwen3-4B --dataset ds_… --iters 200 --rank 16 --lr 2e-4 --batch 2
+aiw train sft --base Qwen/Qwen3-4B --eval esempio --eval-profile default
+```
+
+`--base` è un modello locale (id o nome, non GGUF) oppure un repository Hugging Face che il trainer
+scarica. Senza `--trainer` si usa il primo pronto che conosce il metodo. L'avanzamento e il log
+scorrono nel terminale; Ctrl+C interrompe l'addestramento. Un solo addestramento alla volta per
+dispositivo. I parametri non indicati usano i predefiniti del trainer (3 epoche, rango 8 con mlx-lm
+e 16 con TRL, learning rate 2e-4 con TRL).
+
+4. **Usa l'adapter**. A fine corsa `aiw adapters` lo elenca con il percorso. mlx-lm produce una cartella
+   che si usa subito (`aiw profile --adapter <cartella>` su un profilo `mlx-lm`, oppure «Usa in un
+   profilo» nella pagina Addestramento). TRL produce un adapter PEFT: per llama.cpp va convertito in
+   GGUF con `convert_lora_to_gguf.py`, che AIW non esegue.
+
+Con `--eval <suite> --eval-profile <profilo>` a fine corsa AIW esegue la suite con il modello del
+profilo com'è e poi con l'adapter (un profilo temporaneo), e scrive la differenza nelle metriche
+del job. Funziona se il runtime del profilo carica adapter di quel formato; altrimenti il confronto
+riporta l'errore e l'adapter resta registrato.
+
+Comandi: `aiw train jobs`, `aiw train logs <id>`, `aiw train cancel <id>`, `aiw train datasets`,
+`aiw adapters`, `aiw adapters rm <id>`. API: `POST/GET /api/datasets`, `POST/GET /api/train/jobs`,
+`GET /api/train/jobs/{id}/log`, `POST /api/train/jobs/{id}/cancel`, `GET /api/adapters`.
+Nella UI la pagina **Addestramento** (`#/training`) mostra il dispositivo, i trainer, i dataset,
+gli addestramenti con il log e gli adapter.
+
+### Limiti
+
+- Nessun trainer è stato provato in CI: i test usano un `python` finto. La prima esecuzione con
+  mlx-lm, TRL o Unsloth veri può scoprire differenze nei formati o negli argomenti.
+- I dati sono in formato chat (`{"messages": [...]}`), con gli argomenti dei tool come oggetti JSON.
+- Un adapter si registra solo se la cartella ha i file attesi (`adapters.safetensors` e
+  `adapter_config.json` per MLX; `adapter_config.json` e i pesi per PEFT).
+- I log e i file di configurazione dei job stanno in `~/.aiw/train/<id>/`; il file di configurazione
+  per gli script TRL è leggibile solo dall'utente.

@@ -3,6 +3,7 @@ import type {
   AgEvent, AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, MeshState, PeerDevice,
+  AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
 } from "./types";
@@ -118,6 +119,23 @@ export interface Transport {
   evalReports(): Promise<EvalReport[]>;
   evalReport(id: string): Promise<EvalReport>;
   compareEvalReports(a: string, b: string): Promise<EvalComparison>;
+
+  /** Device, trainers and what can be trained here. */
+  trainDoctor(): Promise<TrainDoctor>;
+  installTrainer(id: string): Promise<InstallJob>;
+  trainerInstall(id: string): Promise<InstallJob | null>;
+  datasets(): Promise<DatasetInfo[]>;
+  /** The server refuses with the reason when there are too few examples. */
+  buildDataset(spec: DatasetSpec): Promise<DatasetInfo>;
+  deleteDataset(id: string): Promise<void>;
+  trainJobs(): Promise<TrainJob[]>;
+  /** Starts a fine-tuning in the background: the job comes back `queued` and is polled with `trainJobs`. */
+  startTrainJob(req: TrainJobRequest): Promise<TrainJob>;
+  cancelTrainJob(id: string): Promise<TrainJob>;
+  /** The last `lines` lines of the log. */
+  trainJobLog(id: string, lines?: number): Promise<string[]>;
+  adapters(): Promise<AdapterInfo[]>;
+  deleteAdapter(id: string): Promise<void>;
 
   tools(): Promise<ToolInfo[]>;
   setToolEnabled(name: string, enabled: boolean): Promise<void>;

@@ -6,6 +6,7 @@ import type {
   AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
+  DatasetSpec, TrainJobRequest,
 } from "../types";
 import {
   agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
@@ -13,6 +14,7 @@ import {
 } from "./fixtures";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
+import * as training from "./training";
 
 /** A simulated download: files transferred one after the other, then verified. */
 interface MockJob {
@@ -842,6 +844,31 @@ export class MockTransport implements Transport {
   async compareEvalReports(a: string, b: string): Promise<EvalComparison> {
     return compareReports(await this.evalReport(a), await this.evalReport(b));
   }
+
+  async trainDoctor() { return training.doctor(); }
+  async installTrainer(id: string): Promise<InstallJob> {
+    const t = training.trainers.find((x) => x.id === id);
+    if (!t) throw new ApiError(404, `trainer ${id} non trovato`);
+    if (t.state === "unsupported") throw new ApiError(422, `${t.name} non si può usare qui: ${t.reason ?? ""}`);
+    const job: InstallJob = { runtime_id: id, state: "running", step: 1, steps: 2, log: ["$ python3 -m venv ~/.aiw/pyenv"] };
+    this.installs.set(`trainer:${id}`, job);
+    setTimeout(() => { job.step = 2; job.log.push(`$ python -m pip install ${id}`, "Downloading wheel (312 MB)"); }, 700);
+    setTimeout(() => { job.log.push("✓ Installazione completata"); job.state = "done"; t.state = "ready"; }, 1800);
+    return structuredClone(job);
+  }
+  async trainerInstall(id: string): Promise<InstallJob | null> {
+    const j = this.installs.get(`trainer:${id}`);
+    return j ? structuredClone(j) : null;
+  }
+  async datasets() { return structuredClone(training.datasets); }
+  async buildDataset(spec: DatasetSpec) { return training.buildDataset(spec); }
+  async deleteDataset(id: string) { training.deleteDataset(id); }
+  async trainJobs() { return structuredClone(training.jobs); }
+  async startTrainJob(req: TrainJobRequest) { return training.startJob(req); }
+  async cancelTrainJob(id: string) { return training.cancelJob(id); }
+  async trainJobLog(id: string, lines = 200) { return training.jobLog(id, lines); }
+  async adapters() { return structuredClone(training.adapters); }
+  async deleteAdapter(id: string) { training.deleteAdapter(id); }
 
   async tools() { return structuredClone(tools); }
   async setToolEnabled(name: string, enabled: boolean) {

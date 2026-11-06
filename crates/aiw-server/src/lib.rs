@@ -173,6 +173,14 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/trainers/{id}/install-plan", get(trainer_install_plan))
         .route("/api/trainers/{id}/install", get(trainer_install_status).post(trainer_install_start))
         .route("/api/train/doctor", get(train_doctor))
+        .route("/api/datasets", get(datasets).post(build_dataset))
+        .route("/api/datasets/{id}", get(dataset).delete(delete_dataset))
+        .route("/api/train/jobs", get(train_jobs).post(start_train_job))
+        .route("/api/train/jobs/{id}", get(train_job))
+        .route("/api/train/jobs/{id}/log", get(train_job_log))
+        .route("/api/train/jobs/{id}/cancel", post(cancel_train_job))
+        .route("/api/adapters", get(adapters))
+        .route("/api/adapters/{id}", get(adapter).delete(delete_adapter))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat_completions))
         .route("/v1/messages", post(anthropic::messages))
@@ -893,6 +901,49 @@ async fn trainer_install_status(State(s): State<AppState>, Path(id): Path<String
 }
 async fn train_doctor(State(s): State<AppState>) -> ApiResult<aiw_engine::train::TrainDoctor> {
     ok(s.engine.train_doctor().await)
+}
+async fn datasets(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::DatasetInfo>> {
+    ok(s.engine.datasets()?)
+}
+async fn build_dataset(State(s): State<AppState>, Json(spec): Json<aiw_core::api::DatasetSpec>) -> ApiResult<aiw_core::api::DatasetInfo> {
+    ok(s.engine.build_dataset(&spec)?)
+}
+async fn dataset(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::DatasetInfo> {
+    ok(s.engine.dataset(&id)?)
+}
+async fn delete_dataset(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_dataset(&id)?;
+    ok(json!({"deleted": true}))
+}
+async fn train_jobs(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::TrainJob>> {
+    ok(s.engine.train_jobs()?)
+}
+async fn start_train_job(State(s): State<AppState>, Json(req): Json<aiw_core::api::TrainJobRequest>) -> ApiResult<aiw_core::api::TrainJob> {
+    ok(s.engine.start_train_job(req).await?)
+}
+async fn train_job(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::TrainJob> {
+    ok(s.engine.train_job(&id)?)
+}
+#[derive(Deserialize)]
+struct LogQuery {
+    lines: Option<usize>,
+}
+async fn train_job_log(State(s): State<AppState>, Path(id): Path<String>, Query(q): Query<LogQuery>) -> ApiResult<Value> {
+    let lines = q.lines.unwrap_or(aiw_engine::train_jobs::DEFAULT_LOG_LINES).clamp(1, 5000);
+    ok(json!({"lines": s.engine.train_job_log(&id, lines)?}))
+}
+async fn cancel_train_job(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::TrainJob> {
+    ok(s.engine.cancel_train_job(&id)?)
+}
+async fn adapters(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::AdapterInfo>> {
+    ok(s.engine.adapters()?)
+}
+async fn adapter(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::AdapterInfo> {
+    ok(s.engine.adapter(&id)?)
+}
+async fn delete_adapter(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_adapter(&id)?;
+    ok(json!({"deleted": true}))
 }
 async fn tools(State(s): State<AppState>) -> ApiResult<Vec<ToolInfo>> {
     ok(s.engine.tools())

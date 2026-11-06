@@ -607,6 +607,160 @@ pub struct Feedback {
     pub created_at: String,
 }
 
+// ---------------------------------------------------------------- training
+
+/// What goes into a training dataset (`POST /api/datasets`, `aiw train sft --from-traces …`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DatasetSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `sft` (conversations), `dpo` (preference pairs) or `grpo` (prompts to answer, from a suite).
+    pub method: String,
+    /// Only the sessions of this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// RFC 3339 or `YYYY-MM-DD`, compared with the last activity of the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    /// Where the examples come from: `feedback` (sessions with a thumbs up and no thumbs down),
+    /// `succeeded` (sessions whose last run succeeded), `eval` (tasks that passed in `eval_reports`).
+    /// Default for `sft`: `feedback`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    /// Evaluation reports (ids) to take passed tasks from, and for `dpo` pairs from repeated runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub eval_reports: Vec<String>,
+    /// Suite whose task prompts are the training prompts (`grpo`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suite: Option<String>,
+    /// Times each prompt appears (`grpo`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<u32>,
+}
+
+/// A dataset written to `~/.aiw/datasets/<id>/` (`train.jsonl`, `valid.jsonl`, `meta.json`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DatasetInfo {
+    pub id: String,
+    pub name: String,
+    pub method: String,
+    pub created_at: String,
+    pub examples: usize,
+    pub train: usize,
+    pub valid: usize,
+    /// Rough size in tokens (a quarter of the characters).
+    pub tokens_est: u64,
+    /// Agents the examples come from.
+    pub agents: Vec<String>,
+    pub sources: Vec<String>,
+    pub path: String,
+}
+
+/// Knobs of a fine-tuning; whatever is missing falls back to the trainer's own default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TrainParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epochs: Option<f32>,
+    /// Optimizer steps (mlx-lm); with `epochs` also given, `iters` wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iters: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learning_rate: Option<f64>,
+    /// LoRA rank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<u32>,
+}
+
+/// `POST /api/train/jobs`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TrainJobRequest {
+    /// `sft`, `dpo` or `grpo`.
+    pub method: String,
+    /// A trainer id (`mlx-lm-lora`, `trl`, `unsloth`); the first ready one that knows the method when missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trainer: Option<String>,
+    /// A local model (id or name), or a Hugging Face repository the trainer downloads.
+    pub base_model: String,
+    pub dataset_id: String,
+    #[serde(default)]
+    pub params: TrainParams,
+    /// Name of the adapter that is registered at the end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Suite to run, once with the base model and once with the adapter, when the job succeeds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_suite: Option<String>,
+    /// Inference profile the comparison starts from (its model with and without the adapter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_profile: Option<String>,
+    /// Suite whose graders reward the answers (`grpo`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reward_suite: Option<String>,
+}
+
+/// A fine-tuning, from `queued` to `succeeded`, `failed` or `cancelled`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TrainJob {
+    pub id: String,
+    pub method: String,
+    pub trainer: String,
+    pub base_model: String,
+    pub dataset_id: String,
+    pub params: TrainParams,
+    /// queued | running | succeeded | failed | cancelled
+    pub status: String,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    pub log_path: String,
+    /// 0..1, read from the log when the trainer prints it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_suite: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reward_suite: Option<String>,
+}
+
+/// A LoRA adapter AIW trained, registered with the files it left in `~/.aiw/adapters/<id>/`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdapterInfo {
+    pub id: String,
+    pub name: String,
+    pub base_model: String,
+    pub method: String,
+    pub trainer: String,
+    pub dataset_id: String,
+    pub created_at: String,
+    /// What a profile names in `params.adapters[].path`.
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<Value>,
+    /// `mlx` or `peft` (a folder), `gguf` (a file).
+    pub format: String,
+    /// The job that produced it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Todo {
     pub content: String,

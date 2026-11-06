@@ -584,3 +584,62 @@ describe("updates (demo)", () => {
     expect(view.effective["update.auto_download"]).toBe(false);
   });
 });
+
+describe("fine-tuning", () => {
+  let api: MockTransport;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    api = new MockTransport();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const sleep = async (ms: number) => void (await vi.advanceTimersByTimeAsync(ms));
+
+  it("explains the device and refuses a dataset with too few examples", async () => {
+    const d = await api.trainDoctor();
+    expect(d.trainers.map((t) => t.id)).toEqual(["mlx-lm-lora", "trl", "unsloth"]);
+    await expect(api.buildDataset({ method: "sft", agent: "planner" })).rejects.toThrow(/almeno 10 esempi.*ne ho trovati 3/);
+    await expect(api.buildDataset({ method: "sft", sources: ["eval"] })).rejects.toThrow(/report di valutazione/);
+    await expect(api.buildDataset({ method: "sft", sources: ["boh"] })).rejects.toThrow(/sorgente/);
+    const ds = await api.buildDataset({ method: "sft", name: "Nuovo" });
+    expect(ds.examples).toBe(ds.train + ds.valid);
+    expect((await api.datasets())[0].id).toBe(ds.id);
+    await api.deleteDataset(ds.id);
+    await expect(api.deleteDataset(ds.id)).rejects.toThrow(/non trovato/);
+  });
+
+  it("runs a job to the adapter, one at a time, and can cancel it", async () => {
+    const ds = await api.buildDataset({ method: "sft" });
+    const job = await api.startTrainJob({ method: "sft", base_model: "Qwen/Qwen3-4B", dataset_id: ds.id, params: { iters: 3 }, name: "Prova" });
+    expect(job.status).toBe("queued");
+    await expect(api.startTrainJob({ method: "sft", base_model: "x", dataset_id: ds.id })).rejects.toThrow(/già un addestramento/);
+    await expect(api.deleteDataset(ds.id)).rejects.toThrow(/in uso/);
+    await sleep(3000);
+    const done = (await api.trainJobs()).find((j) => j.id === job.id)!;
+    expect(done.status).toBe("succeeded");
+    expect(done.adapter_id).toBeTruthy();
+    expect((await api.adapters())[0]).toMatchObject({ id: done.adapter_id, name: "Prova", method: "sft" });
+    expect((await api.trainJobLog(job.id, 2)).at(-1)).toBe("Addestramento completato.");
+
+    const second = await api.startTrainJob({ method: "sft", base_model: "x", dataset_id: ds.id, params: { iters: 50 } });
+    await sleep(1200);
+    await api.cancelTrainJob(second.id);
+    await sleep(800);
+    expect((await api.trainJobs()).find((j) => j.id === second.id)!.status).toBe("cancelled");
+    await expect(api.cancelTrainJob(second.id)).rejects.toThrow(/non è in corso/);
+    await api.deleteAdapter(done.adapter_id!);
+    await expect(api.deleteAdapter(done.adapter_id!)).rejects.toThrow(/non trovato/);
+  });
+
+  it("refuses a trainer that is missing or cannot run here", async () => {
+    const ds = await api.buildDataset({ method: "sft" });
+    await expect(api.startTrainJob({ method: "sft", trainer: "unsloth", base_model: "x", dataset_id: ds.id })).rejects.toThrow(/non è installato/);
+    await expect(api.startTrainJob({ method: "sft", trainer: "mlx-lm-lora", base_model: "x", dataset_id: ds.id })).rejects.toThrow(/non si può usare qui/);
+    await expect(api.startTrainJob({ method: "dpo", base_model: "x", dataset_id: ds.id })).rejects.toThrow(/è per SFT/);
+    const install = await api.installTrainer("unsloth");
+    expect(install.state).toBe("running");
+    await sleep(2000);
+    expect((await api.trainerInstall("unsloth"))?.state).toBe("done");
+    expect((await api.trainDoctor()).trainers.find((t) => t.id === "unsloth")!.state).toBe("ready");
+  });
+});

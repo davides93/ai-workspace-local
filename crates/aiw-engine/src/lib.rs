@@ -1,5 +1,6 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
+mod dataset;
 pub mod defaults;
 pub mod eval;
 mod host;
@@ -10,6 +11,7 @@ mod secrets;
 pub mod store;
 pub mod traces;
 pub mod train;
+pub mod train_jobs;
 pub mod update;
 pub mod voice;
 pub mod webhook;
@@ -126,6 +128,8 @@ pub(crate) struct Inner {
     pub pair_guard: Mutex<pairing::PairGuard>,
     pub updater: update::Updater,
     pub current_version: semver::Version,
+    /// Running fine-tuning jobs.
+    pub train: train_jobs::TrainState,
 }
 
 #[derive(Clone)]
@@ -242,6 +246,7 @@ impl Engine {
             pairing: Mutex::new((random_digits(6), Instant::now())),
             pair_guard: Default::default(),
             updater: update::Updater::new(opts.update_api_base.clone(), &updater_os, &updater_arch, updates_dir),
+            train: Default::default(),
             current_version: semver::Version::parse(opts.current_version.as_deref().unwrap_or(aiw_core::VERSION))
                 .map_err(|e| Error::Invalid(format!("versione non valida: {e}")))?,
         }));
@@ -258,6 +263,7 @@ impl Engine {
 
     fn seed(&self) -> Result<()> {
         let s = &self.0.store;
+        self.fail_interrupted_train_jobs()?;
         // Nothing can be running yet: whatever says so was interrupted by a crash or a kill.
         if s.fail_interrupted_runs()? > 0 {
             for mut session in s.sessions()?.into_iter().filter(|x| x.last_status.as_deref() == Some("running")) {

@@ -72,6 +72,18 @@ describe("HttpTransport", () => {
     await t.evalReports();
     await t.evalReport("evr 1");
     await t.compareEvalReports("evr_a", "evr b");
+    await t.trainDoctor();
+    await t.installTrainer("trl");
+    await t.trainerInstall("trl");
+    await t.datasets();
+    await t.buildDataset({ method: "sft", sources: ["feedback"] });
+    await t.deleteDataset("ds 1");
+    await t.trainJobs();
+    await t.startTrainJob({ method: "sft", base_model: "m", dataset_id: "ds_1" });
+    await t.cancelTrainJob("trn/1");
+    await t.trainJobLog("trn_1", 50);
+    await t.adapters();
+    await t.deleteAdapter("ad 1");
     vi.unstubAllGlobals();
     expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
       "POST /runtimes/refresh",
@@ -103,6 +115,18 @@ describe("HttpTransport", () => {
       "GET /eval-runs",
       "GET /eval-runs/evr%201",
       "GET /eval-runs/compare?a=evr_a&b=evr%20b",
+      "GET /train/doctor",
+      "POST /trainers/trl/install",
+      "GET /trainers/trl/install",
+      "GET /datasets",
+      "POST /datasets",
+      "DELETE /datasets/ds%201",
+      "GET /train/jobs",
+      "POST /train/jobs",
+      "POST /train/jobs/trn%2F1/cancel",
+      "GET /train/jobs/trn_1/log?lines=50",
+      "GET /adapters",
+      "DELETE /adapters/ad%201",
     ]);
     expect(JSON.parse(calls[2].body!)).toEqual({ token: "t0k", endpoint: "https://mirror" });
     expect(JSON.parse(calls[5].body!)).toEqual({ id: "some-id" });
@@ -112,6 +136,8 @@ describe("HttpTransport", () => {
     expect(JSON.parse(calls[20].body!)).toEqual({ rating: 1 });
     expect(JSON.parse(calls[23].body!)).toMatchObject({ id: "s/1", name: "S" });
     expect(JSON.parse(calls[25].body!)).toEqual({ profile: "veloce", repeat: 3 });
+    expect(JSON.parse(calls[33].body!)).toEqual({ method: "sft", sources: ["feedback"] });
+    expect(JSON.parse(calls[36].body!)).toEqual({ method: "sft", base_model: "m", dataset_id: "ds_1" });
   });
 });
 

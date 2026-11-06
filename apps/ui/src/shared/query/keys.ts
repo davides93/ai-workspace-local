@@ -56,6 +56,15 @@ export const qk = {
     compare: (a: string, b: string) => ["evals", "compare", a, b] as const,
   },
 
+  training: {
+    all: () => ["training"] as const,
+    doctor: () => ["training", "doctor"] as const,
+    datasets: () => ["training", "datasets"] as const,
+    jobs: () => ["training", "jobs"] as const,
+    log: (id: string) => ["training", "jobs", id, "log"] as const,
+    adapters: () => ["training", "adapters"] as const,
+  },
+
   tools: () => ["tools"] as const,
   mcp: () => ["mcp", "servers"] as const,
 

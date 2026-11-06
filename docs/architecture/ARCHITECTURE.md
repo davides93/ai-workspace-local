@@ -401,6 +401,21 @@ scelta per usare un adapter: per percorso. Il manifest di un runtime dichiara co
 (`aiw_runtimes::adapters`) e rifiuta i runtime senza supporto. Il supervisor aggiunge gli argomenti al
 lancio e ricorda gli adapter con cui il sidecar è partito: un set diverso lo riavvia.
 
+**SFT dalle traiettorie.** `Engine::build_dataset` (`dataset.rs`) scrive in `~/.aiw/datasets/<id>/`
+`train.jsonl`, `valid.jsonl` (90/10 stabile: dipende dall'esempio, non dall'ordine) e `meta.json`.
+Le sorgenti sono le sessioni con un pollice in su e nessuno in giù (`feedback`), quelle il cui ultimo run è
+riuscito (`succeeded`) e i task superati nei report di valutazione (`eval`, un solo turno: prompt e risposta
+finale). Passano dallo stesso mascheramento dei segreti dell'export delle traiettorie e servono almeno 10
+esempi. Le chiamate di tool escono con gli argomenti come oggetto JSON, non come stringa, perché è ciò che si
+aspettano i chat template. `Engine::start_train_job` (`train_jobs.rs`) sceglie il trainer, controlla che il
+modello entri nel dispositivo e lancia il processo con `aiw_runtimes::job` (gruppo di processi, log su file,
+annullamento che uccide il gruppo): un solo job alla volta. Il progresso si legge dal log (righe di mlx-lm
+`Iter N: Train loss …` o `AIW_PROGRESS {json}` dello script TRL, `scripts/train/trl_train.py`, che l'engine
+copia in `~/.aiw/scripts/train/`). A fine corsa l'adapter è nella sua cartella `~/.aiw/adapters/<id>/`, verificata
+dal formato, e registrato; con una suite di valutazione il job la esegue con il modello del profilo scelto
+prima senza e poi con l'adapter (profilo temporaneo) e riporta la differenza nelle metriche. Un job rimasto
+`running` quando l'app si riavvia risulta `failed`. Il file di configurazione dello script TRL è `0600`.
+
 ## 6. Tool (L4)
 
 | Tool | Piattaforme | Note |
@@ -438,6 +453,9 @@ lancio e ricorda gli adapter con cui il sidecar è partito: un set diverso lo ri
 | GET | `/api/eval-runs` · `/api/eval-runs/{id}` · `/api/eval-runs/compare?a=&b=` | Report (aggiornati a ogni task), confronto A/B tra due report salvati |
 | GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET | `/api/trainers` · `/api/train/doctor` · `/api/trainers/{id}/install-plan` · GET/POST `/api/trainers/{id}/install` | Trainer, idoneità del dispositivo, installazione |
+| GET/POST | `/api/datasets` · GET/DELETE `/api/datasets/{id}` | Dataset di addestramento: POST crea da sessioni, feedback e report (`DatasetSpec`), rifiuta con meno di 10 esempi |
+| GET/POST | `/api/train/jobs` · GET `/api/train/jobs/{id}` · `/api/train/jobs/{id}/log?lines=` · POST `/api/train/jobs/{id}/cancel` | Addestramenti (uno alla volta), log e annullamento |
+| GET/DELETE | `/api/adapters[/{id}]` | Adapter registrati; un adapter usato da un profilo non si cancella |
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
 | POST | `/api/kill` | Kill switch |

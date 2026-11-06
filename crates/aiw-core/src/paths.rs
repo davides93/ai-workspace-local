@@ -65,6 +65,22 @@ impl DataDirs {
     pub fn eval_work(&self) -> PathBuf {
         self.root.join("eval-work")
     }
+    /// Training datasets (`<id>/train.jsonl`, `valid.jsonl`, `meta.json`).
+    pub fn datasets(&self) -> PathBuf {
+        self.root.join("datasets")
+    }
+    /// LoRA adapters AIW trained (`<id>/…`).
+    pub fn adapters(&self) -> PathBuf {
+        self.root.join("adapters")
+    }
+    /// Working folders and logs of the fine-tuning jobs (`<job id>/train.log`).
+    pub fn train_jobs(&self) -> PathBuf {
+        self.root.join("train")
+    }
+    /// Scripts AIW hands to the external trainers (`train/trl_train.py`).
+    pub fn scripts(&self) -> PathBuf {
+        self.root.join("scripts")
+    }
     pub fn device_config(&self, device_name: &str) -> PathBuf {
         let safe: String = device_name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
         self.devices().join(format!("{safe}.json"))

@@ -129,7 +129,8 @@ export const system: SystemInfo = {
     tier: "xl",
   },
   peers: [
-    { id: "dev_mbp", name: "MacBook Pro M4 Max", os: "macos", address: "192.168.1.42", status: "online", shared_runtimes: ["mlx-lm", "apple-fm"] },
+    { id: "dev_mbp", name: "MacBook Pro M4 Max", os: "macos", address: "192.168.1.42", status: "online", shared_runtimes: ["mlx-lm", "apple-fm"],
+      hardware: { arch: "aarch64", tier: "xl", memory_mb: 131072, vram_mb: 131072, accelerators: ["metal", "cpu"], unified_memory: true } },
     { id: "dev_iphone", name: "iPhone 17 Pro", os: "ios", address: "192.168.1.57", status: "online", shared_runtimes: ["apple-fm"] },
     { id: "dev_pixel", name: "Pixel 10", os: "android", address: "—", status: "offline", shared_runtimes: ["gemini-nano", "litert-lm"] },
   ],

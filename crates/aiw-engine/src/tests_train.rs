@@ -155,3 +155,249 @@ async fn profiles_with_adapters_are_checked_when_they_are_saved() {
     // Ollama without adapters is fine.
     assert!(e.save_profile(profile_with("ollama", vec![])).is_ok());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Datasets and jobs
+
+use aiw_core::api::{DatasetSpec, TrainJob, TrainJobRequest};
+
+/// A session with one exchange, rated when `rating` is given.
+fn rated_session(e: &Engine, n: usize, rating: Option<i32>, answer: &str) -> String {
+    let s = e.create_session("operator", None).unwrap();
+    let msg = |role: &str, content: String| ChatMessage {
+        id: new_id("msg"),
+        role: role.into(),
+        content,
+        reasoning: None,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+        created_at: now_rfc3339(),
+    };
+    let reply = msg("assistant", answer.to_string());
+    let reply_id = reply.id.clone();
+    e.0.store.append_messages(&s.id, &[msg("user", format!("domanda numero {n}")), reply]).unwrap();
+    if let Some(r) = rating {
+        e.set_feedback(&s.id, &reply_id, r, None).unwrap();
+    }
+    s.id
+}
+
+fn sft_spec() -> DatasetSpec {
+    DatasetSpec { method: "sft".into(), ..Default::default() }
+}
+
+#[tokio::test]
+async fn an_sft_dataset_needs_enough_liked_sessions_and_hides_secrets() {
+    let (e, _d, _w) = engine(vec![]).await;
+    for n in 0..9 {
+        rated_session(&e, n, Some(1), "risposta utile");
+    }
+    // Nine are not enough, and the message says how many there were.
+    let err = e.build_dataset(&sft_spec()).unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("ne ho trovati 9"), "{err}");
+
+    rated_session(&e, 9, Some(1), "la chiave è sk-abcdefghijklmnop1234567890");
+    // A thumbs down and an unrated session are left out.
+    rated_session(&e, 10, Some(-1), "risposta sbagliata");
+    rated_session(&e, 11, None, "risposta neutra");
+    let info = e.build_dataset(&DatasetSpec { name: Some("  Mio  ".into()), ..sft_spec() }).unwrap();
+    assert_eq!((info.name.as_str(), info.examples, info.train + info.valid), ("Mio", 10, 10));
+    assert_eq!(info.valid, 1);
+    assert_eq!(info.sources, vec!["feedback"]);
+
+    let train = std::fs::read_to_string(format!("{}/train.jsonl", info.path)).unwrap();
+    let valid = std::fs::read_to_string(format!("{}/valid.jsonl", info.path)).unwrap();
+    let all = format!("{train}{valid}");
+    assert!(!all.contains("sk-abcdefghij") && all.contains(crate::traces::REDACTED), "secrets are masked");
+    assert!(!all.contains("sbagliata") && !all.contains("neutra"));
+    let first: Value = serde_json::from_str(train.lines().next().unwrap()).unwrap();
+    assert_eq!(first["messages"][0]["role"], "user");
+
+    // Listed, readable by id, removable; an unknown id or a path-like one is a 404.
+    assert_eq!(e.datasets().unwrap().len(), 1);
+    assert_eq!(e.dataset(&info.id).unwrap().examples, 10);
+    assert!(matches!(e.dataset("../x"), Err(Error::NotFound(_))));
+    e.delete_dataset(&info.id).unwrap();
+    assert!(e.datasets().unwrap().is_empty());
+    assert!(matches!(e.build_dataset(&DatasetSpec { method: "boh".into(), ..Default::default() }), Err(Error::Invalid(_))));
+    assert!(matches!(e.build_dataset(&DatasetSpec { sources: vec!["boh".into()], ..sft_spec() }), Err(Error::Invalid(_))));
+}
+
+/// A `python` that "imports" mlx_lm and, when run with `-m mlx_lm.lora`, behaves like a (fast) training:
+/// it prints the lines mlx-lm prints and writes the adapter. A model with "slow" in its name hangs.
+#[cfg(unix)]
+fn fake_mlx_trainer(e: &Engine) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = e.0.dirs.root.join("pyenv").join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = r#"#!/bin/sh
+if [ "$1" = "-c" ]; then
+  case "$2" in "import mlx_lm") exit 0;; *) exit 1;; esac
+fi
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --adapter-path) AD="$2";;
+    --model) M="$2";;
+    --iters) IT="$2";;
+  esac
+  shift
+done
+case "$M" in *fail*) echo "boom: out of memory"; exit 3;; esac
+case "$M" in *slow*) echo "Iter 1: Train loss 2.5, Learning Rate 1e-5"; sleep 30;; esac
+echo "Iter 1: Train loss 2.500, Learning Rate 1e-5"
+echo "Iter $IT: Val loss 1.250, Val took 0.1s"
+echo "Iter $IT: Train loss 0.750, Learning Rate 1e-5"
+mkdir -p "$AD"
+echo weights > "$AD/adapters.safetensors"
+echo '{}' > "$AD/adapter_config.json"
+"#;
+    let py = bin.join("python");
+    std::fs::write(&py, script).unwrap();
+    std::fs::set_permissions(&py, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+async fn ready_to_train(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, tempfile::TempDir, tempfile::TempDir, String) {
+    let (e, d, w) = engine(turns).await;
+    e.set_device(device("macos", "aarch64", "m", 24, vec![("metal", None), ("cpu", None)]));
+    #[cfg(unix)]
+    fake_mlx_trainer(&e);
+    for n in 0..12 {
+        rated_session(&e, n, Some(1), "risposta utile");
+    }
+    let ds = e.build_dataset(&sft_spec()).unwrap();
+    (e, d, w, ds.id)
+}
+
+fn sft_request(dataset: &str, model: &str) -> TrainJobRequest {
+    TrainJobRequest {
+        method: "sft".into(),
+        base_model: model.into(),
+        dataset_id: dataset.into(),
+        params: aiw_core::api::TrainParams { iters: Some(4), ..Default::default() },
+        ..Default::default()
+    }
+}
+
+async fn wait_job(e: &Engine, id: &str) -> TrainJob {
+    for _ in 0..400 {
+        let j = e.train_job(id).unwrap();
+        if !matches!(j.status.as_str(), "queued" | "running") {
+            return j;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("job {id} did not finish: {:?}", e.train_job(id).unwrap());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_job_with_a_fake_trainer_registers_the_adapter() {
+    let (e, _d, _w, ds) = ready_to_train(vec![]).await;
+    let job =
+        e.start_train_job(TrainJobRequest { name: Some("Mio adapter".into()), ..sft_request(&ds, "org/modello-piccolo") }).await.unwrap();
+    assert_eq!((job.status.as_str(), job.trainer.as_str()), ("queued", "mlx-lm-lora"));
+    let done = wait_job(&e, &job.id).await;
+    assert_eq!(done.status, "succeeded", "{:?}", done.error);
+    assert_eq!(done.progress, Some(1.0));
+    let m = done.metrics.clone().unwrap();
+    assert_eq!((m["train_loss"].as_f64(), m["val_loss"].as_f64(), m["steps"].as_u64()), (Some(0.75), Some(1.25), Some(4)));
+    let log = e.train_job_log(&job.id, 50).unwrap().join("\n");
+    assert!(log.contains("Iter 1: Train loss 2.500"), "{log}");
+
+    // The adapter is registered and its files are where the profile can use them.
+    let a = e.adapter(done.adapter_id.as_deref().unwrap()).unwrap();
+    assert_eq!((a.name.as_str(), a.format.as_str(), a.method.as_str()), ("Mio adapter", "mlx", "sft"));
+    assert!(std::path::Path::new(&a.path).join("adapters.safetensors").is_file());
+    assert_eq!(e.adapters().unwrap().len(), 1);
+    // The configuration of mlx-lm carries the rank.
+    let yaml = std::fs::read_to_string(e.0.dirs.train_jobs().join(&job.id).join("lora.yaml")).unwrap();
+    assert!(yaml.contains("rank: 8"), "{yaml}");
+
+    // A profile that uses it keeps it from being deleted; free again, it goes with its files.
+    let mut p = profile_with("mlx-lm", vec![AdapterRef { path: a.path.clone(), scale: None }]);
+    p.id = "usa-adapter".into();
+    e.save_profile(p).unwrap();
+    let err = e.delete_adapter(&a.id).unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)) && err.to_string().contains("Fine-tuned"), "{err}");
+    e.delete_profile("usa-adapter").unwrap();
+    e.delete_adapter(&a.id).unwrap();
+    assert!(!std::path::Path::new(&a.path).exists() && e.adapters().unwrap().is_empty());
+    assert!(matches!(e.adapter(&a.id), Err(Error::NotFound(_))));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failing_trainer_leaves_no_adapter_and_says_why() {
+    let (e, _d, _w, ds) = ready_to_train(vec![]).await;
+    let job = e.start_train_job(sft_request(&ds, "org/fail")).await.unwrap();
+    let done = wait_job(&e, &job.id).await;
+    assert_eq!(done.status, "failed");
+    let why = done.error.unwrap();
+    assert!(why.contains("codice 3") && why.contains("out of memory"), "{why}");
+    assert!(e.adapters().unwrap().is_empty());
+    assert_eq!(std::fs::read_dir(e.0.dirs.adapters()).map(|d| d.count()).unwrap_or(0), 0, "the partial folder is removed");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn one_job_at_a_time_and_a_running_job_can_be_cancelled() {
+    let (e, _d, _w, ds) = ready_to_train(vec![]).await;
+    let job = e.start_train_job(sft_request(&ds, "org/slow")).await.unwrap();
+    let err = e.start_train_job(sft_request(&ds, "org/altro")).await.unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)), "{err}");
+    // The dataset of a running job cannot be removed.
+    assert!(matches!(e.delete_dataset(&ds), Err(Error::Conflict(_))));
+    e.cancel_train_job(&job.id).unwrap();
+    let done = wait_job(&e, &job.id).await;
+    assert_eq!(done.status, "cancelled");
+    assert!(e.adapters().unwrap().is_empty());
+    // Nothing runs any more: a second cancel is a conflict, and a new job can start.
+    assert!(matches!(e.cancel_train_job(&job.id), Err(Error::Conflict(_))));
+    assert!(matches!(e.cancel_train_job("trn_none"), Err(Error::NotFound(_))));
+    let next = e.start_train_job(sft_request(&ds, "org/ok")).await.unwrap();
+    assert_eq!(wait_job(&e, &next.id).await.status, "succeeded");
+    assert_eq!(e.train_jobs().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_job_is_refused_before_it_starts_when_it_cannot_work() {
+    let (e, _d, _w, ds) = ready_to_train(vec![]).await;
+    let bad = |r: TrainJobRequest| async { e.start_train_job(r).await.unwrap_err() };
+    assert!(matches!(bad(TrainJobRequest { method: "boh".into(), ..sft_request(&ds, "m") }).await, Error::Invalid(_)));
+    assert!(matches!(bad(sft_request(&ds, "  ")).await, Error::Invalid(_)));
+    assert!(matches!(bad(sft_request("ds_none", "m")).await, Error::NotFound(_)));
+    let mut r = sft_request(&ds, "m");
+    r.params.rank = Some(0);
+    assert!(matches!(bad(r).await, Error::Invalid(_)));
+    // A dataset for another method.
+    let mut r = sft_request(&ds, "m");
+    r.method = "dpo".into();
+    assert!(bad(r).await.to_string().contains("è per SFT"));
+    // A trainer that does not know the method (or is not here) is refused with the reason.
+    let mut r = sft_request(&ds, "m");
+    r.trainer = Some("trl".into());
+    assert!(matches!(bad(r).await, Error::Unsupported(_)));
+    // Comparing the adapter needs a suite and the profile to start from.
+    let mut r = sft_request(&ds, "m");
+    r.eval_suite = Some("nessuna".into());
+    assert!(bad(r).await.to_string().contains("non esiste"));
+    assert!(e.train_jobs().unwrap().is_empty(), "a refused job leaves no trace");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_job_interrupted_by_a_restart_is_failed() {
+    let (e, _d, _w, ds) = ready_to_train(vec![]).await;
+    let job = e.start_train_job(sft_request(&ds, "org/slow")).await.unwrap();
+    e.cancel_train_job(&job.id).unwrap();
+    wait_job(&e, &job.id).await;
+    // Simulate a crash: the record says running, nobody is running it.
+    let mut j = e.train_job(&job.id).unwrap();
+    j.status = "running".into();
+    e.0.store.save_train_job(&j.id, &j.method, &j.trainer, &j.status, &j.created_at, &j).unwrap();
+    e.fail_interrupted_train_jobs().unwrap();
+    let j = e.train_job(&job.id).unwrap();
+    assert_eq!(j.status, "failed");
+    assert!(j.error.unwrap().contains("interrotto"));
+}

@@ -4,6 +4,7 @@ pub mod adapters;
 #[cfg(feature = "llama-embedded")]
 pub mod embedded;
 pub mod install;
+pub mod job;
 pub mod manifest;
 pub mod ollama;
 pub mod openai;
