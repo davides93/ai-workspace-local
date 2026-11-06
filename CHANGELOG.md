@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0-beta.2 - pre-release
+
+- Addestramento guidato: il wizard SFT importa esempi JSONL revisionati da un file locale e rende selezionabile MedGemma 1.5 4B (testo, Apple Silicon, trainer `mlx-lm`). Provato su Mac con 12 esempi sintetici: import, job LoRA su Metal, confronto base/adapter su un esempio separato e profilo con l'adapter. La prova conferma il percorso, non un miglioramento delle risposte.
+- Agenti e training: un agente con il permesso esplicito può preparare il dataset, avviare e seguire il job e proporre un profilo candidato (`training_tool`). Il Kill switch interrompe anche il training.
+- Runtime: LocalAI si installa e si avvia tramite Homebrew; la scheda mostra un errore breve e i dettagli stanno nei log.
+- Aggiornamenti: selettore del canale (Automatico, Stabile, Beta, Alpha) in Impostazioni → Aggiornamenti ed elenco delle release del canale con le note di rilascio.
+- Modelli: i modelli di sistema disponibili compaiono tra i modelli; i profili si gestiscono da Modelli → Profili.
+- Apple Foundation Models: il modello è rilevato e il percorso funziona con un backend di test; l'errore generico del servizio Apple diventa un messaggio in italiano con dominio e codice. Su un Mac reale la generazione restituisce ancora un errore del servizio Apple (limite noto).
+
 ## 0.5.0-beta.1 - pre-release
 
 - Workflow: passo `team` (`{kind: team, team, prompt}`) che affida il compito a un team e ne usa la risposta finale; accetta `retry`, `timeout_s` e `on_error`, si può usare dentro `foreach` e `parallel`, ha il suo selettore nell'editor dei workflow. Un team usato da un workflow non si può eliminare (409).
