@@ -61,10 +61,74 @@ impl Store {
              CREATE UNIQUE INDEX IF NOT EXISTS feedback_message ON feedback(session_id, message_id);
              CREATE TABLE IF NOT EXISTS eval_runs (id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS workflow_state (run_id TEXT PRIMARY KEY, json TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS workflow_state (run_id TEXT PRIMARY KEY, json TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS a2a_tasks (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, session_id TEXT, json TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE INDEX IF NOT EXISTS a2a_tasks_context ON a2a_tasks(context_id, updated_at);",
         )
         .map_err(db)?;
         Ok(Self { conn: Mutex::new(conn) })
+    }
+
+    // ---------------- A2A tasks (served to other agents; they expire)
+    pub fn a2a_put(&self, task: &serde_json::Value, session: Option<&str>) -> Result<()> {
+        let id = task["id"].as_str().unwrap_or_default();
+        let context = task["contextId"].as_str().unwrap_or_default();
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO a2a_tasks(id,context_id,session_id,json,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id, json=excluded.json, updated_at=excluded.updated_at",
+                params![id, context, session, task.to_string(), aiw_core::now_rfc3339()],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+    pub fn a2a_get(&self, id: &str) -> Result<Option<(serde_json::Value, Option<String>)>> {
+        let row: Option<(String, Option<String>)> = self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT json, session_id FROM a2a_tasks WHERE id=?1", params![id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .map_err(db)?;
+        row.map(|(j, s)| Ok((serde_json::from_str(&j)?, s))).transpose()
+    }
+    /// Read-modify-write of one task under the connection lock, so that a cancellation and the end of the
+    /// run cannot overwrite each other. Returns what `f` returned, or `None` when the task does not exist.
+    pub fn a2a_update<R>(&self, id: &str, f: impl FnOnce(&mut serde_json::Value, &mut Option<String>) -> R) -> Result<Option<R>> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(String, Option<String>)> = conn
+            .query_row("SELECT json, session_id FROM a2a_tasks WHERE id=?1", params![id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .map_err(db)?;
+        let Some((json, mut session)) = row else { return Ok(None) };
+        let mut task: serde_json::Value = serde_json::from_str(&json)?;
+        let out = f(&mut task, &mut session);
+        conn.execute(
+            "UPDATE a2a_tasks SET json=?2, session_id=?3, updated_at=?4 WHERE id=?1",
+            params![id, task.to_string(), session, aiw_core::now_rfc3339()],
+        )
+        .map_err(db)?;
+        Ok(Some(out))
+    }
+    /// The local session that a conversation (`contextId`) continues in, if the context is known.
+    pub fn a2a_context_session(&self, context: &str) -> Result<Option<String>> {
+        let s: Option<Option<String>> = self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT session_id FROM a2a_tasks WHERE context_id=?1 AND session_id IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
+                params![context],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db)?;
+        Ok(s.flatten())
+    }
+    /// Deletes the tasks not touched since `cutoff` (RFC 3339); returns how many.
+    pub fn a2a_cleanup(&self, cutoff: &str) -> Result<usize> {
+        self.conn.lock().unwrap().execute("DELETE FROM a2a_tasks WHERE updated_at < ?1", params![cutoff]).map_err(db)
     }
 
     // ---------------- documents

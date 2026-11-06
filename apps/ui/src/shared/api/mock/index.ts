@@ -4,12 +4,12 @@ import { isSecretName } from "../../lib/secrets";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, InferenceProfile, McpServer,
-  MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
+  MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
+  SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
-  runtimes, sessionMessages, sessions, sleep, system, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
+  remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
@@ -86,7 +86,7 @@ export class MockTransport implements Transport {
   readonly kind = "mock" as const;
   readonly capabilities: TransportCapabilities = { demo: true, native: false, pairing: false };
   private runListeners = new Map<string, Set<(e: AgEvent) => void>>();
-  private runEvents = new Map<string, AgEvent[]>();
+  private runLog = new Map<string, AgEvent[]>();
   private pendingApprovals = new Map<string, { req: ApprovalRequest; resolve: (allow: boolean) => void }>();
   private jobs: MockJob[] = [];
   private voiceTurn = 0;
@@ -387,7 +387,65 @@ export class MockTransport implements Transport {
     return a;
   }
 
+  async runEvents(runId: string) {
+    return structuredClone(this.runLog.get(runId) ?? []);
+  }
+
+  async remoteAgents() { return remoteAgents.map((r) => ({ ...r, token: r.token ? SECRET_MASK : "" })); }
+  async saveRemoteAgent(r: RemoteAgent) {
+    // `save_remote_agent` of the engine, with its messages.
+    const id = r.id.trim();
+    if (!/^[A-Za-z0-9_-]{1,48}$/.test(id)) throw new ApiError(400, "id dell'agente remoto non valido (lettere, cifre, - e _, al massimo 48)");
+    if (id.startsWith("peer-")) throw new ApiError(400, "gli id che iniziano con `peer-` sono riservati ai dispositivi accoppiati");
+    if (!r.name.trim()) throw new ApiError(400, "il nome dell'agente remoto è obbligatorio");
+    if (!/^https?:\/\/[^/\s]+/.test(r.url.trim())) throw new ApiError(400, "l'URL dell'agente remoto deve essere http(s)");
+    const old = remoteAgents.find((x) => x.id === id);
+    const saved: RemoteAgent = { ...r, id, name: r.name.trim(), url: r.url.trim(), skill: r.skill?.trim() || undefined, token: r.token === SECRET_MASK ? (old?.token ?? "") : r.token };
+    delete saved.paired;
+    const i = remoteAgents.findIndex((x) => x.id === id);
+    if (i >= 0) remoteAgents[i] = saved; else remoteAgents.push(saved);
+    return { ...saved, token: saved.token ? SECRET_MASK : "" };
+  }
+  async deleteRemoteAgent(id: string) {
+    const r = remoteAgents.find((x) => x.id === id);
+    if (!r) throw new ApiError(404, `agente remoto ${id} non trovato`);
+    const using = teams.filter((t) => t.members.some((m) => m.agent === `remote:${id}`)).map((t) => t.name);
+    if (using.length > 0) throw new ApiError(409, `«${r.name}» è usato dai team: ${using.join(", ")}`);
+    remoteAgents.splice(remoteAgents.indexOf(r), 1);
+  }
+  async teams() { return structuredClone(teams); }
+  async saveTeam(t: TeamDef) {
+    // `save_team` of the engine, with its messages.
+    if (!t.id.trim() || !t.name.trim()) throw new ApiError(400, "il team ha bisogno di un id e di un nome");
+    if (!["supervisor", "parallel", "pipeline"].includes(t.strategy)) throw new ApiError(400, `strategia non valida: ${t.strategy} (supervisor, parallel o pipeline)`);
+    if (t.members.length < 1 || t.members.length > 8) throw new ApiError(400, "un team ha da 1 a 8 membri");
+    const exists = (id: string) => id.startsWith("remote:") || agents.some((a) => a.id === id);
+    const seen = new Set<string>();
+    for (const m of t.members) {
+      if (seen.has(m.agent)) throw new ApiError(400, `il membro \`${m.agent}\` compare più volte`);
+      seen.add(m.agent);
+      if (!exists(m.agent)) throw new ApiError(400, `l'agente \`${m.agent}\` non esiste`);
+    }
+    if (t.strategy === "supervisor" && !t.supervisor) throw new ApiError(400, "la strategia supervisor richiede un supervisore");
+    if (t.supervisor) {
+      if (!exists(t.supervisor)) throw new ApiError(400, `l'agente \`${t.supervisor}\` non esiste`);
+      if (seen.has(t.supervisor)) throw new ApiError(400, `il supervisore \`${t.supervisor}\` non può essere anche un membro`);
+    }
+    if (t.aggregator && !exists(t.aggregator)) throw new ApiError(400, `l'agente \`${t.aggregator}\` non esiste`);
+    for (const [k, v] of Object.entries(t.budget ?? {})) if (v === 0) throw new ApiError(400, `budget.${k} deve essere almeno 1 (ometti il campo per nessun limite)`);
+    const i = teams.findIndex((x) => x.id === t.id);
+    if (i >= 0) teams[i] = t; else teams.push(t);
+    return structuredClone(t);
+  }
+  async deleteTeam(id: string) {
+    const i = teams.findIndex((t) => t.id === id);
+    if (i < 0) throw new ApiError(404, `team ${id} non trovato`);
+    teams.splice(i, 1);
+  }
+
   async deleteAgent(id: string) {
+    const using = teams.filter((t) => t.supervisor === id || t.aggregator === id || t.members.some((m) => m.agent === id)).map((t) => t.name);
+    if (using.length > 0) throw new ApiError(409, `L'agente «${agents.find((a) => a.id === id)?.name ?? id}» è usato dai team: ${using.join(", ")}. Modificali prima di eliminarlo.`);
     if (sessions.some((s) => s.agent_id === id)) throw new Error("L'agente ha delle sessioni: eliminale prima");
     const i = agents.findIndex((a) => a.id === id);
     if (i >= 0) agents.splice(i, 1);
@@ -580,7 +638,7 @@ export class MockTransport implements Transport {
   }
 
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void) {
-    (this.runEvents.get(runId) ?? []).forEach(onEvent);
+    (this.runLog.get(runId) ?? []).forEach(onEvent);
     const set = this.runListeners.get(runId) ?? new Set();
     set.add(onEvent);
     this.runListeners.set(runId, set);
@@ -592,9 +650,9 @@ export class MockTransport implements Transport {
 
   private emit(runId: string, e: AgEvent) {
     const ev = { ...e, timestamp: Date.now() } as AgEvent;
-    const list = this.runEvents.get(runId) ?? [];
+    const list = this.runLog.get(runId) ?? [];
     list.push(ev);
-    this.runEvents.set(runId, list);
+    this.runLog.set(runId, list);
     this.runListeners.get(runId)?.forEach((fn) => fn(ev));
   }
 
@@ -743,7 +801,18 @@ export class MockTransport implements Transport {
     this.emit(runId, { type: "STATE_SNAPSHOT", snapshot: state() });
 
     const sub = nid("sub");
-    this.emit(runId, { type: "SUBAGENT_STARTED", subagentId: sub, name: "Lettore di metadati (Veloce)" });
+    // The sub-agent's own run, so that its card can open the trace.
+    const subRun = nid("run");
+    this.emit(subRun, { type: "RUN_STARTED", threadId, runId: subRun });
+    this.emit(subRun, { type: "TOOL_CALL_START", toolCallId: `${subRun}_t`, toolCallName: "read_file" });
+    this.emit(subRun, { type: "TOOL_CALL_ARGS", toolCallId: `${subRun}_t`, delta: JSON.stringify({ path: "~/Downloads/manuale-router.pdf" }) });
+    this.emit(subRun, { type: "TOOL_CALL_END", toolCallId: `${subRun}_t` });
+    this.emit(subRun, { type: "TOOL_CALL_RESULT", messageId: nid("m"), toolCallId: `${subRun}_t`, content: "PDF 1.7 · CreationDate: 2025-09-22" });
+    this.emit(subRun, { type: "TEXT_MESSAGE_START", messageId: `${subRun}_m`, role: "assistant" });
+    this.emit(subRun, { type: "TEXT_MESSAGE_CONTENT", messageId: `${subRun}_m`, delta: "manuale-router.pdf: data documento 2025-09-22 → 2025" });
+    this.emit(subRun, { type: "TEXT_MESSAGE_END", messageId: `${subRun}_m` });
+    this.emit(subRun, { type: "RUN_FINISHED", threadId, runId: subRun });
+    this.emit(runId, { type: "SUBAGENT_STARTED", subagentId: sub, name: "Lettore di metadati (Veloce)", runId: subRun });
     await sleep(700);
     this.emit(runId, { type: "SUBAGENT_FINISHED", subagentId: sub, result: "manuale-router.pdf: data documento 2025-09-22 → 2025" });
 

@@ -124,6 +124,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/profiles/{id}", put(save_profile).delete(delete_profile))
         .route("/api/agents", get(agents))
         .route("/api/agents/{id}", put(save_agent).delete(delete_agent))
+        .route("/api/remote-agents", get(remote_agents))
+        .route("/api/remote-agents/{id}", put(save_remote_agent).delete(delete_remote_agent))
+        .route("/api/teams", get(teams))
+        .route("/api/teams/{id}", get(get_team).put(save_team).delete(delete_team))
         .route("/api/policy", get(get_policy).put(put_policy))
         .route("/api/hooks", get(get_hooks).put(put_hooks))
         .route("/api/sessions", get(sessions).post(create_session))
@@ -428,6 +432,31 @@ async fn delete_agent(State(s): State<AppState>, Path(id): Path<String>) -> ApiR
 async fn save_agent(State(s): State<AppState>, Path(id): Path<String>, Json(mut a): Json<AgentProfile>) -> ApiResult<AgentProfile> {
     a.id = id;
     ok(s.engine.save_agent(a)?)
+}
+async fn remote_agents(State(s): State<AppState>) -> ApiResult<Vec<RemoteAgent>> {
+    ok(s.engine.remote_agents())
+}
+async fn save_remote_agent(State(s): State<AppState>, Path(id): Path<String>, Json(mut r): Json<RemoteAgent>) -> ApiResult<RemoteAgent> {
+    r.id = id;
+    ok(s.engine.save_remote_agent(r)?)
+}
+async fn delete_remote_agent(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_remote_agent(&id)?;
+    ok(json!({}))
+}
+async fn teams(State(s): State<AppState>) -> ApiResult<Vec<TeamDef>> {
+    ok(s.engine.teams()?)
+}
+async fn get_team(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<TeamDef> {
+    ok(s.engine.team(&id)?)
+}
+async fn save_team(State(s): State<AppState>, Path(id): Path<String>, Json(mut t): Json<TeamDef>) -> ApiResult<TeamDef> {
+    t.id = id;
+    ok(s.engine.save_team(t)?)
+}
+async fn delete_team(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_team(&id)?;
+    ok(json!({}))
 }
 async fn get_policy(State(s): State<AppState>) -> ApiResult<Value> {
     ok(json!({"rules": s.engine.policy_rules()}))
@@ -972,6 +1001,8 @@ mod tests_errors;
 mod tests_eval;
 #[cfg(test)]
 mod tests_models;
+#[cfg(test)]
+mod tests_remote;
 #[cfg(test)]
 mod tests_security;
 #[cfg(test)]

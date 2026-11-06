@@ -47,9 +47,10 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Esecuzione dei run | ✅ **v0.4** | un solo run per sessione (il secondo risponde 409); eliminare la sessione ferma il run; agente, profilo o runtime spariti → 409; i run rimasti `running` dopo un crash sono segnati falliti all'avvio; senza il profilo `default` il gateway ripiega sul profilo dell'agente predefinito |
 | Checkpoint prima delle scritture e rewind | ✅ | `aiw rewind <run>` (`--dry-run`), `GET /api/runs/{id}/checkpoint`, `POST /api/runs/{id}/rewind` e «Ripristina i file» nella chat; i file fuori dal workspace sono solo elencati |
 | Workflow (tool, agent, llm, approval, condition, foreach, parallel, sotto-workflow) e trigger (manuale, cron, intervallo, file, webhook) | ✅ | retry, timeout e `on_error` per passo, approvazioni con scadenza, segnaposto JSON, stato salvato a ogni passo e ripresa dopo il riavvio (passo in corso rieseguito: almeno una volta); **v0.4** editor visuale dei passi |
-| A2A 1.0 server, server MCP, delega ai peer via MCP | 🟡 | A2A senza streaming, task in memoria |
+| A2A 1.0 server, server MCP, delega ai peer via MCP | 🟡 | A2A senza streaming (`SendStreamingMessage` non c'è: il client interroga `GetTask`); i task sono in SQLite (`a2a_tasks`) e scadono dopo 24 ore |
+| Agenti remoti A2A | ✅ | registro `remote_agent` in Integrazioni (token mascherato come i segreti MCP) e dispositivi accoppiati, usabili come `remote:<id>` nei team e come subagenti; client A2A in `aiw-engine` (Agent Card, `SendMessage`, polling di `GetTask` con attesa crescente e timeout `a2a.timeout_seconds`, default 10 minuti, `CancelTask` se il run padre viene annullato); si parla solo con gli indirizzi registrati (l'Agent Card deve restare sulla stessa origine, nessun redirect) e ogni delega è nel registro delle attività |
 | Tracce e valutazione (export delle traiettorie, feedback, suite di valutazione) | 🟡 | export NDJSON delle sessioni con segreti mascherati (`aiw traces export`, `GET /api/traces/export`); **feedback** pollice su/giù sulle risposte finali, con nota, esportato con le tracce; **suite di valutazione** (crate `aiw-eval`): task con file iniziali e grader `file_exists`, `file_contains`, `output_matches`, `json_schema`, `command`, `judge` (un modello valuta il lavoro), eseguiti in una cartella temporanea con `aiw eval run`, con ripetizioni, report salvato e confronto A/B (`aiw eval compare`, `--profile` ripetuto); pagina **Valutazioni** nella UI con editor delle suite, esecuzione in background, report e confronto |
-| Team multi-agente (supervisor, handoff) | ❌ | |
+| Team multi-agente | ✅ | team (`/api/teams`, pagina Team, sessione `team:<id>`) con strategie supervisor, parallelo e catena, budget e schema di risposta, 1-8 membri locali o remoti; **handoff** (tool `handoff`: la conversazione passa a un altro agente, al massimo 3 passaggi per messaggio, mai verso una modalità più permissiva), **stato condiviso** (tool `team_state`, 64 chiavi e 32 KB, visibile nell'Inspector) e traccia annidata dei subagenti in chat (`GET /api/runs/{id}/events.json`). Limite: dopo un ricaricamento la traccia annidata non c'è più (la cronologia mostra le schede dei tool); un team di soli agenti remoti non si apre in chat |
 | Bot e canali (Telegram, Slack, email) | ❌ | |
 | Documenti e RAG (knowledge base, embeddings) | ❌ | la capacità `embeddings` è solo un'etichetta nei manifest |
 | Memoria a lungo termine | ❌ | |
@@ -198,7 +199,7 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 10. Client MCP completo: resources, prompts, sampling, OAuth, riconnessione.
 11. Rewind dei checkpoint, workflow durevoli (ripresa, foreach, retry, timeout), approvazioni con
     timeout e notifiche desktop.
-12. Team multi-agente (supervisor e handoff), canali (Telegram, Slack, email) e voce neurale locale
+12. Canali (Telegram, Slack, email) e voce neurale locale
     (Kokoro/Piper al posto delle voci di sistema; la trascrizione con whisper.cpp c'è già).
 
 **P3 · Sicurezza e distribuzione**

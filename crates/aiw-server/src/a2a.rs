@@ -3,6 +3,8 @@
 //! `/.well-known/agent-card.json` and hand them tasks with `SendMessage` on `/a2a`.
 //!
 //! Each `contextId` maps to one local session, so a conversation continues where it left off.
+//! Tasks live in SQLite (`a2a_tasks`) and expire after 24 hours.
+//! Known limit: no streaming (`SendStreamingMessage`); a client polls `GetTask`.
 //! Every action still goes through the local policy, approvals and audit. The 0.3 method names
 //! (`message/send`, `tasks/get`, `tasks/cancel`) are accepted too, with 0.3-shaped results.
 
@@ -12,25 +14,8 @@ use aiw_core::ids::new_id;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 pub const PROTOCOL_VERSION: &str = "1.0";
-
-struct TaskEntry {
-    task: Value,
-    session: Option<String>,
-}
-
-fn tasks() -> &'static Mutex<HashMap<String, TaskEntry>> {
-    static T: OnceLock<Mutex<HashMap<String, TaskEntry>>> = OnceLock::new();
-    T.get_or_init(Default::default)
-}
-
-fn contexts() -> &'static Mutex<HashMap<String, String>> {
-    static C: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-    C.get_or_init(Default::default)
-}
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
@@ -116,32 +101,31 @@ fn text_of(message: &Value) -> String {
         .unwrap_or_default()
 }
 
-fn finish(task_id: &str, result: aiw_core::Result<(String, String)>) {
-    let mut all = tasks().lock().unwrap();
-    let Some(entry) = all.get_mut(task_id) else { return };
-    if entry.task["status"]["state"] == "TASK_STATE_CANCELED" {
-        return;
-    }
-    let context = entry.task["contextId"].as_str().unwrap_or_default().to_string();
-    match result {
-        Ok((answer, session)) => {
-            contexts().lock().unwrap().insert(context.clone(), session.clone());
-            entry.session = Some(session);
-            let agent_msg = json!({"messageId": new_id("msg"), "role": "ROLE_AGENT", "parts": [{"text": answer}], "contextId": context, "taskId": task_id});
-            entry.task["artifacts"] = json!([{"artifactId": new_id("art"), "name": "risposta", "parts": [{"text": answer}]}]);
-            if let Some(h) = entry.task["history"].as_array_mut() {
-                h.push(agent_msg);
+fn finish(s: &AppState, task_id: &str, result: aiw_core::Result<(String, String)>) {
+    let _ = s.engine.a2a_update_task(task_id, |task, session| {
+        if task["status"]["state"] == "TASK_STATE_CANCELED" {
+            return;
+        }
+        let context = task["contextId"].as_str().unwrap_or_default().to_string();
+        match result {
+            Ok((answer, sid)) => {
+                *session = Some(sid);
+                let agent_msg = json!({"messageId": new_id("msg"), "role": "ROLE_AGENT", "parts": [{"text": answer}], "contextId": context, "taskId": task_id});
+                task["artifacts"] = json!([{"artifactId": new_id("art"), "name": "risposta", "parts": [{"text": answer}]}]);
+                if let Some(h) = task["history"].as_array_mut() {
+                    h.push(agent_msg);
+                }
+                task["status"] = json!({"state": "TASK_STATE_COMPLETED", "timestamp": now()});
             }
-            entry.task["status"] = json!({"state": "TASK_STATE_COMPLETED", "timestamp": now()});
+            Err(e) => {
+                task["status"] = json!({
+                    "state": "TASK_STATE_FAILED",
+                    "timestamp": now(),
+                    "message": {"messageId": new_id("msg"), "role": "ROLE_AGENT", "parts": [{"text": e.to_string()}], "contextId": context, "taskId": task_id}
+                });
+            }
         }
-        Err(e) => {
-            entry.task["status"] = json!({
-                "state": "TASK_STATE_FAILED",
-                "timestamp": now(),
-                "message": {"messageId": new_id("msg"), "role": "ROLE_AGENT", "parts": [{"text": e.to_string()}], "contextId": context, "taskId": task_id}
-            });
-        }
-    }
+    });
 }
 
 async fn send_message(s: &AppState, params: &Value, legacy_shape: bool, id: &Value) -> Value {
@@ -157,14 +141,11 @@ async fn send_message(s: &AppState, params: &Value, legacy_shape: bool, id: &Val
     let context = message["contextId"].as_str().filter(|c| !c.is_empty()).map(String::from).unwrap_or_else(|| new_id("ctx"));
     let title = format!("A2A · {}", text.chars().take(40).collect::<String>());
     // One local session per context, created now so that the task can be cancelled at once.
-    let known = contexts().lock().unwrap().get(&context).cloned();
+    let known = s.engine.a2a_context_session(&context).ok().flatten();
     let session = match known {
         Some(sid) => sid,
         None => match s.engine.create_session(&agent, Some(title.clone())) {
-            Ok(created) => {
-                contexts().lock().unwrap().insert(context.clone(), created.id.clone());
-                created.id
-            }
+            Ok(created) => created.id,
             Err(e) => return rpc_error(id, -32603, e.to_string()),
         },
     };
@@ -174,21 +155,23 @@ async fn send_message(s: &AppState, params: &Value, legacy_shape: bool, id: &Val
         "role": "ROLE_USER", "parts": [{"text": text}], "contextId": context, "taskId": task_id
     });
     let task = json!({"id": task_id, "contextId": context, "status": {"state": "TASK_STATE_WORKING", "timestamp": now()}, "artifacts": [], "history": [user_msg]});
-    tasks().lock().unwrap().insert(task_id.clone(), TaskEntry { task, session: Some(session.clone()) });
+    if let Err(e) = s.engine.a2a_put_task(&task, Some(&session)) {
+        return rpc_error(id, -32603, e.to_string());
+    }
     let blocking = params["configuration"]["blocking"].as_bool() != Some(false)
         && params["configuration"]["returnImmediately"].as_bool() != Some(true);
-    let engine = s.engine.clone();
+    let state = s.clone();
     let tid = task_id.clone();
     let work = async move {
-        let r = engine.run_agent_task(&agent, &text, Some(&session), &title).await;
-        finish(&tid, r);
+        let r = state.engine.run_agent_task(&agent, &text, Some(&session), &title).await;
+        finish(&state, &tid, r);
     };
     if blocking {
         work.await;
     } else {
         tokio::spawn(work);
     }
-    let task = tasks().lock().unwrap().get(&task_id).map(|e| e.task.clone()).unwrap_or(Value::Null);
+    let task = s.engine.a2a_task(&task_id).ok().flatten().map(|(t, _)| t).unwrap_or(Value::Null);
     json!({"jsonrpc": "2.0", "id": id, "result": wrap(&task, legacy_shape)})
 }
 
@@ -202,25 +185,31 @@ pub async fn handle(State(s): State<AppState>, Json(body): Json<Value>) -> Json<
         "SendMessage" | "message/send" => send_message(&s, params, legacy_shape, &id).await,
         "GetTask" | "tasks/get" => {
             let tid = params["id"].as_str().unwrap_or_default();
-            match tasks().lock().unwrap().get(tid) {
-                Some(e) => json!({"jsonrpc": "2.0", "id": id, "result": if legacy_shape { legacy(&e.task) } else { e.task.clone() }}),
-                None => rpc_error(&id, -32001, format!("task non trovato: {tid}")),
+            match s.engine.a2a_task(tid) {
+                Ok(Some((task, _))) => json!({"jsonrpc": "2.0", "id": id, "result": if legacy_shape { legacy(&task) } else { task }}),
+                Ok(None) => rpc_error(&id, -32001, format!("task non trovato: {tid}")),
+                Err(e) => rpc_error(&id, -32603, e.to_string()),
             }
         }
         "CancelTask" | "tasks/cancel" => {
             let tid = params["id"].as_str().unwrap_or_default().to_string();
-            let entry = tasks().lock().unwrap().get(&tid).map(|e| (e.task["status"]["state"].clone(), e.session.clone()));
-            match entry {
-                None => rpc_error(&id, -32001, format!("task non trovato: {tid}")),
-                Some((state, _)) if state != "TASK_STATE_WORKING" => rpc_error(&id, -32002, "il task non è più annullabile"),
-                Some((_, session)) => {
+            // The state change is atomic with respect to the end of the run: whichever comes first wins.
+            let changed = s.engine.a2a_update_task(&tid, |task, session| {
+                if task["status"]["state"] != "TASK_STATE_WORKING" {
+                    return Err(());
+                }
+                task["status"] = json!({"state": "TASK_STATE_CANCELED", "timestamp": now()});
+                Ok((task.clone(), session.clone()))
+            });
+            match changed {
+                Err(e) => rpc_error(&id, -32603, e.to_string()),
+                Ok(None) => rpc_error(&id, -32001, format!("task non trovato: {tid}")),
+                Ok(Some(Err(()))) => rpc_error(&id, -32002, "il task non è più annullabile"),
+                Ok(Some(Ok((task, session)))) => {
                     if let Some(run) = session.and_then(|sid| s.engine.active_run(&sid)) {
                         let _ = s.engine.cancel_run(&run);
                     }
-                    let mut all = tasks().lock().unwrap();
-                    let e = all.get_mut(&tid).expect("task present");
-                    e.task["status"] = json!({"state": "TASK_STATE_CANCELED", "timestamp": now()});
-                    json!({"jsonrpc": "2.0", "id": id, "result": if legacy_shape { legacy(&e.task) } else { e.task.clone() }})
+                    json!({"jsonrpc": "2.0", "id": id, "result": if legacy_shape { legacy(&task) } else { task }})
                 }
             }
         }

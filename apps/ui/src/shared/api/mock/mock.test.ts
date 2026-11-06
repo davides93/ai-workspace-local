@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DownloadProgress } from "../types";
+import { SECRET_MASK, type DownloadProgress } from "../types";
 import { MockTransport, urlDest } from "./index";
 
 // Basic contract of the demo transport for the model hub (docs/architecture/model-hub.md §3-§4).
@@ -293,6 +293,47 @@ describe("other v0.4 methods", () => {
     expect((await api.workflows()).some((w) => w.id === "wf-tmp")).toBe(false);
   });
 
+  it("keeps remote agents like the engine: the token is masked and kept, and a team protects the agent", async () => {
+    const demo = await api.remoteAgents();
+    expect(demo[0]).toMatchObject({ id: "studio", token: SECRET_MASK });
+    const base = { id: "tmp", name: "Tmp", url: "http://h:7777", token: "segreto", description: "" };
+    await expect(api.saveRemoteAgent({ ...base, id: "a b" })).rejects.toMatchObject({ status: 400 });
+    await expect(api.saveRemoteAgent({ ...base, id: "peer-x" })).rejects.toMatchObject({ message: expect.stringContaining("riservati") });
+    await expect(api.saveRemoteAgent({ ...base, name: " " })).rejects.toMatchObject({ message: "il nome dell'agente remoto è obbligatorio" });
+    await expect(api.saveRemoteAgent({ ...base, url: "ftp://x" })).rejects.toMatchObject({ message: expect.stringContaining("http(s)") });
+    const saved = await api.saveRemoteAgent(base);
+    expect(saved.token).toBe(SECRET_MASK);
+    // Sending the mask back keeps the stored token: nothing leaks, nothing is lost.
+    await api.saveRemoteAgent({ ...saved, description: "nuova" });
+    expect((await api.remoteAgents()).find((r) => r.id === "tmp")).toMatchObject({ token: SECRET_MASK, description: "nuova" });
+
+    await api.saveTeam({ id: "t-rem", name: "Con remoto", description: "", strategy: "parallel", members: [{ agent: "remote:tmp", role: "" }] });
+    await expect(api.deleteRemoteAgent("tmp")).rejects.toMatchObject({ status: 409, message: expect.stringContaining("Con remoto") });
+    await api.deleteTeam("t-rem");
+    await api.deleteRemoteAgent("tmp");
+    await expect(api.deleteRemoteAgent("tmp")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("saves, validates and deletes teams like the engine, and protects the agents they use", async () => {
+    const demo = await api.teams();
+    expect(demo.map((t) => t.id)).toContain("revisione");
+    const base = { id: "t-tmp", name: "Tmp", description: "", strategy: "pipeline" as const, members: [{ agent: "coder", role: "scrive" }] };
+    await expect(api.saveTeam({ ...base, strategy: "coro" as never })).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strategia non valida") });
+    await expect(api.saveTeam({ ...base, members: [] })).rejects.toMatchObject({ message: "un team ha da 1 a 8 membri" });
+    await expect(api.saveTeam({ ...base, members: [base.members[0], base.members[0]] })).rejects.toMatchObject({ message: expect.stringContaining("compare più volte") });
+    await expect(api.saveTeam({ ...base, members: [{ agent: "ghost", role: "" }] })).rejects.toMatchObject({ message: "l'agente `ghost` non esiste" });
+    await expect(api.saveTeam({ ...base, strategy: "supervisor" })).rejects.toMatchObject({ message: expect.stringContaining("richiede un supervisore") });
+    await expect(api.saveTeam({ ...base, strategy: "supervisor", supervisor: "coder" })).rejects.toMatchObject({ message: expect.stringContaining("non può essere anche un membro") });
+    await expect(api.saveTeam({ ...base, budget: { max_tokens: 0 } })).rejects.toMatchObject({ message: expect.stringContaining("budget.max_tokens") });
+    await expect(api.saveTeam({ ...base, members: [{ agent: "remote:r1", role: "" }] })).resolves.toBeDefined();
+
+    await api.saveTeam({ ...base, members: [{ agent: "browser", role: "" }] });
+    await expect(api.deleteAgent("browser")).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/usato dai team: .*Tmp/) });
+    await api.deleteTeam("t-tmp");
+    await expect(api.deleteTeam("t-tmp")).rejects.toMatchObject({ status: 404 });
+    expect((await api.teams()).some((t) => t.id === "t-tmp")).toBe(false);
+  });
+
   it("saves, runs and compares evaluation suites like the engine does", async () => {
     const suite = { id: "ev-tmp", name: "Tmp", tasks: [{ id: "t", prompt: "crea note.md", graders: [{ kind: "file_exists", path: "note.md" }] }] };
     expect((await api.evalSuites()).some((s) => s.id === "esempio")).toBe(true);
@@ -343,7 +384,7 @@ describe("backend fixes in the demo", () => {
   it("lists the tools of the agent loop as internal, always on, and refuses to switch them (400)", async () => {
     const api = new MockTransport();
     const internal = (await api.tools()).filter((t) => t.source === "internal");
-    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "render_ui", "skill", "todo"]);
+    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "handoff", "render_ui", "skill", "team_state", "todo"]);
     expect(internal.every((t) => t.enabled && t.available && t.risk === "read")).toBe(true);
     await expect(api.setToolEnabled("todo", false)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strumento interno") });
     await expect(api.setToolEnabled("nope", false)).rejects.toMatchObject({ status: 404 });

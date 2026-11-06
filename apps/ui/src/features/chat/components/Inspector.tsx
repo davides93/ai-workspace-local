@@ -43,6 +43,7 @@ export function InspectorBody({ runState, agent, profile, session, pending, runn
   const ctxMax = u?.context_max ?? profile?.params.context;
   const ctxPct = u?.context_used && ctxMax ? u.context_used / ctxMax : 0;
   const todos = useMemo(() => runState.todos ?? [], [runState.todos]);
+  const shared = useMemo(() => Object.entries(runState.shared ?? {}), [runState.shared]);
   const doneCount = todos.filter((t) => t.status === "completed").length;
   const mode = modeInfo(agent?.mode);
   const sandbox = sandboxInfo(agent?.sandbox);
@@ -96,6 +97,12 @@ export function InspectorBody({ runState, agent, profile, session, pending, runn
           </ul>
         )}
       </Section>
+
+      {shared.length > 0 && (
+        <Section title="Stato condiviso" aside={<span className="faint text-xs num">{shared.length} {shared.length === 1 ? "chiave" : "chiavi"}</span>}>
+          <KeyValue items={shared.map(([k, v]): [string, ReactNode] => [k, <span className="mono text-xs" title={JSON.stringify(v, null, 2)}>{typeof v === "string" ? v : JSON.stringify(v)}</span>])} />
+        </Section>
+      )}
 
       {session?.worktree && <WorktreePanel key={session.id} session={session} running={running} />}
       {session && <CheckpointPanel key={`ck-${session.id}`} sessionId={session.id} running={running} />}

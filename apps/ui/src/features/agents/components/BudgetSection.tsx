@@ -1,6 +1,5 @@
 import { Field, Input } from "../../../shared/ui";
-import type { AgentProfile, BudgetLimits } from "../../../shared/api/types";
-import type { AgentIssue } from "../model/agents";
+import type { BudgetLimits } from "../../../shared/api/types";
 
 const FIELDS: { key: keyof BudgetLimits; id: string; label: string; hint: string }[] = [
   { key: "max_tokens", id: "ag-budget-tokens", label: "Token", hint: "Prompt e risposta di tutte le chiamate al modello." },
@@ -8,8 +7,17 @@ const FIELDS: { key: keyof BudgetLimits; id: string; label: string; hint: string
   { key: "max_seconds", id: "ag-budget-seconds", label: "Secondi", hint: "Tempo massimo del run." },
 ];
 
+/** What the section edits: an agent profile or a team. */
+interface HasBudget {
+  budget?: BudgetLimits;
+}
+
 /** Optional limits of one run, shared with the sub-agents it starts. An empty field means "the global setting". */
-export function BudgetSection({ agent, issues, onChange }: { agent: AgentProfile; issues: AgentIssue[]; onChange: (patch: Partial<AgentProfile>) => void }) {
+export function BudgetSection({ agent, issues, onChange }: {
+  agent: HasBudget;
+  issues: { field: string; level: string; message: string }[];
+  onChange: (patch: HasBudget) => void;
+}) {
   const error = issues.find((i) => i.field === "budget" && i.level === "error")?.message;
   const set = (key: keyof BudgetLimits, raw: string) => {
     const next: BudgetLimits = { ...agent.budget };

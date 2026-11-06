@@ -54,6 +54,9 @@ describe("HttpTransport", () => {
     await t.deleteModel("ollama:qwen3:4b");
     await t.deleteAgent("a");
     await t.deleteProfile("p");
+    await t.teams();
+    await t.saveTeam({ id: "t 1", name: "T", description: "", strategy: "pipeline", members: [{ agent: "a", role: "" }] });
+    await t.deleteTeam("t 1");
     await t.renameSession("s", "Titolo");
     await t.getSession("s");
     await t.deleteWorkflow("w");
@@ -72,6 +75,9 @@ describe("HttpTransport", () => {
     await t.evalReports();
     await t.evalReport("evr 1");
     await t.compareEvalReports("evr_a", "evr b");
+    await t.remoteAgents();
+    await t.saveRemoteAgent({ id: "r 1", name: "R", url: "http://h:1", token: "", description: "" });
+    await t.deleteRemoteAgent("r 1");
     vi.unstubAllGlobals();
     expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
       "POST /runtimes/refresh",
@@ -85,6 +91,9 @@ describe("HttpTransport", () => {
       "DELETE /models/ollama%3Aqwen3%3A4b",
       "DELETE /agents/a",
       "DELETE /profiles/p",
+      "GET /teams",
+      "PUT /teams/t%201",
+      "DELETE /teams/t%201",
       "PATCH /sessions/s",
       "GET /sessions/s",
       "DELETE /workflows/w",
@@ -103,15 +112,19 @@ describe("HttpTransport", () => {
       "GET /eval-runs",
       "GET /eval-runs/evr%201",
       "GET /eval-runs/compare?a=evr_a&b=evr%20b",
+      "GET /remote-agents",
+      "PUT /remote-agents/r%201",
+      "DELETE /remote-agents/r%201",
     ]);
     expect(JSON.parse(calls[2].body!)).toEqual({ token: "t0k", endpoint: "https://mirror" });
     expect(JSON.parse(calls[5].body!)).toEqual({ id: "some-id" });
-    expect(JSON.parse(calls[11].body!)).toEqual({ title: "Titolo" });
-    expect(JSON.parse(calls[15].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
-    expect(JSON.parse(calls[19].body!)).toEqual({ rating: -1, note: "troppo lunga" });
-    expect(JSON.parse(calls[20].body!)).toEqual({ rating: 1 });
-    expect(JSON.parse(calls[23].body!)).toMatchObject({ id: "s/1", name: "S" });
-    expect(JSON.parse(calls[25].body!)).toEqual({ profile: "veloce", repeat: 3 });
+    expect(JSON.parse(calls[12].body!)).toMatchObject({ id: "t 1", strategy: "pipeline" });
+    expect(JSON.parse(calls[14].body!)).toEqual({ title: "Titolo" });
+    expect(JSON.parse(calls[18].body!)).toEqual({ rules: [{ tool: "shell", action: "ask" }] });
+    expect(JSON.parse(calls[22].body!)).toEqual({ rating: -1, note: "troppo lunga" });
+    expect(JSON.parse(calls[23].body!)).toEqual({ rating: 1 });
+    expect(JSON.parse(calls[26].body!)).toMatchObject({ id: "s/1", name: "S" });
+    expect(JSON.parse(calls[28].body!)).toEqual({ profile: "veloce", repeat: 3 });
   });
 });
 
