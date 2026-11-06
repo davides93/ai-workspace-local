@@ -9,7 +9,7 @@ import type { IconName } from "../shared/ui";
  */
 
 export type RouteId =
-  | "home" | "chat" | "agents" | "workflows" | "evals" | "training" | "capabilities" | "integrations"
+  | "home" | "chat" | "agents" | "teams" | "workflows" | "evals" | "training" | "capabilities" | "integrations"
   | "models" | "runtimes" | "devices" | "security" | "activity" | "settings";
 
 export type GroupId = "overview" | "work" | "capabilities" | "inference" | "control";
@@ -41,6 +41,7 @@ export const ROUTES: AppRoute[] = [
   { id: "home", path: "/", label: "Panoramica", icon: "home", group: "overview", tab: 0, keywords: ["home", "dashboard", "inizio"], View: view(() => import("../features/home/HomeView"), "HomeView") },
   { id: "chat", path: "/chat/:sessionId?", label: "Workspace", icon: "chat", group: "work", tab: 1, keywords: ["chat", "conversazione", "sessioni"], View: view(() => import("../features/chat/ChatView"), "ChatView") },
   { id: "agents", path: "/agents/:agentId?", label: "Agenti", icon: "agent", group: "work", keywords: ["profili", "prompt"], View: view(() => import("../features/agents/AgentsView"), "AgentsView") },
+  { id: "teams", path: "/teams/:teamId?", label: "Team", icon: "team", group: "work", keywords: ["squadra", "supervisore", "multi-agente", "parallelo", "catena"], View: view(() => import("../features/teams/TeamsView"), "TeamsView") },
   { id: "workflows", path: "/workflows/:workflowId?", label: "Workflow", icon: "flow", group: "work", keywords: ["automazioni", "trigger", "webhook"], View: view(() => import("../features/workflows/WorkflowsView"), "WorkflowsView") },
   { id: "evals", path: "/evals/:tab?", label: "Valutazioni", icon: "check", group: "work", keywords: ["valutazione", "eval", "test", "benchmark", "grader", "confronto", "qualità"], View: view(() => import("../features/evals/EvalsView"), "EvalsView") },
   { id: "capabilities", path: "/capabilities/:tab?", label: "Tool, MCP e browser", icon: "tool", group: "capabilities", keywords: ["tool", "mcp", "browser", "computer-use", "strumenti"], View: view(() => import("../features/capabilities/CapabilitiesView"), "CapabilitiesView") },

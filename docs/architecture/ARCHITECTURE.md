@@ -261,8 +261,44 @@ sequenceDiagram
   `PreCompact`. `SessionStart` parte solo al primo messaggio di una conversazione e il suo output entra nel prompt di sistema;
   per gli eventi dei subagenti il filtro (`matcher`) è un glob sull'id dell'agente; `PreCompact` può saltare la compattazione.
   Un hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
-- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in `checkpoints/`.
+- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in
+  `checkpoints/<run_id>/<percorso>` (una volta per run). Accanto, `.aiw-run.json` registra la radice
+  del workspace e i file che il run ha *creato* (`write_file`, `edit_file` con `old_string` vuoto,
+  destinazione di `move_file`, che salva anche l'originale della sorgente); un file creato dal run non
+  ha un originale da salvare. I file fuori dal workspace stanno in `_esterni/`. Il **rewind**
+  (`aiw rewind <run_id> [--dry-run]`, `GET /api/runs/{id}/checkpoint`, `POST /api/runs/{id}/rewind`,
+  «Ripristina i file» nel pannello della chat) rimette gli originali ed elimina i file creati se
+  esistono ancora ed entro la radice registrata; i file esterni e quelli di un checkpoint senza radice
+  (precedente al rewind) sono solo elencati. È rifiutato (409) mentre il run è in corso, scrive in
+  audit `checkpoint.rewind`, e toglie dal checkpoint ciò che ha ripristinato, così un secondo rewind non
+  cancella le modifiche successive. Le cartelle spostate con `move_file` e i run dei sotto-agenti
+  (id propri) non sono coperti.
   Il rewind (ripristino dei file di un run) non è ancora implementato, né dalla UI né dalla CLI.
+
+### Team
+
+Un **team** (`TeamDef`, documento `team`) raggruppa da 1 a 8 agenti, locali o remoti (`remote:<id>`), e si usa in
+chat come un agente: l'id della sessione è `team:<id>`. Tre strategie:
+
+- `supervisor`: la sessione gira come l'agente supervisore (che non è anche un membro), con il tool `agent` ristretto
+  ai membri; il budget e lo schema di risposta del team hanno la precedenza.
+- `parallel`: tutti i membri lavorano sulla stessa richiesta (al massimo `agents.max_parallel_subagents` alla volta); un
+  aggregatore facoltativo unisce i risultati.
+- `pipeline` (catena): ogni membro riceve la richiesta e il risultato del precedente.
+
+Le strategie senza supervisore sono eseguite da `aiw-agent::team` (nessun modello in testa). Ogni membro gira come un
+subagente: stessi limiti del padre (modalità, sandbox, tool), budget condiviso con il run radice, un run figlio con il
+proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs/{id}/events.json`.
+
+- **Handoff**: il tool `handoff` chiude il run e passa la sessione a un altro agente (nota `aiw.handoff` in chat);
+  al massimo 3 passaggi per messaggio dell'utente, mai verso una modalità più permissiva.
+- **Stato condiviso**: il tool `team_state` (leggi, scrivi, elimina; 64 chiavi, 32 KB) vive nel `RunState.shared` del run
+  radice ed è pubblicato con `STATE_SNAPSHOT`.
+- **Agenti remoti**: il registro (`remote_agent`, API `/api/remote-agents`) e i dispositivi accoppiati. Il client A2A
+  (`aiw-engine/src/a2a_client.rs`) legge l'Agent Card, invia `SendMessage` non bloccante, interroga `GetTask` con
+  attesa crescente fino a `completed`, `failed` o `canceled` (o al timeout `a2a.timeout_seconds`) e invia `CancelTask`
+  se il run viene annullato. Rete solo verso gli URL registrati; ogni delega è nell'audit (`a2a.delegate`, `a2a.result`).
+  Il server A2A (`aiw-server/src/a2a.rs`) tiene i task in SQLite (`a2a_tasks`, scadenza 24 ore, pulizia all'avvio).
 
 ### 5.2 Policy, sandbox, audit
 
@@ -298,6 +334,54 @@ steps:
 Tipi di step: `tool`, `agent`, `llm`, `approval`, `condition` (`if`), `foreach`, `workflow`
 (sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
 ripresa dopo un'approvazione.
+
+**Segnaposto.** `{{inputs.x}}`, `{{now}}`, `{{steps.<id>.output}}` (anche `{{steps.<id>}}`),
+`{{steps.<id>.error}}` per un passo andato avanti con `on_error: continue`. L'output di un passo si
+legge come JSON con `{{steps.<id>.json}}` (riformattato compatto), `{{steps.<id>.json.a.b}}` e
+`{{steps.<id>.json.items.0.nome}}` (un numero indicizza un array): vale se l'output è JSON per
+intero o contiene un blocco ```json, altrimenti il segnaposto resta vuoto. Un valore stringa si
+inserisce senza virgolette, gli altri come JSON. Dentro un `foreach` ci sono anche `{{item}}`,
+`{{item.campo}}` e `{{index}}`. Le `condition` vedono il testo già sostituito.
+
+**Opzioni dei passi.** `tool`, `agent` e `llm` accettano `retry` (0–5 nuovi tentativi),
+`retry_delay_s` (attesa, default 2 s), `timeout_s` (limite per tentativo) e `on_error: continue`
+(il passo resta `failed`, il run prosegue e l'errore è in `{{steps.<id>.error}}`). Il timeout di un
+passo `agent` annulla anche il run dell'agente.
+
+**`foreach` e `parallel`.** `foreach` (`items`, `do`, `parallel` 1–8) esegue un passo inline
+`tool`/`agent`/`llm` per ogni voce di `items`: un array JSON (anche in un blocco ```json) oppure un
+testo con una voce per riga, al massimo 200. Nel passo valgono `{{item}}`, `{{item.campo}}` e
+`{{index}}`; l'output è l'array JSON degli output nell'ordine delle voci (`null` per una voce
+fallita con `on_error: continue`). Con `on_error: fail` il primo errore ferma il ciclo e annulla le
+voci ancora in corso. `parallel` (`steps`) esegue più passi inline insieme; l'output è l'oggetto
+`{id_interno: output}` e ogni output è leggibile anche come `{{steps.<id_interno>.output}}`. I passi
+interni possono essere solo `tool`, `agent` o `llm` (niente annidamento, `approval` o `condition`) e
+i loro id contano nell'unicità degli id del workflow. Gli agenti eseguiti insieme usano sessioni
+diverse. Durante l'esecuzione il passo mostra «3/5 completati».
+
+**Sotto-workflow.** `{kind: workflow, workflow: <id>, inputs: {…}}` avvia il workflow figlio (i
+valori di `inputs` accettano i segnaposto) e ne aspetta la fine. L'output del passo è l'output
+dell'ultimo passo `done` del figlio che non sia una `condition`; un figlio fallito o annullato è un
+errore del passo. Il figlio è un run normale, con `parent_run_id` che punta al padre, e può essere
+un workflow disattivato (l'attivazione riguarda solo i trigger). Profondità massima 3: un
+workflow che richiama se stesso è rifiutato dalla validazione, i cicli indiretti si fermano al
+limite. Se il padre smette di aspettare (timeout del passo) il figlio risulta annullato; dopo un
+riavvio un figlio non riprende da solo: il padre riparte dal passo e ne avvia uno nuovo.
+
+**Approvazioni con scadenza.** Il passo `approval` accetta `timeout_s` e `default` (`deny` o `allow`,
+default `deny`): allo scadere vale il default, l'output è «scaduto: approvato» oppure il passo
+fallisce con «scaduto: rifiutato» (e il run risulta annullato), l'audit registra `decision: "timeout"`.
+Per le richieste dei tool degli agenti vale l'impostazione globale `approvals.timeout_s` (0 = nessun
+limite, il default): allo scadere la richiesta è rifiutata e l'agente riceve un messaggio che spiega
+il timeout. Il livello *workspace* non può impostarla.
+
+**Durabilità.** Il motore tiene lo stato del run (`WorkflowState`: run, definizione, input, output,
+rami abilitati, passo corrente) e lo salva a ogni cambiamento nella tabella `workflow_state`; il run
+stesso è aggiornato in `workflow_runs`. All'avvio l'engine riprende i run `running` e
+`waiting_approval` dal passo salvato: quel passo ricomincia da capo (semantica *almeno una volta*,
+quindi un passo con effetti collaterali dovrebbe poter essere ripetuto), un'approvazione in attesa
+viene richiesta di nuovo, un run il cui workflow non esiste più diventa `failed`. L'audit registra
+`workflow.resume`.
 
 ### 5.4 Valutazione e tracce
 
@@ -376,7 +460,56 @@ esporta e la usa per misurare gli agenti:
   `~/.aiw/evals` (le suite già salvate si possono comunque eseguire) e il confronto via API legge solo
   report salvati, mai percorsi di file.
 
-### 5.5 Addestramento
+### 5.5 Apprendimento senza pesi
+
+L'agente impara dalle conversazioni senza toccare i pesi del modello: propone **lezioni** e l'utente
+decide. Nulla viene scritto prima dell'approvazione.
+
+- **Lezione** (`Lesson`, documenti `kind: "lesson"`): `kind` `memory` (una regola per `AGENTS.md`) o
+  `skill` (una procedura), `title`, `content` in Markdown, `reason`, `status` `pending` →
+  `approved` | `rejected`, la sessione e il run di origine.
+- **Riflessione** (`Engine::reflect`, `POST /api/sessions/{id}/reflect`): prende la traccia della
+  sessione con lo stesso codice dell'export (ultimi 30 messaggi, contenuti lunghi troncati, segreti
+  mascherati, errori dei run, rifiuti, note dei pollici giù) e chiede al profilo `learning.profile`
+  (vuoto = il profilo dell'agente della sessione) un JSON `{kind, title, content, reason}`, validato
+  con `aiw_agent::schema`. Una risposta non valida ha un solo tentativo di correzione, poi c'è un
+  errore e nessuna lezione.
+- **Avvio automatico** (`learning.reflect`): `off`; `on_feedback` (default) dopo un pollice giù;
+  `on_failure` anche dopo un run fallito o fermato dal budget. Va in background, con al massimo una
+  lezione in attesa per sessione; gli errori vanno solo nei log.
+- **Approvazione** (`POST /api/lessons/{id}/approve {title?, content?}`): una `memory` è aggiunta in
+  fondo alla sezione `## Lezioni apprese` di `~/.aiw/AGENTS.md` (creata se manca), con titolo e data;
+  una `skill` diventa `~/.aiw/skills/<titolo-in-minuscolo>/SKILL.md` con frontmatter `name` e
+  `description` (un nome già usato prende il suffisso `-2`, `-3`…). Titolo e contenuto si possono
+  modificare prima. Audit `lesson.approve` / `lesson.reject`. La cartella del workspace non viene mai
+  toccata: è contenuto del repository. Le istruzioni globali entrano nel prompt di sistema dei run
+  successivi (troncate a 20.000 caratteri), le skill sono nell'indice delle skill disponibili.
+
+CLI: `aiw lessons [list [--status pending|approved|rejected|all]|approve <id> [--title] [--content]|reject <id>]`.
+
+**Ottimizzazione del prompt** (`Engine::optimize_prompt`, `aiw eval optimize`): usa la valutazione per
+migliorare il system prompt di un agente, senza cambiarlo da sola.
+
+1. Esegue la suite con il prompt attuale (baseline). `TaskRequest.system_prompt` sovrascrive il prompt
+   dell'agente solo per quel task: l'agente salvato non viene toccato.
+2. Chiede al profilo `learning.profile` (vuoto: il `--profile` indicato, altrimenti il profilo
+   dell'agente) da 1 a 5 varianti (default 3) come JSON `{variants: [{prompt, rationale}]}`, validato
+   come le lezioni (un tentativo di correzione), dandogli il prompt attuale e i task falliti con i
+   dettagli dei grader. Le varianti vuote, ripetute o uguali all'attuale sono scartate.
+3. Esegue la suite per ogni variante.
+4. Sceglie la migliore per score, a parità per pass rate, poi per prompt più corto, **solo se batte la
+   baseline** (score maggiore, o uguale con pass rate maggiore); altrimenti `best` manca e il
+   risultato dice che non c'è nulla da applicare.
+
+Il risultato è un documento `kind: "prompt_optimization"` (`running` → `done` | `failed` → `applied`):
+baseline e varianti con score, pass rate, id dei report e diff unificato rispetto al prompt di
+partenza. Quelli rimasti `running` all'avvio del motore diventano `failed`. L'applicazione
+(`Engine::apply_prompt_optimization`, audit `prompt.apply`) salva il prompt con le stesse validazioni
+di `save_agent` e si rifiuta se il prompt dell'agente è cambiato nel frattempo. Non è mai automatica:
+`--apply` chiede conferma sul terminale (fuori da un terminale serve anche `--yes`) e la UI chiede
+conferma prima di «Applica all'agente».
+
+### 5.6 Addestramento
 
 AIW orchestra il fine-tuning, non lo esegue: i **trainer** sono programmi Python esterni
 (mlx-lm su Apple Silicon, TRL/PEFT e Unsloth su CUDA) descritti da manifest propri
@@ -469,12 +602,19 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET/PUT/DELETE | `/api/evals[/{id}]` | Suite di valutazione (PUT: JSON della suite o `{"text": yaml|json}`; i grader `command` non si scrivono via API) |
 | POST | `/api/evals/{id}/runs` | Avvia la suite in background (`{agent?, profile?, repeat?}`); risponde con il report `running` |
 | GET | `/api/eval-runs` · `/api/eval-runs/{id}` · `/api/eval-runs/compare?a=&b=` | Report (aggiornati a ogni task), confronto A/B tra due report salvati |
+| GET | `/api/lessons?status=` | Lezioni proposte dagli agenti (`pending`, `approved`, `rejected`) |
+| POST | `/api/lessons/{id}/approve` · `/api/lessons/{id}/reject` | Approva (scrive `AGENTS.md` o una skill; `{title?, content?}` per modificare) o scarta |
+| POST | `/api/evals/{id}/optimize` | Avvia in background l'ottimizzazione del prompt di un agente su una suite (`{agent, variants?, profile?, repeat?}`); risponde con il record `running` |
+| GET | `/api/prompt-optimizations[/{id}]` | Ottimizzazioni (baseline, varianti, diff), aggiornate a ogni esecuzione |
+| POST | `/api/prompt-optimizations/{id}/apply` | Salva nell'agente il prompt della variante (`{variant}`) |
+| POST | `/api/sessions/{id}/reflect` | Chiede subito all'agente una lezione sulla conversazione |
 | GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET | `/api/trainers` · `/api/train/doctor` · `/api/trainers/{id}/install-plan` · GET/POST `/api/trainers/{id}/install` | Trainer, idoneità del dispositivo, installazione |
 | GET/POST | `/api/datasets` · GET/DELETE `/api/datasets/{id}` | Dataset di addestramento: POST crea da sessioni, feedback e report (`DatasetSpec`), rifiuta con meno di 10 esempi |
 | GET/POST | `/api/train/jobs` · GET `/api/train/jobs/{id}` · `/api/train/jobs/{id}/log?lines=` · POST `/api/train/jobs/{id}/cancel` | Addestramenti (uno alla volta), log e annullamento |
 | GET/DELETE | `/api/adapters[/{id}]` | Adapter registrati; un adapter usato da un profilo non si cancella |
 | GET/POST | `/api/mcp/servers` | Server MCP |
+| GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
 | POST | `/api/kill` | Kill switch |
 | — | `/v1/models`, `/v1/chat/completions` | Gateway OpenAI-compatibile verso i runtime locali |

@@ -303,6 +303,66 @@ async fn the_agent_route_refuses_unknown_profiles_turns_and_tools() {
 }
 
 #[tokio::test]
+async fn the_team_routes_validate_and_protect_member_agents() {
+    let (app, e, _d) = fixture(None).await;
+    let team = json!({
+        "id": "x", "name": "Squadra", "description": "", "strategy": "supervisor", "supervisor": "planner",
+        "members": [{"agent": "operator", "role": "Esegue"}]
+    });
+    let (st, v) = dispatch(app.clone(), "PUT", "/api/teams/squadra", Some(team.clone())).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["id"], "squadra", "the id comes from the path");
+    let (st, v) = dispatch(app.clone(), "GET", "/api/teams/squadra", None).await;
+    assert_eq!((st, v["name"].as_str()), (200, Some("Squadra")));
+    let (_, all) = dispatch(app.clone(), "GET", "/api/teams", None).await;
+    assert_eq!(all.as_array().unwrap().len(), 1);
+    assert_eq!(dispatch(app.clone(), "GET", "/api/teams/nope", None).await.0, 404);
+
+    let with = |k: &str, v: Value| {
+        let mut x = team.clone();
+        x[k] = v;
+        x
+    };
+    let dup = json!([{"agent": "operator", "role": "a"}, {"agent": "operator", "role": "b"}]);
+    let nine: Vec<Value> = (0..9).map(|i| json!({"agent": format!("remote:r{i}"), "role": "x"})).collect();
+    for (body, why) in [
+        (with("strategy", json!("coro")), "strategia non valida"),
+        (with("supervisor", Value::Null), "richiede un supervisore"),
+        (with("supervisor", json!("operator")), "non può essere anche un membro"),
+        (with("supervisor", json!("fantasma")), "l'agente `fantasma` non esiste"),
+        (with("members", json!([])), "da 1 a 8 membri"),
+        (with("members", Value::Array(nine)), "da 1 a 8 membri"),
+        (with("members", dup), "compare più volte"),
+        (with("members", json!([{"agent": "fantasma", "role": ""}])), "l'agente `fantasma` non esiste"),
+        (with("budget", json!({"max_tokens": 0})), "budget.max_tokens deve essere almeno 1"),
+        (with("output_schema", json!({"type": "wibble"})), "output_schema non valido"),
+        (with("aggregator", json!("fantasma")), "l'agente `fantasma` non esiste"),
+    ] {
+        let (st, msg) = failure(&app, "PUT", "/api/teams/squadra", Some(body.clone())).await;
+        assert_eq!(st, 400, "{body}: {msg}");
+        assert!(msg.contains(why), "{body}: {msg}");
+    }
+    // Remote members are accepted without being resolved.
+    let (st, v) =
+        dispatch(app.clone(), "PUT", "/api/teams/squadra", Some(with("members", json!([{"agent": "remote:r1", "role": "x"}])))).await;
+    assert_eq!(st, 200, "{v}");
+
+    // An agent a team uses can't be deleted; the team can, and then the agent can too.
+    let mut mine = e.agent("planner").unwrap();
+    mine.id = "revisore".into();
+    mine.name = "Revisore".into();
+    dispatch(app.clone(), "PUT", "/api/agents/revisore", Some(serde_json::to_value(&mine).unwrap())).await;
+    let (st, v) = dispatch(app.clone(), "PUT", "/api/teams/squadra", Some(with("aggregator", json!("revisore")))).await;
+    assert_eq!(st, 200, "{v}");
+    let (st, msg) = failure(&app, "DELETE", "/api/agents/revisore", None).await;
+    assert_eq!(st, 409);
+    assert!(msg.contains("usato dai team: Squadra"), "{msg}");
+    assert_eq!(dispatch(app.clone(), "DELETE", "/api/teams/squadra", None).await.0, 200);
+    assert_eq!(dispatch(app.clone(), "DELETE", "/api/teams/squadra", None).await.0, 404);
+    assert_eq!(dispatch(app.clone(), "DELETE", "/api/agents/revisore", None).await.0, 200);
+}
+
+#[tokio::test]
 async fn the_mcp_route_validates_masks_secrets_and_404s_on_unknown_servers() {
     let (app, e, data) = fixture(None).await;
     for (body, why) in [
@@ -586,4 +646,34 @@ mod updates {
         assert_eq!(s["channel"], "stable", "a repository cannot pick the update channel");
         assert_eq!(e.config().effective["update.auto_download"], json!(false));
     }
+}
+
+// ------------------------------------------------------------------ checkpoints
+
+#[tokio::test]
+async fn a_checkpoint_is_read_and_rewound_over_http() {
+    let (app, e, data) = fixture(None).await;
+    let ws = e.workspace_root();
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("a.md"), "cambiato").unwrap();
+    std::fs::write(ws.join("nuovo.md"), "creato").unwrap();
+    let run = data.path().join("checkpoints/run_http");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(run.join("a.md"), "originale").unwrap();
+    std::fs::write(run.join(".aiw-run.json"), json!({"root": ws.display().to_string(), "created": ["nuovo.md"]}).to_string()).unwrap();
+
+    let (st, v) = dispatch(app.clone(), "GET", "/api/runs/run_http/checkpoint", None).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["restore"], json!(["a.md"]));
+    assert_eq!(v["delete"], json!(["nuovo.md"]));
+    assert_eq!(failure(&app, "GET", "/api/runs/run_assente/checkpoint", None).await.0, 404);
+    assert_eq!(failure(&app, "POST", "/api/runs/run_assente/rewind", None).await.0, 404);
+
+    let (st, v) = dispatch(app.clone(), "POST", "/api/runs/run_http/rewind", None).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["restored"], json!(["a.md"]));
+    assert_eq!(v["deleted"], json!(["nuovo.md"]));
+    assert_eq!(std::fs::read_to_string(ws.join("a.md")).unwrap(), "originale");
+    assert!(!ws.join("nuovo.md").exists());
+    assert_eq!(failure(&app, "POST", "/api/runs/run_http/rewind", None).await.0, 404);
 }

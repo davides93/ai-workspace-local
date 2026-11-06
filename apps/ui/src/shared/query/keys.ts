@@ -31,6 +31,8 @@ export const qk = {
   profiles: () => ["profiles"] as const,
   agents: () => ["agents"] as const,
   agentRouting: (id: string) => ["agents", "routing", id] as const,
+  teams: () => ["teams"] as const,
+  remoteAgents: () => ["remote-agents"] as const,
 
   sessions: {
     all: () => ["sessions"] as const,
@@ -39,9 +41,16 @@ export const qk = {
     messages: (id: string) => ["sessions", "messages", id] as const,
     feedback: (id: string) => ["sessions", "feedback", id] as const,
     worktree: (id: string) => ["sessions", "worktree", id] as const,
+    checkpoints: (id: string) => ["sessions", "checkpoints", id] as const,
   },
 
   approvals: () => ["approvals"] as const,
+  runEvents: (runId: string) => ["runs", "events", runId] as const,
+
+  lessons: {
+    all: () => ["lessons"] as const,
+    list: (status?: string) => ["lessons", "list", status ?? "all"] as const,
+  },
 
   workflows: {
     all: () => ["workflows"] as const,
@@ -55,6 +64,8 @@ export const qk = {
     reports: () => ["evals", "reports"] as const,
     report: (id: string) => ["evals", "reports", id] as const,
     compare: (a: string, b: string) => ["evals", "compare", a, b] as const,
+    optimizations: () => ["evals", "optimizations"] as const,
+    optimization: (id: string) => ["evals", "optimizations", id] as const,
   },
 
   training: {

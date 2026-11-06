@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Field, Textarea } from "../../../shared/ui";
-import type { AgentProfile } from "../../../shared/api/types";
 import { parseSchemaText, schemaToText } from "../model/agents";
 
 /**
@@ -8,8 +7,8 @@ import { parseSchemaText, schemaToText } from "../model/agents";
  * while the text is valid JSON, and `onError` tells the editor when saving must wait.
  */
 export function OutputSection({ agent, onChange, onError }: {
-  agent: AgentProfile;
-  onChange: (patch: Partial<AgentProfile>) => void;
+  agent: { output_schema?: unknown };
+  onChange: (patch: { output_schema?: Record<string, unknown> }) => void;
   onError: (message: string | null) => void;
 }) {
   const [text, setText] = useState(() => schemaToText(agent.output_schema));

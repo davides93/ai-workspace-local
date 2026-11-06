@@ -1,4 +1,4 @@
-//! Fine-tuning (architecture §5.5): AIW orchestrates external trainers, it does not train in Rust.
+//! Fine-tuning (architecture §5.6): AIW orchestrates external trainers, it does not train in Rust.
 //! Here: the trainers of this device and `aiw train doctor`.
 
 use crate::Engine;

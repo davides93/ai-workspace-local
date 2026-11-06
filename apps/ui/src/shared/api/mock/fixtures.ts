@@ -1,6 +1,6 @@
 import type {
   AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, Fit, HookConfig, InferenceProfile, LocalModel, McpServer,
-  PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, ToolInfo, WorkflowDef, WorkflowRun,
+  PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, RemoteAgent, TeamDef, ToolInfo, WorkflowDef, WorkflowRun,
 } from "../types";
 import { RUN_ERROR_MESSAGE } from "../types";
 
@@ -207,6 +207,25 @@ export const agents: AgentProfile[] = [
   { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "todo"], mode: "plan", sandbox: "read-only", max_turns: 20 },
 ];
 
+/** Teams of the demo: a supervisor with two members, and a chain. */
+/** Remote agents (A2A). The token of a stored one is kept here and masked by the mock API. */
+export const remoteAgents: RemoteAgent[] = [
+  { id: "studio", name: "PC dello studio", url: "http://192.168.1.20:7777", token: "demo-token", skill: "operator", description: "Il portatile dello studio, con i documenti del cliente." },
+];
+
+export const teams: TeamDef[] = [
+  {
+    id: "revisione", name: "Revisione del codice", description: "Il Coder implementa, il Pianificatore rivede: il supervisore li coordina.",
+    strategy: "supervisor", supervisor: "operator",
+    members: [{ agent: "coder", role: "Scrive e verifica le modifiche" }, { agent: "planner", role: "Rivede il piano e i rischi, senza modificare" }],
+    budget: { max_turns: 40 },
+  },
+  {
+    id: "ricerca", name: "Ricerca e sintesi", description: "Il Navigatore raccoglie, il Pianificatore riassume.",
+    strategy: "pipeline", members: [{ agent: "browser", role: "Raccoglie le fonti" }, { agent: "planner", role: "Riassume in un piano" }],
+  },
+];
+
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
 export const sessions: Session[] = [
@@ -244,6 +263,9 @@ new file mode 100644
 `;
 
 export const appliedWorktrees = new Set<string>();
+
+/** Runs whose files were put back (the demo checkpoint of the coder session is then empty). */
+export const rewoundRuns = new Set<string>();
 
 /**
  * A tiny PNG (256x160) standing for the screenshot of a web page: the scripted browser run sends it as the
@@ -311,7 +333,7 @@ tools.push(
  * The tools of the agent loop, as `GET /api/tools` lists them after the built-in and MCP ones: `source: "internal"`,
  * always on, risk `read`, no switch (crates/aiw-agent/src/internal.rs).
  */
-export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code"] as const;
+export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state"] as const;
 tools.push(
   ...([
     ["todo", "Pubblica e aggiorna il piano di lavoro dell'agente: elenco di passi con il loro stato."],
@@ -319,6 +341,8 @@ tools.push(
     ["skill", "Carica le istruzioni complete di una skill elencata nel prompt di sistema."],
     ["render_ui", "Mostra all'utente un'interfaccia interattiva (A2UI): moduli, scelte, riepiloghi, tabelle di card."],
     ["code", "Esegue uno script Rhai che orchestra più strumenti in un solo passo (cicli, filtri, conteggi)."],
+    ["handoff", "Passa la conversazione a un altro agente: il run termina e il nuovo agente prosegue con il tuo riassunto."],
+    ["team_state", "Legge e scrive lo stato condiviso tra gli agenti di un team (solo nei run di team)."],
   ] as const).map(([name, description]): ToolInfo => ({ name, description, source: "internal", risk: "read", enabled: true, available: true, parameters: {} })),
 );
 
@@ -379,6 +403,7 @@ export const configSchema: SettingsSchema = {
     "ui.theme": { type: "string", title: "Tema", enum: ["system", "light", "dark"], default: "system" },
     "ui.language": { type: "string", title: "Lingua", enum: ["it", "en"], default: "it" },
     "agent.default": { type: "string", title: "Agente predefinito", default: "operator" },
+    "approvals.timeout_s": { type: "integer", title: "Tempo massimo per rispondere a una richiesta di approvazione (secondi)", description: "0 = nessun limite. Allo scadere la richiesta dell'agente viene rifiutata", default: 0, minimum: 0, maximum: 86400 },
     "policy.mode": { type: "string", title: "Modalità di approvazione", enum: ["plan", "ask", "auto-edit", "auto", "yolo"], default: "ask" },
     "sandbox.mode": { type: "string", title: "Sandbox", enum: ["read-only", "workspace-write", "off"], default: "workspace-write" },
     "agents.max_parallel_subagents": { type: "integer", title: "Subagenti in parallelo", default: 3, minimum: 1, maximum: 8 },
@@ -395,6 +420,8 @@ export const configSchema: SettingsSchema = {
     "update.channel": { type: "string", title: "Canale di aggiornamento", description: "auto segue la versione installata (una beta resta sulle beta); stable = produzione; beta e alpha ricevono anche le versioni più stabili", enum: ["auto", "stable", "beta", "alpha"], default: "auto" },
     "update.auto_check": { type: "boolean", title: "Cerca aggiornamenti da solo", description: "All'avvio e ogni 6 ore, dalle release del repository pubblico su GitHub", default: true },
     "update.auto_download": { type: "boolean", title: "Scarica da solo gli aggiornamenti", description: "L'installer viene scaricato e verificato (SHA-256) in anticipo; l'installazione parte solo quando la confermi", default: false },
+    "learning.reflect": { type: "string", title: "Riflessione dell'agente", description: "Quando l'agente propone una lezione da approvare: off = mai; on_feedback = dopo un pollice giù; on_failure = anche dopo un run fallito o fermato dal budget", enum: ["off", "on_feedback", "on_failure"], default: "on_feedback" },
+    "learning.profile": { type: "string", title: "Profilo per riflessione e ottimizzazione del prompt", description: "Profilo di inferenza che scrive le lezioni e le varianti del prompt; vuoto = quello dell'agente", default: "" },
     "voice.language": { type: "string", title: "Lingua della voce", description: "Codice ISO 639-1 (it, en…) o auto per riconoscerla", default: "auto" },
     "voice.stt_runtime": { type: "string", title: "Motore di trascrizione", description: "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", enum: ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], default: "auto" },
     "voice.stt_model": { type: "string", title: "Modello Whisper", description: "Vuoto = il più grande installato che sta in memoria", default: "" },

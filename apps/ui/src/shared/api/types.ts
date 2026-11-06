@@ -444,6 +444,51 @@ export interface BudgetLimits {
   max_seconds?: number;
 }
 
+// ---------- Teams ----------
+export type TeamStrategy = "supervisor" | "parallel" | "pipeline";
+
+export interface TeamMember {
+  /** A local agent id, or `remote:<id>` for a remote agent. */
+  agent: string;
+  /** What the member is for (the description the supervisor sees). */
+  role: string;
+}
+
+/** An agent that runs elsewhere and speaks A2A. Teams use it as `remote:<id>`; the token is always `SECRET_MASK`. */
+export interface RemoteAgent {
+  id: string;
+  name: string;
+  /** A2A base URL or the URL of its Agent Card. */
+  url: string;
+  token: string;
+  /** The remote agent to ask for (`metadata.agent`); empty: its default. */
+  skill?: string;
+  description: string;
+  /** A paired device: offered automatically, managed from the devices page. */
+  paired?: boolean;
+}
+
+/** A group of agents used in chat like one agent: the session's agent id is `team:<id>`. */
+export interface TeamDef {
+  id: string;
+  name: string;
+  description: string;
+  strategy: TeamStrategy;
+  /** Agent that orchestrates the members; required for `supervisor`. */
+  supervisor?: string;
+  members: TeamMember[];
+  /** Agent that merges the member results of a `parallel` team (optional). */
+  aggregator?: string;
+  budget?: BudgetLimits;
+  /** JSON Schema of the final answer (same subset as the agents'). */
+  output_schema?: unknown;
+}
+
+/** Prefix of a session's agent id that names a team. */
+export const TEAM_PREFIX = "team:";
+/** Prefix of the id of a remote agent in a team. */
+export const REMOTE_PREFIX = "remote:";
+
 // ---------- Sessions, messages, runs ----------
 export interface Session {
   id: string;
@@ -476,6 +521,26 @@ export interface WorktreeStatus extends WorktreeInfo {
   truncated: boolean;
 }
 
+/** What a rewind of a run would do (paths relative to the workspace of the run). */
+export interface CheckpointInfo {
+  run_id: string;
+  root?: string;
+  /** Put back to their original content. */
+  restore: string[];
+  /** Created by the run: deleted. */
+  delete: string[];
+  /** Outside the workspace: listed, never touched. */
+  external: string[];
+}
+
+export interface RewindResult {
+  run_id: string;
+  restored: string[];
+  deleted: string[];
+  external: string[];
+  failed: string[];
+}
+
 /** The user's rating of an assistant message (one per message). */
 export interface Feedback {
   id: string;
@@ -491,6 +556,31 @@ export interface Feedback {
 
 /** Longest note the engine accepts with a rating. */
 export const MAX_FEEDBACK_NOTE_CHARS = 2000;
+
+export type LessonKind = "memory" | "skill";
+export type LessonStatus = "pending" | "approved" | "rejected";
+
+/** What the agent learned from a conversation, proposed to the user: nothing is written until it is approved. */
+export interface Lesson {
+  id: string;
+  session_id: string;
+  run_id?: string;
+  agent_id: string;
+  /** memory: a note for AGENTS.md. skill: a new skill. */
+  kind: LessonKind;
+  title: string;
+  /** Markdown. */
+  content: string;
+  /** Why the agent proposes it. */
+  reason: string;
+  status: LessonStatus;
+  created_at: string;
+  decided_at?: string;
+}
+
+/** Limits of the engine on what the user can edit before approving. */
+export const MAX_LESSON_TITLE_CHARS = 120;
+export const MAX_LESSON_CONTENT_CHARS = 6000;
 
 /** One grader of an evaluation task: `kind` plus the fields of that kind (path, pattern, criteria…). */
 export interface EvalGraderSpec {
@@ -608,6 +698,48 @@ export interface EvalComparison {
   score_delta: number;
 }
 
+export type OptimizationStatus = "running" | "done" | "failed" | "applied";
+
+/** A candidate system prompt and how the suite went with it. */
+export interface PromptVariant {
+  prompt: string;
+  rationale: string;
+  score: number;
+  pass_rate: number;
+  /** The report of the suite run with this prompt. */
+  report_id?: string;
+  /** Unified diff against the prompt the agent had. */
+  diff: string;
+}
+
+/** The suite run with the agent's prompt and with variants of it; applying one to the agent is the user's choice. */
+export interface PromptOptimization {
+  id: string;
+  suite_id: string;
+  agent_id: string;
+  status: OptimizationStatus;
+  started_at: string;
+  finished_at?: string;
+  base_prompt: string;
+  baseline_score: number;
+  baseline_pass_rate: number;
+  baseline_report_id?: string;
+  variants: PromptVariant[];
+  /** Index in `variants` of the one that beats the baseline; missing when none does. */
+  best?: number;
+  /** Index of the variant applied to the agent. */
+  applied?: number;
+  error?: string;
+}
+
+export interface OptimizeRequest {
+  agent: string;
+  /** 1 to 5 (default 3). */
+  variants?: number;
+  profile?: string;
+  repeat?: number;
+}
+
 export type RunStatus = "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled";
 
 export interface ToolCall {
@@ -652,7 +784,7 @@ export type AgEvent = { timestamp?: number } & (
   | { type: "TOOL_CALL_END"; toolCallId: string }
   | { type: "TOOL_CALL_RESULT"; messageId: string; toolCallId: string; content: string }
   | { type: "STATE_SNAPSHOT"; snapshot: RunState }
-  | { type: "SUBAGENT_STARTED"; subagentId: string; name: string }
+  | { type: "SUBAGENT_STARTED"; subagentId: string; name: string; /** Run of the sub-agent: its events are at `runEvents(runId)`. */ runId?: string }
   | { type: "SUBAGENT_FINISHED"; subagentId: string; result?: string }
   | { type: "CUSTOM"; name: string; value: unknown }
 );
@@ -662,6 +794,8 @@ export interface RunState {
   usage?: { prompt_tokens: number; completion_tokens: number; tokens_per_s?: number; context_used?: number; context_max?: number };
   runtime?: string;
   model?: string;
+  /** State shared by the agents of a team run (the `team_state` tool). */
+  shared?: Record<string, unknown>;
 }
 
 export interface ApprovalRequest {
@@ -681,11 +815,29 @@ export type WorkflowTrigger =
   | { kind: "file"; path: string }
   | { kind: "webhook"; secret?: string };
 
+/** Options of the executable steps; the defaults (0, 2 s, none, `fail`) are left out. */
+export interface StepOptions {
+  /** Extra attempts after a failure, 0..5. */
+  retry?: number;
+  /** Seconds between attempts, 0..300 (default 2). */
+  retry_delay_s?: number;
+  /** Time limit of each attempt in seconds, 1..86400. */
+  timeout_s?: number;
+  /** `continue`: the step stays failed but the run goes on; `{{steps.<id>.error}}` holds the error. */
+  on_error?: "fail" | "continue";
+}
+
 export type WorkflowStep =
-  | { id: string; kind: "tool"; tool: string; args: Record<string, unknown> }
-  | { id: string; kind: "agent"; agent: string; prompt: string }
-  | { id: string; kind: "llm"; profile: string; prompt: string }
-  | { id: string; kind: "approval"; message: string }
+  | ({ id: string; kind: "tool"; tool: string; args: Record<string, unknown> } & StepOptions)
+  | ({ id: string; kind: "agent"; agent: string; prompt: string } & StepOptions)
+  | ({ id: string; kind: "llm"; profile: string; prompt: string } & StepOptions)
+  /** `do` is one inline tool/agent/llm step that can use `{{item}}`, `{{item.field}}` and `{{index}}`; the output is the JSON array of its outputs. */
+  | ({ id: string; kind: "foreach"; items: string; do: WorkflowStep; parallel?: number } & StepOptions)
+  /** Inline tool/agent/llm steps that run together; the output is the JSON object `{inner_id: output}`. */
+  | ({ id: string; kind: "parallel"; steps: WorkflowStep[] } & StepOptions)
+  /** Starts another workflow (it can be disabled) and waits for it; the output is the one of its last step. */
+  | ({ id: string; kind: "workflow"; workflow: string; inputs?: Record<string, unknown> } & StepOptions)
+  | { id: string; kind: "approval"; message: string; timeout_s?: number; default?: "deny" | "allow" }
   | { id: string; kind: "condition"; if: string; then: string[]; else?: string[] };
 
 export interface WorkflowDef {
@@ -704,7 +856,9 @@ export interface WorkflowRun {
   status: RunStatus;
   started_at: string;
   finished_at?: string;
-  steps: { id: string; status: "pending" | "running" | "done" | "failed" | "skipped" | "waiting"; output?: string; error?: string }[];
+  /** The run of the workflow that started this one as a sub-workflow. */
+  parent_run_id?: string;
+  steps: { id: string; status: "pending" | "running" | "done" | "failed" | "skipped" | "waiting"; output?: string; error?: string; attempts?: number }[];
 }
 
 // ---------- Tools & MCP ----------

@@ -25,6 +25,8 @@ const STOP_GRACE: Duration = Duration::from_secs(30);
 pub struct EvalRequest {
     pub agent: Option<String>,
     pub profile: Option<String>,
+    /// System prompt that replaces the agent's own in every task (see [`Engine::optimize_prompt`]).
+    pub system_prompt: Option<String>,
     /// Times each task is run (default 1).
     pub repeat: Option<u32>,
     /// Keep the working folders of the tasks.
@@ -187,6 +189,7 @@ impl Engine {
         let mut opts = RunOptions::new(self.0.dirs.eval_work());
         opts.agent = req.agent.clone();
         opts.profile = req.profile.clone();
+        opts.system_prompt = req.system_prompt.clone();
         opts.repeat = req.repeat.unwrap_or(1);
         opts.keep = req.keep;
         opts.report_id = req.report_id.clone();
@@ -228,6 +231,9 @@ impl EvalHost for Engine {
         let mut agent = self.agent(&req.agent)?;
         if let Some(p) = &req.profile {
             agent.inference_profile = self.profile(p)?.id;
+        }
+        if let Some(p) = &req.system_prompt {
+            agent.system_prompt = p.clone();
         }
         let profile = self.profile(&agent.inference_profile)?;
         let manifest = self.0.runtimes.manifest(&profile.runtime_id)?;

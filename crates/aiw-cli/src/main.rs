@@ -75,6 +75,13 @@ enum Cmd {
     },
     /// Esegue un workflow
     Workflow { id: String },
+    /// Ripristina i file di un run: rimette gli originali salvati ed elimina i file che il run ha creato
+    Rewind {
+        run_id: String,
+        /// Mostra cosa cambierebbe senza toccare nulla
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Esporta le traiettorie delle sessioni (per valutazione e fine-tuning)
     Traces {
         #[command(subcommand)]
@@ -94,6 +101,11 @@ enum Cmd {
     Adapters {
         #[command(subcommand)]
         cmd: Option<AdaptersCmd>,
+    },
+    /// Lezioni proposte dagli agenti: le vedi, le approvi (vengono scritte) o le scarti
+    Lessons {
+        #[command(subcommand)]
+        cmd: Option<LessonsCmd>,
     },
 }
 
@@ -200,6 +212,28 @@ struct GrpoArgs {
 }
 
 #[derive(Subcommand)]
+enum LessonsCmd {
+    /// Elenca le lezioni (di default quelle in attesa)
+    List {
+        /// pending, approved o rejected; "all" le mostra tutte
+        #[arg(long, default_value = "pending")]
+        status: String,
+    },
+    /// Approva una lezione: una memoria va in ~/.aiw/AGENTS.md, una skill in ~/.aiw/skills
+    Approve {
+        id: String,
+        /// Nuovo titolo
+        #[arg(long)]
+        title: Option<String>,
+        /// Nuovo contenuto
+        #[arg(long)]
+        content: Option<String>,
+    },
+    /// Scarta una lezione
+    Reject { id: String },
+}
+
+#[derive(Subcommand)]
 enum EvalCmd {
     /// Esegue una suite (file YAML/JSON o id di una suite salvata) e mostra il riepilogo.
     /// I grader `command` eseguono comandi della suite con i tuoi permessi: lancia solo suite di cui ti fidi.
@@ -222,6 +256,30 @@ enum EvalCmd {
         /// Non cancella le cartelle di lavoro dei task
         #[arg(long)]
         keep: bool,
+    },
+    /// Prova varianti del system prompt di un agente sulla suite e propone la migliore. Il prompt dell'agente
+    /// cambia solo con --apply (e una conferma)
+    Optimize {
+        /// File della suite oppure id di una suite salvata
+        suite: String,
+        /// Agente di cui ottimizzare il prompt
+        #[arg(long)]
+        agent: String,
+        /// Quante varianti provare (da 1 a 5)
+        #[arg(long, default_value_t = 3)]
+        variants: u32,
+        /// Profilo di inferenza dei task (e delle varianti, se `learning.profile` è vuoto)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Quante volte eseguire ogni task
+        #[arg(long, default_value_t = 1)]
+        repeat: u32,
+        /// Applica all'agente la variante migliore, se batte quella attuale
+        #[arg(long)]
+        apply: bool,
+        /// Con --apply: non chiede conferma (necessario fuori da un terminale)
+        #[arg(long)]
+        yes: bool,
     },
     /// Confronta due report (id salvati o file JSON): le differenze sono B meno A
     Compare {
@@ -445,6 +503,7 @@ async fn main() -> Result<()> {
         }
         Cmd::Traces { cmd: TracesCmd::Export { agent, since, until, status, limit, rated, out, no_redact, exclude_path } } => {
             let filter = aiw_engine::traces::TraceFilter {
+                session: None,
                 agent,
                 since,
                 until,
@@ -484,7 +543,28 @@ async fn main() -> Result<()> {
                 println!("Adapter {id} eliminato.");
             }
         },
+        Cmd::Lessons { cmd } => lessons_cmd(&engine, cmd.unwrap_or(LessonsCmd::List { status: "pending".into() }))?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
+        Cmd::Rewind { run_id, dry_run } => {
+            let info = engine.checkpoint_info(&run_id)?;
+            let show = |label: &str, files: &[String]| files.iter().for_each(|f| println!("{label:<12} {f}"));
+            if dry_run {
+                println!("Il ripristino del run {run_id} cambierebbe:");
+                show("ripristina", &info.restore);
+                show("elimina", &info.delete);
+                show("non toccato", &info.external);
+            } else {
+                let r = engine.rewind(&run_id)?;
+                show("ripristinato", &r.restored);
+                show("eliminato", &r.deleted);
+                show("non toccato", &r.external);
+                show("FALLITO", &r.failed);
+                println!("Fatto: {} ripristinati, {} eliminati, {} falliti.", r.restored.len(), r.deleted.len(), r.failed.len());
+                if !r.failed.is_empty() {
+                    std::process::exit(1);
+                }
+            }
+        }
         Cmd::Workflow { id } => {
             let first = engine.run_workflow(&id, Default::default(), "user").await?;
             loop {
@@ -700,6 +780,32 @@ fn percent(x: f64) -> String {
     format!("{:.0}%", x * 100.0)
 }
 
+fn lessons_cmd(engine: &Engine, cmd: LessonsCmd) -> Result<()> {
+    match cmd {
+        LessonsCmd::List { status } => {
+            let lessons = engine.lessons((status != "all").then_some(status.as_str()))?;
+            if lessons.is_empty() {
+                println!("Nessuna lezione.");
+            }
+            for l in lessons {
+                println!("{:<24} {:<9} {:<7} {}  ({})", l.id, l.status, l.kind, l.title, l.agent_id);
+                if l.status == "pending" {
+                    println!("    {}", l.reason);
+                }
+            }
+        }
+        LessonsCmd::Approve { id, title, content } => {
+            let l = engine.approve_lesson(&id, title, content)?;
+            println!("Lezione «{}» approvata e scritta ({}).", l.title, if l.kind == "skill" { "nuova skill" } else { "AGENTS.md" });
+        }
+        LessonsCmd::Reject { id } => {
+            let l = engine.reject_lesson(&id)?;
+            println!("Lezione «{}» scartata.", l.title);
+        }
+    }
+    Ok(())
+}
+
 async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
     use aiw_engine::eval::EvalRequest;
     match cmd {
@@ -730,6 +836,54 @@ async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
             } else {
                 print!("{}", comparison.to_text());
             }
+        }
+        EvalCmd::Optimize { suite, agent, variants, profile, repeat, apply, yes } => {
+            use std::io::IsTerminal;
+            if apply && !yes && !std::io::stdin().is_terminal() {
+                anyhow::bail!("--apply fuori da un terminale richiede anche --yes");
+            }
+            eprintln!("Ottimizzo il prompt di «{agent}» con {variants} varianti: la suite gira {} volte in tutto…", variants + 1);
+            let opts = aiw_engine::optimize::OptimizeOptions { variants: Some(variants), profile, repeat: Some(repeat) };
+            let o = engine.optimize_prompt(&suite, &agent, &opts).await?;
+            println!("{:<12} {:>7} {:>10}  REPORT", "", "SCORE", "PASS RATE");
+            println!(
+                "{:<12} {:>7.2} {:>10}  {}",
+                "attuale",
+                o.baseline_score,
+                percent(o.baseline_pass_rate),
+                o.baseline_report_id.as_deref().unwrap_or("-")
+            );
+            for (i, v) in o.variants.iter().enumerate() {
+                println!(
+                    "{:<12} {:>7.2} {:>10}  {}  {}",
+                    format!("variante {}{}", i + 1, if o.best == Some(i) { " *" } else { "" }),
+                    v.score,
+                    percent(v.pass_rate),
+                    v.report_id.as_deref().unwrap_or("-"),
+                    v.rationale
+                );
+            }
+            let Some(best) = o.best else {
+                println!("\nNessuna variante batte il prompt attuale: non c'è nulla da applicare.");
+                return Ok(());
+            };
+            println!("\nLa migliore è la variante {} (*). Differenze rispetto al prompt attuale:\n{}", best + 1, o.variants[best].diff);
+            if !apply {
+                println!("Per applicarla: aiw eval optimize … --apply, oppure dalla pagina Valutazioni (ottimizzazione {}).", o.id);
+                return Ok(());
+            }
+            if !yes {
+                eprint!("Applicare la variante {} al prompt dell'agente «{agent}»? [s/N] ", best + 1);
+                std::io::stderr().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                if !matches!(line.trim().to_lowercase().as_str(), "s" | "si" | "sì" | "y" | "yes") {
+                    println!("Prompt non modificato.");
+                    return Ok(());
+                }
+            }
+            engine.apply_prompt_optimization(&o.id, best)?;
+            println!("Prompt di «{agent}» aggiornato.");
         }
         EvalCmd::Run { suite, agent, profile, repeat, out, keep } => {
             let suite = engine.resolve_eval_suite(&suite)?;

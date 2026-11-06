@@ -119,6 +119,26 @@ pub struct PeerHardware {
     pub unified_memory: bool,
 }
 
+/// An agent that runs elsewhere and speaks A2A (another device, an orchestrator, a cloud agent). Teams and
+/// agents delegate to it as `remote:<id>`. The API shows [`SECRET_MASK`] in place of the token.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteAgent {
+    pub id: String,
+    pub name: String,
+    /// A2A base URL (`http://host:7777`) or the URL of its Agent Card.
+    pub url: String,
+    #[serde(default)]
+    pub token: String,
+    /// The skill (agent) to ask for: sent as `metadata.agent`. Empty: the remote default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    /// True for a paired device, which is offered automatically and is managed from the devices list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paired: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub version: String,
@@ -529,6 +549,38 @@ pub struct BudgetLimits {
     pub max_seconds: Option<u64>,
 }
 
+/// A team of agents used in chat like a single agent (session agent id `team:<id>`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TeamDef {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// supervisor | parallel | pipeline
+    pub strategy: String,
+    /// Agent id that orchestrates the members; required for the `supervisor` strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor: Option<String>,
+    pub members: Vec<TeamMember>,
+    /// Agent that merges the member results for the `parallel` strategy (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetLimits>,
+    /// Schema of the final answer, same subset as [`AgentProfile::output_schema`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TeamMember {
+    /// A local agent id, or `remote:<id>` for a remote agent.
+    pub agent: String,
+    /// What this member is for; shown to the supervisor as the sub-agent description.
+    #[serde(default)]
+    pub role: String,
+}
+
 // ---------------------------------------------------------------- sessions & messages
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -593,6 +645,10 @@ pub const RUN_ERROR_MESSAGE: &str = "aiw.run_error";
 /// `name` of a user message that a `UserPromptSubmit` hook blocked: kept for the chat history,
 /// never sent to the model.
 pub const BLOCKED_PROMPT_MESSAGE: &str = "aiw.blocked_prompt";
+/// `name` of the messages written by a handoff to another agent: the user message that opens the
+/// next agent's run (`[Passaggio da …] summary`, sent to the model) and the `system` notes about a
+/// handoff that was not carried out (history only).
+pub const HANDOFF_MESSAGE: &str = "aiw.handoff";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
@@ -786,6 +842,71 @@ pub struct AdapterInfo {
     pub job_id: Option<String>,
 }
 
+/// A lesson the agent proposes after reflecting on a conversation. Nothing is written anywhere
+/// until the user approves it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Lesson {
+    pub id: String,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    pub agent_id: String,
+    /// memory (a note for `AGENTS.md`) | skill (a new `SKILL.md`)
+    pub kind: String,
+    pub title: String,
+    /// Markdown.
+    pub content: String,
+    /// Why the agent proposes it.
+    pub reason: String,
+    /// pending | approved | rejected
+    pub status: String,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<String>,
+}
+
+/// A candidate system prompt tried by a [`PromptOptimization`], with how the suite went with it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PromptVariant {
+    pub prompt: String,
+    pub rationale: String,
+    pub score: f64,
+    pub pass_rate: f64,
+    /// Report of the suite run with this prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_id: Option<String>,
+    /// Unified diff of the prompt against the current one.
+    pub diff: String,
+}
+
+/// Outcome of trying variants of an agent's system prompt against an evaluation suite.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PromptOptimization {
+    pub id: String,
+    pub suite_id: String,
+    pub agent_id: String,
+    /// running | done | failed | applied
+    pub status: String,
+    pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    /// System prompt of the agent when the optimization started.
+    pub base_prompt: String,
+    pub baseline_score: f64,
+    pub baseline_pass_rate: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_report_id: Option<String>,
+    pub variants: Vec<PromptVariant>,
+    /// Index in `variants` of the one that beats the baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best: Option<usize>,
+    /// Index of the variant applied to the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Todo {
     pub content: String,
@@ -815,6 +936,9 @@ pub struct RunState {
     pub runtime: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// State shared by the agents of a team run (the `team_state` tool): a JSON object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -851,6 +975,96 @@ pub enum WorkflowTrigger {
     },
 }
 
+/// The answer an `approval` step takes when nobody answers in time.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ApprovalDefault {
+    #[default]
+    Deny,
+    Allow,
+}
+
+impl ApprovalDefault {
+    fn is_deny(&self) -> bool {
+        *self == ApprovalDefault::Deny
+    }
+}
+
+/// How an approval request ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    Allowed,
+    Denied,
+    /// Nobody answered within the time limit.
+    TimedOut,
+}
+
+/// What a workflow does when a step fails (after its retries).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OnError {
+    /// The run fails (default).
+    #[default]
+    Fail,
+    /// The step stays `failed` but the run goes on; `{{steps.<id>.error}}` holds the error.
+    Continue,
+}
+
+impl OnError {
+    fn is_fail(&self) -> bool {
+        *self == OnError::Fail
+    }
+}
+
+pub const MAX_STEP_RETRY: u32 = 5;
+pub const MAX_RETRY_DELAY_S: u64 = 300;
+pub const MAX_STEP_TIMEOUT_S: u64 = 86_400;
+pub const DEFAULT_RETRY_DELAY_S: u64 = 2;
+
+/// How many sub-workflows can be nested (a top-level run is depth 0).
+pub const MAX_SUBWORKFLOW_DEPTH: u32 = 3;
+pub const MAX_FOREACH_PARALLEL: u32 = 8;
+pub const MAX_FOREACH_ITEMS: usize = 200;
+
+fn one() -> u32 {
+    1
+}
+fn is_one(n: &u32) -> bool {
+    *n == 1
+}
+fn default_retry_delay() -> u64 {
+    DEFAULT_RETRY_DELAY_S
+}
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+fn is_default_delay(n: &u64) -> bool {
+    *n == DEFAULT_RETRY_DELAY_S
+}
+
+/// Options shared by the executable steps (`tool`, `agent`, `llm`, ...). Every field is optional
+/// and the defaults reproduce the behaviour of a step without options; defaults are not serialized.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StepOptions {
+    /// Extra attempts after the first failure (0..=5).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retry: u32,
+    /// Seconds to wait between attempts (0..=300).
+    #[serde(default = "default_retry_delay", skip_serializing_if = "is_default_delay")]
+    pub retry_delay_s: u64,
+    /// Time limit of each attempt in seconds (1..=86400).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_s: Option<u64>,
+    #[serde(default, skip_serializing_if = "OnError::is_fail")]
+    pub on_error: OnError,
+}
+
+impl Default for StepOptions {
+    fn default() -> Self {
+        Self { retry: 0, retry_delay_s: DEFAULT_RETRY_DELAY_S, timeout_s: None, on_error: OnError::Fail }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum WorkflowStep {
@@ -859,20 +1073,68 @@ pub enum WorkflowStep {
         tool: String,
         #[serde(default)]
         args: Map<String, Value>,
+        #[serde(default, flatten)]
+        opts: StepOptions,
     },
     Agent {
         id: String,
         agent: String,
         prompt: String,
+        #[serde(default, flatten)]
+        opts: StepOptions,
     },
     Llm {
         id: String,
         profile: String,
         prompt: String,
+        #[serde(default, flatten)]
+        opts: StepOptions,
+    },
+    /// Runs `do` once for every entry of `items` (a JSON array, or one entry per non-empty line),
+    /// `parallel` at a time. `{{item}}`, `{{item.field}}` and `{{index}}` are available in `do`.
+    /// The output is the JSON array of the outputs, in the order of the entries.
+    Foreach {
+        id: String,
+        items: String,
+        /// A single inline `tool`, `agent` or `llm` step.
+        #[serde(rename = "do")]
+        body: Box<WorkflowStep>,
+        /// How many entries run at the same time (1..=8).
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        parallel: u32,
+        #[serde(default, flatten)]
+        opts: StepOptions,
+    },
+    /// Runs inline `tool`, `agent` and `llm` steps all at once. The output is the JSON object
+    /// `{inner_id: output}`; each inner output is also `{{steps.<inner_id>.output}}`.
+    Parallel {
+        id: String,
+        steps: Vec<WorkflowStep>,
+        #[serde(default, flatten)]
+        opts: StepOptions,
+    },
+    /// Starts another workflow and waits for it. The output is the output of the last step of the
+    /// child that finished (`done`); a failed or cancelled child is an error of this step. The child
+    /// can be a disabled workflow (enabling only concerns the triggers) and runs at most 3 levels deep.
+    Workflow {
+        id: String,
+        /// Id of the workflow to run.
+        workflow: String,
+        /// Inputs of the child; the values can use placeholders.
+        #[serde(default)]
+        inputs: Map<String, Value>,
+        #[serde(default, flatten)]
+        opts: StepOptions,
     },
     Approval {
         id: String,
         message: String,
+        /// Seconds to wait for the answer (1..=86400); without it the step waits for ever.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_s: Option<u64>,
+        /// What counts as the answer when the time is up.
+        #[serde(default, rename = "default", skip_serializing_if = "ApprovalDefault::is_deny")]
+        on_timeout: ApprovalDefault,
     },
     Condition {
         id: String,
@@ -890,8 +1152,38 @@ impl WorkflowStep {
             WorkflowStep::Tool { id, .. }
             | WorkflowStep::Agent { id, .. }
             | WorkflowStep::Llm { id, .. }
+            | WorkflowStep::Foreach { id, .. }
+            | WorkflowStep::Parallel { id, .. }
+            | WorkflowStep::Workflow { id, .. }
             | WorkflowStep::Approval { id, .. }
             | WorkflowStep::Condition { id, .. } => id,
+        }
+    }
+
+    /// The inline steps of a `foreach` (its `do`) or `parallel`.
+    pub fn inner(&self) -> Vec<&WorkflowStep> {
+        match self {
+            WorkflowStep::Foreach { body, .. } => vec![body.as_ref()],
+            WorkflowStep::Parallel { steps, .. } => steps.iter().collect(),
+            _ => vec![],
+        }
+    }
+
+    /// The step and its inline steps.
+    pub fn with_inner(&self) -> Vec<&WorkflowStep> {
+        std::iter::once(self).chain(self.inner()).collect()
+    }
+
+    /// The retry/timeout/error options of the steps that have them.
+    pub fn opts(&self) -> Option<&StepOptions> {
+        match self {
+            WorkflowStep::Tool { opts, .. }
+            | WorkflowStep::Agent { opts, .. }
+            | WorkflowStep::Llm { opts, .. }
+            | WorkflowStep::Foreach { opts, .. }
+            | WorkflowStep::Parallel { opts, .. }
+            | WorkflowStep::Workflow { opts, .. } => Some(opts),
+            WorkflowStep::Approval { .. } | WorkflowStep::Condition { .. } => None,
         }
     }
 }
@@ -919,6 +1211,9 @@ pub struct WorkflowStepRun {
     pub output: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Attempts made so far, only for steps with `retry`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -929,7 +1224,38 @@ pub struct WorkflowRun {
     pub started_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
+    /// The run of the workflow that started this one as a sub-workflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
     pub steps: Vec<WorkflowStepRun>,
+}
+
+// ---------------------------------------------------------------- checkpoints
+
+/// What a rewind of a run would do: the originals saved before the run overwrote files, and the
+/// files the run created. Paths are relative to `root` (the workspace of the run).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CheckpointInfo {
+    pub run_id: String,
+    /// Workspace root of the run; absent for a checkpoint made before rewind existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// Files that would be put back to their original content.
+    pub restore: Vec<String>,
+    /// Files the run created, that would be deleted.
+    pub delete: Vec<String>,
+    /// Files outside the workspace (or of a checkpoint without a root): listed, never touched.
+    pub external: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RewindResult {
+    pub run_id: String,
+    pub restored: Vec<String>,
+    pub deleted: Vec<String>,
+    pub external: Vec<String>,
+    /// Files that could not be restored or deleted, with the reason.
+    pub failed: Vec<String>,
 }
 
 // ---------------------------------------------------------------- tools & MCP

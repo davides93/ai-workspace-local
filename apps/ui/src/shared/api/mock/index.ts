@@ -3,15 +3,17 @@ import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, InferenceProfile, McpServer,
-  MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, InstallJob, InstallPlan, UpdateStatus,
+  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
+  MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
+  SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   DatasetSpec, TrainJobRequest,
 } from "../types";
 import {
-  agents, appliedWorktrees, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
-  runtimes, sessionMessages, sessions, sleep, system, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
+  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
+  remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
+import { demoLesson, lessonProblem, lessons } from "./lessons";
+import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 import * as training from "./training";
@@ -91,7 +93,7 @@ export class MockTransport implements Transport {
   readonly kind = "mock" as const;
   readonly capabilities: TransportCapabilities = { demo: true, native: false, pairing: false };
   private runListeners = new Map<string, Set<(e: AgEvent) => void>>();
-  private runEvents = new Map<string, AgEvent[]>();
+  private runLog = new Map<string, AgEvent[]>();
   private pendingApprovals = new Map<string, { req: ApprovalRequest; resolve: (allow: boolean) => void }>();
   private jobs: MockJob[] = [];
   private voiceTurn = 0;
@@ -405,8 +407,65 @@ export class MockTransport implements Transport {
     if (!agents.some((x) => x.id === id)) throw new ApiError(404, `agente ${id} non trovato`);
     for (const k of [...routingStats.keys()]) if (k.startsWith(`${id}|`)) routingStats.delete(k);
   }
+  async runEvents(runId: string) {
+    return structuredClone(this.runLog.get(runId) ?? []);
+  }
+
+  async remoteAgents() { return remoteAgents.map((r) => ({ ...r, token: r.token ? SECRET_MASK : "" })); }
+  async saveRemoteAgent(r: RemoteAgent) {
+    // `save_remote_agent` of the engine, with its messages.
+    const id = r.id.trim();
+    if (!/^[A-Za-z0-9_-]{1,48}$/.test(id)) throw new ApiError(400, "id dell'agente remoto non valido (lettere, cifre, - e _, al massimo 48)");
+    if (id.startsWith("peer-")) throw new ApiError(400, "gli id che iniziano con `peer-` sono riservati ai dispositivi accoppiati");
+    if (!r.name.trim()) throw new ApiError(400, "il nome dell'agente remoto è obbligatorio");
+    if (!/^https?:\/\/[^/\s]+/.test(r.url.trim())) throw new ApiError(400, "l'URL dell'agente remoto deve essere http(s)");
+    const old = remoteAgents.find((x) => x.id === id);
+    const saved: RemoteAgent = { ...r, id, name: r.name.trim(), url: r.url.trim(), skill: r.skill?.trim() || undefined, token: r.token === SECRET_MASK ? (old?.token ?? "") : r.token };
+    delete saved.paired;
+    const i = remoteAgents.findIndex((x) => x.id === id);
+    if (i >= 0) remoteAgents[i] = saved; else remoteAgents.push(saved);
+    return { ...saved, token: saved.token ? SECRET_MASK : "" };
+  }
+  async deleteRemoteAgent(id: string) {
+    const r = remoteAgents.find((x) => x.id === id);
+    if (!r) throw new ApiError(404, `agente remoto ${id} non trovato`);
+    const using = teams.filter((t) => t.members.some((m) => m.agent === `remote:${id}`)).map((t) => t.name);
+    if (using.length > 0) throw new ApiError(409, `«${r.name}» è usato dai team: ${using.join(", ")}`);
+    remoteAgents.splice(remoteAgents.indexOf(r), 1);
+  }
+  async teams() { return structuredClone(teams); }
+  async saveTeam(t: TeamDef) {
+    // `save_team` of the engine, with its messages.
+    if (!t.id.trim() || !t.name.trim()) throw new ApiError(400, "il team ha bisogno di un id e di un nome");
+    if (!["supervisor", "parallel", "pipeline"].includes(t.strategy)) throw new ApiError(400, `strategia non valida: ${t.strategy} (supervisor, parallel o pipeline)`);
+    if (t.members.length < 1 || t.members.length > 8) throw new ApiError(400, "un team ha da 1 a 8 membri");
+    const exists = (id: string) => id.startsWith("remote:") || agents.some((a) => a.id === id);
+    const seen = new Set<string>();
+    for (const m of t.members) {
+      if (seen.has(m.agent)) throw new ApiError(400, `il membro \`${m.agent}\` compare più volte`);
+      seen.add(m.agent);
+      if (!exists(m.agent)) throw new ApiError(400, `l'agente \`${m.agent}\` non esiste`);
+    }
+    if (t.strategy === "supervisor" && !t.supervisor) throw new ApiError(400, "la strategia supervisor richiede un supervisore");
+    if (t.supervisor) {
+      if (!exists(t.supervisor)) throw new ApiError(400, `l'agente \`${t.supervisor}\` non esiste`);
+      if (seen.has(t.supervisor)) throw new ApiError(400, `il supervisore \`${t.supervisor}\` non può essere anche un membro`);
+    }
+    if (t.aggregator && !exists(t.aggregator)) throw new ApiError(400, `l'agente \`${t.aggregator}\` non esiste`);
+    for (const [k, v] of Object.entries(t.budget ?? {})) if (v === 0) throw new ApiError(400, `budget.${k} deve essere almeno 1 (ometti il campo per nessun limite)`);
+    const i = teams.findIndex((x) => x.id === t.id);
+    if (i >= 0) teams[i] = t; else teams.push(t);
+    return structuredClone(t);
+  }
+  async deleteTeam(id: string) {
+    const i = teams.findIndex((t) => t.id === id);
+    if (i < 0) throw new ApiError(404, `team ${id} non trovato`);
+    teams.splice(i, 1);
+  }
 
   async deleteAgent(id: string) {
+    const using = teams.filter((t) => t.supervisor === id || t.aggregator === id || t.members.some((m) => m.agent === id)).map((t) => t.name);
+    if (using.length > 0) throw new ApiError(409, `L'agente «${agents.find((a) => a.id === id)?.name ?? id}» è usato dai team: ${using.join(", ")}. Modificali prima di eliminarlo.`);
     if (sessions.some((s) => s.agent_id === id)) throw new Error("L'agente ha delle sessioni: eliminale prima");
     const i = agents.findIndex((a) => a.id === id);
     if (i >= 0) agents.splice(i, 1);
@@ -461,6 +520,21 @@ export class MockTransport implements Transport {
     const s = sessions.find((x) => x.id === sessionId);
     if (s) s.worktree = undefined;
   }
+  async sessionCheckpoints(sessionId: string): Promise<CheckpointInfo[]> {
+    if (sessionId !== "ses_bug" || rewoundRuns.has("run_bug")) return [];
+    return [{
+      run_id: "run_bug",
+      root: "~/progetto",
+      restore: ["crates/aiw-models/src/gguf.rs"],
+      delete: ["crates/aiw-models/tests/header.rs"],
+      external: [],
+    }];
+  }
+  async rewindRun(runId: string): Promise<RewindResult> {
+    if (runId !== "run_bug" || rewoundRuns.has(runId)) throw new ApiError(404, `nessun checkpoint per il run ${runId}`);
+    rewoundRuns.add(runId);
+    return { run_id: runId, restored: ["crates/aiw-models/src/gguf.rs"], deleted: ["crates/aiw-models/tests/header.rs"], external: [], failed: [] };
+  }
   async deleteSession(id: string) {
     const i = sessions.findIndex((s) => s.id === id);
     if (i < 0) throw new ApiError(404, `sessione ${id} non trovata`);
@@ -489,11 +563,47 @@ export class MockTransport implements Transport {
     const prev = this.feedback.find((f) => f.session_id === sessionId && f.message_id === messageId);
     const f: Feedback = { id: prev?.id ?? nid("fbk"), session_id: sessionId, message_id: messageId, rating, ...(text ? { note: text } : {}), created_at: now() };
     this.feedback = [...this.feedback.filter((x) => x !== prev), f];
+    // A thumbs down makes the agent propose a lesson (setting `learning.reflect`), one waiting per session.
+    const mode = String(effective()["learning.reflect"] ?? "on_feedback");
+    const session = sessions.find((s) => s.id === sessionId)!;
+    if (rating === -1 && mode !== "off" && !lessons.some((l) => l.session_id === sessionId && l.status === "pending")) {
+      lessons.unshift(demoLesson(session, nid("les")));
+    }
     return structuredClone(f);
   }
   async deleteFeedback(sessionId: string, messageId: string) {
     if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     this.feedback = this.feedback.filter((f) => !(f.session_id === sessionId && f.message_id === messageId));
+  }
+
+  async lessons(status?: LessonStatus) { return structuredClone(lessons.filter((l) => !status || l.status === status)); }
+  private pendingLesson(id: string): Lesson {
+    const l = lessons.find((x) => x.id === id);
+    if (!l) throw new ApiError(404, `lezione ${id} non trovata`);
+    if (l.status !== "pending") throw new ApiError(409, `la lezione è già stata ${l.status === "approved" ? "approvata" : "scartata"}`);
+    return l;
+  }
+  async approveLesson(id: string, edit: { title?: string; content?: string } = {}) {
+    const l = this.pendingLesson(id);
+    const title = edit.title?.trim() ?? l.title;
+    const content = edit.content?.trim() ?? l.content;
+    const problem = lessonProblem(title, content);
+    if (problem) throw new ApiError(400, problem);
+    Object.assign(l, { title, content, status: "approved", decided_at: now() });
+    return structuredClone(l);
+  }
+  async rejectLesson(id: string) {
+    const l = this.pendingLesson(id);
+    Object.assign(l, { status: "rejected", decided_at: now() });
+    return structuredClone(l);
+  }
+  async reflectSession(sessionId: string) {
+    const s = sessions.find((x) => x.id === sessionId);
+    if (!s) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    await sleep(600);
+    const l = demoLesson(s, nid("les"));
+    lessons.unshift(l);
+    return structuredClone(l);
   }
 
   async activeRun(sessionId?: string) {
@@ -584,7 +694,7 @@ export class MockTransport implements Transport {
   }
 
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void) {
-    (this.runEvents.get(runId) ?? []).forEach(onEvent);
+    (this.runLog.get(runId) ?? []).forEach(onEvent);
     const set = this.runListeners.get(runId) ?? new Set();
     set.add(onEvent);
     this.runListeners.set(runId, set);
@@ -596,9 +706,9 @@ export class MockTransport implements Transport {
 
   private emit(runId: string, e: AgEvent) {
     const ev = { ...e, timestamp: Date.now() } as AgEvent;
-    const list = this.runEvents.get(runId) ?? [];
+    const list = this.runLog.get(runId) ?? [];
     list.push(ev);
-    this.runEvents.set(runId, list);
+    this.runLog.set(runId, list);
     this.runListeners.get(runId)?.forEach((fn) => fn(ev));
   }
 
@@ -747,7 +857,18 @@ export class MockTransport implements Transport {
     this.emit(runId, { type: "STATE_SNAPSHOT", snapshot: state() });
 
     const sub = nid("sub");
-    this.emit(runId, { type: "SUBAGENT_STARTED", subagentId: sub, name: "Lettore di metadati (Veloce)" });
+    // The sub-agent's own run, so that its card can open the trace.
+    const subRun = nid("run");
+    this.emit(subRun, { type: "RUN_STARTED", threadId, runId: subRun });
+    this.emit(subRun, { type: "TOOL_CALL_START", toolCallId: `${subRun}_t`, toolCallName: "read_file" });
+    this.emit(subRun, { type: "TOOL_CALL_ARGS", toolCallId: `${subRun}_t`, delta: JSON.stringify({ path: "~/Downloads/manuale-router.pdf" }) });
+    this.emit(subRun, { type: "TOOL_CALL_END", toolCallId: `${subRun}_t` });
+    this.emit(subRun, { type: "TOOL_CALL_RESULT", messageId: nid("m"), toolCallId: `${subRun}_t`, content: "PDF 1.7 · CreationDate: 2025-09-22" });
+    this.emit(subRun, { type: "TEXT_MESSAGE_START", messageId: `${subRun}_m`, role: "assistant" });
+    this.emit(subRun, { type: "TEXT_MESSAGE_CONTENT", messageId: `${subRun}_m`, delta: "manuale-router.pdf: data documento 2025-09-22 → 2025" });
+    this.emit(subRun, { type: "TEXT_MESSAGE_END", messageId: `${subRun}_m` });
+    this.emit(subRun, { type: "RUN_FINISHED", threadId, runId: subRun });
+    this.emit(runId, { type: "SUBAGENT_STARTED", subagentId: sub, name: "Lettore di metadati (Veloce)", runId: subRun });
     await sleep(700);
     this.emit(runId, { type: "SUBAGENT_FINISHED", subagentId: sub, result: "manuale-router.pdf: data documento 2025-09-22 → 2025" });
 
@@ -886,6 +1007,59 @@ export class MockTransport implements Transport {
   async trainJobLog(id: string, lines = 200) { return training.jobLog(id, lines); }
   async adapters() { return structuredClone(training.adapters); }
   async deleteAdapter(id: string) { training.deleteAdapter(id); }
+  async startPromptOptimization(suiteId: string, req: OptimizeRequest) {
+    const suite = evalSuites.find((x) => x.id === suiteId);
+    if (!suite) throw new ApiError(404, `suite di valutazione ${suiteId} non trovata`);
+    const agent = agents.find((a) => a.id === req.agent);
+    if (!agent) throw new ApiError(404, `agente ${req.agent} non trovato`);
+    if (req.profile && !profiles.some((p) => p.id === req.profile)) throw new ApiError(404, `profilo ${req.profile} non trovato`);
+    const n = req.variants ?? 3;
+    if (!Number.isInteger(n) || n < 1 || n > 5) throw new ApiError(400, "variants deve essere tra 1 e 5");
+    const repeat = req.repeat ?? 1;
+    if (!Number.isInteger(repeat) || repeat < 1 || repeat > 50) throw new ApiError(400, "repeat deve essere tra 1 e 50");
+    const o: PromptOptimization = {
+      id: nid("opt"), suite_id: suite.id, agent_id: agent.id, status: "running", started_at: now(), base_prompt: agent.system_prompt,
+      baseline_score: 0, baseline_pass_rate: 0, variants: [],
+    };
+    optimizations.unshift(o);
+    void (async () => {
+      await sleep(900);
+      o.baseline_score = 0.5;
+      o.baseline_pass_rate = 0.33;
+      o.baseline_report_id = nid("evr");
+      for (const [i, c] of demoPrompts(agent.system_prompt, n).entries()) {
+        await sleep(900);
+        const [score, rate] = DEMO_SCORES[i];
+        o.variants.push({ ...variant(agent.system_prompt, c.prompt, c.rationale, score, rate, nid("evr")) });
+      }
+      const top = o.variants.reduce((b, v, i) => (v.score > o.variants[b].score ? i : b), 0);
+      if (o.variants[top].score > o.baseline_score) o.best = top;
+      o.status = "done";
+      o.finished_at = now();
+    })();
+    return structuredClone(o);
+  }
+  async promptOptimizations() { return structuredClone(optimizations); }
+  async promptOptimization(id: string) {
+    const o = optimizations.find((x) => x.id === id);
+    if (!o) throw new ApiError(404, `ottimizzazione del prompt ${id} non trovata`);
+    return structuredClone(o);
+  }
+  async applyPromptOptimization(id: string, variantIndex: number) {
+    const o = optimizations.find((x) => x.id === id);
+    if (!o) throw new ApiError(404, `ottimizzazione del prompt ${id} non trovata`);
+    if (o.status !== "done") throw new ApiError(409, o.status === "applied" ? "questa ottimizzazione è già stata applicata" : o.status === "running" ? "l'ottimizzazione è ancora in corso" : "l'ottimizzazione non è finita: non c'è nulla da applicare");
+    const v = o.variants[variantIndex];
+    if (!v) throw new ApiError(400, `la variante ${variantIndex} non esiste`);
+    const agent = agents.find((a) => a.id === o.agent_id);
+    if (!agent) throw new ApiError(404, `agente ${o.agent_id} non trovato`);
+    if (agent.system_prompt !== o.base_prompt) throw new ApiError(409, `il prompt dell'agente «${agent.name}» è cambiato dopo l'ottimizzazione: rifalla con il prompt attuale`);
+    agent.system_prompt = v.prompt;
+    o.status = "applied";
+    o.applied = variantIndex;
+    audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "prompt.apply", detail: `agente ${agent.id} · ottimizzazione ${o.id} · variante ${variantIndex + 1}` });
+    return structuredClone(o);
+  }
 
   async tools() { return structuredClone(tools); }
   async setToolEnabled(name: string, enabled: boolean) {

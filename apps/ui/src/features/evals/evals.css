@@ -35,3 +35,11 @@
   .ev-ws[data-detail="closed"] .list-item[aria-current="true"] { background: transparent; }
   .ev-ws[data-detail="closed"] .list-item[aria-current="true"] .list-link > svg { color: var(--fg-muted); }
 }
+
+/* Prompt optimization */
+.ev-opt-table .ev-opt-best { font-weight: 650; }
+.ev-diff { margin: 0; padding: var(--space-3); max-height: 22rem; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ev-diff span { display: block; }
+.ev-diff .add { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.ev-diff .del { color: var(--crit); background: color-mix(in srgb, var(--crit) 10%, transparent); }
+.ev-diff .hunk, .ev-diff .head { color: var(--fg-muted); }

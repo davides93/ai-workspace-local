@@ -66,10 +66,19 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
   // A new workflow takes its id from its name when it is created; the JSON views show that id.
   const liveId = isNew && plain ? uniqueSlug(slugify(plain.name, "workflow"), list.map((w) => w.id)) : plain?.id ?? "";
   const issues = useMemo(
-    () => (plain ? validateDraft(plain, { agents: (agents.data ?? []).map((a) => a.id), profiles: (profiles.data ?? []).map((p) => p.id), tools: (tools.data ?? []).map((t) => t.name) }) : []),
-    [plain, agents.data, profiles.data, tools.data],
+    () => (plain ? validateDraft(plain, {
+      agents: (agents.data ?? []).map((a) => a.id), profiles: (profiles.data ?? []).map((p) => p.id), tools: (tools.data ?? []).map((t) => t.name),
+      workflows: list.map((w) => w.id), selfId: isNew ? liveId : workflowId,
+    }) : []),
+    [plain, agents.data, profiles.data, tools.data, list, isNew, liveId, workflowId],
   );
-  const catalog = useMemo(() => ({ agents: agents.data ?? [], profiles: profiles.data ?? [], tools: tools.data ?? [] }), [agents.data, profiles.data, tools.data]);
+  const catalog = useMemo(
+    () => ({
+      agents: agents.data ?? [], profiles: profiles.data ?? [], tools: tools.data ?? [],
+      workflows: list.filter((w) => w.id !== workflowId).map((w) => ({ id: w.id, name: w.name })),
+    }),
+    [agents.data, profiles.data, tools.data, list, workflowId],
+  );
 
   const secret = saved?.trigger.kind === "webhook" ? saved.trigger.secret ?? "" : "";
   const wfRuns = useMemo(() => (runs.data ?? []).filter((r) => r.workflow_id === workflowId), [runs.data, workflowId]);

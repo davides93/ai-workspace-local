@@ -7,6 +7,7 @@ import type { Item } from "../model/items";
 import { describeRunError, errorDetail } from "../model/runNotice";
 import { MessageActions } from "./MessageActions";
 import { RunNote } from "./RunNote";
+import { SubagentCard } from "./SubagentCard";
 import { ToolCard } from "./ToolCard";
 
 interface Props {
@@ -88,11 +89,7 @@ export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, 
     case "subagent":
       return (
         <div className="ws-msg ws-assistant">
-          <div className="ws-subagent">
-            <Icon name="agent" size={15} />
-            <span>Subagente <b>{it.name}</b></span>
-            {it.result !== undefined ? <span className="muted">→ {it.result}</span> : it.interrupted ? <span className="muted">interrotto</span> : <Led tone="run" />}
-          </div>
+          <SubagentCard it={it} renderItem={(row) => <ItemView it={row} onRespond={onRespond} onAction={onAction} busy respondingId={null} />} />
         </div>
       );
     case "note":

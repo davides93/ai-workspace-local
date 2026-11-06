@@ -59,14 +59,17 @@ function RenameForm({ session, onDone }: { session: Session; onDone: () => void 
 }
 
 /** One session of the list: open it, rename it (inline) or delete it (the parent asks to confirm). */
-export function SessionItem({ session, agentName, active, renaming, onSelect, onRename, onRenamed, onDelete }: {
+export function SessionItem({ session, agentName, active, renaming, reflecting, onSelect, onRename, onRenamed, onReflect, onDelete }: {
   session: Session;
   agentName: string;
   active: boolean;
   renaming: boolean;
+  /** The agent is writing a lesson on this conversation. */
+  reflecting: boolean;
   onSelect: () => void;
   onRename: () => void;
   onRenamed: () => void;
+  onReflect: () => void;
   onDelete: () => void;
 }) {
   const titleId = useId();
@@ -91,6 +94,10 @@ export function SessionItem({ session, agentName, active, renaming, onSelect, on
           <div className="ws-session-actions">
             {/* The title names the session; the buttons are described by it (their own names stay short). */}
             <IconButton aria-label="Rinomina la sessione" aria-describedby={titleId} icon="edit" size={15} onClick={onRename} />
+            <IconButton
+              aria-label="Rifletti su questa conversazione" aria-describedby={titleId} icon="sparkle" size={15} disabled={reflecting || session.last_status === "running"}
+              title={reflecting ? "L'agente sta scrivendo una lezione…" : "Rifletti su questa conversazione: l'agente propone una lezione da approvare"} onClick={onReflect}
+            />
             <IconButton aria-label="Elimina la sessione" aria-describedby={titleId} icon="trash" size={15} onClick={onDelete} />
           </div>
         </>

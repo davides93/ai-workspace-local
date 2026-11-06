@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { navigate, useParams } from "../../app/router";
+import { Link, navigate, useParams } from "../../app/router";
 import { lastChatSession, rememberChatSession } from "../../shared/lib/navMemory";
 import { defaultAgentId } from "../../shared/lib/agents";
 import { forgetSessionRuns } from "../../shared/lib/runIndex";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { Session } from "../../shared/api/types";
-import { Button, Drawer, EmptyState, ModalShell, Sheet } from "../../shared/ui";
+import { Button, Drawer, EmptyState, Icon, ModalShell, Sheet } from "../../shared/ui";
 import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
+import { useLessons } from "../learning/api";
+import { pendingFor } from "../learning/model/lessons";
+import { useTeams } from "../teams/api";
+import { teamAsAgent, teamIdOf } from "../teams/model/teams";
 import { useConfig } from "../settings/api";
 import { useCreateSession, useSessions } from "./api";
 import { ChatEmpty } from "./components/ChatEmpty";
@@ -33,6 +37,7 @@ const chatPath = (id: string) => `/chat/${encodeURIComponent(id)}`;
 export function ChatView() {
   const sessions = useSessions();
   const agents = useAgents();
+  const teams = useTeams();
   const profiles = useProfiles();
   const config = useConfig();
   const createSession = useCreateSession();
@@ -42,7 +47,12 @@ export function ChatView() {
   const list = sessions.data;
   const active = list?.find((s) => s.id === urlId) ?? null;
   const openId = active?.id ?? null;
-  const agent = agents.data?.find((a) => a.id === active?.agent_id) ?? null;
+  // A team session (`team:<id>`) shows the profile the engine runs it with, under the team's name.
+  const sessionTeamId = active ? teamIdOf(active.agent_id) : null;
+  const sessionTeam = sessionTeamId ? teams.data?.find((t) => t.id === sessionTeamId) : undefined;
+  const agent = sessionTeamId
+    ? (sessionTeam ? teamAsAgent(sessionTeam, agents.data ?? []) : null)
+    : agents.data?.find((a) => a.id === active?.agent_id) ?? null;
   const profile = profiles.data?.find((p) => p.id === agent?.inference_profile) ?? null;
   const defaultAgent = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
 
@@ -75,6 +85,8 @@ export function ChatView() {
   );
   const conv = useConversation(openId, { onGone: gone });
   const feedback = useFeedback(openId, conv.items, conv.running);
+  // After a thumbs down the agent may have proposed a lesson: point to it.
+  const lessonToReview = pendingFor(useLessons("pending").data, openId);
   const [input, setInput] = useDraft(openId);
   const [focusTick, setFocusTick] = useState(0);
   const [showSessions, setShowSessions] = useState(false);
@@ -126,7 +138,7 @@ export function ChatView() {
   };
   const sessionList = (onClose?: () => void) => (
     <SessionList
-      sessions={sessions} agents={agents.data ?? []} defaultAgent={defaultAgent} activeId={openId}
+      sessions={sessions} agents={agents.data ?? []} teams={teams.data ?? []} defaultAgent={defaultAgent} activeId={openId}
       creating={createSession.isPending} onCreate={create} onDeleted={onDeleted} onClose={onClose}
       onSelect={(id) => {
         navigate(chatPath(id));
@@ -184,6 +196,16 @@ export function ChatView() {
             onRespond={conv.respond} onAction={conv.sendAction} notice={notice} sessionKey={openId} feedback={feedback}
             empty={<ChatEmpty onPick={(text) => { setInput(text); setFocusTick((n) => n + 1); }} />}
           />
+        )}
+        {lessonToReview && (
+          <div className="ws-note ws-lesson" role="status">
+            <Icon name="sparkle" size={18} />
+            <div className="ws-note-body">
+              <b>Ho proposto una lezione da rivedere</b>
+              <span className="ws-note-hint">«{lessonToReview.title}»: non viene scritta finché non la approvi.</span>
+              <Link to="/" className="ws-note-link">Rivedila nella Panoramica <Icon name="forward" size={12} /></Link>
+            </div>
+          </div>
         )}
         <Composer
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}

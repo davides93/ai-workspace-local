@@ -1,4 +1,4 @@
-//! Fine-tuning jobs and the registry of the adapters they leave (architecture §5.5). A job is an
+//! Fine-tuning jobs and the registry of the adapters they leave (architecture §5.6). A job is an
 //! external trainer run as a supervised process: log on file, progress read from the log, one at a
 //! time on a device, cancellable. When it succeeds the adapter is registered and, if the job names a
 //! suite, compared with the base model.

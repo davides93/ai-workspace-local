@@ -1,9 +1,9 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, RoutingStats, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
-  ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, MeshState, PeerDevice,
+  ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
@@ -112,6 +112,12 @@ export class HttpTransport implements Transport {
   deleteAgent = (id: string) => this.req<void>("DELETE", `/agents/${enc(id)}`);
   agentRouting = (id: string) => this.req<RoutingStats>("GET", `/agents/${enc(id)}/routing`);
   resetAgentRouting = (id: string) => this.req<void>("DELETE", `/agents/${enc(id)}/routing`);
+  remoteAgents = () => this.req<RemoteAgent[]>("GET", "/remote-agents");
+  saveRemoteAgent = (r: RemoteAgent) => this.req<RemoteAgent>("PUT", `/remote-agents/${enc(r.id)}`, r);
+  deleteRemoteAgent = (id: string) => this.req<void>("DELETE", `/remote-agents/${enc(id)}`);
+  teams = () => this.req<TeamDef[]>("GET", "/teams");
+  saveTeam = (t: TeamDef) => this.req<TeamDef>("PUT", `/teams/${enc(t.id)}`, t);
+  deleteTeam = (id: string) => this.req<void>("DELETE", `/teams/${enc(id)}`);
 
   sessions = () => this.req<Session[]>("GET", "/sessions");
   getSession = (id: string) => this.req<Session>("GET", `/sessions/${enc(id)}`);
@@ -158,8 +164,12 @@ export class HttpTransport implements Transport {
     this.req<void>("DELETE", `/sessions/${enc(sessionId)}/messages/${enc(messageId)}/feedback`);
   startRun = (sessionId: string, input: string, kind?: "a2ui.action") =>
     this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, kind ? { input, kind } : { input });
+  sessionCheckpoints = (sessionId: string) => this.req<CheckpointInfo[]>("GET", `/sessions/${enc(sessionId)}/checkpoints`);
+  rewindRun = (runId: string) => this.req<RewindResult>("POST", `/runs/${enc(runId)}/rewind`);
   cancelRun = (runId: string) => this.req<void>("POST", `/runs/${enc(runId)}/cancel`);
   activeRun = async (sessionId: string) => (await this.req<{ run_id: string | null }>("GET", `/sessions/${enc(sessionId)}/active-run`)).run_id;
+  runEvents = async (runId: string) =>
+    (await this.req<{ seq: number; event: AgEvent }[]>("GET", `/runs/${enc(runId)}/events.json`)).map((e) => e.event);
   approvals = () => this.req<ApprovalRequest[]>("GET", "/approvals");
   respondApproval = (id: string, decision: "allow" | "deny", remember?: boolean) =>
     this.req<void>("POST", `/approvals/${enc(id)}`, { decision, remember: !!remember });
@@ -226,6 +236,10 @@ export class HttpTransport implements Transport {
     this.req<WorkflowRun>("POST", `/workflows/${enc(id)}/run`, { inputs: inputs ?? {} });
   workflowRuns = () => this.req<WorkflowRun[]>("GET", "/workflows/runs");
 
+  lessons = (status?: LessonStatus) => this.req<Lesson[]>("GET", status ? `/lessons?status=${enc(status)}` : "/lessons");
+  approveLesson = (id: string, edit?: { title?: string; content?: string }) => this.req<Lesson>("POST", `/lessons/${enc(id)}/approve`, edit ?? {});
+  rejectLesson = (id: string) => this.req<Lesson>("POST", `/lessons/${enc(id)}/reject`, {});
+  reflectSession = (sessionId: string) => this.req<Lesson>("POST", `/sessions/${enc(sessionId)}/reflect`, {});
   evalSuites = () => this.req<EvalSuite[]>("GET", "/evals");
   saveEvalSuite = (s: EvalSuite) => this.req<EvalSuite>("PUT", `/evals/${enc(s.id)}`, s);
   deleteEvalSuite = (id: string) => this.req<void>("DELETE", `/evals/${enc(id)}`);
@@ -233,6 +247,10 @@ export class HttpTransport implements Transport {
   evalReports = () => this.req<EvalReport[]>("GET", "/eval-runs");
   evalReport = (id: string) => this.req<EvalReport>("GET", `/eval-runs/${enc(id)}`);
   compareEvalReports = (a: string, b: string) => this.req<EvalComparison>("GET", `/eval-runs/compare?a=${enc(a)}&b=${enc(b)}`);
+  startPromptOptimization = (suiteId: string, req: OptimizeRequest) => this.req<PromptOptimization>("POST", `/evals/${enc(suiteId)}/optimize`, req);
+  promptOptimizations = () => this.req<PromptOptimization[]>("GET", "/prompt-optimizations");
+  promptOptimization = (id: string) => this.req<PromptOptimization>("GET", `/prompt-optimizations/${enc(id)}`);
+  applyPromptOptimization = (id: string, variant: number) => this.req<PromptOptimization>("POST", `/prompt-optimizations/${enc(id)}/apply`, { variant });
 
   trainDoctor = () => this.req<TrainDoctor>("GET", "/train/doctor");
   installTrainer = (id: string) => this.req<InstallJob>("POST", `/trainers/${enc(id)}/install`);

@@ -19,6 +19,8 @@ pub const EXCLUDED: &str = "[escluso]";
 /// Which sessions to export and how to treat what they contain.
 #[derive(Debug, Clone)]
 pub struct TraceFilter {
+    /// Only this session.
+    pub session: Option<String>,
     pub agent: Option<String>,
     /// RFC 3339 or `YYYY-MM-DD`, compared with the last activity of the session.
     pub since: Option<String>,
@@ -36,7 +38,17 @@ pub struct TraceFilter {
 
 impl Default for TraceFilter {
     fn default() -> Self {
-        Self { agent: None, since: None, until: None, status: None, limit: None, rated: None, redact: true, exclude_paths: vec![] }
+        Self {
+            session: None,
+            agent: None,
+            since: None,
+            until: None,
+            status: None,
+            limit: None,
+            rated: None,
+            redact: true,
+            exclude_paths: vec![],
+        }
     }
 }
 
@@ -255,6 +267,9 @@ impl Engine {
         for s in store.all_sessions()? {
             if out.len() >= filter.limit.unwrap_or(usize::MAX) {
                 break;
+            }
+            if filter.session.as_deref().is_some_and(|id| id != s.id) {
+                continue;
             }
             if filter.agent.as_deref().is_some_and(|a| a != s.agent_id) {
                 continue;

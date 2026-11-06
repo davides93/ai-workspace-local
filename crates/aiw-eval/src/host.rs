@@ -12,6 +12,8 @@ pub struct TaskRequest {
     pub agent: String,
     /// Inference profile that replaces the agent's own.
     pub profile: Option<String>,
+    /// System prompt that replaces the agent's own for this task only.
+    pub system_prompt: Option<String>,
     pub prompt: String,
     /// The folder the agent works in (its workspace root), already holding the task's files.
     pub workdir: PathBuf,

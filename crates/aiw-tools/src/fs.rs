@@ -125,6 +125,9 @@ impl Tool for WriteFile {
             tokio::fs::write(&p, content).await?;
         }
         ctx.mark_seen(&p);
+        if !existed {
+            ctx.record_created(&p);
+        }
         Ok(ToolOutput::text(format!(
             "{} {} ({} righe, {} byte)",
             match (existed, append) {
@@ -181,6 +184,9 @@ impl Tool for EditFile {
             text.push_str(new);
             tokio::fs::write(&p, &text).await?;
             ctx.mark_seen(&p);
+            if !existed {
+                ctx.record_created(&p);
+            }
             return Ok(ToolOutput::text(format!(
                 "{} {} ({} righe aggiunte)",
                 if existed { "Aggiunto in fondo a" } else { "Creato" },
@@ -430,7 +436,14 @@ impl Tool for MoveFile {
         if let Some(parent) = to.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
+        // The original of the source is kept; the destination did not exist, so a rewind deletes it
+        // (a moved folder is not tracked: only files are).
+        ctx.checkpoint(&from);
+        let is_file = from.is_file();
         tokio::fs::rename(&from, &to).await.map_err(|e| Error::Invalid(format!("spostamento non riuscito: {e}")))?;
+        if is_file {
+            ctx.record_created(&to);
+        }
         Ok(ToolOutput::text(format!("{} → {}", rel(ctx, &from), rel(ctx, &to))))
     }
 }
@@ -438,6 +451,7 @@ impl Tool for MoveFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::checkpoint;
 
     #[tokio::test]
     async fn write_edit_read_list_grep_move() {
@@ -450,7 +464,8 @@ mod tests {
         assert!(out.content.contains("Creato notes/a.md"));
         let out = t("edit_file").call(json!({"path":"notes/a.md","old_string":"mondo","new_string":"workspace"}), &ctx).await.unwrap();
         assert!(!out.is_error, "{}", out.content);
-        assert!(dir.path().join(".ckpt/run_t/notes/a.md").exists(), "checkpoint saved before edit");
+        // The file was created by this run: a rewind deletes it, so no "original" is kept.
+        assert!(!dir.path().join(".ckpt/run_t/notes/a.md").exists(), "no original for a file the run created");
         let out = t("read_file").call(json!({"path":"notes/a.md"}), &ctx).await.unwrap();
         assert!(out.content.contains("ciao workspace"));
         let out = t("edit_file").call(json!({"path":"notes/a.md","old_string":"assente","new_string":"x"}), &ctx).await.unwrap();
@@ -465,6 +480,34 @@ mod tests {
         assert!(!out.is_error, "{}", out.content);
         assert!(dir.path().join("archivio/2026/a.md").exists());
         assert!(t("write_file").call(json!({"path":"../evil.txt","content":"x"}), &ctx).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn file_tools_feed_the_checkpoint_of_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+        let mut ctx = ToolContext::new("run_c", dir.path().to_path_buf());
+        ctx.checkpoint_dir = Some(ckpt.path().to_path_buf());
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        std::fs::write(dir.path().join("vecchio.md"), "originale").unwrap();
+        std::fs::write(dir.path().join("da-spostare.md"), "contenuto").unwrap();
+
+        t("write_file").call(json!({"path":"nuovo.md","content":"uno"}), &ctx).await.unwrap();
+        t("write_file").call(json!({"path":"nuovo.md","content":"due"}), &ctx).await.unwrap();
+        t("write_file").call(json!({"path":"vecchio.md","content":"sostituito"}), &ctx).await.unwrap();
+        t("edit_file").call(json!({"path":"creato-da-edit.md","old_string":"","new_string":"x"}), &ctx).await.unwrap();
+        t("move_file").call(json!({"from":"da-spostare.md","to":"archivio/spostato.md"}), &ctx).await.unwrap();
+
+        let info = checkpoint::plan(ckpt.path(), "run_c").unwrap();
+        assert_eq!(info.restore, vec!["da-spostare.md", "vecchio.md"]);
+        assert_eq!(info.delete, vec!["archivio/spostato.md", "creato-da-edit.md", "nuovo.md"]);
+        // `nuovo.md` was created by the run: overwriting it again must not make "uno" look like an original.
+        assert!(!ckpt.path().join("run_c/nuovo.md").exists());
+        let r = checkpoint::rewind(ckpt.path(), "run_c").unwrap();
+        assert!(r.failed.is_empty());
+        assert_eq!(std::fs::read_to_string(dir.path().join("vecchio.md")).unwrap(), "originale");
+        assert_eq!(std::fs::read_to_string(dir.path().join("da-spostare.md")).unwrap(), "contenuto");
+        assert!(!dir.path().join("nuovo.md").exists() && !dir.path().join("archivio/spostato.md").exists());
     }
 
     /// Symlinks cannot be created without privileges on Windows, hence unix only.

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DownloadProgress } from "../types";
+import { SECRET_MASK, type DownloadProgress } from "../types";
 import { MockTransport, urlDest } from "./index";
 
 // Basic contract of the demo transport for the model hub (docs/architecture/model-hub.md §3-§4).
@@ -293,6 +293,47 @@ describe("other v0.4 methods", () => {
     expect((await api.workflows()).some((w) => w.id === "wf-tmp")).toBe(false);
   });
 
+  it("keeps remote agents like the engine: the token is masked and kept, and a team protects the agent", async () => {
+    const demo = await api.remoteAgents();
+    expect(demo[0]).toMatchObject({ id: "studio", token: SECRET_MASK });
+    const base = { id: "tmp", name: "Tmp", url: "http://h:7777", token: "segreto", description: "" };
+    await expect(api.saveRemoteAgent({ ...base, id: "a b" })).rejects.toMatchObject({ status: 400 });
+    await expect(api.saveRemoteAgent({ ...base, id: "peer-x" })).rejects.toMatchObject({ message: expect.stringContaining("riservati") });
+    await expect(api.saveRemoteAgent({ ...base, name: " " })).rejects.toMatchObject({ message: "il nome dell'agente remoto è obbligatorio" });
+    await expect(api.saveRemoteAgent({ ...base, url: "ftp://x" })).rejects.toMatchObject({ message: expect.stringContaining("http(s)") });
+    const saved = await api.saveRemoteAgent(base);
+    expect(saved.token).toBe(SECRET_MASK);
+    // Sending the mask back keeps the stored token: nothing leaks, nothing is lost.
+    await api.saveRemoteAgent({ ...saved, description: "nuova" });
+    expect((await api.remoteAgents()).find((r) => r.id === "tmp")).toMatchObject({ token: SECRET_MASK, description: "nuova" });
+
+    await api.saveTeam({ id: "t-rem", name: "Con remoto", description: "", strategy: "parallel", members: [{ agent: "remote:tmp", role: "" }] });
+    await expect(api.deleteRemoteAgent("tmp")).rejects.toMatchObject({ status: 409, message: expect.stringContaining("Con remoto") });
+    await api.deleteTeam("t-rem");
+    await api.deleteRemoteAgent("tmp");
+    await expect(api.deleteRemoteAgent("tmp")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("saves, validates and deletes teams like the engine, and protects the agents they use", async () => {
+    const demo = await api.teams();
+    expect(demo.map((t) => t.id)).toContain("revisione");
+    const base = { id: "t-tmp", name: "Tmp", description: "", strategy: "pipeline" as const, members: [{ agent: "coder", role: "scrive" }] };
+    await expect(api.saveTeam({ ...base, strategy: "coro" as never })).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strategia non valida") });
+    await expect(api.saveTeam({ ...base, members: [] })).rejects.toMatchObject({ message: "un team ha da 1 a 8 membri" });
+    await expect(api.saveTeam({ ...base, members: [base.members[0], base.members[0]] })).rejects.toMatchObject({ message: expect.stringContaining("compare più volte") });
+    await expect(api.saveTeam({ ...base, members: [{ agent: "ghost", role: "" }] })).rejects.toMatchObject({ message: "l'agente `ghost` non esiste" });
+    await expect(api.saveTeam({ ...base, strategy: "supervisor" })).rejects.toMatchObject({ message: expect.stringContaining("richiede un supervisore") });
+    await expect(api.saveTeam({ ...base, strategy: "supervisor", supervisor: "coder" })).rejects.toMatchObject({ message: expect.stringContaining("non può essere anche un membro") });
+    await expect(api.saveTeam({ ...base, budget: { max_tokens: 0 } })).rejects.toMatchObject({ message: expect.stringContaining("budget.max_tokens") });
+    await expect(api.saveTeam({ ...base, members: [{ agent: "remote:r1", role: "" }] })).resolves.toBeDefined();
+
+    await api.saveTeam({ ...base, members: [{ agent: "browser", role: "" }] });
+    await expect(api.deleteAgent("browser")).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/usato dai team: .*Tmp/) });
+    await api.deleteTeam("t-tmp");
+    await expect(api.deleteTeam("t-tmp")).rejects.toMatchObject({ status: 404 });
+    expect((await api.teams()).some((t) => t.id === "t-tmp")).toBe(false);
+  });
+
   it("saves, runs and compares evaluation suites like the engine does", async () => {
     const suite = { id: "ev-tmp", name: "Tmp", tasks: [{ id: "t", prompt: "crea note.md", graders: [{ kind: "file_exists", path: "note.md" }] }] };
     expect((await api.evalSuites()).some((s) => s.id === "esempio")).toBe(true);
@@ -329,6 +370,71 @@ describe("other v0.4 methods", () => {
     await expect(api.deleteEvalSuite("ev-tmp")).rejects.toThrow(/non trovata/);
   });
 
+  it("proposes lessons after a thumbs down and writes them only when approved, like the engine does", async () => {
+    const pending = await api.lessons("pending");
+    expect(pending.length).toBeGreaterThan(0);
+    expect(pending.every((l) => l.status === "pending")).toBe(true);
+    expect((await api.lessons()).length).toBeGreaterThan(pending.length);
+
+    // A thumbs down proposes a lesson (one waiting per session); a thumbs up does not.
+    const before = (await api.lessons("pending")).filter((l) => l.session_id === "ses_ui").length;
+    await api.setFeedback("ses_ui", "m1", 1);
+    expect((await api.lessons("pending")).filter((l) => l.session_id === "ses_ui")).toHaveLength(before);
+    await api.setFeedback("ses_ui", "m1", -1);
+    await api.setFeedback("ses_ui", "m2", -1);
+    const proposed = (await api.lessons("pending")).filter((l) => l.session_id === "ses_ui");
+    expect(proposed).toHaveLength(Math.max(before, 1));
+
+    // Approved with edits; deciding twice or editing to nothing is refused with the reason.
+    const id = proposed[0].id;
+    await expect(api.approveLesson(id, { title: " " })).rejects.toThrow(/vuoti/);
+    const done = await api.approveLesson(id, { title: "Titolo nuovo", content: "Contenuto nuovo" });
+    expect(done).toMatchObject({ status: "approved", title: "Titolo nuovo", content: "Contenuto nuovo" });
+    expect(done.decided_at).toBeTruthy();
+    await expect(api.approveLesson(id)).rejects.toThrow(/già stata approvata/);
+    await expect(api.rejectLesson(id)).rejects.toThrow(/già stata/);
+    expect((await api.lessons("pending")).some((l) => l.id === id)).toBe(false);
+
+    const other = (await api.reflectSession("ses_cv")).id;
+    expect((await api.rejectLesson(other)).status).toBe("rejected");
+    await expect(api.rejectLesson("les_none")).rejects.toThrow(/non trovata/);
+    await expect(api.reflectSession("ses_none")).rejects.toThrow(/non trovata/);
+  });
+
+  it("optimizes a prompt in the background and applies a variant only on request, like the engine does", async () => {
+    await expect(api.startPromptOptimization("esempio", { agent: "fantasma" })).rejects.toThrow(/non trovato/);
+    await expect(api.startPromptOptimization("nessuna", { agent: "operator" })).rejects.toThrow(/non trovata/);
+    await expect(api.startPromptOptimization("esempio", { agent: "operator", variants: 6 })).rejects.toThrow(/variants/);
+    await expect(api.startPromptOptimization("esempio", { agent: "operator", repeat: 0 })).rejects.toThrow(/repeat/);
+
+    const promptBefore = (await api.agents()).find((a) => a.id === "operator")!.system_prompt;
+    vi.useFakeTimers();
+    const started = await api.startPromptOptimization("esempio", { agent: "operator", variants: 2 });
+    expect(started).toMatchObject({ status: "running", suite_id: "esempio", agent_id: "operator", base_prompt: promptBefore });
+    await expect(api.applyPromptOptimization(started.id, 0)).rejects.toThrow(/in corso/);
+    await vi.advanceTimersByTimeAsync(4000);
+    vi.useRealTimers();
+    const done = await api.promptOptimization(started.id);
+    expect(done.status).toBe("done");
+    expect(done.variants).toHaveLength(2);
+    expect(done.best).toBe(1);
+    expect(done.variants[1].diff).toContain("+");
+    expect((await api.promptOptimizations())[0].id).toBe(started.id);
+    // Not applied by itself.
+    expect((await api.agents()).find((a) => a.id === "operator")!.system_prompt).toBe(promptBefore);
+
+    await expect(api.applyPromptOptimization(started.id, 7)).rejects.toThrow(/non esiste/);
+    const applied = await api.applyPromptOptimization(started.id, 1);
+    expect(applied).toMatchObject({ status: "applied", applied: 1 });
+    expect((await api.agents()).find((a) => a.id === "operator")!.system_prompt).toBe(done.variants[1].prompt);
+    await expect(api.applyPromptOptimization(started.id, 1)).rejects.toThrow(/già stata applicata/);
+    await expect(api.promptOptimization("opt_none")).rejects.toThrow(/non trovata/);
+
+    // The demo has one result where nothing wins: no `best`, so nothing to propose.
+    const none = (await api.promptOptimizations()).find((o) => o.id === "opt_demo_none")!;
+    expect(none.best).toBeUndefined();
+  });
+
   it("re-detects runtimes", async () => {
     vi.useFakeTimers();
     const p = api.refreshRuntimes();
@@ -343,7 +449,7 @@ describe("backend fixes in the demo", () => {
   it("lists the tools of the agent loop as internal, always on, and refuses to switch them (400)", async () => {
     const api = new MockTransport();
     const internal = (await api.tools()).filter((t) => t.source === "internal");
-    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "render_ui", "skill", "todo"]);
+    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "handoff", "render_ui", "skill", "team_state", "todo"]);
     expect(internal.every((t) => t.enabled && t.available && t.risk === "read")).toBe(true);
     await expect(api.setToolEnabled("todo", false)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strumento interno") });
     await expect(api.setToolEnabled("nope", false)).rejects.toMatchObject({ status: 404 });
@@ -662,5 +768,18 @@ describe("fine-tuning", () => {
     await sleep(2000);
     expect((await api.trainerInstall("unsloth"))?.state).toBe("done");
     expect((await api.trainDoctor()).trainers.find((t) => t.id === "unsloth")!.state).toBe("ready");
+  });
+});
+
+describe("checkpoint rewind", () => {
+  it("lists the demo checkpoint, rewinds it once and then has nothing left", async () => {
+    const api = new MockTransport();
+    expect(await api.sessionCheckpoints("ses_altra")).toEqual([]);
+    const [ck] = await api.sessionCheckpoints("ses_bug");
+    expect(ck).toMatchObject({ run_id: "run_bug", restore: ["crates/aiw-models/src/gguf.rs"], delete: ["crates/aiw-models/tests/header.rs"] });
+    const res = await api.rewindRun(ck.run_id);
+    expect(res).toMatchObject({ restored: ck.restore, deleted: ck.delete, failed: [] });
+    expect(await api.sessionCheckpoints("ses_bug")).toEqual([]);
+    await expect(api.rewindRun(ck.run_id)).rejects.toMatchObject({ status: 404 });
   });
 });

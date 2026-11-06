@@ -2,10 +2,13 @@ import type { ReactNode } from "react";
 import { Chip, Field, Input, Select, Textarea } from "../../../shared/ui";
 import type { AgentProfile, InferenceProfile, ToolInfo } from "../../../shared/api/types";
 import type { Issue } from "../model/draft";
-import { schemaParams, type StepDraft } from "../model/steps";
+import { cleanOptions, DEFAULT_RETRY_DELAY_S, FOREACH_MAX_PARALLEL, OPTION_LIMITS, schemaParams, type StepDraft } from "../model/steps";
+import type { StepOptions } from "../../../shared/api/types";
 import { PlaceholderInsert } from "./PlaceholderInsert";
 
 export interface StepCatalog {
+  /** Workflows a sub-workflow step can start (not the one being edited). */
+  workflows: { id: string; name: string }[];
   agents: AgentProfile[];
   profiles: InferenceProfile[];
   tools: ToolInfo[];
@@ -103,9 +106,85 @@ export function LlmFields({ step, uid, issues, catalog, before, inputKeys, onCha
   );
 }
 
-export function ApprovalFields({ step, uid, issues, before, inputKeys, onChange }: Props<"approval">) {
+/** The text of an inline step (or list of steps) as JSON, with the check of what it says. */
+function InlineJson({ id, label, value, hint, rows, issues, field, onChange }: { id: string; label: string; value: string; hint: ReactNode; rows: number; issues: Issue[]; field: string; onChange: (v: string) => void }) {
+  const n = note(issues, field);
   return (
-    <PromptField id={`st-${uid}-message`} label="Domanda per te" value={step.message} rows={2} placeholder="Sposto i file come proposto?" issues={issues} field="message" before={before} inputKeys={inputKeys} onChange={(message) => onChange({ ...step, message })} />
+    <Field label={label} htmlFor={id} error={n.error} hint={n.hint ?? hint}>
+      <Textarea id={id} rows={rows} className="mono" spellCheck={false} value={value} onChange={(e) => onChange(e.target.value)} aria-invalid={!!n.error} />
+    </Field>
+  );
+}
+
+export function ForeachFields({ step, uid, issues, before, inputKeys, onChange }: Props<"foreach">) {
+  const p = note(issues, "parallel");
+  return (
+    <>
+      <PromptField id={`st-${uid}-items`} label="Elenco da scorrere" value={step.items} rows={2} placeholder="{{steps.scan.output}}" issues={issues} field="items" before={before} inputKeys={inputKeys} onChange={(items) => onChange({ ...step, items })} />
+      <p className="faint text-xs">Un array JSON (anche in un blocco ```json) oppure un testo con una voce per riga; al massimo 200 voci.</p>
+      <Field label="Voci alla volta" htmlFor={`st-${uid}-parallel`} error={p.error} hint={`1–${FOREACH_MAX_PARALLEL}`}>
+        <Input id={`st-${uid}-parallel`} type="number" min={1} max={FOREACH_MAX_PARALLEL} value={step.parallel ?? ""} placeholder="1" onChange={(e) => onChange({ ...step, parallel: e.target.value.trim() === "" ? undefined : Number(e.target.value) })} aria-invalid={!!p.error} />
+      </Field>
+      <InlineJson
+        id={`st-${uid}-body`} label="Passo da ripetere (JSON)" value={step.body} rows={7} issues={issues} field="body" onChange={(body) => onChange({ ...step, body })}
+        hint={<>Un passo <code>tool</code>, <code>agent</code> o <code>llm</code>. Usa <code>{"{{item}}"}</code>, <code>{"{{item.campo}}"}</code> e <code>{"{{index}}"}</code>.</>}
+      />
+    </>
+  );
+}
+
+export function ParallelFields({ step, uid, issues, onChange }: Props<"parallel">) {
+  return (
+    <InlineJson
+      id={`st-${uid}-steps`} label="Passi da eseguire insieme (JSON)" value={step.steps} rows={10} issues={issues} field="steps" onChange={(steps) => onChange({ ...step, steps })}
+      hint={<>Un elenco di passi <code>tool</code>, <code>agent</code> o <code>llm</code>. L'output di ognuno è anche <code>{"{{steps.<id>.output}}"}</code>.</>}
+    />
+  );
+}
+
+export function WorkflowFields({ step, uid, issues, catalog, before, inputKeys, onChange }: Props<"workflow">) {
+  const known = catalog.workflows.some((w) => w.id === step.workflow);
+  const n = note(issues, "workflow");
+  const i = note(issues, "inputs");
+  return (
+    <>
+      <Field label="Workflow da avviare" htmlFor={`st-${uid}-workflow`} error={n.error} hint={n.hint ?? "Anche un workflow disattivato: l'attivazione riguarda solo i suoi trigger."}>
+        <Select id={`st-${uid}-workflow`} value={step.workflow} onChange={(e) => onChange({ ...step, workflow: e.target.value })} aria-invalid={!!n.error}>
+          {!step.workflow && <option value="">Scegli un workflow…</option>}
+          {step.workflow && !known && <option value={step.workflow}>{step.workflow} (non esiste)</option>}
+          {catalog.workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </Select>
+      </Field>
+      <Field label="Input (JSON)" htmlFor={`st-${uid}-inputs`} error={i.error} hint={i.hint ?? "Un oggetto JSON; i valori possono usare i segnaposto. Il risultato è l'output dell'ultimo passo del workflow avviato."}>
+        <Textarea id={`st-${uid}-inputs`} rows={4} className="mono" spellCheck={false} value={step.inputs} onChange={(e) => onChange({ ...step, inputs: e.target.value })} aria-invalid={!!i.error} />
+        <PlaceholderInsert targetId={`st-${uid}-inputs`} value={step.inputs} onChange={(v) => onChange({ ...step, inputs: v })} before={before} inputKeys={inputKeys} quoted />
+      </Field>
+    </>
+  );
+}
+
+export function ApprovalFields({ step, uid, issues, before, inputKeys, onChange }: Props<"approval">) {
+  const t = note(issues, "timeout_s");
+  return (
+    <>
+      <PromptField id={`st-${uid}-message`} label="Domanda per te" value={step.message} rows={2} placeholder="Sposto i file come proposto?" issues={issues} field="message" before={before} inputKeys={inputKeys} onChange={(message) => onChange({ ...step, message })} />
+      <div className="step-options-grid">
+        <Field label="Attendi al massimo (s)" htmlFor={`st-${uid}-wait`} error={t.error} hint="Vuoto = aspetta senza limite">
+          <Input
+            id={`st-${uid}-wait`} type="number" min={1} max={OPTION_LIMITS.timeout} value={step.timeout_s ?? ""}
+            onChange={(e) => onChange({ ...step, timeout_s: e.target.value.trim() === "" ? undefined : Number(e.target.value) })} aria-invalid={!!t.error}
+          />
+        </Field>
+        {step.timeout_s !== undefined && (
+          <Field label="Se nessuno risponde" htmlFor={`st-${uid}-default`}>
+            <Select id={`st-${uid}-default`} value={step.default ?? "deny"} onChange={(e) => onChange({ ...step, default: e.target.value === "allow" ? "allow" : undefined })}>
+              <option value="deny">Rifiuta (il workflow finisce)</option>
+              <option value="allow">Approva e prosegui</option>
+            </Select>
+          </Field>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -149,5 +228,35 @@ export function ConditionFields({ step, uid, issues, before, inputKeys, others, 
       <p className="faint text-xs">I passi non scelti vengono saltati. Un passo scelto deve venire dopo la condizione, altrimenti non parte mai.</p>
       {t.map((i) => <p key={i.message} className={i.level === "error" ? "field-error" : "row-warn"}>{i.message}</p>)}
     </>
+  );
+}
+
+/** Retry, time limit and what to do when the step fails; closed unless something is set. */
+export function OptionsFields({ opts, uid, issues, onChange }: { opts?: StepOptions; uid: number; issues: Issue[]; onChange: (next?: StepOptions) => void }) {
+  const o = opts ?? {};
+  const set = (patch: StepOptions) => onChange({ ...o, ...patch });
+  const num = (v: string): number | undefined => (v.trim() === "" ? undefined : Number(v));
+  const err = (field: string) => note(issues, field).error;
+  return (
+    <details className="step-options" open={!!cleanOptions(opts) || undefined}>
+      <summary className="muted text-sm">Tentativi, limite di tempo ed errori</summary>
+      <div className="step-options-grid">
+        <Field label="Nuovi tentativi" htmlFor={`st-${uid}-retry`} error={err("retry")} hint={`0–${OPTION_LIMITS.retry}`}>
+          <Input id={`st-${uid}-retry`} type="number" min={0} max={OPTION_LIMITS.retry} value={o.retry ?? ""} placeholder="0" onChange={(e) => set({ retry: num(e.target.value) })} aria-invalid={!!err("retry")} />
+        </Field>
+        <Field label="Attesa tra i tentativi (s)" htmlFor={`st-${uid}-delay`} error={err("retry_delay_s")} hint={`0–${OPTION_LIMITS.retryDelay}`}>
+          <Input id={`st-${uid}-delay`} type="number" min={0} max={OPTION_LIMITS.retryDelay} value={o.retry_delay_s ?? ""} placeholder={String(DEFAULT_RETRY_DELAY_S)} onChange={(e) => set({ retry_delay_s: num(e.target.value) })} aria-invalid={!!err("retry_delay_s")} />
+        </Field>
+        <Field label="Limite di tempo (s)" htmlFor={`st-${uid}-timeout`} error={err("timeout_s")} hint="Per ogni tentativo; vuoto = nessun limite">
+          <Input id={`st-${uid}-timeout`} type="number" min={1} max={OPTION_LIMITS.timeout} value={o.timeout_s ?? ""} onChange={(e) => set({ timeout_s: num(e.target.value) })} aria-invalid={!!err("timeout_s")} />
+        </Field>
+        <Field label="Se il passo fallisce" htmlFor={`st-${uid}-onerror`} hint="Con «prosegui» l'errore è in {{steps.<id>.error}}">
+          <Select id={`st-${uid}-onerror`} value={o.on_error ?? "fail"} onChange={(e) => set({ on_error: e.target.value === "continue" ? "continue" : "fail" })}>
+            <option value="fail">Ferma il workflow</option>
+            <option value="continue">Prosegui con i passi successivi</option>
+          </Select>
+        </Field>
+      </div>
+    </details>
   );
 }

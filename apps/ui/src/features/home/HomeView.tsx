@@ -5,6 +5,7 @@ import { useAgents, useProfiles } from "../agents/api";
 import { useSessions } from "../chat/api";
 import { useModels } from "../models/api";
 import { useRuntimes } from "../runtimes/api";
+import { LessonsPanel } from "../learning/components/LessonsPanel";
 import { useConfig } from "../settings/api";
 import { ApprovalsPanel } from "./components/ApprovalsPanel";
 import { DevicePanel } from "./components/DevicePanel";
@@ -63,6 +64,7 @@ export function HomeView() {
         <RuntimesPanel />
         <ModelPanel />
         <ApprovalsPanel />
+        <LessonsPanel />
         <RecentSessions />
         <DownloadsPanel />
       </div>
