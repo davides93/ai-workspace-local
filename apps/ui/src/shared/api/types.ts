@@ -209,6 +209,7 @@ export interface UpdateStatus {
   configured: string;
   state: UpdateState;
   available?: ReleaseInfo | null;
+  releases?: ReleaseInfo[];
   checked_at?: string | null;
   received: number;
   total: number;
@@ -230,7 +231,7 @@ export interface RuntimeCompat {
   reason: string;
 }
 
-export type ModelOrigin = "aiw" | "ollama" | "lmstudio" | "hf-cache" | "manual";
+export type ModelOrigin = "aiw" | "ollama" | "lmstudio" | "hf-cache" | "manual" | "system";
 
 export interface LocalModel {
   id: string;

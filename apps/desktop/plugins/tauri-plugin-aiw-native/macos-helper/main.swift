@@ -63,7 +63,8 @@ func describe(_ error: Error) -> String {
     if d.contains("rateLimited") || d.contains("concurrentRequests") {
         return "Il modello di sistema Apple è occupato: riprova tra poco."
     }
-    return d
+    let ns = error as NSError
+    return "Apple Intelligence non è riuscita a rispondere. Riprova e, se il problema continua, controlla Apple Intelligence e Siri nelle Impostazioni di Sistema. (\(ns.domain), codice \(ns.code))"
 }
 
 func unavailableMessage(_ reason: String) -> String {

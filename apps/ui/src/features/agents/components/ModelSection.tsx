@@ -38,7 +38,7 @@ export function ModelSection({ agent, profiles, runtimes, issues, onChange }: {
       )}
       <p className="row text-sm">
         <Icon name="info" size={14} />
-        <span className="muted">Modifichi i profili in</span> <Link to="/agents?tab=profiles">Profili di inferenza</Link>
+        <span className="muted">Modifichi i profili in</span> <Link to="/models/profiles">Profili di inferenza</Link>
         <span className="muted">· scarichi i modelli in</span> <Link to="/models">Modelli</Link>
       </p>
     </div>

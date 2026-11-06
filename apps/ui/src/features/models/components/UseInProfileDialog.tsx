@@ -24,7 +24,7 @@ export function UseInProfileDialog({ model, onClose }: { model: LocalModel; onCl
 function ProfileDialog({ model, profiles, onClose }: { model: LocalModel; profiles: InferenceProfile[]; onClose: () => void }) {
   const save = useSaveProfile();
   const options = useMemo(() => runtimeOptions(model), [model]);
-  const [target, setTarget] = useState((profiles.find((p) => p.model !== model.id) ?? profiles[0])?.id ?? NEW);
+  const [target, setTarget] = useState(NEW);
   const profile = profiles.find((p) => p.id === target);
   const [runtimeChoice, setRuntimeChoice] = useState<string | null>(null);
   const [name, setName] = useState(model.name);

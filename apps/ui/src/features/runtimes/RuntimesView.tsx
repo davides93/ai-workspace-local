@@ -1,3 +1,4 @@
+import { errorMessage } from "../../shared/lib/errors";
 import { useMemo, useState } from "react";
 import { navigate, useParams } from "../../app/router";
 import { useSystem } from "../../shared/query/system";
@@ -15,7 +16,7 @@ export function RuntimesView() {
   const models = useModels();
   const system = useSystem();
   const refresh = useRefreshRuntimes();
-  const action = useRuntimeAction();
+  const action = useRuntimeAction(true);
   const [scope, setScope] = useState<Scope>("here");
   const [query, setQuery] = useState("");
   const runtimeId = useParams().runtimeId;
@@ -72,6 +73,7 @@ export function RuntimesView() {
                 {items.map((r) => (
                   <RuntimeCard
                     key={r.id} runtime={r} deviceAccels={deviceAccels} busy={busyId === r.id}
+                    error={action.isError && action.variables.runtime.id === r.id ? errorMessage(action.error) : undefined}
                     onAct={(a) => action.mutate({ runtime: r, action: a })}
                     onOpen={() => navigate(`/runtimes/${encodeURIComponent(r.id)}`)}
                   />

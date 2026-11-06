@@ -31,11 +31,21 @@ pub struct RunOptions {
     pub work_root: PathBuf,
     /// Id of the report; a new one when missing.
     pub report_id: Option<String>,
+    pub cancel: tokio_util::sync::CancellationToken,
 }
 
 impl RunOptions {
     pub fn new(work_root: PathBuf) -> Self {
-        Self { agent: None, profile: None, system_prompt: None, repeat: 1, keep: false, work_root, report_id: None }
+        Self {
+            agent: None,
+            profile: None,
+            system_prompt: None,
+            repeat: 1,
+            keep: false,
+            work_root,
+            report_id: None,
+            cancel: Default::default(),
+        }
     }
 }
 
@@ -83,8 +93,11 @@ pub async fn run_suite(
     };
     observer(EvalEvent::Started(&report));
     let attempts = suite.tasks.len() as u32 * opts.repeat;
-    for attempt in 1..=opts.repeat {
+    'attempts: for attempt in 1..=opts.repeat {
         for task in &suite.tasks {
+            if opts.cancel.is_cancelled() {
+                break 'attempts;
+            }
             observer(EvalEvent::TaskStarted { task_id: &task.id, attempt, attempts });
             let result = run_task(host, suite, task, attempt, opts, &report.id).await;
             report.tasks.push(result);
@@ -92,7 +105,7 @@ pub async fn run_suite(
             observer(EvalEvent::TaskFinished { result: report.tasks.last().expect("just pushed"), report: &report });
         }
     }
-    report.status = "completed".into();
+    report.status = if opts.cancel.is_cancelled() { "cancelled" } else { "completed" }.into();
     report.finished_at = Some(now_rfc3339());
     Ok(report)
 }
@@ -123,6 +136,7 @@ async fn run_task(host: &dyn EvalHost, suite: &Suite, task: &Task, attempt: u32,
         prompt: task.prompt.clone(),
         workdir: dir.clone(),
         timeout,
+        cancel: opts.cancel.child_token(),
     };
     let started = std::time::Instant::now();
     let run = match tokio::time::timeout(timeout + GRACE, host.run_task(req)).await {
@@ -136,7 +150,11 @@ async fn run_task(host: &dyn EvalHost, suite: &Suite, task: &Task, attempt: u32,
     let ctx = GradeContext { workdir: &dir, run: &run, host, prompt: &task.prompt, changes: &changes };
     let mut graders: Vec<GraderResult> = Vec::with_capacity(task.graders.len());
     for spec in &task.graders {
-        graders.push(grade(spec, &ctx).await);
+        tokio::select! {
+            biased;
+            _ = opts.cancel.cancelled() => break,
+            result = grade(spec, &ctx) => graders.push(result),
+        }
     }
     let score =
         if run.error.is_some() || graders.is_empty() { 0.0 } else { graders.iter().map(|g| g.score).sum::<f64>() / graders.len() as f64 };

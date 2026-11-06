@@ -75,6 +75,8 @@ pub struct ToolContext {
     pub require_read_before_overwrite: bool,
     /// Files read or written during this run (shared by the clones of the context).
     pub seen_files: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Training jobs started by this run, used to enforce its attempt budget.
+    pub training_jobs: Arc<tokio::sync::Mutex<Vec<String>>>,
 }
 
 impl ToolContext {
@@ -90,6 +92,7 @@ impl ToolContext {
             allow_private_network: false,
             require_read_before_overwrite: false,
             seen_files: Arc::default(),
+            training_jobs: Arc::default(),
         }
     }
 
@@ -245,6 +248,10 @@ pub trait Tool: Send + Sync {
     /// JSON Schema of the arguments.
     fn parameters(&self) -> Value;
     fn risk(&self) -> Risk;
+    /// Whether an agent must list this tool explicitly even when it grants a wildcard.
+    fn explicit_grant(&self) -> bool {
+        false
+    }
     /// `Err(reason)` when the tool cannot run on this device/build.
     fn available(&self) -> std::result::Result<(), String> {
         Ok(())

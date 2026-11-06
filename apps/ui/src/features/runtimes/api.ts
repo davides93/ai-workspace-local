@@ -34,10 +34,11 @@ export function useRefreshRuntimes() {
   });
 }
 
-export function useRuntimeAction() {
+export function useRuntimeAction(handled = false) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
+    meta: { handled },
     mutationFn: (v: { runtime: RuntimeInfo; action: "start" | "stop"; model?: string }) =>
       api.runtimeAction(v.runtime.id, v.action, v.model ? { model: v.model } : undefined),
     onSuccess: (_r, v) => {
@@ -99,7 +100,8 @@ export function useInstallRuntime() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (runtime: Pick<RuntimeInfo, "id" | "name">) => api.installRuntime(runtime.id),
+    mutationFn: (runtime: Pick<RuntimeInfo, "id" | "name">) => api.installRuntime(runtime.id, runtime.id === "localai"),
+    meta: { handled: true },
     onSuccess: (job, runtime) => {
       qc.setQueryData(qk.runtimes.install(runtime.id), job);
       toast(`Installazione di ${runtime.name} avviata`);

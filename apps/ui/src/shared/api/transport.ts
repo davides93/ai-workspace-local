@@ -44,7 +44,8 @@ export interface Transport {
   /** Steps and missing prerequisites of installing a runtime. */
   runtimeInstallPlan(id: string): Promise<InstallPlan>;
   /** Starts installing a runtime in the background (no further confirmation). */
-  installRuntime(id: string): Promise<InstallJob>;
+  previewSystemModel(id: string, prompt: string): Promise<string>;
+  installRuntime(id: string, start?: boolean): Promise<InstallJob>;
   /** The last installation of a runtime, or null when none ran. */
   runtimeInstall(id: string): Promise<InstallJob | null>;
 
@@ -159,6 +160,7 @@ export interface Transport {
   datasets(): Promise<DatasetInfo[]>;
   /** The server refuses with the reason when there are too few examples. */
   buildDataset(spec: DatasetSpec): Promise<DatasetInfo>;
+  importSftDataset(name: string, jsonl: string): Promise<DatasetInfo>;
   deleteDataset(id: string): Promise<void>;
   trainJobs(): Promise<TrainJob[]>;
   /** Starts a fine-tuning in the background: the job comes back `queued` and is polled with `trainJobs`. */

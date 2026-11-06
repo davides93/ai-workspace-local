@@ -186,9 +186,22 @@ impl Engine {
     fn local_enrichment(&self, mut models: Vec<LocalModel>) -> Vec<LocalModel> {
         let device = self.device();
         let infos = self.0.runtimes.list();
+        let mlx_lm = runtime_compat(&infos, &device.os, "mlx").into_iter().find(|runtime| runtime.id == "mlx-lm");
         let mut by_format: HashMap<String, Vec<RuntimeCompat>> = HashMap::new();
         for m in models.iter_mut() {
-            let compat = by_format.entry(m.format.clone()).or_insert_with(|| runtime_compat(&infos, &device.os, &m.format)).clone();
+            let mut compat = by_format.entry(m.format.clone()).or_insert_with(|| runtime_compat(&infos, &device.os, &m.format)).clone();
+            // Verified with the original Google safetensors: mlx-lm uses the text branch of Gemma 3.
+            let is_medgemma = m
+                .source
+                .as_deref()
+                .and_then(|source| source.strip_prefix("hf:"))
+                .is_some_and(|source| source.split(['@', '#']).next() == Some("google/medgemma-1.5-4b-it"));
+            if m.format == "safetensors" && is_medgemma {
+                if let Some(runtime) = &mlx_lm {
+                    compat.push(runtime.clone());
+                    compat.sort_by_key(|r| !r.available);
+                }
+            }
             m.runtimes = compat.iter().map(|c| c.id.clone()).collect();
             m.runtime_compat = compat;
             let kv_mb = if m.format == "gguf" {
@@ -210,8 +223,36 @@ impl Engine {
 
     pub fn rescan_models(&self) -> Vec<LocalModel> {
         let roots = self.0.external_roots.read().unwrap().clone();
-        let found = self.local_enrichment(aiw_models::scan_all(&self.0.models_dir, &roots));
+        let mut found = self.local_enrichment(aiw_models::scan_all(&self.0.models_dir, &roots));
+        let system = self.available_system_models();
+        found.retain(|m| !system.iter().any(|s| s.id == m.id));
+        found.extend(system);
         *self.0.models.write().unwrap() = found.clone();
+        found
+    }
+
+    pub(crate) fn available_system_models(&self) -> Vec<LocalModel> {
+        let mut found = Vec::new();
+        let os = self.device().os;
+        let runtimes = self.0.runtimes.list();
+        let compatible = runtime_compat(&runtimes, &os, "system");
+        for model in aiw_models::builtin_catalog() {
+            let ModelSource::System { runtime } = model.source else { continue };
+            let Some(compat) = compatible.iter().find(|c| c.id == runtime && c.available) else { continue };
+            found.push(LocalModel {
+                id: model.id,
+                name: model.name,
+                format: "system".into(),
+                origin: "system".into(),
+                params_b: (model.params_b > 0.0).then_some(model.params_b),
+                context_length: (model.context_length > 0).then_some(model.context_length),
+                capabilities: model.capabilities,
+                runtimes: vec![runtime],
+                runtime_compat: vec![compat.clone()],
+                fit_detail: "Fornito dal sistema operativo. Nessun download richiesto.".into(),
+                ..Default::default()
+            });
+        }
         found
     }
 
@@ -808,6 +849,24 @@ mod tests {
         assert!(!ms.auth_configured);
         assert_eq!(ms.endpoint, "https://www.modelscope.cn");
         assert!(e.0.store.get_doc::<ProviderDoc>("model_provider", "modelscope").unwrap().is_none());
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[tokio::test]
+    async fn native_model_becomes_selectable_and_answers_using_its_own_runtime() {
+        let d = tempfile::tempdir().unwrap();
+        let e = engine_in(d.path()).await;
+        let id = "apple-fm-system";
+        assert!(e.models().iter().all(|model| model.id != id));
+        let backend =
+            aiw_runtimes::scripted::ScriptedBackend::new(vec![aiw_runtimes::scripted::ScriptedBackend::text_turn("Ciao da Apple")]);
+        e.register_native_runtime("apple-fm", std::sync::Arc::new(backend));
+        let model = e.models().into_iter().find(|model| model.id == id).unwrap();
+        assert_eq!(model.origin, "system");
+        assert!(!model.removable && model.path.is_none());
+        assert_eq!(model.runtimes, ["apple-fm"]);
+        assert!(e.gateway_models().contains(&id.to_string()));
+        assert_eq!(e.preview_system_model(id, "Ciao").await.unwrap(), "Ciao da Apple");
     }
 
     #[tokio::test]

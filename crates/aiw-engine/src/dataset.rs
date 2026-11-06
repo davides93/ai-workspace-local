@@ -133,6 +133,58 @@ impl Engine {
         self.write_dataset(spec, examples, sources)
     }
 
+    /// Imports curated text examples chosen by the user. One JSONL row is one example.
+    pub fn import_sft_dataset(&self, name: &str, jsonl: &str) -> Result<DatasetInfo> {
+        if jsonl.len() > 1_000_000 {
+            return Err(Error::Invalid("Il file di esempi supera 1 MB.".into()));
+        }
+        let redactor = Redactor::new(crate::traces::mcp_secret_values(&self.0.store));
+        let mut examples = Vec::new();
+        let mut seen = BTreeSet::new();
+        for (index, line) in jsonl.lines().enumerate().filter(|(_, line)| !line.trim().is_empty()) {
+            if seen.len() == 500 {
+                return Err(Error::Invalid("Importa al massimo 500 esempi per dataset.".into()));
+            }
+            let invalid = || {
+                Error::Invalid(format!(
+                    "Riga {}: usa un oggetto JSON con messages, una domanda user e una risposta assistant finale.",
+                    index + 1
+                ))
+            };
+            let value: Value = serde_json::from_str(line.trim_start_matches('\u{feff}')).map_err(|_| invalid())?;
+            let messages = value.get("messages").and_then(Value::as_array).ok_or_else(invalid)?;
+            if messages.len() < 2 || messages.len() > 50 {
+                return Err(invalid());
+            }
+            let mut cleaned = Vec::with_capacity(messages.len());
+            let mut expect = "user";
+            for (n, message) in messages.iter().enumerate() {
+                let role = message["role"].as_str().ok_or_else(invalid)?;
+                let text = message["content"].as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(invalid)?;
+                if role != "system" || n != 0 {
+                    if role != expect {
+                        return Err(invalid());
+                    }
+                    expect = if role == "user" { "assistant" } else { "user" };
+                }
+                cleaned.push(json!({"role": role, "content": redactor.apply(text)}));
+            }
+            if expect != "user" || cleaned.last().is_none_or(|m| m["role"] != "assistant") {
+                return Err(invalid());
+            }
+            let value = json!({"messages": cleaned});
+            let key = format!("{:x}", Sha256::digest(serde_json::to_vec(&value)?));
+            if seen.insert(key.clone()) {
+                examples.push(Example { key, value, agent: String::new() });
+            }
+        }
+        if examples.len() < MIN_EXAMPLES {
+            return Err(Error::Invalid(format!("Servono almeno {MIN_EXAMPLES} esempi distinti. Nel file ce ne sono {}.", examples.len())));
+        }
+        let spec = DatasetSpec { method: "sft".into(), name: Some(name.chars().take(80).collect()), ..Default::default() };
+        self.write_dataset(&spec, examples, vec!["import".into()])
+    }
+
     /// Splits, checks the minimum and writes the files.
     pub(crate) fn write_dataset(&self, spec: &DatasetSpec, examples: Vec<Example>, sources: Vec<String>) -> Result<DatasetInfo> {
         let noun = if spec.method == "dpo" { "coppie" } else { "esempi" };
@@ -154,8 +206,8 @@ impl Engine {
         let id = new_id("ds");
         let dir = self.dataset_dir(&id)?;
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("train.jsonl"), jsonl(&train)?)?;
-        std::fs::write(dir.join("valid.jsonl"), jsonl(&valid)?)?;
+        crate::train_jobs::write_private(&dir.join("train.jsonl"), &jsonl(&train)?)?;
+        crate::train_jobs::write_private(&dir.join("valid.jsonl"), &jsonl(&valid)?)?;
         let info = DatasetInfo {
             name: spec
                 .name

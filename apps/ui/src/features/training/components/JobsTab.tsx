@@ -34,7 +34,7 @@ function JobCard({ job }: { job: TrainJob }) {
         {METHOD_LABEL[job.method]} · {job.trainer} · {job.base_model} · <span title={formatDateTime(job.created_at)}>{relTime(job.created_at)}</span>
       </span>
       {isActive(job) && pct !== null && <Meter value={pct} max={100} label="Avanzamento" />}
-      {isActive(job) && pct !== null && <span className="faint text-xs">{pct}%</span>}
+      {isActive(job) && pct !== null && <span className="faint text-xs">{job.adapter_id ? "Confronto con il modello base in corso…" : `${pct}%`}</span>}
       {metrics && <span className="text-sm">{metrics}</span>}
       {job.error && <p className="tr-error" role="alert">{job.error}</p>}
       {job.metrics?.eval != null && <EvalLine eval={job.metrics.eval as Record<string, unknown>} />}
@@ -64,7 +64,10 @@ export function JobsTab({ doctor, jobs, datasets }: { doctor: UseQueryResult<Tra
   const busy = (jobs.data ?? []).some(isActive);
   return (
     <div className="stack stack-lg">
-      <DoctorPanel doctor={doctor} />
+      <details>
+        <summary>Trainer e capacità di questo dispositivo</summary>
+        <DoctorPanel doctor={doctor} />
+      </details>
       <Section
         title="Addestramenti"
         hint={busy ? "Un addestramento alla volta: aspetta che finisca o interrompilo." : undefined}
@@ -72,7 +75,7 @@ export function JobsTab({ doctor, jobs, datasets }: { doctor: UseQueryResult<Tra
       >
         <QueryState
           query={jobs} isEmpty={(j) => j.length === 0}
-          empty={<EmptyState icon="bolt" title="Nessun addestramento" description="Crea un dataset dalle conversazioni a cui hai dato un pollice in su, poi avvia l'addestramento: alla fine trovi l'adapter da usare in un profilo." action={<Link to="/training/datasets" className="btn primary">Vai ai dataset</Link>} />}
+          empty={<EmptyState icon="bolt" title="Nessun addestramento" description="Crea un dataset dalle conversazioni a cui hai dato un pollice in su, poi avvia l'addestramento: alla fine trovi l'adapter da usare in un profilo." action={<Button onClick={() => setStarting(true)}>Inizia con la guida</Button>} />}
         >
           {(all) => <ul className="tr-jobs">{all.map((j) => <JobCard key={j.id} job={j} />)}</ul>}
         </QueryState>

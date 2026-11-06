@@ -160,16 +160,20 @@ pub fn pick_release(releases: &[GhRelease], current: &Version, channel: Channel,
             best = Some((v, r));
         }
     }
-    best.map(|(v, r)| ReleaseInfo {
+    best.map(|(v, r)| release_info(r, &v, os, arch))
+}
+
+fn release_info(r: &GhRelease, v: &Version, os: &str, arch: &str) -> ReleaseInfo {
+    ReleaseInfo {
         tag: r.tag_name.clone(),
-        channel: Channel::of(&v),
+        channel: Channel::of(v),
         version: v.to_string(),
         notes: r.body.clone().unwrap_or_default(),
         published_at: r.published_at.clone(),
         page: r.html_url.clone(),
         asset: pick_asset(os, arch, &r.assets).map(|a| Asset { name: a.name.clone(), size: a.size, url: a.browser_download_url.clone() }),
         checksums_url: r.assets.iter().find(|a| a.name == CHECKSUMS_ASSET).map(|a| a.browser_download_url.clone()),
-    })
+    }
 }
 
 /// `sha256sum` output (`<hex>  <name>`, `*` marks binary mode) → name → lowercase hex.
@@ -307,6 +311,7 @@ pub struct UpdateStatus {
     pub configured: String,
     pub state: UpdateState,
     pub available: Option<ReleaseInfo>,
+    pub releases: Vec<ReleaseInfo>,
     pub checked_at: Option<String>,
     pub received: u64,
     pub total: u64,
@@ -321,6 +326,8 @@ pub struct UpdateStatus {
 struct Inner {
     state: Option<UpdateState>,
     available: Option<ReleaseInfo>,
+    releases: Vec<ReleaseInfo>,
+    checked_channel: Option<Channel>,
     checked_at: Option<String>,
     received: u64,
     total: u64,
@@ -360,13 +367,16 @@ impl Updater {
 
     pub fn status(&self, current: &Version, configured: &str) -> UpdateStatus {
         let i = self.inner.lock().unwrap();
+        let channel = Channel::parse(configured, current).unwrap_or_else(|_| Channel::of(current));
+        let same_channel = i.checked_channel == Some(channel);
         UpdateStatus {
             current: current.to_string(),
-            channel: Channel::parse(configured, current).unwrap_or_else(|_| Channel::of(current)),
+            channel,
             configured: if configured.is_empty() { "auto".into() } else { configured.into() },
             state: i.state.unwrap_or(UpdateState::Idle),
-            available: i.available.clone(),
-            checked_at: i.checked_at.clone(),
+            available: i.available.clone().filter(|_| same_channel),
+            releases: if same_channel { i.releases.clone() } else { vec![] },
+            checked_at: i.checked_at.clone().filter(|_| same_channel),
             received: i.received,
             total: i.total,
             file: i.file.as_ref().map(|p| p.display().to_string()),
@@ -392,11 +402,21 @@ impl Updater {
             i.error = None;
             i.message = None;
         }
-        let found = self.fetch_releases().await.map(|r| pick_release(&r, current, channel, &self.os, &self.arch));
+        let found = self.fetch_releases().await;
         let mut i = self.inner.lock().unwrap();
         i.checked_at = Some(chrono::Utc::now().to_rfc3339());
         match found {
-            Ok(rel) => {
+            Ok(releases) => {
+                let rel = pick_release(&releases, current, channel, &self.os, &self.arch);
+                let mut versions = releases
+                    .iter()
+                    .filter(|r| !r.draft)
+                    .filter_map(|r| parse_tag(&r.tag_name).map(|v| (v, r)))
+                    .filter(|(v, _)| channel.accepts(Channel::of(v)))
+                    .collect::<Vec<_>>();
+                versions.sort_by(|a, b| b.0.cmp(&a.0));
+                i.releases = versions.iter().map(|(v, r)| release_info(r, v, &self.os, &self.arch)).collect();
+                i.checked_channel = Some(channel);
                 // A different release than the one already downloaded invalidates that file.
                 if i.available.as_ref().map(|a| &a.tag) != rel.as_ref().map(|a| &a.tag) {
                     i.file = None;
@@ -580,6 +600,9 @@ impl crate::Engine {
 
     /// Downloads and verifies the installer of the release found by the last check.
     pub async fn update_download(&self) -> Result<UpdateStatus> {
+        if self.update_status().available.is_none() {
+            return Err(Error::Invalid("Controlla gli aggiornamenti per il canale selezionato.".into()));
+        }
         let file = self.0.updater.download().await?;
         self.audit_user("update.download", &file.display().to_string());
         Ok(self.update_status())
@@ -587,6 +610,9 @@ impl crate::Engine {
 
     /// Hands the verified installer to the system. Returns what the user has to do next.
     pub fn update_install(&self) -> Result<UpdateStatus> {
+        if self.update_status().available.is_none() {
+            return Err(Error::Invalid("Controlla gli aggiornamenti per il canale selezionato.".into()));
+        }
         let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
         let msg = self.0.updater.install(appimage.as_deref())?;
         self.audit_user("update.install", &msg);

@@ -109,6 +109,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/runtimes/{id}/install", get(runtime_install_status).post(runtime_install_start))
         .route("/api/runtimes/{id}/{action}", post(runtime_action))
         .route("/api/models", get(models))
+        .route("/api/model-preview", post(preview_system_model))
         .route("/api/models/catalog", get(catalog))
         .route("/api/models/providers", get(model_providers))
         .route("/api/models/providers/{id}/auth", put(provider_auth))
@@ -191,6 +192,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/trainers/{id}/install", get(trainer_install_status).post(trainer_install_start))
         .route("/api/train/doctor", get(train_doctor))
         .route("/api/datasets", get(datasets).post(build_dataset))
+        .route("/api/dataset-import", post(import_sft_dataset).layer(DefaultBodyLimit::max(6_000_000)))
         .route("/api/datasets/{id}", get(dataset).delete(delete_dataset))
         .route("/api/train/jobs", get(train_jobs).post(start_train_job))
         .route("/api/train/jobs/{id}", get(train_job))
@@ -349,8 +351,18 @@ async fn runtime_settings(State(s): State<AppState>, Path(id): Path<String>, Jso
 async fn runtime_install_plan(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallPlan> {
     ok(s.engine.runtime_install_plan(&id).await?)
 }
-async fn runtime_install_start(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_runtimes::install::InstallJob> {
-    ok(s.engine.runtime_install_start(&id).await?)
+#[derive(Deserialize)]
+struct RuntimeInstallOptions {
+    #[serde(default)]
+    start: bool,
+}
+
+async fn runtime_install_start(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(options): Query<RuntimeInstallOptions>,
+) -> ApiResult<aiw_runtimes::install::InstallJob> {
+    ok(s.engine.runtime_install_start(&id, options.start).await?)
 }
 async fn runtime_install_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Option<aiw_runtimes::install::InstallJob>> {
     ok(s.engine.runtime_install_status(&id))
@@ -358,6 +370,16 @@ async fn runtime_install_status(State(s): State<AppState>, Path(id): Path<String
 async fn runtime_logs(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<String>> {
     ok(s.engine.runtime_logs(&id).await)
 }
+#[derive(Deserialize)]
+struct PreviewModel {
+    id: String,
+    prompt: String,
+}
+
+async fn preview_system_model(State(s): State<AppState>, Json(input): Json<PreviewModel>) -> ApiResult<String> {
+    ok(s.engine.preview_system_model(&input.id, &input.prompt).await?)
+}
+
 async fn models(State(s): State<AppState>) -> ApiResult<Vec<LocalModel>> {
     ok(s.engine.models())
 }
@@ -1047,6 +1069,16 @@ async fn datasets(State(s): State<AppState>) -> ApiResult<Vec<aiw_core::api::Dat
 async fn build_dataset(State(s): State<AppState>, Json(spec): Json<aiw_core::api::DatasetSpec>) -> ApiResult<aiw_core::api::DatasetInfo> {
     ok(s.engine.build_dataset(&spec)?)
 }
+#[derive(Deserialize)]
+struct SftImport {
+    name: String,
+    jsonl: String,
+}
+
+async fn import_sft_dataset(State(s): State<AppState>, Json(input): Json<SftImport>) -> ApiResult<DatasetInfo> {
+    ok(s.engine.import_sft_dataset(&input.name, &input.jsonl)?)
+}
+
 async fn dataset(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::DatasetInfo> {
     ok(s.engine.dataset(&id)?)
 }

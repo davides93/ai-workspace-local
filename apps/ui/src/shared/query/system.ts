@@ -35,10 +35,11 @@ export function useKill() {
   return useMutation({
     mutationFn: () => api.kill(),
     onSuccess: () => {
-      toast("Kill switch: run, sidecar avviati dai run e browser fermati");
+      toast("Kill switch attivato per run, addestramenti, runtime gestiti e browser");
       void qc.invalidateQueries({ queryKey: qk.runtimes.all() });
       void qc.invalidateQueries({ queryKey: qk.sessions.all() });
       void qc.invalidateQueries({ queryKey: qk.approvals() });
+      void qc.invalidateQueries({ queryKey: qk.training.all() });
     },
     onError: (e) => toast(`Kill switch non riuscito: ${String(e instanceof Error ? e.message : e)}`, "crit"),
   });

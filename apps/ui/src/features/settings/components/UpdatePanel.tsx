@@ -1,22 +1,24 @@
 import { errorMessage } from "../../../shared/lib/errors";
 import { formatBytes } from "../../../shared/lib/format";
-import { Button, Led, Markdown, Meter, Pill, QueryState, Section } from "../../../shared/ui";
+import { Button, Led, Markdown, Meter, Pill, QueryState, Section, Field, Select } from "../../../shared/ui";
 import { useCheckUpdate, useDownloadUpdate, useInstallUpdate, useUpdateStatus } from "../updateApi";
+import { useSetConfig } from "../api";
 import { CHANNEL_LABEL, downloadPercent, updateStep } from "../model/update";
 
 /** Self-update from the GitHub releases: version, channel, check, verified download and install. */
 export function UpdatePanel() {
   const status = useUpdateStatus();
+  const setConfig = useSetConfig();
   const check = useCheckUpdate();
   const download = useDownloadUpdate();
   const install = useInstallUpdate();
 
   return (
-    <Section title="Aggiornamenti" hint="Dalle release del repository pubblico su GitHub. Il canale si sceglie nelle impostazioni qui sotto.">
+    <Section title="Aggiornamenti" hint="Controlla quali versioni sono disponibili per questo dispositivo.">
       <QueryState query={status}>
         {(s) => {
           const step = updateStep(s);
-          const busy = check.isPending || download.isPending || install.isPending || s.state === "checking";
+          const busy = setConfig.isPending || check.isPending || download.isPending || install.isPending || s.state === "checking";
           const error = s.error ?? (check.error && errorMessage(check.error)) ?? (download.error && errorMessage(download.error)) ?? (install.error && errorMessage(install.error));
           return (
             <div className="panel upd">
@@ -29,6 +31,19 @@ export function UpdatePanel() {
                     {s.checked_at && ` · ultimo controllo ${new Date(s.checked_at).toLocaleString("it-IT")}`}
                   </span>
                 </div>
+                <Field label="Canale per questo dispositivo" htmlFor="update-channel">
+                  <Select id="update-channel" value={s.configured} disabled={busy || s.state === "downloading"}
+                    onChange={(event) => setConfig.mutate(
+                      { layer: "device", key: "update.channel", value: event.target.value, title: "Canale di aggiornamento" },
+                      { onSuccess: () => check.mutate() },
+                    )}>
+                    <option value="auto">Automatico</option>
+                    <option value="stable">Stabile</option>
+                    <option value="beta">Beta</option>
+                    <option value="alpha">Alpha</option>
+                    {s.configured === "rc" && <option value="rc">Release candidate</option>}
+                  </Select>
+                </Field>
                 <Button icon="refresh" onClick={() => check.mutate()} disabled={busy || s.state === "downloading"}>
                   {check.isPending || s.state === "checking" ? "Controllo…" : "Controlla ora"}
                 </Button>
@@ -73,6 +88,19 @@ export function UpdatePanel() {
                     <p className="text-sm">Questa release non ha un installer per questo sistema: <a href={s.available.page} target="_blank" rel="noreferrer">aprila su GitHub</a>.</p>
                   )}
                 </div>
+              )}
+              {!!s.releases?.length && (
+                <details>
+                  <summary>Release nel canale {CHANNEL_LABEL[s.channel]} ({s.releases.length})</summary>
+                  <ul>
+                    {s.releases.map((release) => (
+                      <li key={release.version}>
+                        <a href={release.page} target="_blank" rel="noreferrer">{release.version} · Note di rilascio</a>
+                        {" · "}{release.version === s.current ? "Installata" : release.asset ? "Installer per questo dispositivo" : "Installer assente"}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               )}
               {error && <p className="crit-text text-sm" role="alert">{error}</p>}
             </div>

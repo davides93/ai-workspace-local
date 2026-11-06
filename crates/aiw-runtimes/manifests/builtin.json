@@ -1095,6 +1095,8 @@
    "command": "local-ai",
    "args": [
     "run",
+    "--models-path",
+    "{models_dir}",
     "--address",
     "127.0.0.1:{port}"
    ],
@@ -1121,7 +1123,11 @@
    }
   },
   "install": {
-   "any": "curl https://localai.io/install.sh | sh"
+   "any": "https://localai.io/docs/getting-started/"
+  },
+  "installer": {
+   "macos": {"kind": "brew", "formula": "localai"},
+   "linux": {"kind": "brew", "formula": "localai"}
   },
   "homepage": "https://localai.io",
   "api": "openai"

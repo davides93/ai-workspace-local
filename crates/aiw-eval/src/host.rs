@@ -19,6 +19,7 @@ pub struct TaskRequest {
     pub workdir: PathBuf,
     /// Wall-clock limit of the run.
     pub timeout: Duration,
+    pub cancel: tokio_util::sync::CancellationToken,
 }
 
 /// What a task run left behind, besides the files in the working folder.

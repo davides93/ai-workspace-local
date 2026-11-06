@@ -10,8 +10,8 @@ export function KillSwitch({ variant = "rail" }: { variant?: "rail" | "sheet" })
       className={`kill ${variant === "sheet" ? "kill-lg" : ""}`}
       onClick={() => kill.mutate()}
       disabled={kill.isPending}
-      title="Ferma subito tutti i run, i sidecar avviati dai run e il browser controllato"
-      aria-label="Kill switch: ferma tutti i run"
+      title="Interrompe run, addestramenti, runtime gestiti e browser"
+      aria-label="Kill switch: interrompi run e addestramenti"
     >
       <Icon name="power" />
       <span className="nav-text">Kill switch</span>

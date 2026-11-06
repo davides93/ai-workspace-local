@@ -17,6 +17,8 @@ export function RuntimeInstall({ runtime: r }: { runtime: RuntimeInfo }) {
   const running = j?.state === "running" || install.isPending;
   const ready = !!p?.automatic && p.prerequisites.every((x) => x.ok);
 
+  if (r.status !== "installable" && !j && !install.isPending && !install.isError) return null;
+  if (r.status !== "installable" && j && j.state === "done") return <InstallProgress job={j} />;
   if (plan.isError) return <p className="crit-text text-sm" role="alert">Impossibile leggere il piano di installazione: {errorMessage(plan.error)}</p>;
   if (!p) return <p className="faint text-sm">Preparo il piano di installazione…</p>;
 
@@ -33,19 +35,22 @@ export function RuntimeInstall({ runtime: r }: { runtime: RuntimeInfo }) {
   return (
     <section className="stack" aria-label="Installazione automatica">
       <h3>Installazione automatica</h3>
+      <details>
+      <summary>Passaggi di installazione</summary>
       <ol className="rt-steps text-sm">
         {p.steps.map((s) => (
           <li key={s.command}><b>{s.title}</b> <code className="mono faint">{s.command}</code></li>
         ))}
       </ol>
+      </details>
       {p.note && <p className="faint text-sm">{p.note}</p>}
       {p.prerequisites.filter((x) => !x.ok).map((x) => (
         <p key={x.name} className="crit-text text-sm" role="alert">Manca: {x.name}. {x.hint}</p>
       ))}
-      {!running && j?.state !== "done" && (
+      {!running && j?.state !== "done" && r.status === "installable" && (
         <div className="row">
           <Button variant="primary" icon="download" disabled={!ready || install.isPending} onClick={() => install.mutate(r)}>
-            {j?.state === "failed" ? "Riprova l'installazione" : `Installa ${r.name}`}
+            {j?.state === "failed" ? "Riprova l'installazione" : r.id === "localai" ? "Installa e avvia LocalAI" : `Installa ${r.name}`}
           </Button>
         </div>
       )}
@@ -76,7 +81,10 @@ export function InstallProgress({ job }: { job: InstallJob }) {
       </div>
       <Meter value={value} max={max} tone={job.state === "failed" ? "crit" : job.state === "done" ? "ok" : undefined} label="Avanzamento dell'installazione" />
       {job.error && <p className="crit-text text-sm" role="alert">{job.error}</p>}
-      {text && <pre ref={box} className="mono logbox" tabIndex={0} role="log" aria-label="Output dell'installazione">{text}</pre>}
+      {text && <details>
+        <summary>Log di installazione</summary>
+        <pre ref={box} className="mono logbox" tabIndex={0} role="log" aria-label="Output dell'installazione">{text}</pre>
+      </details>}
     </div>
   );
 }

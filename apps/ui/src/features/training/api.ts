@@ -72,7 +72,7 @@ export function useTrainJobs() {
   return useQuery({
     queryKey: qk.training.jobs(),
     queryFn: () => api.trainJobs(),
-    refetchInterval: (q) => (q.state.data?.some(isActive) ? TRAIN_POLL_MS : false),
+    refetchInterval: (q) => (q.state.data?.some(isActive) ? TRAIN_POLL_MS : 10_000),
   });
 }
 

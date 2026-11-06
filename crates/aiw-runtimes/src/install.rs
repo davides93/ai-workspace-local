@@ -75,7 +75,7 @@ impl InstallJob {
         Self { runtime_id: runtime_id.into(), state: InstallState::Running, step: 0, steps, log: Vec::new(), error: None }
     }
     pub fn push(&mut self, line: impl Into<String>) {
-        self.log.push(line.into());
+        self.log.push(crate::supervisor::clean_log_line(&line.into()));
         if self.log.len() > MAX_LOG_LINES {
             let extra = self.log.len() - MAX_LOG_LINES;
             self.log.drain(..extra);
@@ -276,7 +276,7 @@ pub fn commands(
 
 /// Runs the commands of an installation one after the other, streaming their output into
 /// `job`. Stops at the first failure.
-pub async fn run(cmds: Vec<Command>, job: Arc<Mutex<InstallJob>>) {
+pub async fn run(cmds: Vec<Command>, job: Arc<Mutex<InstallJob>>, start_after: bool) {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, BufReader};
     let fail = |job: &Arc<Mutex<InstallJob>>, msg: String| {
@@ -326,6 +326,12 @@ pub async fn run(cmds: Vec<Command>, job: Arc<Mutex<InstallJob>>) {
             }));
         }
         let status = tokio::time::timeout(STEP_TIMEOUT, child.wait()).await;
+        if status.is_err() {
+            let _ = child.kill().await;
+            for reader in &readers {
+                reader.abort();
+            }
+        }
         for r in readers {
             let _ = r.await;
         }
@@ -333,15 +339,17 @@ pub async fn run(cmds: Vec<Command>, job: Arc<Mutex<InstallJob>>) {
             Ok(Ok(s)) if s.success() => {}
             Ok(Ok(s)) => return fail(&job, format!("`{}` è terminato con {s}", cmd.display())),
             Ok(Err(e)) => return fail(&job, format!("`{}`: {e}", cmd.display())),
-            Err(_) => {
-                let _ = child.kill().await;
-                return fail(&job, format!("`{}` ha superato il tempo massimo", cmd.display()));
-            }
+            Err(_) => return fail(&job, format!("`{}` ha superato il tempo massimo", cmd.display())),
         }
     }
     let mut j = job.lock().unwrap();
     j.push("✓ Installazione completata");
-    j.state = InstallState::Done;
+    if start_after {
+        j.step = j.steps;
+        j.push("Avvio del runtime…");
+    } else {
+        j.state = InstallState::Done;
+    }
 }
 
 /// A single installation step may take a long time (large wheels, Homebrew bottles).
@@ -389,10 +397,19 @@ mod tests {
 
     #[test]
     fn runtimes_without_a_safe_recipe_stay_manual() {
-        for id in ["lmstudio", "localai", "nexa", "mistralrs"] {
+        for id in ["lmstudio", "nexa", "mistralrs"] {
             let p = plan(&manifest(id), "macos", true, true);
             assert!(!p.automatic, "{id} must not run a script from the internet");
             assert!(p.hint.is_some(), "{id}");
+        }
+    }
+
+    #[test]
+    fn localai_uses_the_package_manager_on_supported_platforms() {
+        for os in ["macos", "linux"] {
+            let plan = plan(&manifest("localai"), os, true, true);
+            assert!(plan.ready());
+            assert_eq!(plan.steps[0].command, "brew install localai");
         }
     }
 
@@ -428,7 +445,7 @@ mod tests {
     async fn run_streams_output_and_stops_at_the_first_failure() {
         let sh = |script: &str| Command { program: "/bin/sh".into(), args: vec!["-c".into(), script.into()] };
         let job = Arc::new(Mutex::new(InstallJob::new("x", 3)));
-        run(vec![sh("echo uno; echo err 1>&2"), sh("exit 3"), sh("echo mai")], job.clone()).await;
+        run(vec![sh("echo uno; echo err 1>&2"), sh("exit 3"), sh("echo mai")], job.clone(), false).await;
         let j = job.lock().unwrap();
         assert_eq!(j.state, InstallState::Failed);
         assert_eq!(j.step, 2);
@@ -437,10 +454,10 @@ mod tests {
         assert!(j.error.as_deref().unwrap().contains("exit status: 3"), "{:?}", j.error);
         drop(j);
         let ok = Arc::new(Mutex::new(InstallJob::new("y", 1)));
-        run(vec![sh("echo fatto")], ok.clone()).await;
+        run(vec![sh("echo fatto")], ok.clone(), false).await;
         assert_eq!(ok.lock().unwrap().state, InstallState::Done);
         let missing = Arc::new(Mutex::new(InstallJob::new("z", 1)));
-        run(vec![Command { program: "/nonexistent/prog".into(), args: vec![] }], missing.clone()).await;
+        run(vec![Command { program: "/nonexistent/prog".into(), args: vec![] }], missing.clone(), false).await;
         assert_eq!(missing.lock().unwrap().state, InstallState::Failed);
     }
 
