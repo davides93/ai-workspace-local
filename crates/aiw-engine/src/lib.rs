@@ -1,5 +1,6 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
+pub mod a2a_client;
 pub mod defaults;
 pub mod eval;
 mod host;
@@ -136,6 +137,10 @@ pub struct Engine(pub(crate) Arc<Inner>);
 
 /// Longest session title accepted by [`Engine::rename_session`].
 pub const MAX_TITLE_CHARS: usize = 200;
+/// Prefix of the ids of remote agents (`remote:<id>`) in teams and sub-agent lists.
+pub const REMOTE_PREFIX: &str = "remote:";
+/// Prefix of a session's agent id that points at a team (`team:<id>`).
+pub const TEAM_PREFIX: &str = "team:";
 
 fn random_digits(n: usize) -> String {
     let u = uuid::Uuid::new_v4().as_u128();
@@ -253,6 +258,7 @@ impl Engine {
             engine.0.runtimes.refresh().await;
         }
         engine.seed()?;
+        engine.resume_workflows();
         if !opts.offline {
             engine.start_background();
             engine.start_update_checks();
@@ -262,6 +268,8 @@ impl Engine {
 
     fn seed(&self) -> Result<()> {
         let s = &self.0.store;
+        // Tasks served to other agents expire after a day.
+        let _ = s.a2a_cleanup(&(chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
         // Nothing can be running yet: whatever says so was interrupted by a crash or a kill.
         if s.fail_interrupted_runs()? > 0 {
             for mut session in s.sessions()?.into_iter().filter(|x| x.last_status.as_deref() == Some("running")) {
@@ -637,7 +645,7 @@ impl Engine {
         let used_by: Vec<String> = self
             .workflows()?
             .into_iter()
-            .filter(|w| w.steps.iter().any(|s| matches!(s, WorkflowStep::Agent { agent: a, .. } if a == id)))
+            .filter(|w| w.steps.iter().flat_map(|s| s.with_inner()).any(|s| matches!(s, WorkflowStep::Agent { agent: a, .. } if a == id)))
             .map(|w| w.name)
             .collect();
         if !used_by.is_empty() {
@@ -647,9 +655,170 @@ impl Engine {
                 used_by.join(", ")
             )));
         }
+        let teams = self.teams_using_agent(id)?;
+        if !teams.is_empty() {
+            return Err(Error::Conflict(format!(
+                "L'agente «{}» è usato dai team: {}. Modificali prima di eliminarlo.",
+                agent.name,
+                teams.join(", ")
+            )));
+        }
         self.0.store.delete_doc("agent", id)?;
         self.audit_user("agent.delete", &format!("{} ({id})", agent.name));
         Ok(())
+    }
+    /// The profile a session runs with, and the team when its agent id is `team:<id>`. A
+    /// supervisor team runs as its supervisor (the team's budget and output schema win); the
+    /// other strategies have no model in charge, so they run under a neutral profile that never
+    /// narrows the members: the widest mode and sandbox among them.
+    pub(crate) fn session_agent(&self, agent_id: &str) -> Result<(AgentProfile, Option<TeamDef>)> {
+        let Some(team_id) = agent_id.strip_prefix(TEAM_PREFIX) else { return Ok((self.agent(agent_id)?, None)) };
+        let team = self.team(team_id)?;
+        let locals: Vec<AgentProfile> = team
+            .members
+            .iter()
+            .map(|m| m.agent.as_str())
+            .chain(team.supervisor.as_deref())
+            .chain(team.aggregator.as_deref())
+            .filter(|id| !id.starts_with(REMOTE_PREFIX))
+            .map(|id| self.agent(id))
+            .collect::<Result<_>>()?;
+        let mut agent = match (team.strategy.as_str(), &team.supervisor) {
+            ("supervisor", Some(sup)) => {
+                let mut a = self.agent(sup)?;
+                for tool in ["agent", aiw_agent::internal::TEAM_STATE] {
+                    if !a.tools.iter().any(|t| t == "*" || t == tool) {
+                        a.tools.push(tool.into());
+                    }
+                }
+                a
+            }
+            _ => {
+                let first = locals.first().ok_or_else(|| Error::Invalid("il team non ha agenti locali".into()))?;
+                let widest = |f: fn(&AgentProfile) -> u8| locals.iter().max_by_key(|a| f(a)).unwrap_or(first);
+                AgentProfile {
+                    id: agent_id.into(),
+                    name: team.name.clone(),
+                    description: team.description.clone(),
+                    inference_profile: first.inference_profile.clone(),
+                    system_prompt: String::new(),
+                    tools: vec!["*".into()],
+                    mode: widest(|a| host::mode_rank(&a.mode)).mode.clone(),
+                    sandbox: widest(|a| sandbox_rank(&a.sandbox)).sandbox.clone(),
+                    max_turns: first.max_turns,
+                    output_schema: None,
+                    budget: None,
+                }
+            }
+        };
+        if team.output_schema.is_some() {
+            agent.output_schema = team.output_schema.clone();
+        }
+        if team.budget.is_some() {
+            agent.budget = team.budget.clone();
+        }
+        Ok((agent, Some(team)))
+    }
+
+    /// Adds what a supervisor team needs to a run input: only the members as sub-agents and the
+    /// `# Team` section of the system prompt.
+    fn apply_team(&self, input: &mut RunInput, team: &TeamDef) {
+        input.in_team = true;
+        if team.strategy != "supervisor" {
+            return;
+        }
+        let described = |m: &TeamMember| {
+            if !m.role.trim().is_empty() {
+                return m.role.trim().to_string();
+            }
+            self.agent(&m.agent).map(|a| a.description).unwrap_or_default()
+        };
+        input.subagents = team.members.iter().map(|m| (m.agent.clone(), described(m))).collect();
+        input.system_extra.push(aiw_agent::team::supervisor_section(team, &input.subagents));
+    }
+
+    // ------------------------------------------------------------------ teams
+    pub fn teams(&self) -> Result<Vec<TeamDef>> {
+        self.0.store.list_docs("team")
+    }
+    pub fn team(&self, id: &str) -> Result<TeamDef> {
+        self.0.store.get_doc("team", id)?.ok_or_else(|| Error::NotFound(format!("team {id} non trovato")))
+    }
+    pub fn save_team(&self, t: TeamDef) -> Result<TeamDef> {
+        if t.id.trim().is_empty() || t.name.trim().is_empty() {
+            return Err(Error::Invalid("il team ha bisogno di un id e di un nome".into()));
+        }
+        if !["supervisor", "parallel", "pipeline"].contains(&t.strategy.as_str()) {
+            return Err(Error::Invalid(format!("strategia non valida: {} (supervisor, parallel o pipeline)", t.strategy)));
+        }
+        if t.members.is_empty() || t.members.len() > 8 {
+            return Err(Error::Invalid("un team ha da 1 a 8 membri".into()));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for m in &t.members {
+            if !seen.insert(m.agent.as_str()) {
+                return Err(Error::Invalid(format!("il membro `{}` compare più volte", m.agent)));
+            }
+            self.check_team_agent(&m.agent)?;
+        }
+        match (t.strategy.as_str(), &t.supervisor) {
+            ("supervisor", None) => return Err(Error::Invalid("la strategia supervisor richiede un supervisore".into())),
+            (_, Some(sup)) => {
+                self.check_team_agent(sup)?;
+                if sup.starts_with(REMOTE_PREFIX) {
+                    return Err(Error::Invalid("il supervisore deve essere un agente locale".into()));
+                }
+                if seen.contains(sup.as_str()) {
+                    return Err(Error::Invalid(format!("il supervisore `{sup}` non può essere anche un membro")));
+                }
+            }
+            _ => {}
+        }
+        if let Some(agg) = &t.aggregator {
+            self.check_team_agent(agg)?;
+            if agg.starts_with(REMOTE_PREFIX) {
+                return Err(Error::Invalid("l'aggregatore deve essere un agente locale".into()));
+            }
+        }
+        if let Some(b) = &t.budget {
+            for (name, v) in [("max_tokens", b.max_tokens), ("max_turns", b.max_turns.map(u64::from)), ("max_seconds", b.max_seconds)] {
+                if v == Some(0) {
+                    return Err(Error::Invalid(format!("budget.{name} deve essere almeno 1 (ometti il campo per nessun limite)")));
+                }
+            }
+        }
+        if let Some(schema) = &t.output_schema {
+            aiw_agent::schema::check_schema(schema).map_err(|e| Error::Invalid(format!("output_schema non valido: {e}")))?;
+        }
+        self.0.store.put_doc("team", &t.id, &t)?;
+        Ok(t)
+    }
+    /// A team member, supervisor or aggregator: an existing local agent or `remote:<id>`.
+    fn check_team_agent(&self, id: &str) -> Result<()> {
+        if id.starts_with(REMOTE_PREFIX) {
+            return Ok(());
+        }
+        if self.0.store.get_doc::<AgentProfile>("agent", id)?.is_none() {
+            return Err(Error::Invalid(format!("l'agente `{id}` non esiste")));
+        }
+        Ok(())
+    }
+    pub fn delete_team(&self, id: &str) -> Result<()> {
+        let team = self.team(id)?;
+        self.0.store.delete_doc("team", id)?;
+        self.audit_user("team.delete", &format!("{} ({id})", team.name));
+        Ok(())
+    }
+    /// Names of the teams that use the agent as supervisor, member or aggregator.
+    fn teams_using_agent(&self, id: &str) -> Result<Vec<String>> {
+        Ok(self
+            .teams()?
+            .into_iter()
+            .filter(|t| {
+                t.supervisor.as_deref() == Some(id) || t.aggregator.as_deref() == Some(id) || t.members.iter().any(|m| m.agent == id)
+            })
+            .map(|t| t.name)
+            .collect())
     }
     /// Deletes an inference profile that no agent (or workflow step) uses any more.
     pub fn delete_profile(&self, id: &str) -> Result<()> {
@@ -658,7 +827,9 @@ impl Engine {
         used_by.extend(
             self.workflows()?
                 .into_iter()
-                .filter(|w| w.steps.iter().any(|s| matches!(s, WorkflowStep::Llm { profile: p, .. } if p == id)))
+                .filter(|w| {
+                    w.steps.iter().flat_map(|s| s.with_inner()).any(|s| matches!(s, WorkflowStep::Llm { profile: p, .. } if p == id))
+                })
                 .map(|w| format!("workflow {}", w.name)),
         );
         if !used_by.is_empty() {
@@ -715,7 +886,10 @@ impl Engine {
     }
     /// `isolation: Some("worktree")` gives the session its own git worktree and branch.
     pub fn create_session_with(&self, agent_id: &str, title: Option<String>, isolation: Option<&str>) -> Result<Session> {
-        self.agent(agent_id)?;
+        match agent_id.strip_prefix(TEAM_PREFIX) {
+            Some(team_id) => self.team(team_id).map(|_| ())?,
+            None => self.agent(agent_id).map(|_| ())?,
+        }
         let now = now_rfc3339();
         let mut s = Session {
             id: new_id("ses"),
@@ -1002,7 +1176,14 @@ impl Engine {
             profile.runtime_id,
             profile.model
         );
-        let subagents = self.agents().unwrap_or_default().into_iter().filter(|a| a.id != agent.id).map(|a| (a.id, a.description)).collect();
+        let subagents = self
+            .agents()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.id != agent.id)
+            .map(|a| (a.id, a.description))
+            .chain(self.remote_subagents())
+            .collect();
         let agent_budget = agent.budget.clone().unwrap_or_default();
         RunInput {
             run_id: run_id.into(),
@@ -1026,6 +1207,9 @@ impl Engine {
             budget: Arc::new(if depth == 0 { self.run_budget(&agent_budget, None) } else { RunBudget::unlimited() }),
             max_parallel_subagents: self.0.config.get("agents.max_parallel_subagents").and_then(|v| v.as_u64()).unwrap_or(3).max(1)
                 as usize,
+            in_team: false,
+            shared: Default::default(),
+            root_run: run_id.into(),
         }
     }
 
@@ -1064,6 +1248,25 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
+        self.start_run_inner(session_id, input, name, 0).await
+    }
+
+    /// Most handoffs one user message can chain before the conversation stops with a note.
+    const MAX_HANDOFFS: u32 = 3;
+
+    /// Starts a run; `hops` is how many handoffs led to it (0 for a run the user asked for). Boxed:
+    /// a handoff starts the next run from inside the task of the previous one.
+    fn start_run_inner<'a>(
+        &'a self,
+        session_id: &'a str,
+        input: String,
+        name: Option<String>,
+        hops: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(self.start_run_body(session_id, input, name, hops))
+    }
+
+    async fn start_run_body(&self, session_id: &str, input: String, name: Option<String>, hops: u32) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
         // removed meanwhile is a conflict the user can fix (the UI must not treat it as deleted).
@@ -1071,7 +1274,7 @@ impl Engine {
             Error::NotFound(m) => Error::Conflict(format!("{m}: {what} di questa sessione non esiste più, scegline un altro in Agenti")),
             other => other,
         };
-        let agent = self.agent(&session.agent_id).map_err(|e| gone("l'agente", e))?;
+        let (agent, team) = self.session_agent(&session.agent_id).map_err(|e| gone("l'agente o il team", e))?;
         let profile = self.profile(&agent.inference_profile).map_err(|e| gone("il profilo", e))?;
         let manifest = self.0.runtimes.manifest(&profile.runtime_id).map_err(|e| gone("il runtime", e))?;
         if profile.model.is_empty() && manifest.launch.as_ref().map(|l| l.requires_model).unwrap_or(false) {
@@ -1113,15 +1316,25 @@ impl Engine {
         session.updated_at = now_rfc3339();
         session.last_status = Some("running".into());
         self.0.store.upsert_session(&session)?;
-        let run_input = self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
+        let mut run_input =
+            self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
+        if let Some(team) = &team {
+            self.apply_team(&mut run_input, team);
+        }
         let engine = self.clone();
         let rid = run_id.clone();
+        let (from_name, from_mode) = (run_input.agent.name.clone(), run_input.policy.mode.clone());
         tokio::spawn(async move {
             let host = Arc::new(EngineHost::new(engine.clone(), Some(session.id.clone()), None));
             // What the run produced is stored whatever its outcome: when it was cancelled or failed
             // its files were still written and its commands run, and the next turn must know.
             // (`new_messages[0]` is the user message, stored above.)
-            let (out, res) = AgentRunner::run_partial(run_input, host).await;
+            let (out, res) = match team {
+                Some(team) if aiw_agent::team::is_scripted(&team.strategy) => {
+                    aiw_agent::team::run_team_partial(run_input, team, host).await
+                }
+                _ => AgentRunner::run_partial(run_input, host).await,
+            };
             let status = match &res {
                 Ok(()) => "succeeded",
                 Err(Error::Cancelled) => "cancelled",
@@ -1165,8 +1378,50 @@ impl Engine {
             if status == "failed" || out_of_budget {
                 engine.maybe_reflect(&session.id, Some(rid.clone()), learning::ReflectTrigger::Failure);
             }
+            if let (Ok(()), Some((to, summary))) = (&res, out.handoff) {
+                engine.continue_handoff(&session.id, &from_name, &from_mode, &to, &summary, hops).await;
+            }
         });
         Ok(run_id)
+    }
+
+    /// The run of a session ended asking for a handoff: moves the session to the new agent and
+    /// starts it with the summary. A handoff that cannot be carried out leaves a note instead.
+    async fn continue_handoff(&self, session_id: &str, from_name: &str, from_mode: &str, to: &str, summary: &str, hops: u32) {
+        let note = |text: String| {
+            let msg = ChatMessage {
+                id: new_id("msg"),
+                role: "system".into(),
+                content: text,
+                reasoning: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: Some(HANDOFF_MESSAGE.into()),
+                created_at: now_rfc3339(),
+            };
+            let _ = self.0.store.append_messages(session_id, &[msg]);
+        };
+        if hops >= Self::MAX_HANDOFFS {
+            return note(format!("Limite di {} passaggi tra agenti raggiunto: la conversazione si ferma qui.", Self::MAX_HANDOFFS));
+        }
+        let target = match self.agent(to) {
+            Ok(a) if host::mode_rank(&a.mode) <= host::mode_rank(from_mode) => a,
+            Ok(a) => return note(format!("Passaggio a «{}» rifiutato: ha una modalità più permissiva di quella di partenza.", a.name)),
+            Err(e) => return note(format!("Passaggio a `{to}` non riuscito: {e}")),
+        };
+        match self.0.store.session(session_id) {
+            Ok(mut s) => {
+                s.agent_id = to.to_string();
+                s.updated_at = now_rfc3339();
+                let _ = self.0.store.upsert_session(&s);
+            }
+            Err(_) => return, // the session was deleted meanwhile
+        }
+        self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
+        let input = format!("[Passaggio da {from_name}] {summary}");
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1).await {
+            note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
+        }
     }
 
     pub fn cancel_run(&self, run_id: &str) -> Result<()> {
@@ -1180,7 +1435,21 @@ impl Engine {
     pub fn approvals(&self) -> Vec<ApprovalRequest> {
         self.0.approvals.lock().unwrap().values().map(|p| p.req.clone()).collect()
     }
+    /// Seconds after which an approval request of an agent is refused (`approvals.timeout_s`, 0 = never).
+    fn approval_timeout(&self) -> Option<Duration> {
+        self.0.config.get("approvals.timeout_s").and_then(|v| v.as_u64()).filter(|s| *s > 0).map(Duration::from_secs)
+    }
     pub(crate) async fn wait_approval(&self, req: ApprovalRequest, session_id: Option<String>) -> bool {
+        self.wait_approval_outcome(req, session_id, self.approval_timeout()).await == ApprovalOutcome::Allowed
+    }
+    /// Waits for the user's answer for at most `timeout`. The request is withdrawn when the wait
+    /// ends for any reason, and a timeout is written to the audit trail as `decision: "timeout"`.
+    pub(crate) async fn wait_approval_outcome(
+        &self,
+        req: ApprovalRequest,
+        session_id: Option<String>,
+        timeout: Option<Duration>,
+    ) -> ApprovalOutcome {
         /// Withdraws the request when the run stops waiting (answered, cancelled, dropped): a stale
         /// request must not stay in the inbox, where a later "allow" would record a decision
         /// that nobody was waiting for.
@@ -1192,8 +1461,32 @@ impl Engine {
         }
         let (tx, rx) = oneshot::channel();
         let _withdraw = Withdraw(self, req.id.clone());
+        let (run_id, tool, reason) = (req.run_id.clone(), req.tool.clone(), req.reason.clone());
         self.0.approvals.lock().unwrap().insert(req.id.clone(), PendingApproval { req, tx, session_id });
-        rx.await.unwrap_or(false)
+        let answer = match timeout {
+            Some(limit) => match tokio::time::timeout(limit, rx).await {
+                Ok(a) => a,
+                Err(_) => {
+                    let _ = self.0.store.add_audit(&AuditEntry {
+                        id: new_id("aud"),
+                        ts: now_rfc3339(),
+                        run_id: Some(run_id),
+                        actor: "system".into(),
+                        action: "approval".into(),
+                        tool: Some(tool),
+                        decision: Some("timeout".into()),
+                        detail: format!("nessuna risposta entro {} s: {reason}", limit.as_secs()),
+                    });
+                    return ApprovalOutcome::TimedOut;
+                }
+            },
+            None => rx.await,
+        };
+        if answer.unwrap_or(false) {
+            ApprovalOutcome::Allowed
+        } else {
+            ApprovalOutcome::Denied
+        }
     }
     pub fn respond_approval(&self, id: &str, allow: bool, remember: bool) -> Result<()> {
         let p = self
@@ -1288,7 +1581,7 @@ impl Engine {
     pub async fn run_workflow(&self, id: &str, inputs: Map<String, Value>, actor: &str) -> Result<WorkflowRun> {
         let wf: WorkflowDef = self.0.store.get_doc("workflow", id)?.ok_or_else(|| Error::NotFound(format!("workflow {id} non trovato")))?;
         let (tx, rx) = oneshot::channel();
-        let host = EngineHost::for_workflow(self.clone(), wf.clone(), tx);
+        let host = EngineHost::for_workflow(self.clone(), wf.clone(), Some(tx));
         let _ = self.0.store.add_audit(&AuditEntry {
             id: new_id("aud"),
             ts: now_rfc3339(),
@@ -1303,6 +1596,83 @@ impl Engine {
             aiw_workflow::run_workflow(&wf, inputs, &host).await;
         });
         rx.await.map_err(|_| Error::Runtime("il workflow non è partito".into()))
+    }
+
+    /// Ends a run that nobody is going to finish: the steps that were going are `failed`, the run
+    /// `cancelled`, its saved state is dropped.
+    pub(crate) fn abandon_workflow_run(&self, run_id: &str, reason: &str) {
+        let known = self.0.workflow_runs.lock().unwrap().iter().find(|r| r.id == run_id).cloned();
+        let run = known.or_else(|| self.0.store.workflow_run(run_id).ok().flatten());
+        if let Some(mut run) = run.filter(|r| matches!(r.status.as_str(), "running" | "waiting_approval")) {
+            for s in run.steps.iter_mut().filter(|s| matches!(s.status.as_str(), "running" | "waiting")) {
+                s.status = "failed".into();
+                s.error = Some(reason.into());
+            }
+            run.status = "cancelled".into();
+            run.finished_at = Some(now_rfc3339());
+            let _ = self.0.store.save_workflow_run(&run);
+            if let Some(m) = self.0.workflow_runs.lock().unwrap().iter_mut().find(|r| r.id == run_id) {
+                *m = run;
+            }
+        }
+        let _ = self.0.store.clear_workflow_state(run_id);
+    }
+
+    /// Goes on with the workflow runs that were interrupted by a restart (state saved at every
+    /// step). The step that was running starts again from the beginning, so a step can run more
+    /// than once (at-least-once): a step with side effects should be safe to repeat. An approval
+    /// that was pending is asked again. A run whose workflow no longer exists is marked failed.
+    fn resume_workflows(&self) {
+        let states = self.0.store.workflow_states().unwrap_or_default();
+        for mut st in states {
+            let run_id = st.run.id.clone();
+            // A sub-workflow is never resumed on its own: its parent starts it again from the step
+            // that was waiting for it.
+            if st.run.parent_run_id.is_some() {
+                self.abandon_workflow_run(&run_id, "interrotto dal riavvio: il workflow padre lo riavvia");
+                continue;
+            }
+            let live = matches!(st.run.status.as_str(), "running" | "waiting_approval");
+            let finished = self
+                .0
+                .store
+                .workflow_run(&run_id)
+                .ok()
+                .flatten()
+                .is_some_and(|r| !matches!(r.status.as_str(), "running" | "waiting_approval"));
+            if !live || finished {
+                let _ = self.0.store.clear_workflow_state(&run_id);
+                continue;
+            }
+            let wf: Option<WorkflowDef> = self.0.store.get_doc("workflow", &st.run.workflow_id).ok().flatten();
+            let Some(wf) = wf else {
+                let at = st.next.min(st.run.steps.len().saturating_sub(1));
+                if let Some(step) = st.run.steps.get_mut(at) {
+                    step.status = "failed".into();
+                    step.error = Some(format!("il workflow «{}» non esiste più: run interrotto dal riavvio", st.run.workflow_id));
+                }
+                st.run.status = "failed".into();
+                st.run.finished_at = Some(now_rfc3339());
+                let _ = self.0.store.save_workflow_run(&st.run);
+                let _ = self.0.store.clear_workflow_state(&run_id);
+                continue;
+            };
+            let _ = self.0.store.add_audit(&AuditEntry {
+                id: new_id("aud"),
+                ts: now_rfc3339(),
+                run_id: Some(run_id.clone()),
+                actor: "workflow".into(),
+                action: "workflow.resume".into(),
+                tool: None,
+                decision: None,
+                detail: format!("{} (dal passo {})", wf.name, st.next + 1),
+            });
+            st.run.status = "running".into();
+            let host = EngineHost::for_workflow(self.clone(), wf, None);
+            tokio::spawn(async move {
+                aiw_workflow::run_from(st, &host).await;
+            });
+        }
     }
 
     // ------------------------------------------------------------------ tools & MCP
@@ -1425,6 +1795,58 @@ impl Engine {
         self.0.store.audit(500).unwrap_or_default()
     }
 
+    // ------------------------------------------------------------------ checkpoints
+    /// What a rewind of the run would do. `NotFound` when the run saved no checkpoint.
+    pub fn checkpoint_info(&self, run_id: &str) -> Result<CheckpointInfo> {
+        if !aiw_tools::checkpoint::valid_run_id(run_id) {
+            return Err(Error::Invalid("identificativo di run non valido".into()));
+        }
+        aiw_tools::checkpoint::plan(&self.0.dirs.checkpoints(), run_id)
+            .ok_or_else(|| Error::NotFound(format!("nessun checkpoint per il run {run_id}")))
+    }
+
+    /// Checkpoints of the runs of a session, newest run first.
+    pub fn session_checkpoints(&self, session_id: &str) -> Result<Vec<CheckpointInfo>> {
+        let ids = self.0.store.session_run_ids(session_id)?;
+        Ok(ids.iter().filter_map(|id| aiw_tools::checkpoint::plan(&self.0.dirs.checkpoints(), id)).collect())
+    }
+
+    /// Puts back the originals saved by the run and deletes the files it created. Refused while the run is going.
+    pub fn rewind(&self, run_id: &str) -> Result<RewindResult> {
+        let info = self.checkpoint_info(run_id)?;
+        let agent_running = self.0.runs.lock().unwrap().get(run_id).is_some_and(|r| !r.done);
+        let workflow_running = self
+            .0
+            .workflow_runs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.id == run_id && matches!(r.status.as_str(), "running" | "waiting_approval"));
+        if agent_running || workflow_running {
+            return Err(Error::Conflict("il run è ancora in corso: fermalo prima di ripristinare i file".into()));
+        }
+        let res = aiw_tools::checkpoint::rewind(&self.0.dirs.checkpoints(), run_id)?;
+        let _ = self.0.store.add_audit(&AuditEntry {
+            id: new_id("aud"),
+            ts: now_rfc3339(),
+            run_id: Some(run_id.into()),
+            actor: "user".into(),
+            action: "checkpoint.rewind".into(),
+            tool: None,
+            decision: None,
+            detail: format!(
+                "ripristinati {}, eliminati {}, esterni {}, falliti {} (previsti {} + {})",
+                res.restored.len(),
+                res.deleted.len(),
+                res.external.len(),
+                res.failed.len(),
+                info.restore.len(),
+                info.delete.len()
+            ),
+        });
+        Ok(res)
+    }
+
     // ------------------------------------------------------------------ OpenAI-compatible gateway
     /// Model ids exposed on `/v1/models`: inference profiles and local GGUF files.
     pub fn gateway_models(&self) -> Vec<String> {
@@ -1517,9 +1939,18 @@ impl Engine {
                     reason: format!("{actor}: {reason}"),
                     risk: aiw_agent::policy::risk_level(t.risk()).into(),
                 };
-                if !self.wait_approval(req, None).await {
-                    audit("rejected");
-                    return Err(Error::Denied("rifiutato dall'utente".into()));
+                match self.wait_approval_outcome(req, None, self.approval_timeout()).await {
+                    ApprovalOutcome::Allowed => {}
+                    ApprovalOutcome::Denied => {
+                        audit("rejected");
+                        return Err(Error::Denied("rifiutato dall'utente".into()));
+                    }
+                    ApprovalOutcome::TimedOut => {
+                        audit("timeout");
+                        return Err(Error::Denied(
+                            "nessuna risposta entro il tempo limite (approvals.timeout_s): richiesta rifiutata".into(),
+                        ));
+                    }
                 }
                 audit("approved");
             }
@@ -1540,6 +1971,15 @@ impl Engine {
         };
         let mut rx = self.subscribe();
         let run_id = self.start_run(&session_id, prompt.to_string()).await?;
+        // If the caller stops waiting (a workflow step timeout, a dropped task) the agent run must
+        // not go on in the background.
+        struct CancelOnDrop<'a>(&'a Engine, &'a str);
+        impl Drop for CancelOnDrop<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.cancel_run(self.1);
+            }
+        }
+        let cancel_guard = CancelOnDrop(self, &run_id);
         loop {
             if self.run_done(&run_id) {
                 break;
@@ -1549,6 +1989,7 @@ impl Engine {
                 _ => {}
             }
         }
+        std::mem::forget(cancel_guard);
         // Let the run task persist its messages.
         for _ in 0..50 {
             if self.0.store.session(&session_id).ok().and_then(|s| s.last_status).as_deref() != Some("running") {
@@ -1663,3 +2104,13 @@ mod tests_optimize;
 mod tests_traces;
 #[cfg(test)]
 mod tests_validation;
+#[cfg(test)]
+mod tests_workflow;
+
+fn sandbox_rank(s: &str) -> u8 {
+    match s {
+        "read-only" => 0,
+        "workspace-write" => 1,
+        _ => 2,
+    }
+}

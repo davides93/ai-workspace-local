@@ -12,6 +12,8 @@ import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
 import { useLessons } from "../learning/api";
 import { pendingFor } from "../learning/model/lessons";
+import { useTeams } from "../teams/api";
+import { teamAsAgent, teamIdOf } from "../teams/model/teams";
 import { useConfig } from "../settings/api";
 import { useCreateSession, useSessions } from "./api";
 import { ChatEmpty } from "./components/ChatEmpty";
@@ -35,6 +37,7 @@ const chatPath = (id: string) => `/chat/${encodeURIComponent(id)}`;
 export function ChatView() {
   const sessions = useSessions();
   const agents = useAgents();
+  const teams = useTeams();
   const profiles = useProfiles();
   const config = useConfig();
   const createSession = useCreateSession();
@@ -44,7 +47,12 @@ export function ChatView() {
   const list = sessions.data;
   const active = list?.find((s) => s.id === urlId) ?? null;
   const openId = active?.id ?? null;
-  const agent = agents.data?.find((a) => a.id === active?.agent_id) ?? null;
+  // A team session (`team:<id>`) shows the profile the engine runs it with, under the team's name.
+  const sessionTeamId = active ? teamIdOf(active.agent_id) : null;
+  const sessionTeam = sessionTeamId ? teams.data?.find((t) => t.id === sessionTeamId) : undefined;
+  const agent = sessionTeamId
+    ? (sessionTeam ? teamAsAgent(sessionTeam, agents.data ?? []) : null)
+    : agents.data?.find((a) => a.id === active?.agent_id) ?? null;
   const profile = profiles.data?.find((p) => p.id === agent?.inference_profile) ?? null;
   const defaultAgent = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
 
@@ -130,7 +138,7 @@ export function ChatView() {
   };
   const sessionList = (onClose?: () => void) => (
     <SessionList
-      sessions={sessions} agents={agents.data ?? []} defaultAgent={defaultAgent} activeId={openId}
+      sessions={sessions} agents={agents.data ?? []} teams={teams.data ?? []} defaultAgent={defaultAgent} activeId={openId}
       creating={createSession.isPending} onCreate={create} onDeleted={onDeleted} onClose={onClose}
       onSelect={(id) => {
         navigate(chatPath(id));

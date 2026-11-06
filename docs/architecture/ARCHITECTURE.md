@@ -261,8 +261,44 @@ sequenceDiagram
   `PreCompact`. `SessionStart` parte solo al primo messaggio di una conversazione e il suo output entra nel prompt di sistema;
   per gli eventi dei subagenti il filtro (`matcher`) è un glob sull'id dell'agente; `PreCompact` può saltare la compattazione.
   Un hook è un comando che riceve JSON su stdin e può bloccare o modificare l'azione, oppure un hook builtin.
-- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in `checkpoints/`.
+- **Checkpoint** (P15): prima di ogni scrittura il file originale viene salvato in
+  `checkpoints/<run_id>/<percorso>` (una volta per run). Accanto, `.aiw-run.json` registra la radice
+  del workspace e i file che il run ha *creato* (`write_file`, `edit_file` con `old_string` vuoto,
+  destinazione di `move_file`, che salva anche l'originale della sorgente); un file creato dal run non
+  ha un originale da salvare. I file fuori dal workspace stanno in `_esterni/`. Il **rewind**
+  (`aiw rewind <run_id> [--dry-run]`, `GET /api/runs/{id}/checkpoint`, `POST /api/runs/{id}/rewind`,
+  «Ripristina i file» nel pannello della chat) rimette gli originali ed elimina i file creati se
+  esistono ancora ed entro la radice registrata; i file esterni e quelli di un checkpoint senza radice
+  (precedente al rewind) sono solo elencati. È rifiutato (409) mentre il run è in corso, scrive in
+  audit `checkpoint.rewind`, e toglie dal checkpoint ciò che ha ripristinato, così un secondo rewind non
+  cancella le modifiche successive. Le cartelle spostate con `move_file` e i run dei sotto-agenti
+  (id propri) non sono coperti.
   Il rewind (ripristino dei file di un run) non è ancora implementato, né dalla UI né dalla CLI.
+
+### Team
+
+Un **team** (`TeamDef`, documento `team`) raggruppa da 1 a 8 agenti, locali o remoti (`remote:<id>`), e si usa in
+chat come un agente: l'id della sessione è `team:<id>`. Tre strategie:
+
+- `supervisor`: la sessione gira come l'agente supervisore (che non è anche un membro), con il tool `agent` ristretto
+  ai membri; il budget e lo schema di risposta del team hanno la precedenza.
+- `parallel`: tutti i membri lavorano sulla stessa richiesta (al massimo `agents.max_parallel_subagents` alla volta); un
+  aggregatore facoltativo unisce i risultati.
+- `pipeline` (catena): ogni membro riceve la richiesta e il risultato del precedente.
+
+Le strategie senza supervisore sono eseguite da `aiw-agent::team` (nessun modello in testa). Ogni membro gira come un
+subagente: stessi limiti del padre (modalità, sandbox, tool), budget condiviso con il run radice, un run figlio con il
+proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs/{id}/events.json`.
+
+- **Handoff**: il tool `handoff` chiude il run e passa la sessione a un altro agente (nota `aiw.handoff` in chat);
+  al massimo 3 passaggi per messaggio dell'utente, mai verso una modalità più permissiva.
+- **Stato condiviso**: il tool `team_state` (leggi, scrivi, elimina; 64 chiavi, 32 KB) vive nel `RunState.shared` del run
+  radice ed è pubblicato con `STATE_SNAPSHOT`.
+- **Agenti remoti**: il registro (`remote_agent`, API `/api/remote-agents`) e i dispositivi accoppiati. Il client A2A
+  (`aiw-engine/src/a2a_client.rs`) legge l'Agent Card, invia `SendMessage` non bloccante, interroga `GetTask` con
+  attesa crescente fino a `completed`, `failed` o `canceled` (o al timeout `a2a.timeout_seconds`) e invia `CancelTask`
+  se il run viene annullato. Rete solo verso gli URL registrati; ogni delega è nell'audit (`a2a.delegate`, `a2a.result`).
+  Il server A2A (`aiw-server/src/a2a.rs`) tiene i task in SQLite (`a2a_tasks`, scadenza 24 ore, pulizia all'avvio).
 
 ### 5.2 Policy, sandbox, audit
 
@@ -298,6 +334,54 @@ steps:
 Tipi di step: `tool`, `agent`, `llm`, `approval`, `condition` (`if`), `foreach`, `workflow`
 (sotto-workflow). Ogni run di workflow è un run normale, quindi ha eventi, audit e possibilità di
 ripresa dopo un'approvazione.
+
+**Segnaposto.** `{{inputs.x}}`, `{{now}}`, `{{steps.<id>.output}}` (anche `{{steps.<id>}}`),
+`{{steps.<id>.error}}` per un passo andato avanti con `on_error: continue`. L'output di un passo si
+legge come JSON con `{{steps.<id>.json}}` (riformattato compatto), `{{steps.<id>.json.a.b}}` e
+`{{steps.<id>.json.items.0.nome}}` (un numero indicizza un array): vale se l'output è JSON per
+intero o contiene un blocco ```json, altrimenti il segnaposto resta vuoto. Un valore stringa si
+inserisce senza virgolette, gli altri come JSON. Dentro un `foreach` ci sono anche `{{item}}`,
+`{{item.campo}}` e `{{index}}`. Le `condition` vedono il testo già sostituito.
+
+**Opzioni dei passi.** `tool`, `agent` e `llm` accettano `retry` (0–5 nuovi tentativi),
+`retry_delay_s` (attesa, default 2 s), `timeout_s` (limite per tentativo) e `on_error: continue`
+(il passo resta `failed`, il run prosegue e l'errore è in `{{steps.<id>.error}}`). Il timeout di un
+passo `agent` annulla anche il run dell'agente.
+
+**`foreach` e `parallel`.** `foreach` (`items`, `do`, `parallel` 1–8) esegue un passo inline
+`tool`/`agent`/`llm` per ogni voce di `items`: un array JSON (anche in un blocco ```json) oppure un
+testo con una voce per riga, al massimo 200. Nel passo valgono `{{item}}`, `{{item.campo}}` e
+`{{index}}`; l'output è l'array JSON degli output nell'ordine delle voci (`null` per una voce
+fallita con `on_error: continue`). Con `on_error: fail` il primo errore ferma il ciclo e annulla le
+voci ancora in corso. `parallel` (`steps`) esegue più passi inline insieme; l'output è l'oggetto
+`{id_interno: output}` e ogni output è leggibile anche come `{{steps.<id_interno>.output}}`. I passi
+interni possono essere solo `tool`, `agent` o `llm` (niente annidamento, `approval` o `condition`) e
+i loro id contano nell'unicità degli id del workflow. Gli agenti eseguiti insieme usano sessioni
+diverse. Durante l'esecuzione il passo mostra «3/5 completati».
+
+**Sotto-workflow.** `{kind: workflow, workflow: <id>, inputs: {…}}` avvia il workflow figlio (i
+valori di `inputs` accettano i segnaposto) e ne aspetta la fine. L'output del passo è l'output
+dell'ultimo passo `done` del figlio che non sia una `condition`; un figlio fallito o annullato è un
+errore del passo. Il figlio è un run normale, con `parent_run_id` che punta al padre, e può essere
+un workflow disattivato (l'attivazione riguarda solo i trigger). Profondità massima 3: un
+workflow che richiama se stesso è rifiutato dalla validazione, i cicli indiretti si fermano al
+limite. Se il padre smette di aspettare (timeout del passo) il figlio risulta annullato; dopo un
+riavvio un figlio non riprende da solo: il padre riparte dal passo e ne avvia uno nuovo.
+
+**Approvazioni con scadenza.** Il passo `approval` accetta `timeout_s` e `default` (`deny` o `allow`,
+default `deny`): allo scadere vale il default, l'output è «scaduto: approvato» oppure il passo
+fallisce con «scaduto: rifiutato» (e il run risulta annullato), l'audit registra `decision: "timeout"`.
+Per le richieste dei tool degli agenti vale l'impostazione globale `approvals.timeout_s` (0 = nessun
+limite, il default): allo scadere la richiesta è rifiutata e l'agente riceve un messaggio che spiega
+il timeout. Il livello *workspace* non può impostarla.
+
+**Durabilità.** Il motore tiene lo stato del run (`WorkflowState`: run, definizione, input, output,
+rami abilitati, passo corrente) e lo salva a ogni cambiamento nella tabella `workflow_state`; il run
+stesso è aggiornato in `workflow_runs`. All'avvio l'engine riprende i run `running` e
+`waiting_approval` dal passo salvato: quel passo ricomincia da capo (semantica *almeno una volta*,
+quindi un passo con effetti collaterali dovrebbe poter essere ripetuto), un'approvazione in attesa
+viene richiesta di nuovo, un run il cui workflow non esiste più diventa `failed`. L'audit registra
+`workflow.resume`.
 
 ### 5.4 Valutazione e tracce
 
@@ -468,6 +552,7 @@ conferma prima di «Applica all'agente».
 | POST | `/api/sessions/{id}/reflect` | Chiede subito all'agente una lezione sulla conversazione |
 | GET | `/api/traces/export` | Traiettorie delle sessioni in NDJSON (filtri `agent`, `since`, `until`, `status`, `limit`) |
 | GET/POST | `/api/mcp/servers` | Server MCP |
+| GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
 | POST | `/api/kill` | Kill switch |
 | — | `/v1/models`, `/v1/chat/completions` | Gateway OpenAI-compatibile verso i runtime locali |

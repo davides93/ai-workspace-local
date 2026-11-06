@@ -1,0 +1,15 @@
+/* Teams: member rows. The list and the form reuse the agents' styles. Tokens only. */
+.team-members { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.team-member {
+  display: grid; grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) auto; gap: var(--space-2) var(--space-3); align-items: center;
+  padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
+}
+.team-member-agent { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font-weight: 600; font-size: var(--fs-sm); }
+.team-member-agent > span { overflow-wrap: anywhere; }
+.team-member-step { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.team-add { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.team-add .input { max-width: 20rem; }
+@media (max-width: 40rem) {
+  .team-member { grid-template-columns: minmax(0, 1fr) auto; }
+  .team-member .team-role { grid-column: 1 / -1; grid-row: 2; }
+}

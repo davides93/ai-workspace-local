@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Button, EmptyState, Icon, IconButton, QueryState, Select } from "../../../shared/ui";
-import type { AgentProfile, Session } from "../../../shared/api/types";
+import type { AgentProfile, Session, TeamDef } from "../../../shared/api/types";
 import { useReflect } from "../../learning/api";
+import { teamAgentId } from "../../teams/model/teams";
 import { filterSessions, groupSessions } from "../model/sessions";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { SessionItem } from "./SessionItem";
@@ -16,9 +17,11 @@ export interface NewSessionInput {
  * The sessions column: new session (agent, optional git worktree), search, and the sessions grouped
  * by day with rename and delete. The search box filters by title and agent name.
  */
-export function SessionList({ sessions, agents, defaultAgent, activeId, creating, onCreate, onSelect, onDeleted, onClose }: {
+export function SessionList({ sessions, agents, teams = [], defaultAgent, activeId, creating, onCreate, onSelect, onDeleted, onClose }: {
   sessions: UseQueryResult<Session[]>;
   agents: AgentProfile[];
+  /** Teams are chosen like agents; their session agent id is `team:<id>`. */
+  teams?: TeamDef[];
   defaultAgent: string;
   activeId: string | null;
   creating: boolean;
@@ -37,12 +40,16 @@ export function SessionList({ sessions, agents, defaultAgent, activeId, creating
 
   // The agents arrive after the first render: preselect the default once they are known.
   useEffect(() => {
-    if (!agents.some((a) => a.id === agent)) setAgent(defaultAgent);
-  }, [agents, agent, defaultAgent]);
+    if (!agents.some((a) => a.id === agent) && !teams.some((t) => teamAgentId(t.id) === agent)) setAgent(defaultAgent);
+  }, [agents, teams, agent, defaultAgent]);
 
-  const agentName = (id: string) => agents.find((a) => a.id === id)?.name;
+  const nameOf = useMemo(
+    () => (id: string) => agents.find((a) => a.id === id)?.name ?? teams.find((t) => teamAgentId(t.id) === id)?.name,
+    [agents, teams],
+  );
+  const agentName = nameOf;
   const list = sessions.data;
-  const shown = useMemo(() => (list ? filterSessions(list, query, (id) => agents.find((a) => a.id === id)?.name) : []), [list, query, agents]);
+  const shown = useMemo(() => (list ? filterSessions(list, query, nameOf) : []), [list, query, nameOf]);
   const groups = useMemo(() => groupSessions(shown), [shown]);
 
   return (
@@ -56,7 +63,12 @@ export function SessionList({ sessions, agents, defaultAgent, activeId, creating
       <div className="ws-new">
         <div className="ws-new-row">
           <Select aria-label="Agente della nuova sessione" value={agent} onChange={(e) => setAgent(e.target.value)} disabled={agents.length === 0}>
-            {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            {teams.length > 0 ? (
+              <>
+                <optgroup label="Agenti">{agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</optgroup>
+                <optgroup label="Team">{teams.map((t) => <option key={t.id} value={teamAgentId(t.id)}>{t.name}</option>)}</optgroup>
+              </>
+            ) : agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
           </Select>
           <Button variant="primary" icon="plus" disabled={!agent || creating} onClick={() => onCreate({ agent_id: agent, isolation: isolated ? "worktree" : "none" })}>
             Nuova

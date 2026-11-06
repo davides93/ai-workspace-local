@@ -124,6 +124,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/profiles/{id}", put(save_profile).delete(delete_profile))
         .route("/api/agents", get(agents))
         .route("/api/agents/{id}", put(save_agent).delete(delete_agent))
+        .route("/api/remote-agents", get(remote_agents))
+        .route("/api/remote-agents/{id}", put(save_remote_agent).delete(delete_remote_agent))
+        .route("/api/teams", get(teams))
+        .route("/api/teams/{id}", get(get_team).put(save_team).delete(delete_team))
         .route("/api/policy", get(get_policy).put(put_policy))
         .route("/api/hooks", get(get_hooks).put(put_hooks))
         .route("/api/sessions", get(sessions).post(create_session))
@@ -139,7 +143,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/lessons/{id}/reject", post(reject_lesson))
         .route("/api/sessions/{id}/active-run", get(active_run))
         .route("/api/sessions/{id}/runs", post(start_run))
+        .route("/api/sessions/{id}/checkpoints", get(session_checkpoints))
         .route("/api/runs/{id}/cancel", post(cancel_run))
+        .route("/api/runs/{id}/checkpoint", get(run_checkpoint))
+        .route("/api/runs/{id}/rewind", post(run_rewind))
         .route("/api/runs/{id}/events", get(run_events_sse))
         .route("/api/runs/{id}/events.json", get(run_events_json))
         .route("/api/approvals", get(approvals))
@@ -434,6 +441,31 @@ async fn save_agent(State(s): State<AppState>, Path(id): Path<String>, Json(mut 
     a.id = id;
     ok(s.engine.save_agent(a)?)
 }
+async fn remote_agents(State(s): State<AppState>) -> ApiResult<Vec<RemoteAgent>> {
+    ok(s.engine.remote_agents())
+}
+async fn save_remote_agent(State(s): State<AppState>, Path(id): Path<String>, Json(mut r): Json<RemoteAgent>) -> ApiResult<RemoteAgent> {
+    r.id = id;
+    ok(s.engine.save_remote_agent(r)?)
+}
+async fn delete_remote_agent(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_remote_agent(&id)?;
+    ok(json!({}))
+}
+async fn teams(State(s): State<AppState>) -> ApiResult<Vec<TeamDef>> {
+    ok(s.engine.teams()?)
+}
+async fn get_team(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<TeamDef> {
+    ok(s.engine.team(&id)?)
+}
+async fn save_team(State(s): State<AppState>, Path(id): Path<String>, Json(mut t): Json<TeamDef>) -> ApiResult<TeamDef> {
+    t.id = id;
+    ok(s.engine.save_team(t)?)
+}
+async fn delete_team(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.delete_team(&id)?;
+    ok(json!({}))
+}
 async fn get_policy(State(s): State<AppState>) -> ApiResult<Value> {
     ok(json!({"rules": s.engine.policy_rules()}))
 }
@@ -480,6 +512,15 @@ async fn worktree_apply(State(s): State<AppState>, Path(id): Path<String>) -> Ap
 async fn worktree_discard(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.worktree_discard(&id)?;
     ok(json!({}))
+}
+async fn session_checkpoints(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<aiw_core::api::CheckpointInfo>> {
+    ok(s.engine.session_checkpoints(&id)?)
+}
+async fn run_checkpoint(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::CheckpointInfo> {
+    ok(s.engine.checkpoint_info(&id)?)
+}
+async fn run_rewind(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<aiw_core::api::RewindResult> {
+    ok(s.engine.rewind(&id)?)
 }
 async fn delete_session(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.delete_session(&id)?;
@@ -1039,6 +1080,8 @@ mod tests_learning;
 mod tests_models;
 #[cfg(test)]
 mod tests_optimize;
+#[cfg(test)]
+mod tests_remote;
 #[cfg(test)]
 mod tests_security;
 #[cfg(test)]
