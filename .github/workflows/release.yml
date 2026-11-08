@@ -251,11 +251,17 @@ jobs:
       - name: MSVC environment (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+      # (pwsh, not bash: Git's bash puts its own usr/bin/link.exe in front of MSVC's linker.)
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: C:\t
+          CMAKE_GENERATOR: Ninja
+        run: cargo build --release -p aiw-cli --features llama-vulkan
       - name: Build
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then export CARGO_TARGET_DIR='C:\t' CMAKE_GENERATOR=Ninja; fi
-          cargo build --release -p aiw-cli --features llama-vulkan
+        if: runner.os != 'Windows'
+        run: cargo build --release -p aiw-cli --features llama-vulkan
       - name: Name the binary
         shell: bash
         run: |
