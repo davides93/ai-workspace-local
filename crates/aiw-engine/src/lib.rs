@@ -401,6 +401,34 @@ impl Engine {
         self.0.runtimes.register_bridge(id, backend);
     }
 
+    /// Like [`Engine::register_native_runtime`] for a platform system model (Apple Foundation
+    /// Models): if the system model fails before answering, the request continues on the
+    /// smallest chat model downloaded on this device (see [`Engine::local_fallback_model`]).
+    pub fn register_system_runtime(&self, id: &str, backend: Arc<dyn ChatBackend>) {
+        let weak = Arc::downgrade(&self.0);
+        let resolver: aiw_runtimes::FallbackResolver = Arc::new(move || {
+            let weak = weak.clone();
+            Box::pin(async move {
+                let engine = Engine(weak.upgrade()?);
+                let model = engine.local_fallback_model()?;
+                engine.gateway_backend(&model).await.ok()
+            })
+        });
+        self.register_native_runtime(id, Arc::new(aiw_runtimes::FallbackBackend::new(backend, resolver)));
+    }
+
+    /// Smallest downloaded GGUF chat model (not embeddings, not speech): what a system model
+    /// falls back to.
+    pub fn local_fallback_model(&self) -> Option<String> {
+        self.models()
+            .into_iter()
+            .filter(|m| m.format == "gguf" && m.origin != "system")
+            .filter(|m| !m.capabilities.iter().any(|c| c == "embeddings" || c == "voce"))
+            .filter(|m| !m.id.to_lowercase().contains("embed"))
+            .min_by_key(|m| m.size_bytes)
+            .map(|m| m.id)
+    }
+
     /// Current 6-digit pairing code (rotates every 10 minutes).
     pub fn pairing_code(&self) -> String {
         let mut p = self.0.pairing.lock().unwrap();

@@ -83,7 +83,7 @@
 .profiles-table td { vertical-align: top; }
 
 /* ---------- Phones: the detail is its own page, so the page chrome above it steps aside ---------- */
-@media (max-width: 760px) {
+@media (max-width: 700px) {
   .check-inline { min-height: 32px; }
   .agents-page:has(.agents-ws[data-detail="open"]) > .page-head,
   .agents-page:has(.agents-ws[data-detail="open"]) > .agents-tabs { display: none; }

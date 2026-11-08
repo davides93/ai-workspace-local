@@ -55,8 +55,13 @@ pub fn run() {
                     }
                     for rt in list.into_iter().filter(|r| r.available) {
                         let bridge: Arc<dyn tauri_plugin_aiw_native::NativeGenerate> = Arc::new(NativeHandle(app.handle().clone()));
-                        engine
-                            .register_native_runtime(&rt.id, Arc::new(tauri_plugin_aiw_native::NativeBackend::new(rt.id.clone(), bridge)));
+                        let backend = Arc::new(tauri_plugin_aiw_native::NativeBackend::new(rt.id.clone(), bridge));
+                        if rt.id == "apple-fm" {
+                            // Not ready / refused / failing: continue on a downloaded local model.
+                            engine.register_system_runtime(&rt.id, backend);
+                        } else {
+                            engine.register_native_runtime(&rt.id, backend);
+                        }
                     }
                 }
                 Err(e) => tracing::warn!("native runtimes unavailable: {e}"),

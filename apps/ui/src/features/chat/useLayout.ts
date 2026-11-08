@@ -12,7 +12,7 @@ export type InspectorMode = "inline" | "drawer" | "sheet";
  * tablets (the conversation would be left too narrow), a bottom sheet on phones.
  */
 export function useInspectorMode(): InspectorMode {
-  const phone = useMediaQuery("(max-width: 760px)");
+  const phone = useMediaQuery("(max-width: 700px)");
   const wide = useMediaQuery("(min-width: 1320px)");
   return phone ? "sheet" : wide ? "inline" : "drawer";
 }

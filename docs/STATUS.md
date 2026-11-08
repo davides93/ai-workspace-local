@@ -181,7 +181,7 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 2. Provare i provider del model hub contro i servizi reali (HF, ModelScope, Ollama) e
    rigenerare l'indice Ollama da CI. Le build GPU e i percorsi nativi Apple e Android vanno
    provati su hardware reale (vedi §2.9).
-3. Selezionare Xcode 26 nella CI iOS, così il ramo Foundation Models viene compilato davvero.
+3. Selezionare Xcode 26 nella CI iOS (stesso accorgimento del linker llama.cpp del job macOS), così il ramo Foundation Models viene compilato davvero.
    Il build macOS desktop usa già Xcode 26 e fallisce se il helper Swift non si compila
    (`AIW_REQUIRE_APPLE_FM=1`): provare `aiw-apple-fm` su un Mac con macOS 26 e Apple Intelligence attiva.
 
@@ -210,3 +210,15 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 14. Token per dispositivo con revoca (oggi un solo token condiviso) e TLS per la LAN.
 15. Firma e notarizzazione delle release, pubblicazione su GitHub Releases, target arm64.
 16. Font inclusi nell'app invece di Google Fonts, i18n it/en.
+
+## iOS e iPadOS (v0.5)
+
+- Una sola base per macOS (binario universale), iOS e iPadOS: Tauri 2 + la stessa UI React.
+- iPad: tutti gli orientamenti, niente schermo intero obbligatorio (Split View e Stage Manager), iOS 17+.
+  Il layout a icone laterali parte da 701 px, quindi l'iPad mini 7 (744 pt in verticale) usa la barra
+  laterale, non quella da telefono. Sui dispositivi touch il tema scuro usa il nero vero (OLED).
+- Modelli: Apple Foundation Models (iOS 26+, Apple Intelligence attiva) e i GGUF locali con llama.cpp
+  Metal (Gemma 3 1B, Gemma 3n E2B, Llama 3.2 1B/3B, Qwen3 0.6B/1.7B nel catalogo, scaricabili dal model hub).
+- Fallback: se il modello di sistema Apple fallisce prima di rispondere, la richiesta prosegue sul più
+  piccolo GGUF scaricato, con una nota in chat. Senza GGUF scaricati resta l'errore originale.
+- Da provare su iPad mini 7 reale: Apple FM e prestazioni Metal, nessun test su dispositivo finora.

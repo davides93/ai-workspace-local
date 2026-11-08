@@ -6,7 +6,7 @@ import { GROUPS, ROUTES, routeHref, type RouteId } from "../routes";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
 
-/** Left navigation on desktop; icon-only between 761 and 1100 px (labels stay as tooltips and accessible names). */
+/** Left navigation on desktop; icon-only between 701 and 1100 px (labels stay as tooltips and accessible names). */
 export function Rail({ current, onOpenPalette }: { current?: RouteId; onOpenPalette: () => void }) {
   const { data: system } = useSystem();
   const update = useUpdateStatus().data?.available;

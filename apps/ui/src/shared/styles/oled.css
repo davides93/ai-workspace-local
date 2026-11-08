@@ -1,0 +1,13 @@
+/* OLED (iPhone, iPad mini 7…): on touch devices the dark theme uses true black so the pixels
+   switch off. Only backgrounds change; text and accent tokens keep their contrast. */
+@media (pointer: coarse) and (hover: none) {
+  :root[data-theme="dark"] {
+    --bg: #000000;
+    --surface: #0a0c0c;
+    --surface-2: #131617;
+    --surface-3: #1c2022;
+    --line: #23292b;
+    --code-bg: #070909;
+  }
+  html:not([data-theme]) { background: #000000; }
+}

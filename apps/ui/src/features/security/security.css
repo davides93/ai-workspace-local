@@ -96,7 +96,7 @@ table.data tr.current-os th.cell-os { background: var(--accent-soft); }
   .hook-row .hook-timeout { grid-column: 3 / 4; }
   .hook-row .rule-buttons { grid-column: 2 / -1; justify-content: flex-start; }
 }
-@media (max-width: 760px) {
+@media (max-width: 700px) {
   .check-inline { min-height: 32px; }
   .rule-row .rule-n, .hook-row .rule-n { align-self: start; margin-top: var(--space-1); }
   .rule-row .rule-action { grid-column: 2 / -1; }
