@@ -11,6 +11,7 @@ import WebKit
 /// Rust side runs on 127.0.0.1: the proxy decides every HTTPS connection, so the agent's browser
 /// cannot reach the LAN or loopback. Needs iOS 17 (`proxyConfigurations`); older systems get a
 /// clear error and the browser tools stay unavailable.
+@available(iOS 17.0, *)
 final class BrowserPanel: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private var webView: WKWebView!
     private var pending: ((Result<String, Error>) -> Void)?
@@ -34,15 +35,12 @@ final class BrowserPanel: UIViewController, WKNavigationDelegate, WKUIDelegate {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
         let config = WKWebViewConfiguration()
-        if #available(iOS 17.0, *) {
-            let id = BrowserPanel.storeIdentifier()
-            let store = WKWebsiteDataStore(forIdentifier: id)
-            if let port = NWEndpoint.Port(rawValue: proxyPort) {
-                let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: port)
-                store.proxyConfigurations = [ProxyConfiguration(httpCONNECTProxy: endpoint, tlsOptions: nil)]
-            }
-            config.websiteDataStore = store
+        let store = WKWebsiteDataStore(forIdentifier: BrowserPanel.storeIdentifier())
+        if let port = NWEndpoint.Port(rawValue: proxyPort) {
+            let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: port)
+            store.proxyConfigurations = [ProxyConfiguration(httpCONNECTProxy: endpoint, tlsOptions: nil)]
         }
+        config.websiteDataStore = store
         // No WebRTC: it would bypass the proxy.
         let noRtc = WKUserScript(
             source: "for (const k of ['RTCPeerConnection','webkitRTCPeerConnection','RTCDataChannel']) { try { Object.defineProperty(window, k, { value: undefined }); } catch (e) {} }",
@@ -85,7 +83,6 @@ final class BrowserPanel: UIViewController, WKNavigationDelegate, WKUIDelegate {
     }
 
     /// A fixed data store for the agent's browser, separate from the app's own web data.
-    @available(iOS 17.0, *)
     static func storeIdentifier() -> UUID {
         let key = "aiw.browser.store"
         if let s = UserDefaults.standard.string(forKey: key), let id = UUID(uuidString: s) { return id }
@@ -174,7 +171,7 @@ class BrowserEvalArgs: Decodable { let js: String }
 /// Commands called from Rust (`browserConfigure`, `browserNavigate`, `browserEval`,
 /// `browserScreenshot`, `browserClose`). Rust blocks until each one answers.
 extension AiwNativePlugin {
-    private static var panel: BrowserPanel?
+    private static var panel: UIViewController?
     private static var proxyPort: UInt16 = 0
 
     private func topController() -> UIViewController? {
@@ -186,9 +183,10 @@ extension AiwNativePlugin {
     }
 
     /// The panel, created and shown on demand (it keeps its page while the app lives).
+    @available(iOS 17.0, *)
     private func withPanel(_ invoke: Invoke, _ body: @escaping (BrowserPanel) -> Void) {
         DispatchQueue.main.async {
-            if let existing = AiwNativePlugin.panel, existing.presentingViewController != nil || existing.isBeingPresented {
+            if let existing = AiwNativePlugin.panel as? BrowserPanel, existing.presentingViewController != nil || existing.isBeingPresented {
                 body(existing)
                 return
             }
@@ -214,6 +212,7 @@ extension AiwNativePlugin {
     }
 
     @objc public func browserNavigate(_ invoke: Invoke) throws {
+        guard #available(iOS 17.0, *) else { invoke.reject("Il browser dell'agente richiede iOS 17 o successivo"); return }
         let args = try invoke.parseArgs(BrowserNavigateArgs.self)
         guard let url = URL(string: args.url) else { invoke.reject("URL non valido"); return }
         withPanel(invoke) { panel in
@@ -227,6 +226,7 @@ extension AiwNativePlugin {
     }
 
     @objc public func browserEval(_ invoke: Invoke) throws {
+        guard #available(iOS 17.0, *) else { invoke.reject("Il browser dell'agente richiede iOS 17 o successivo"); return }
         let args = try invoke.parseArgs(BrowserEvalArgs.self)
         withPanel(invoke) { panel in
             panel.evaluate(args.js) { result in
@@ -239,6 +239,7 @@ extension AiwNativePlugin {
     }
 
     @objc public func browserScreenshot(_ invoke: Invoke) {
+        guard #available(iOS 17.0, *) else { invoke.reject("Il browser dell'agente richiede iOS 17 o successivo"); return }
         withPanel(invoke) { panel in
             panel.screenshot { result in
                 switch result {
