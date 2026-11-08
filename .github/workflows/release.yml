@@ -246,10 +246,15 @@ jobs:
       # Windows: a short target dir. llama.cpp's Vulkan build runs a nested CMake/MSBuild project
       # (vulkan-shaders-gen) whose paths exceed MAX_PATH under the default
       # D:\a\<repo>\<repo>\target\... and cl.exe then fails with C1083 on its test program.
+      # Also Ninja instead of the Visual Studio 18 generator: its install step of the nested
+      # vulkan-shaders-gen project fails ("Not a file: .../cmake_install.cmake").
+      - name: MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Build
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then export CARGO_TARGET_DIR='C:\t'; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then export CARGO_TARGET_DIR='C:\t' CMAKE_GENERATOR=Ninja; fi
           cargo build --release -p aiw-cli --features llama-vulkan
       - name: Name the binary
         shell: bash
