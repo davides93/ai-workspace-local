@@ -36,6 +36,12 @@ struct GeneratePayload {
 }
 
 impl<R: Runtime> NativeLlm<R> {
+    /// Calls a command of the in-app browser (`browserConfigure`, `browserNavigate`, `browserEval`,
+    /// `browserScreenshot`, `browserClose`) and returns its JSON answer. Blocks.
+    pub fn browser_call(&self, method: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
+        self.0.run_mobile_plugin::<serde_json::Value>(method, payload).map_err(|e| Error::Runtime(e.to_string()))
+    }
+
     pub fn availability(&self) -> Result<Vec<NativeRuntime>> {
         self.0.run_mobile_plugin::<AvailabilityResponse>("availability", ()).map(|r| r.runtimes).map_err(|e| Error::Runtime(e.to_string()))
     }

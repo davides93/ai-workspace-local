@@ -223,3 +223,4 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
   piccolo GGUF scaricato, con una nota in chat. Senza GGUF scaricati resta l'errore originale.
 - Galleria (Modelli → Galleria): schede dei modelli di sistema e dei GGUF "mobile" con Scarica, Prova (messaggio di prova, anche sui modelli scaricati) e Usa nel profilo.
 - Da provare su iPad mini 7 reale: Apple FM e prestazioni Metal, nessun test su dispositivo finora.
+- Browser dell'agente su iOS, iPadOS e Android: WebView in-app visibile, solo https, rete filtrata da un proxy locale in Rust (iOS 17+). Scritto ma mai eseguito su dispositivo né compilato in CI mobile. Computer use mobile: non previsto (Google Play, e iOS lo vieta).

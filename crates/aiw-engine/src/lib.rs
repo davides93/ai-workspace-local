@@ -401,6 +401,11 @@ impl Engine {
         self.0.runtimes.register_bridge(id, backend);
     }
 
+    /// The controlled browser (Chrome on desktop, the in-app WebView on mobile).
+    pub fn browser(&self) -> Arc<BrowserManager> {
+        self.0.browser.clone()
+    }
+
     /// Like [`Engine::register_native_runtime`] for a platform system model (Apple Foundation
     /// Models): if the system model fails before answering, the request continues on the
     /// smallest chat model downloaded on this device (see [`Engine::local_fallback_model`]).

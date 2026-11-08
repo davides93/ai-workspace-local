@@ -18,7 +18,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
-const SNAPSHOT_JS: &str = r#"(() => {
+pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
   const out = []; let n = 0;
   document.querySelectorAll('[data-aiw-ref]').forEach(e => e.removeAttribute('data-aiw-ref'));
   const sel = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[contenteditable=true],summary';
@@ -52,14 +52,14 @@ struct Cdp {
 /// Network policy of the controlled browser: the context of the tool call that is running (it
 /// changes from call to call) and the resolver used to vet names.
 #[derive(Clone)]
-struct Policy {
-    ctx: Arc<Mutex<ToolContext>>,
-    resolve: ResolveFn,
+pub(crate) struct Policy {
+    pub(crate) ctx: Arc<Mutex<ToolContext>>,
+    pub(crate) resolve: ResolveFn,
     /// Requests refused since the last navigation started: `(url, reason)`.
-    blocked: Arc<Mutex<Vec<(String, String)>>>,
+    pub(crate) blocked: Arc<Mutex<Vec<(String, String)>>>,
 }
 
-type ResolveFn = Arc<dyn Fn(String, u16) -> futures::future::BoxFuture<'static, std::io::Result<Vec<IpAddr>>> + Send + Sync>;
+pub(crate) type ResolveFn = Arc<dyn Fn(String, u16) -> futures::future::BoxFuture<'static, std::io::Result<Vec<IpAddr>>> + Send + Sync>;
 
 /// Longest a paused request waits for its verdict (DNS included) before it is failed.
 const REQUEST_VERDICT_TIMEOUT: Duration = Duration::from_secs(12);
@@ -68,7 +68,7 @@ const REQUEST_VERDICT_TIMEOUT: Duration = Duration::from_secs(12);
 /// allowed; `ws(s):` is vetted like `http(s):`; every other scheme (file:, ftp:, chrome:, ...) is
 /// refused. http(s) goes through the same policy as `web_fetch` (allowlist, private ranges, DNS
 /// answers, proxy rules).
-async fn request_verdict<R, F>(url: &str, ctx: &ToolContext, resolve: R) -> std::result::Result<(), String>
+pub(crate) async fn request_verdict<R, F>(url: &str, ctx: &ToolContext, resolve: R) -> std::result::Result<(), String>
 where
     R: Fn(String, u16) -> F,
     F: std::future::Future<Output = std::io::Result<Vec<IpAddr>>>,
@@ -87,7 +87,7 @@ where
 
 /// The tools' own address checks (before and after a navigation): the same policy and resolver
 /// as the per-request one.
-async fn vet_with(url: &str, ctx: &ToolContext, resolve: &ResolveFn) -> Result<reqwest::Url> {
+pub(crate) async fn vet_with(url: &str, ctx: &ToolContext, resolve: &ResolveFn) -> Result<reqwest::Url> {
     let via_proxy = reqwest::Url::parse(url).is_ok_and(|u| proxy_applies(&u));
     let resolve = resolve.clone();
     Ok(vet_url_with(url, ctx, move |h, p| resolve(h, p), via_proxy).await?.url)
@@ -236,7 +236,9 @@ pub struct BrowserManager {
     profile_dir: PathBuf,
     headless: bool,
     session: tokio::sync::Mutex<Option<Session>>,
-    policy: Policy,
+    pub(crate) policy: Policy,
+    /// In-app WebView (iOS, Android): when set, the tools drive it instead of Chrome.
+    webview: Mutex<Option<Arc<crate::webview::WebViewHost>>>,
     /// Extra Chrome command-line flags (tests only).
     extra_args: Vec<String>,
 }
@@ -271,10 +273,22 @@ impl BrowserManager {
             resolve: Arc::new(|h, p| Box::pin(system_resolve(h, p))),
             blocked: Default::default(),
         };
-        Self { profile_dir, headless, session: tokio::sync::Mutex::new(None), policy, extra_args: vec![] }
+        Self { profile_dir, headless, session: tokio::sync::Mutex::new(None), policy, webview: Mutex::new(None), extra_args: vec![] }
+    }
+
+    /// Hands the tools an in-app WebView (mobile). Replaces Chrome for every later call.
+    pub fn set_webview(&self, bridge: Arc<dyn crate::webview::WebViewBridge>) {
+        *self.webview.lock().unwrap() = Some(Arc::new(crate::webview::WebViewHost::new(bridge)));
+    }
+
+    pub(crate) fn webview(&self) -> Option<Arc<crate::webview::WebViewHost>> {
+        self.webview.lock().unwrap().clone()
     }
 
     pub fn available(&self) -> std::result::Result<(), String> {
+        if self.webview().is_some() {
+            return Ok(());
+        }
         if cfg!(any(target_os = "ios", target_os = "android")) {
             return Err("il browser controllato è disponibile su desktop".into());
         }
@@ -385,6 +399,10 @@ impl BrowserManager {
 
     /// Closes the controlled browser (kill switch).
     pub async fn close(&self) -> bool {
+        if let Some(w) = self.webview() {
+            w.close().await;
+            return true;
+        }
         let mut guard = self.session.lock().await;
         if let Some(mut s) = guard.take() {
             let _ = s.cdp.call("Browser.close", json!({})).await;
@@ -408,7 +426,7 @@ pub fn tools(mgr: Arc<BrowserManager>) -> Vec<Arc<dyn Tool>> {
 }
 
 #[derive(Clone, Copy)]
-enum Op {
+pub(crate) enum Op {
     Navigate,
     Snapshot,
     Click,
@@ -421,7 +439,7 @@ struct BrowserTool {
     op: Op,
 }
 
-fn ref_arg(args: &Value) -> Result<u64> {
+pub(crate) fn ref_arg(args: &Value) -> Result<u64> {
     args.get("ref")
         .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim_matches(['[', ']']).parse().ok())))
         .ok_or_else(|| Error::Invalid("argomento `ref` (numero dello snapshot) mancante".into()))
@@ -468,6 +486,9 @@ impl Tool for BrowserTool {
         self.mgr.available()
     }
     async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        if let Some(host) = self.mgr.webview() {
+            return crate::webview::call(&self.mgr, host, self.op, args, ctx).await;
+        }
         match self.op {
             Op::Navigate => {
                 let resolve = self.mgr.policy.resolve.clone();

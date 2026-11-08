@@ -67,6 +67,10 @@ pub fn run() {
                 Err(e) => tracing::warn!("native runtimes unavailable: {e}"),
             }
 
+            // Mobile: the browser tools drive the app's own WebView (a visible panel).
+            #[cfg(mobile)]
+            engine.browser().set_webview(Arc::new(WebViewHandle(app.handle().clone())));
+
             // Forward the run-event bus to the webview.
             let handle = app.handle().clone();
             let mut rx = engine.subscribe();
@@ -114,6 +118,39 @@ pub fn run() {
             }
         }
     });
+}
+
+/// Adapter between the browser tools and the plugin's in-app WebView.
+#[cfg(mobile)]
+struct WebViewHandle(tauri::AppHandle<tauri::Wry>);
+
+#[cfg(mobile)]
+impl WebViewHandle {
+    fn call(&self, method: &str, payload: serde_json::Value) -> aiw_core::Result<serde_json::Value> {
+        self.0.state::<tauri_plugin_aiw_native::NativeLlm<tauri::Wry>>().browser_call(method, payload)
+    }
+}
+
+#[cfg(mobile)]
+impl aiw_tools::webview::WebViewBridge for WebViewHandle {
+    fn configure(&self, proxy_port: u16) -> aiw_core::Result<()> {
+        self.call("browserConfigure", serde_json::json!({ "proxyPort": proxy_port })).map(|_| ())
+    }
+    fn navigate(&self, url: &str) -> aiw_core::Result<String> {
+        let v = self.call("browserNavigate", serde_json::json!({ "url": url }))?;
+        Ok(v["url"].as_str().unwrap_or(url).to_string())
+    }
+    fn eval(&self, js: &str) -> aiw_core::Result<serde_json::Value> {
+        let v = self.call("browserEval", serde_json::json!({ "js": js }))?;
+        Ok(v["value"].clone())
+    }
+    fn screenshot(&self) -> aiw_core::Result<String> {
+        let v = self.call("browserScreenshot", serde_json::json!({}))?;
+        Ok(v["dataUrl"].as_str().unwrap_or_default().to_string())
+    }
+    fn close(&self) {
+        let _ = self.call("browserClose", serde_json::json!({}));
+    }
 }
 
 /// Adapter so the engine can call the plugin without knowing the Tauri runtime type.

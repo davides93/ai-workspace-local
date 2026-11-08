@@ -1,6 +1,8 @@
 # Browser e computer use su mobile: piano
 
-Stato: proposta, nessun codice scritto. Oggi `browser_*` e `computer_*` sono solo desktop (`Tool::available()` risponde Err su iOS e Android).
+Stato: **browser mobile implementato** (iOS, iPadOS, Android), da provare su dispositivo. **Computer use mobile: fermo** per decisione di Dave, perché la policy di Google Play vieta l'AccessibilityService per agenti che pianificano ed eseguono azioni in autonomia (permesso solo a strumenti di accessibilità verificati e ad automazioni deterministiche con script fisso). Su iOS non è possibile in nessun caso.
+
+Cosa c'è nel codice: `aiw-tools/src/webview.rs` (trait `WebViewBridge`, tool su WebView, proxy HTTPS di policy con 4 test), `ios/.../BrowserPanel.swift`, `android/.../AgentBrowser.kt`, wiring in `src-tauri/src/lib.rs`. Il browser mobile apre solo pagine https; richiede iOS 17+ e un WebView Android con `PROXY_OVERRIDE`; su Android i cookie sono quelli condivisi dell'app.
 
 ## Cosa è possibile
 
