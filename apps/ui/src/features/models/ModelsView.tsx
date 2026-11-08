@@ -7,13 +7,14 @@ import { Page, PageHeader, QueryState, TabPanel, Tabs } from "../../shared/ui";
 import { isActiveDownload, useDownloads, useModels } from "./api";
 import { ActiveDownloadsStrip } from "./components/ActiveDownloadsStrip";
 import { CatalogTab } from "./components/CatalogTab";
+import { GalleryTab } from "./components/GalleryTab";
 import { DiscoverTab } from "./components/DiscoverTab";
 import { DownloadsTab } from "./components/DownloadsTab";
 import { InstalledTab } from "./components/InstalledTab";
 import "./models.css";
 
-type Tab = "installed" | "discover" | "downloads" | "catalog" | "profiles";
-const TABS: Tab[] = ["installed", "discover", "downloads", "catalog", "profiles"];
+type Tab = "gallery" | "installed" | "discover" | "downloads" | "catalog" | "profiles";
+const TABS: Tab[] = ["gallery", "installed", "discover", "downloads", "catalog", "profiles"];
 
 /** Modelli: installed, live discovery on several providers, the download queue, and the curated catalog. */
 export function ModelsView() {
@@ -36,6 +37,7 @@ export function ModelsView() {
       <Tabs
         idPrefix="models" label="Sezioni dei modelli" value={tab} onChange={(t) => navigate(t === "installed" ? "/models" : `/models/${t}`)}
         tabs={[
+          { id: "gallery", label: "Galleria" },
           { id: "installed", label: "Disponibili qui", count: models.data?.length },
           { id: "profiles", label: "Profili" },
           { id: "discover", label: "Scopri" },
@@ -46,6 +48,7 @@ export function ModelsView() {
       {tab !== "downloads" && <ActiveDownloadsStrip jobs={jobs} />}
       <TabPanel idPrefix="models" id={tab}>
         {tab === "profiles" && <ProfilesPanel />}
+        {tab === "gallery" && <GalleryTab jobs={jobs} />}
         {tab === "installed" && <InstalledTab />}
         {tab === "discover" && <DiscoverTab />}
         {tab === "downloads" && <QueryState query={downloads}>{(list) => <DownloadsTab jobs={list} />}</QueryState>}

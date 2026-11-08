@@ -1965,18 +1965,20 @@ impl Engine {
         if prompt.is_empty() || prompt.chars().count() > 2000 {
             return Err(Error::Invalid("Scrivi una richiesta da 1 a 2000 caratteri.".into()));
         }
-        let model = self
-            .available_system_models()
-            .into_iter()
-            .find(|m| m.id == id)
-            .ok_or_else(|| Error::NotFound("Modello di sistema non disponibile su questo dispositivo.".into()))?;
+        // A system model (Apple Intelligence…) or a model downloaded on this device.
+        let (backend, model_name) = if let Some(model) = self.available_system_models().into_iter().find(|m| m.id == id) {
+            (self.0.runtimes.backend(&model.runtimes[0], Some(id)).await?, id.to_string())
+        } else if self.models().iter().any(|m| m.id == id && m.origin != "system") {
+            self.gateway_backend(id).await?
+        } else {
+            return Err(Error::NotFound("Modello non disponibile su questo dispositivo.".into()));
+        };
         let cancel = CancellationToken::new();
         let _guard = cancel.clone().drop_guard();
-        let backend = self.0.runtimes.backend(&model.runtimes[0], Some(id)).await?;
         tokio::time::timeout(std::time::Duration::from_secs(90), async {
             let mut stream = backend
                 .chat(
-                    ChatRequest { model: id.into(), messages: vec![Msg::user(prompt)], max_tokens: Some(512), ..Default::default() },
+                    ChatRequest { model: model_name, messages: vec![Msg::user(prompt)], max_tokens: Some(512), ..Default::default() },
                     cancel,
                 )
                 .await?;

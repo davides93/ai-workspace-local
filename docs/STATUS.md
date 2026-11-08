@@ -221,4 +221,5 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
   Metal (Gemma 3 1B, Gemma 3n E2B, Llama 3.2 1B/3B, Qwen3 0.6B/1.7B nel catalogo, scaricabili dal model hub).
 - Fallback: se il modello di sistema Apple fallisce prima di rispondere, la richiesta prosegue sul più
   piccolo GGUF scaricato, con una nota in chat. Senza GGUF scaricati resta l'errore originale.
+- Galleria (Modelli → Galleria): schede dei modelli di sistema e dei GGUF "mobile" con Scarica, Prova (messaggio di prova, anche sui modelli scaricati) e Usa nel profilo.
 - Da provare su iPad mini 7 reale: Apple FM e prestazioni Metal, nessun test su dispositivo finora.
