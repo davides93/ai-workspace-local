@@ -18,15 +18,15 @@ on:
         type: boolean
         default: true
       play_track:
-        description: "Track Google Play"
+        description: "Track Google Play (alpha = test chiuso, beta = test aperto)"
         type: choice
-        options: [internal, alpha, beta, production]
-        default: internal
+        options: [alpha, internal, beta, production]
+        default: alpha
       play_status:
-        description: "Stato release Play (draft obbligatorio finché l'app non è mai stata pubblicata)"
+        description: "Stato release Play (completed = parte subito ai tester; draft = la confermi in console, obbligatorio finché l'app non è mai stata pubblicata)"
         type: choice
-        options: [draft, completed]
-        default: draft
+        options: [completed, draft]
+        default: completed
 
 permissions:
   contents: read
