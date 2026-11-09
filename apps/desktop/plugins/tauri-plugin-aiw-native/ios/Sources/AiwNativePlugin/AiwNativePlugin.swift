@@ -2,6 +2,7 @@ import Foundation
 import SwiftRs
 import Tauri
 import UIKit
+import Speech
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -37,6 +38,43 @@ class AiwNativePlugin: Plugin {
         runtimes.append(["id": "apple-fm", "available": false, "detail": "SDK senza FoundationModels", "models": []])
         #endif
         invoke.resolve(["runtimes": runtimes])
+    }
+
+    /// Speech to text for a WAV file with SFSpeechRecognizer (on-device when the language supports it).
+    @objc public func transcribe(_ invoke: Invoke) throws {
+        struct Args: Decodable { let path: String; let language: String? }
+        let args = try invoke.parseArgs(Args.self)
+        SFSpeechRecognizer.requestAuthorization { status in
+            guard status == .authorized else {
+                invoke.reject("Riconoscimento vocale non autorizzato: abilitalo in Impostazioni › AI Workspace › Riconoscimento vocale")
+                return
+            }
+            let locale = Locale(identifier: args.language ?? Locale.preferredLanguages.first ?? "it-IT")
+            guard let recognizer = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer(), recognizer.isAvailable else {
+                invoke.reject("Riconoscimento vocale non disponibile per la lingua \(locale.identifier)")
+                return
+            }
+            let request = SFSpeechURLRecognitionRequest(url: URL(fileURLWithPath: args.path))
+            request.shouldReportPartialResults = false
+            if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+            var finished = false
+            recognizer.recognitionTask(with: request) { result, error in
+                if finished { return }
+                if let result = result, result.isFinal {
+                    finished = true
+                    invoke.resolve(["text": result.bestTranscription.formattedString])
+                } else if let error = error {
+                    finished = true
+                    // "No speech detected" is not a failure: empty text.
+                    let ns = error as NSError
+                    if ns.domain == "kAFAssistantErrorDomain" && (ns.code == 1110 || ns.code == 1101) {
+                        invoke.resolve(["text": ""])
+                    } else {
+                        invoke.reject("\(error.localizedDescription)")
+                    }
+                }
+            }
+        }
     }
 
     @objc public func generate(_ invoke: Invoke) throws {

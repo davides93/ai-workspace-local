@@ -2,7 +2,7 @@
 //! emitting AG-UI events and returning the messages to persist.
 
 use crate::budget::RunBudget;
-use crate::fallback::extract_text_tool_calls;
+use crate::fallback::{bare_json_call, extract_text_tool_calls, has_text_tool_call};
 use crate::hooks::{run_hooks, HookConfig};
 use crate::policy::{risk_level, Decision, Policy};
 use crate::skills::{self, Skill};
@@ -572,9 +572,15 @@ impl AgentRunner {
             }
             // Fallback: tool calls written as text.
             let mut text = text;
-            if calls.is_empty() && text.contains("<tool_call>") {
-                let (clean, parsed) = extract_text_tool_calls(&text);
+            if calls.is_empty() && has_text_tool_call(&text) {
+                let (clean, mut parsed) = extract_text_tool_calls(&text);
                 text = clean;
+                if parsed.is_empty() {
+                    if let Some(c) = bare_json_call(&text) {
+                        parsed.push(c);
+                        text = String::new();
+                    }
+                }
                 for (i, (name, args)) in parsed.into_iter().enumerate() {
                     let id = format!("call_{}_{i}", new_id("t"));
                     ev.emit(AgEvent::ToolCallStart { tool_call_id: id.clone(), tool_call_name: name.clone(), parent_message_id: None });

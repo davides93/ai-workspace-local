@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0-beta.3 - pre-release
+
+- Apple Foundation Models: le chiamate a strumenti scritte come testo con tag diversi da `<tool_call>` (`{tool_call}`, `[tool_call]`) o come JSON nudo (`{"name", "arguments"}`, superficie A2UI `surfaceId`/`components`) vengono riconosciute ed eseguite, invece di comparire come testo in chat.
+- Voce su iOS e iPadOS: dettatura e modalità vocale usano il riconoscimento vocale di sistema (SFSpeechRecognizer, in locale quando la lingua lo supporta) quando whisper.cpp non c'è; la lettura delle risposte resta con le voci di sistema. Al primo uso iOS chiede il permesso del riconoscimento vocale.
+- iPad: l'interfaccia rispetta l'area sicura in alto, quindi la barra di stato e il titolo della finestra non coprono più la barra laterale e l'intestazione.
+
 ## 0.5.0-beta.2 - pre-release
 
 - Addestramento guidato: il wizard SFT importa esempi JSONL revisionati da un file locale e rende selezionabile MedGemma 1.5 4B (testo, Apple Silicon, trainer `mlx-lm`). Provato su Mac con 12 esempi sintetici: import, job LoRA su Metal, confronto base/adapter su un esempio separato e profilo con l'adapter. La prova conferma il percorso, non un miglioramento delle risposte.

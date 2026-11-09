@@ -6,6 +6,8 @@
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>AI Workspace usa il microfono per la dettatura e la conversazione a voce. L'audio viene trascritto in locale, su questo dispositivo o su uno accoppiato.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>AI Workspace usa il riconoscimento vocale di iOS per trascrivere la dettatura e la conversazione a voce.</string>
 	<key>UIRequiresFullScreen</key>
 	<false/>
 	<key>UISupportedInterfaceOrientations</key>

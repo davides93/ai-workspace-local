@@ -1,7 +1,7 @@
 /* Component styles: shell, design system components and feature surfaces. Tokens only, no raw colors. */
 
 /* ---------- App shell ---------- */
-.shell { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); height: 100%; }
+.shell { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); height: 100%; box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); }
 .rail {
   background: var(--surface); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; gap: var(--space-1);

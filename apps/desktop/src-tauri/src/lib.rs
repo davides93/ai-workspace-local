@@ -74,6 +74,10 @@ pub fn run() {
                 Err(e) => tracing::warn!("native runtimes unavailable: {e}"),
             }
 
+            // iOS / iPadOS: dictation and voice mode use the system speech recognizer (no whisper.cpp there).
+            #[cfg(target_os = "ios")]
+            engine.register_native_stt(Arc::new(NativeSpeech(app.handle().clone())));
+
             // Mobile: the browser tools drive the app's own WebView (a visible panel).
             #[cfg(mobile)]
             engine.browser().set_webview(Arc::new(WebViewHandle(app.handle().clone())));
@@ -161,6 +165,16 @@ impl aiw_tools::webview::WebViewBridge for WebViewHandle {
 }
 
 /// Adapter so the engine can call the plugin without knowing the Tauri runtime type.
+#[cfg(target_os = "ios")]
+struct NativeSpeech(tauri::AppHandle<tauri::Wry>);
+
+#[cfg(target_os = "ios")]
+impl aiw_engine::voice::NativeStt for NativeSpeech {
+    fn transcribe(&self, wav: &[u8], language: Option<&str>) -> aiw_core::Result<String> {
+        self.0.state::<tauri_plugin_aiw_native::NativeLlm<tauri::Wry>>().transcribe(wav, language)
+    }
+}
+
 struct NativeHandle(tauri::AppHandle<tauri::Wry>);
 
 impl tauri_plugin_aiw_native::NativeGenerate for NativeHandle {
