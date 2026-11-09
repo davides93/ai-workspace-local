@@ -512,3 +512,39 @@ async fn a_request_nobody_waits_for_leaves_the_inbox() {
     assert!(e.approvals().is_empty());
     assert!(matches!(e.respond_approval("apr_x", true, false), Err(Error::NotFound(_))));
 }
+
+#[tokio::test]
+async fn a_sandboxed_build_keeps_its_workspace_and_says_so() {
+    let data = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    // The setting is stored, but a sandboxed build starts in the folder the shell passes.
+    std::fs::write(data.path().join("config.json"), json!({"workspace.root": elsewhere.path().display().to_string()}).to_string()).unwrap();
+    let e = Engine::new(EngineOptions {
+        data_dir: Some(data.path().to_path_buf()),
+        mode: "embedded".into(),
+        offline: true,
+        sandboxed: true,
+        workspace_root: Some(ws.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert!(e.system(false).sandboxed);
+    assert_eq!(e.workspace_root(), ws.path().canonicalize().unwrap());
+    // Choosing another folder is refused, with a reason the UI can show.
+    let err = e.set_config("global", "workspace.root", json!(elsewhere.path().display().to_string())).unwrap_err().to_string();
+    assert!(err.contains("sandbox"), "{err}");
+    assert_eq!(e.workspace_root(), ws.path().canonicalize().unwrap());
+    // Other settings still work.
+    assert!(e.set_config("global", "sandbox.mode", json!("read-only")).is_ok());
+}
+
+#[tokio::test]
+async fn a_normal_build_is_not_sandboxed_and_can_change_workspace() {
+    let (e, _data, _ws) = engine(Arc::new(ScriptedBackend::new(vec![]))).await;
+    assert!(!e.system(false).sandboxed);
+    let other = tempfile::tempdir().unwrap();
+    e.set_config("global", "workspace.root", json!(other.path().display().to_string())).unwrap();
+    assert_eq!(e.workspace_root(), other.path().to_path_buf());
+}

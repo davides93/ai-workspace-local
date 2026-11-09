@@ -61,6 +61,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "aarch64-apple-ios" }
       - uses: Swatinem/rust-cache@v2
+      # App Store Connect accetta solo app iOS compilate con l'SDK iOS 26 (Xcode 26+).
+      - name: Xcode 26 (SDK iOS 26)
+        shell: bash
+        run: |
+          dev="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)"
+          [ -n "$dev" ] || { echo "::error::Xcode 26 non installato su questo runner"; exit 1; }
+          sudo xcode-select -s "$dev/Contents/Developer"
+          xcodebuild -version
       - run: npm ci --prefix apps/ui && npm ci --prefix apps/desktop
       - name: Build firmato (.ipa)
         working-directory: apps/desktop
@@ -138,7 +146,7 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: |
           sed -i '' -e "s/TEAM_ID_PLACEHOLDER/${{ secrets.APPLE_TEAM_ID }}/g" -e "s/BUNDLE_ID_PLACEHOLDER/$BUNDLE_ID/g" Entitlements.mas.plist
-      - name: Build sandbox (senza computer-use) e pacchetto .pkg
+      - name: Build sandbox (--features mas, senza computer-use) e pacchetto .pkg
         working-directory: apps/desktop
         env:
           AIW_REQUIRE_APPLE_FM: "1"
@@ -146,7 +154,7 @@ jobs:
           PKG_SIGN: ${{ secrets.MAC_INSTALLER_SIGNING_IDENTITY }}  # es. "3rd Party Mac Developer Installer: Nome (TEAMID)" o "Mac Installer Distribution: ..."
         run: |
           export APPLE_SIGNING_IDENTITY="$APP_SIGN"
-          npx tauri build --target universal-apple-darwin --bundles app \
+          npx tauri build --features mas --target universal-apple-darwin --bundles app \
             --config src-tauri/tauri.mas.conf.json \
             --config "{\"version\":\"${{ needs.version.outputs.short }}\"}"
           app=$(find ../../target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n1)

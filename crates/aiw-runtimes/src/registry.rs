@@ -10,9 +10,13 @@ use aiw_core::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Duration;
+
+/// Why a sidecar runtime cannot be installed or launched by the Mac App Store build.
+const SANDBOX_DETAIL: &str =
+    "la versione Mac App Store (sandbox) non può installare né avviare programmi esterni: usa un server già attivo oppure la versione DMG";
 
 /// Resolves a model id (as shown in the UI) to a file or directory path.
 pub type ModelResolver = Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>;
@@ -47,6 +51,9 @@ pub struct RuntimeRegistry {
     /// Guided installations, one per runtime (the last one is kept for the UI).
     installs: StdMutex<HashMap<String, Arc<StdMutex<InstallJob>>>>,
     trainers: Vec<TrainerManifest>,
+    /// Mac App Store build (App Sandbox): servers that already answer can be used, but nothing
+    /// outside the app is installed or launched.
+    sandboxed: AtomicBool,
 }
 
 impl RuntimeRegistry {
@@ -79,7 +86,18 @@ impl RuntimeRegistry {
             pyenv: RwLock::new(pyenv),
             installs: StdMutex::new(HashMap::new()),
             trainers: trainer::builtin(),
+            sandboxed: AtomicBool::new(false),
         }
+    }
+
+    /// Marks this build as sandboxed (Mac App Store). Sidecars and trainers can then no longer be
+    /// installed or launched; embedded, system and remote runtimes are unaffected.
+    pub fn set_sandboxed(&self, on: bool) {
+        self.sandboxed.store(on, Ordering::Relaxed);
+    }
+
+    pub fn sandboxed(&self) -> bool {
+        self.sandboxed.load(Ordering::Relaxed)
     }
 
     /// Where the managed Python environment lives (default: next to the models folder).
@@ -266,6 +284,9 @@ impl RuntimeRegistry {
                         };
                     }
                 }
+                if self.sandboxed() {
+                    return Status { status: "unsupported".into(), detail: Some(SANDBOX_DETAIL.into()), ..Default::default() };
+                }
                 if let Some(bin) = find_binary(m, &settings, &self.search_dirs()) {
                     return Status { status: "available".into(), detail: Some(bin.display().to_string()), ..Default::default() };
                 }
@@ -432,6 +453,9 @@ impl RuntimeRegistry {
                         return self.refresh_one(id).await;
                     }
                 }
+                if self.sandboxed() {
+                    return Err(Error::Unsupported(format!("{}: {SANDBOX_DETAIL}", m.name)));
+                }
                 let launch =
                     m.launch.as_ref().ok_or_else(|| Error::Unsupported(format!("{}: avvialo manualmente e AIW lo rileverà", m.name)))?;
                 let python = if launch.command == "python3" {
@@ -549,6 +573,9 @@ impl RuntimeRegistry {
         plan: InstallPlan,
         installer: Option<&crate::manifest::Installer>,
     ) -> Result<(Vec<install::Command>, Arc<StdMutex<InstallJob>>)> {
+        if self.sandboxed() {
+            return Err(Error::Unsupported(format!("{name}: {SANDBOX_DETAIL}")));
+        }
         if !plan.automatic {
             return Err(Error::Unsupported(format!("{name}: installazione manuale. {}", plan.hint.unwrap_or_default())));
         }
@@ -1020,6 +1047,25 @@ mod tests {
         // Their installation is planned like a runtime's, with a recipe of its own.
         let plan = reg.trainer_install_plan("trl").await.unwrap();
         assert!(plan.automatic && plan.steps.last().unwrap().command.contains("peft"), "{plan:?}");
+    }
+
+    #[tokio::test]
+    async fn sandboxed_build_cannot_install_or_launch_programs_but_reuses_running_servers() {
+        let (reg, _dir) = registry("macos");
+        reg.set_sandboxed(true);
+        // A sidecar that is not running is unsupported, with the reason shown to the user.
+        let info = reg.refresh_one("llama-server").await.unwrap();
+        assert_eq!(info.status, "unsupported");
+        assert!(info.status_detail.unwrap().contains("sandbox"));
+        let err = reg.start("llama-server", Some("m".into())).await.unwrap_err().to_string();
+        assert!(err.contains("sandbox"), "{err}");
+        assert!(reg.begin_install("llama-server").await.unwrap_err().to_string().contains("sandbox"));
+        assert!(reg.begin_trainer_install("trl").await.unwrap_err().to_string().contains("sandbox"));
+        // A server that the user already runs is still used.
+        reg.update_settings("ollama", json!({"base_url": fake_ollama().await}).as_object().unwrap().clone()).unwrap();
+        assert_eq!(reg.refresh_one("ollama").await.unwrap().status, "running");
+        // The in-process engine is not a sidecar: untouched.
+        assert_ne!(reg.refresh_one("llama-embedded").await.unwrap().status, "unsupported");
     }
 
     #[tokio::test]

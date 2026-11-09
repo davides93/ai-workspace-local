@@ -62,6 +62,9 @@ pub struct EngineOptions {
     pub update_api_base: Option<String>,
     /// Version to compare releases against (default: this build's; tests set their own).
     pub current_version: Option<String>,
+    /// Mac App Store build (App Sandbox): no external programs are installed or launched, and the
+    /// agents' folder is the one the shell passes (the `workspace.root` setting is ignored).
+    pub sandboxed: bool,
 }
 
 /// One event on the global bus (Tauri forwards these as `aiw://run-event`).
@@ -167,7 +170,7 @@ impl Engine {
         let workspace_root = opts
             .workspace_root
             .clone()
-            .or_else(|| config.get_str("workspace.root").map(|s| aiw_core::paths::expand_home(&s)))
+            .or_else(|| config.get_str("workspace.root").filter(|_| !opts.sandboxed).map(|s| aiw_core::paths::expand_home(&s)))
             .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join("AIW-Workspace"));
         std::fs::create_dir_all(&workspace_root)?;
         let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
@@ -178,6 +181,7 @@ impl Engine {
         bin_dirs.extend(opts.extra_bin_dirs.clone());
         let runtimes = RuntimeRegistry::new(device.os.clone(), Some(&dirs.runtimes()), bin_dirs, models_dir.clone());
         runtimes.set_arch(&device.arch); // MLX needs Apple Silicon, not just macOS
+        runtimes.set_sandboxed(opts.sandboxed);
         runtimes.set_pyenv_dir(dirs.root.join("pyenv")); // pip-installed runtimes (MLX…) live here
         let store = Store::open(&dirs.db_file())?;
         let overrides: Vec<Value> = store.list_docs("runtime_settings")?;
@@ -486,6 +490,7 @@ impl Engine {
             mode: self.0.mode.clone(),
             data_dir: self.0.dirs.root.display().to_string(),
             workspace_root: self.workspace_root().display().to_string(),
+            sandboxed: self.0.runtimes.sandboxed(),
             uptime_s: self.0.started.elapsed().as_secs(),
             pairing_code: include_pairing.then(|| self.pairing_code()),
             device: self.device(),
@@ -1885,6 +1890,11 @@ impl Engine {
         self.0.config.view()
     }
     pub fn set_config(&self, layer: &str, key: &str, value: Value) -> Result<ConfigView> {
+        if key == "workspace.root" && self.0.runtimes.sandboxed() {
+            return Err(Error::Unsupported(
+                "la versione Mac App Store (sandbox) lavora nella cartella dell'app: per sceglierne un'altra usa la versione DMG".into(),
+            ));
+        }
         self.0.config.set(Layer::parse(layer)?, key, value)?;
         if key == "workspace.root" {
             if let Some(p) = self.0.config.get_str("workspace.root") {

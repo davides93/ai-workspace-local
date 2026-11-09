@@ -38,6 +38,8 @@ export interface SystemInfo {
   mode: "embedded" | "daemon" | "demo";
   data_dir: string;
   workspace_root: string;
+  /** Mac App Store build (App Sandbox): no external programs, the agents work in the app's own folder. */
+  sandboxed?: boolean;
   uptime_s: number;
   pairing_code?: string;
   device: DeviceProfile;
