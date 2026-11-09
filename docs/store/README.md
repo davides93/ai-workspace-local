@@ -1,6 +1,6 @@
 # Pubblicazione sugli store (App Store Connect e Google Play)
 
-Workflow: `.github/workflows/store.yml` (manuale, *Actions → Publish to stores → Run workflow*).
+Workflow: `.github/workflows/store.yml`. Parte da solo con un tag `v*` (iOS e macOS su TestFlight, Android sul track `alpha` con release `completed`; insieme a `release.yml`, che pubblica DMG e Windows sulla GitHub Release) e a mano da *Actions → Publish to stores → Run workflow* per scegliere piattaforme, track e stato. Con un tag la versione di `tauri.conf.json` deve essere quella del tag (`v0.5.0-beta.5` ↔ `0.5.0-beta.5`), altrimenti il workflow si ferma prima di caricare. Gli Environment `app-store` e `google-play`, se hanno l'approvazione manuale, la chiedono a ogni tag.
 Bundle ID / package name: `dev.aiworkspace.local` (da `tauri.conf.json`). Nessun segreto nel repo: tutto in **GitHub Secrets**.
 
 Consiglio: crea due *Environment* (Settings → Environments) `app-store` e `google-play` e metti i segreti lì, con approvazione manuale richiesta.
