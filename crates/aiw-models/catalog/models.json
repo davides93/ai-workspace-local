@@ -442,11 +442,63 @@
   ]
  },
  {
+  "id": "gemini-nano-4-fast-system",
+  "name": "Gemini Nano 4 · Fast (TPU)",
+  "family": "Gemini",
+  "publisher": "Google",
+  "description": "Gemini Nano 4 di AICore (anteprima), variante veloce: gira sulla TPU dei Pixel. Condiviso tra le app.",
+  "params_b": 3.25,
+  "format": "system",
+  "quant": "int4",
+  "size_bytes": 0,
+  "context_length": 4096,
+  "capabilities": [
+   "chat",
+   "vision"
+  ],
+  "license": "Google",
+  "source": {
+   "kind": "system",
+   "runtime": "gemini-nano"
+  },
+  "min_memory_mb": 0,
+  "tags": [
+   "system",
+   "mobile"
+  ]
+ },
+ {
+  "id": "gemini-nano-4-full-system",
+  "name": "Gemini Nano 4 · Full",
+  "family": "Gemini",
+  "publisher": "Google",
+  "description": "Gemini Nano 4 di AICore (anteprima), variante completa: più accurata, più lenta. Condiviso tra le app.",
+  "params_b": 3.25,
+  "format": "system",
+  "quant": "int4",
+  "size_bytes": 0,
+  "context_length": 4096,
+  "capabilities": [
+   "chat",
+   "vision"
+  ],
+  "license": "Google",
+  "source": {
+   "kind": "system",
+   "runtime": "gemini-nano"
+  },
+  "min_memory_mb": 0,
+  "tags": [
+   "system",
+   "mobile"
+  ]
+ },
+ {
   "id": "gemini-nano-system",
   "name": "Gemini Nano",
   "family": "Gemini",
   "publisher": "Google",
-  "description": "Modello di sistema Android (AICore), condiviso tra le app.",
+  "description": "Modello di sistema Android (AICore, versione stabile), condiviso tra le app.",
   "params_b": 3.25,
   "format": "system",
   "quant": "int4",

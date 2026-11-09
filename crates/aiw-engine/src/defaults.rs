@@ -44,7 +44,7 @@ pub fn agents() -> Vec<AgentProfile> {
             "Navigatore",
             "Ricerca e azioni nel browser controllato (CDP).",
             "Usi il browser per trovare informazioni e completare moduli. Prima di inviare dati personali, pagamenti o moduli definitivi chiedi conferma. Cita le pagine da cui prendi le informazioni.",
-            &["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot", "web_fetch", "todo"],
+            &["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_screenshot", "web_fetch", "todo"],
             "ask",
             "read-only",
             40,

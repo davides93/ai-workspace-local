@@ -21,7 +21,7 @@ function Meta({ icon, label, tone = "neutral", title, children }: { icon: string
  * Header of the conversation: title and controls, then who works on it (agent, profile and model,
  * approval mode, sandbox, worktree) so the safety setup is never out of sight.
  */
-export function ChatHeader({ session, agent, profile, running, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree }: {
+export function ChatHeader({ session, agent, profile, running, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser }: {
   session: Session | null;
   agent: AgentProfile | null;
   profile: InferenceProfile | null;
@@ -31,6 +31,8 @@ export function ChatHeader({ session, agent, profile, running, sessionsButton, i
   inspectorOpen: boolean;
   onToggleInspector: () => void;
   onOpenWorktree: () => void;
+  /** Present on devices whose agent browser is a panel that can be closed (iPhone, iPad, Android). */
+  onOpenBrowser?: () => void;
 }) {
   const mode = modeInfo(agent?.mode);
   const sandbox = sandboxInfo(agent?.sandbox);
@@ -43,6 +45,7 @@ export function ChatHeader({ session, agent, profile, running, sessionsButton, i
         {!running && session?.last_status && session.last_status !== "succeeded" && (
           <Pill tone={session.last_status === "failed" ? "crit" : "neutral"} title="Esito dell'ultimo run">{RUN_STATUS_LABEL[session.last_status] ?? session.last_status}</Pill>
         )}
+        {onOpenBrowser && <IconButton aria-label="Browser dell'agente" title="Apri il browser dell'agente" icon="globe" onClick={onOpenBrowser} />}
         <IconButton aria-label="Pannello del run" aria-pressed={inspectorOpen} icon="panel" onClick={onToggleInspector} className={inspectorOpen ? "is-on" : undefined} />
       </div>
       {session && agent && (

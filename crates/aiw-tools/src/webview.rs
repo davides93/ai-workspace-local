@@ -9,7 +9,9 @@
 //! and connects to the address it has just vetted (so DNS rebinding cannot swap it afterwards).
 //! Only HTTPS is allowed: a plain-HTTP request is refused.
 
-use crate::browser::{ref_arg, request_verdict, vet_with, BrowserManager, Op, Policy, SNAPSHOT_JS};
+use crate::browser::{
+    page_action, page_action_note, ref_arg, request_verdict, vet_with, wait_args, wait_for_text, BrowserManager, Op, Policy, SNAPSHOT_JS,
+};
 use crate::{arg_str, ToolContext, ToolOutput};
 use aiw_core::{Error, Result};
 use serde_json::Value;
@@ -36,6 +38,11 @@ pub trait WebViewBridge: Send + Sync + 'static {
     fn screenshot(&self) -> Result<String>;
     /// Hides the WebView and drops the page.
     fn close(&self);
+    /// Brings the panel back in front without touching the page (the user closed it, or never
+    /// saw it). Platforms whose panel is always visible need nothing.
+    fn show(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// The bridge plus the proxy that guards it (started on first use).
@@ -63,6 +70,12 @@ impl WebViewHost {
     async fn blocking<T: Send + 'static>(&self, f: impl FnOnce(&dyn WebViewBridge) -> Result<T> + Send + 'static) -> Result<T> {
         let b = self.bridge.clone();
         tokio::task::spawn_blocking(move || f(&*b)).await.map_err(Error::other)?
+    }
+
+    /// Shows the browser panel (starting the proxy first if nothing used the browser yet).
+    pub async fn show(&self, policy: &Policy) -> Result<()> {
+        self.ensure(policy).await?;
+        self.blocking(|b| b.show()).await
     }
 
     pub async fn close(&self) {
@@ -160,6 +173,44 @@ async fn call_inner(
             tokio::time::sleep(Duration::from_millis(if submit { 1500 } else { 200 })).await;
             let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
             Ok(ToolOutput::text(format!("Scritto in [{r}].\n\n{}", snapshot_text(&snap))))
+        }
+        Op::Scroll | Op::Back | Op::Press => {
+            let Some((js, settle)) = page_action(op, &args)? else { unreachable!() };
+            let r = host.blocking(move |b| b.eval(&js)).await?;
+            let r = r.as_str().unwrap_or_default().to_string();
+            if r == "missing" {
+                return Ok(ToolOutput::error("Elemento non trovato: rifai browser_snapshot"));
+            }
+            tokio::time::sleep(Duration::from_millis(settle)).await;
+            let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
+            Ok(ToolOutput::text(format!("{}\n\n{}", page_action_note(op, &r), snapshot_text(&snap))))
+        }
+        Op::Wait => {
+            let (ms, text) = wait_args(&args);
+            let note = match text {
+                Some(t) => {
+                    let found = wait_for_text(
+                        |js| {
+                            let host = host.clone();
+                            async move { host.blocking(move |b| b.eval(&js)).await }
+                        },
+                        &t,
+                        ms,
+                    )
+                    .await;
+                    if found {
+                        format!("Il testo «{t}» è comparso.")
+                    } else {
+                        format!("Il testo «{t}» non è comparso entro {ms} ms.")
+                    }
+                }
+                None => {
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                    format!("Atteso {ms} ms.")
+                }
+            };
+            let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
+            Ok(ToolOutput::text(format!("{note}\n\n{}", snapshot_text(&snap))))
         }
         Op::Screenshot => {
             let data = host.blocking(|b| b.screenshot()).await?;
@@ -290,6 +341,8 @@ mod tests {
         navigated: Mutex<Vec<String>>,
         scripts: Mutex<Vec<String>>,
         landed: Mutex<Option<String>>,
+        shown: Mutex<u32>,
+        text_shown: std::sync::atomic::AtomicBool,
     }
     struct FakeBridge(Arc<Fake>);
     impl WebViewBridge for FakeBridge {
@@ -303,12 +356,27 @@ mod tests {
         }
         fn eval(&self, js: &str) -> Result<Value> {
             self.0.scripts.lock().unwrap().push(js.to_string());
-            Ok(Value::String(if js.contains("el.click()") || js.contains("setter") { "ok".into() } else { "SNAPSHOT".into() }))
+            Ok(Value::String(if js.contains("el.click()") || js.contains("setter") {
+                "ok".into()
+            } else if js.contains(".includes(") {
+                // Like the real WebViews: strings only; the page "shows" the text once told to.
+                if self.0.text_shown.load(std::sync::atomic::Ordering::SeqCst) {
+                    "yes".into()
+                } else {
+                    "no".into()
+                }
+            } else {
+                "SNAPSHOT".into()
+            }))
         }
         fn screenshot(&self) -> Result<String> {
             Ok("data:image/jpeg;base64,AAAA".into())
         }
         fn close(&self) {}
+        fn show(&self) -> Result<()> {
+            *self.0.shown.lock().unwrap() += 1;
+            Ok(())
+        }
     }
 
     fn manager(fake: &Arc<Fake>, ip: &'static str) -> BrowserManager {
@@ -360,6 +428,49 @@ mod tests {
         let out = call(&m, m.webview().unwrap(), Op::Navigate, serde_json::json!({"url": "https://example.org/"}), &c).await.unwrap();
         assert!(out.is_error && out.content.contains("Annullato"), "{}", out.content);
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn the_browser_button_opens_the_panel_even_before_any_tool_used_it() {
+        let fake = Arc::new(Fake::default());
+        let m = manager(&fake, "93.184.216.34");
+        assert!(fake.proxy_port.lock().unwrap().is_none());
+        assert!(m.show_webview().await.unwrap());
+        assert!(fake.proxy_port.lock().unwrap().is_some(), "the proxy is up before the panel is shown");
+        assert_eq!(*fake.shown.lock().unwrap(), 1);
+        assert!(m.show_webview().await.unwrap());
+        assert_eq!(*fake.shown.lock().unwrap(), 2, "every press shows the panel again");
+        // No in-app WebView (desktop): nothing to show.
+        let desktop = BrowserManager::new(std::env::temp_dir().join("aiw-webview-test"));
+        assert!(!desktop.show_webview().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn scroll_back_press_and_wait_act_on_the_page_and_return_a_snapshot() {
+        let fake = Arc::new(Fake::default());
+        let m = manager(&fake, "93.184.216.34");
+        let out = run(&m, Op::Scroll, serde_json::json!({"direction": "down", "amount": 0.5})).await;
+        assert!(!out.is_error && out.content.contains("SNAPSHOT"), "{}", out.content);
+        assert!(fake.scripts.lock().unwrap().iter().any(|s| s.contains("scrollBy") && s.contains("0.5")));
+        let top = run(&m, Op::Scroll, serde_json::json!({"direction": "top"})).await;
+        assert!(!top.is_error);
+        // A scroll of an element by its number.
+        run(&m, Op::Scroll, serde_json::json!({"ref": 7})).await;
+        assert!(fake.scripts.lock().unwrap().iter().any(|s| s.contains(r#"data-aiw-ref="7""#) && s.contains("scrollIntoView")));
+        assert!(run(&m, Op::Back, serde_json::json!({})).await.content.contains("SNAPSHOT"));
+        let pressed = run(&m, Op::Press, serde_json::json!({"key": "Enter"})).await;
+        assert!(pressed.content.starts_with("Tasto premuto"), "{}", pressed.content);
+        // Only listed keys, only listed directions.
+        assert!(call(&m, m.webview().unwrap(), Op::Press, serde_json::json!({"key": "F12"}), &ctx()).await.is_err());
+        assert!(call(&m, m.webview().unwrap(), Op::Scroll, serde_json::json!({"direction": "sideways"}), &ctx()).await.is_err());
+        // Waiting for a text: not shown -> timeout note; shown -> found.
+        let missing = run(&m, Op::Wait, serde_json::json!({"ms": 100, "text": "Caricato"})).await;
+        assert!(missing.content.contains("non è comparso"), "{}", missing.content);
+        fake.text_shown.store(true, std::sync::atomic::Ordering::SeqCst);
+        let found = run(&m, Op::Wait, serde_json::json!({"ms": 2000, "text": "Caricato"})).await;
+        assert!(found.content.contains("è comparso") && !found.content.contains("non è"), "{}", found.content);
+        let waited = run(&m, Op::Wait, serde_json::json!({"ms": 100})).await;
+        assert!(waited.content.starts_with("Atteso 100 ms"), "{}", waited.content);
     }
 
     #[tokio::test]

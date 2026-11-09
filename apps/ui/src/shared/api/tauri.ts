@@ -32,6 +32,10 @@ export class TauriTransport extends HttpTransport {
     return res.body as T;
   }
 
+  async openBrowser(): Promise<boolean> {
+    return invoke<boolean>("aiw_browser_show");
+  }
+
   /** The IPC bridge carries JSON only: the audio travels as base64. */
   override async transcribe(wav: Blob, language?: string): Promise<Transcript> {
     return this.req<Transcript>("POST", "/voice/transcribe", {

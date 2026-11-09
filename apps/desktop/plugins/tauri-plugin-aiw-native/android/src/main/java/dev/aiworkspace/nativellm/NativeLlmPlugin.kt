@@ -60,7 +60,10 @@ class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
     fun availability(invoke: Invoke) {
         scope.launch {
             val runtimes = JSArray()
-            runtimes.put(runtimeInfo("gemini-nano", gemini.status(), emptyList()))
+            val geminiReady = gemini.available()
+            val geminiInfo = runtimeInfo("gemini-nano", gemini.status(), geminiReady.map { it.id })
+            geminiReady.firstOrNull()?.let { v -> gemini.tokenLimit(v)?.let { geminiInfo.put("contextTokens", it) } }
+            runtimes.put(geminiInfo)
             val files = modelsDir().listFiles { f -> f.name.endsWith(".litertlm") }?.map { it.name } ?: emptyList()
             runtimes.put(runtimeInfo("litert-lm", if (files.isEmpty()) "Nessun file .litertlm in ${modelsDir()}" else null, files))
             invoke.resolve(JSObject().put("runtimes", runtimes))
@@ -83,7 +86,7 @@ class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
             val send: (String) -> Unit = { delta -> args.onEvent.send(JSObject().put("type", "text").put("delta", delta)) }
             try {
                 when (args.runtime) {
-                    "gemini-nano" -> gemini.generate(args.system, args.prompt, args.temperature, args.maxTokens, send)
+                    "gemini-nano" -> gemini.generate(args.model, args.system, args.prompt, args.temperature, args.maxTokens, send)
                     "litert-lm" -> {
                         val file = args.model?.let { File(modelsDir(), it) }?.takeIf { it.exists() }
                             ?: modelsDir().listFiles { f -> f.name.endsWith(".litertlm") }?.firstOrNull()
@@ -123,6 +126,11 @@ class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun browserScreenshot(invoke: Invoke) {
         browser.screenshot { r -> r.fold({ invoke.resolve(JSObject().put("dataUrl", it)) }, { invoke.reject(it.message ?: "screenshot fallito") }) }
+    }
+
+    @Command
+    fun browserShow(invoke: Invoke) {
+        browser.show { r -> r.fold({ invoke.resolve() }, { invoke.reject(it.message ?: "browser non disponibile") }) }
     }
 
     @Command
