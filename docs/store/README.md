@@ -79,6 +79,6 @@ Da verificare su un Mac con la build TestFlight prima di inviare in revisione: a
 8. Da lì: `Run workflow` con `android` attivo → release in bozza nel track scelto → la confermi in console.
 
 ## Come si lancia
-Actions → *Publish to stores* → scegli piattaforme e track. iOS e macOS arrivano su TestFlight (poi "Invia per revisione" da App Store Connect); Android arriva nel track scelto.
+Actions → *Publish to stores* → scegli piattaforme e track. iOS e macOS arrivano su TestFlight (poi "Invia per revisione" da App Store Connect); Android arriva nel track scelto (predefinito: `alpha`, il test chiuso, con stato `completed`: la release parte subito ai tester; usa `draft` per confermarla a mano in console).
 
 Nota: il workflow non è stato eseguito (richiede i segreti); i primi lanci vanno fatti una piattaforma alla volta.
