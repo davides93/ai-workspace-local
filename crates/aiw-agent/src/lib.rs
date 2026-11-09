@@ -245,6 +245,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apple_style_text_calls_run_and_are_not_shown() {
+        let turns = vec![
+            vec![
+                ChatDelta::Text("{tool_".into()),
+                ChatDelta::Text("call}{\"name\": \"list_dir\", \"path\": \".\"}".into()),
+                ChatDelta::Done { finish_reason: Some("stop".into()) },
+            ],
+            // Bare JSON call, no tag at all.
+            vec![
+                ChatDelta::Text("{\"name\": \"list_dir\", \"arguments\": {\"path\": \".\"}}".into()),
+                ChatDelta::Done { finish_reason: Some("stop".into()) },
+            ],
+            ScriptedBackend::text_turn("Finito"),
+        ];
+        let (host, dir) = setup(turns, true);
+        let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        assert_eq!(out.final_text, "Finito");
+        assert_eq!(out.new_messages.iter().filter(|m| m.role == "tool" && m.name.as_deref() == Some("list_dir")).count(), 2);
+        let evs = host.events.lock().unwrap();
+        assert!(!evs
+            .iter()
+            .any(|e| matches!(e, AgEvent::TextMessageContent { delta, .. } if delta.contains("tool_call") || delta.contains("\"name\""))));
+    }
+
+    #[tokio::test]
     async fn render_ui_emits_a2ui_messages() {
         let ui = json!({"surfaceId": "scelta", "components": [
             {"id": "root", "component": "Column", "children": ["q", "ok"]},

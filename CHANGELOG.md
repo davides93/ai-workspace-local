@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0-beta.4 - pre-release
+
+- Apple Foundation Models, chiamate a strumenti: il modello le scrive come `{tool_call}{"name": ..., "url": ...}` (argomenti accanto al nome, una sola graffa) o come JSON nudo. Ora i tag alternativi vengono riscritti anche mentre il testo arriva a pezzi, gli argomenti al livello superiore sono accettati, il JSON troncato viene chiuso e una risposta che comincia con `{` non compare più in chat se è una chiamata: il tool parte e la chat mostra la sua scheda.
+
 ## 0.5.0-beta.3 - pre-release
 
 - Apple Foundation Models: le chiamate a strumenti scritte come testo con tag diversi da `<tool_call>` (`{tool_call}`, `[tool_call]`) o come JSON nudo (`{"name", "arguments"}`, superficie A2UI `surfaceId`/`components`) vengono riconosciute ed eseguite, invece di comparire come testo in chat.
