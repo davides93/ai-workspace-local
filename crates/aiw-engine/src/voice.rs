@@ -13,6 +13,15 @@ use std::time::Instant;
 /// Same cap as OpenAI's transcription API.
 pub const MAX_AUDIO_BYTES: usize = 25 << 20;
 
+/// Id of the platform speech recognizer (SFSpeechRecognizer on iOS/iPadOS), not a runtime.
+pub const NATIVE_STT: &str = "native-stt";
+
+/// Speech to text built into the operating system, registered by the app shell.
+pub trait NativeStt: Send + Sync + 'static {
+    /// Transcribes a WAV (blocking). `language`: BCP-47 hint, `None` = system language.
+    fn transcribe(&self, wav: &[u8], language: Option<&str>) -> Result<String>;
+}
+
 /// Local servers (OpenAI API) that can transcribe when they are running.
 const LOCAL_STT_SERVERS: &[&str] = &["localai", "nexa"];
 
@@ -40,6 +49,7 @@ fn choose(
     free_mb: u64,
     cfg: &Map<String, Value>,
     peer_configured: bool,
+    native: bool,
 ) -> std::result::Result<Choice, String> {
     let wanted = text(cfg, "voice.stt_runtime").unwrap_or("auto");
     let rt = |id: &str| runtimes.iter().find(|r| r.id == id);
@@ -77,6 +87,16 @@ fn choose(
             _ => Err(format!("{} non è in esecuzione", r.name)),
         }
     };
+    let native_choice = || -> std::result::Result<Choice, String> {
+        if native {
+            Ok(Choice { runtime: NATIVE_STT.into(), model: None, label: "Riconoscimento vocale di sistema".into() })
+        } else {
+            Err("il riconoscimento vocale di sistema non è disponibile".into())
+        }
+    };
+    if wanted == NATIVE_STT {
+        return native_choice();
+    }
     if wanted != "auto" {
         return if wanted == "whisper-server" { whisper() } else { server(wanted) };
     }
@@ -84,6 +104,9 @@ fn choose(
     match whisper() {
         Ok(c) => return Ok(c),
         Err(e) => why.push(e),
+    }
+    if let Ok(c) = native_choice() {
+        return Ok(c);
     }
     for id in LOCAL_STT_SERVERS {
         if let Ok(c) = server(id) {
@@ -112,7 +135,19 @@ impl Engine {
         let cfg = self.config().effective;
         let peer =
             allow_peer && self.0.runtimes.settings("aiw-peer").ok().and_then(|s| text(&s, "base_url").map(|_| true)).unwrap_or(false);
-        choose(&self.0.runtimes.list(), &self.stt_models(), self.device().available_memory_mb, &cfg, peer)
+        choose(
+            &self.0.runtimes.list(),
+            &self.stt_models(),
+            self.device().available_memory_mb,
+            &cfg,
+            peer,
+            self.0.native_stt.read().unwrap().is_some(),
+        )
+    }
+
+    /// Registers the operating system's speech recognizer (iOS/iPadOS).
+    pub fn register_native_stt(&self, stt: std::sync::Arc<dyn NativeStt>) {
+        *self.0.native_stt.write().unwrap() = Some(stt);
     }
 
     pub fn voice_status(&self) -> VoiceStatus {
@@ -152,8 +187,23 @@ impl Engine {
         let cfg = self.config().effective;
         let language = language.map(str::trim).filter(|l| !l.is_empty()).or_else(|| text(&cfg, "voice.language")).map(String::from);
         let started = Instant::now();
-        let target = self.0.runtimes.stt_target(&choice.runtime, choice.model.as_deref()).await?;
-        let out = stt::transcribe(http(), &target, &Audio { bytes: audio, mime, language: language.as_deref(), prompt: None }).await?;
+        let out = if choice.runtime == NATIVE_STT {
+            let native = self
+                .0
+                .native_stt
+                .read()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| Error::Unsupported("riconoscimento vocale di sistema non registrato".into()))?;
+            let (bytes, lang) = (audio.to_vec(), language.clone());
+            let text = tokio::task::spawn_blocking(move || native.transcribe(&bytes, lang.as_deref().filter(|l| *l != "auto")))
+                .await
+                .map_err(|e| Error::Runtime(e.to_string()))??;
+            stt::Transcription { text, language: None }
+        } else {
+            let target = self.0.runtimes.stt_target(&choice.runtime, choice.model.as_deref()).await?;
+            stt::transcribe(http(), &target, &Audio { bytes: audio, mime, language: language.as_deref(), prompt: None }).await?
+        };
         let elapsed_ms = started.elapsed().as_millis() as u64;
         let duration_ms = stt::wav_info(audio).map(|w| w.duration_ms);
         tracing::info!(backend = %choice.label, ?duration_ms, elapsed_ms, "trascrizione completata");
@@ -201,22 +251,28 @@ mod tests {
             ]
         };
         // whisper.cpp with the largest model that fits.
-        let c = choose(&all("available", "running"), &models, 8000, &cfg(json!({})), true).unwrap();
+        let c = choose(&all("available", "running"), &models, 8000, &cfg(json!({})), true, false).unwrap();
         assert_eq!((c.runtime.as_str(), c.model.as_deref()), ("whisper-server", Some("ggml-large-v3-turbo-q5_0")));
-        let c = choose(&all("available", "stopped"), &models, 800, &cfg(json!({})), false).unwrap();
+        let c = choose(&all("available", "stopped"), &models, 800, &cfg(json!({})), false, false).unwrap();
         assert_eq!(c.model.as_deref(), Some("ggml-small-q8_0"), "little memory: the smaller model");
         // Without whisper.cpp: a running local server, then the paired device.
-        assert_eq!(choose(&all("installable", "running"), &models, 8000, &cfg(json!({})), true).unwrap().runtime, "localai");
-        assert_eq!(choose(&all("installable", "stopped"), &models, 8000, &cfg(json!({})), true).unwrap().runtime, "aiw-peer");
-        let err = choose(&all("installable", "stopped"), &models, 8000, &cfg(json!({})), false).unwrap_err();
+        assert_eq!(choose(&all("installable", "running"), &models, 8000, &cfg(json!({})), true, false).unwrap().runtime, "localai");
+        assert_eq!(choose(&all("installable", "stopped"), &models, 8000, &cfg(json!({})), true, false).unwrap().runtime, "aiw-peer");
+        let err = choose(&all("installable", "stopped"), &models, 8000, &cfg(json!({})), false, false).unwrap_err();
         assert!(err.contains("brew install whisper-cpp") && err.contains("LocalAI"), "{err}");
         // No speech model installed: fine for a server that is already running, not for one to start.
-        assert!(choose(&all("available", "stopped"), &[], 8000, &cfg(json!({})), false).unwrap_err().contains("Whisper"));
-        let running = choose(&all("running", "stopped"), &[], 8000, &cfg(json!({})), false).unwrap();
+        assert!(choose(&all("available", "stopped"), &[], 8000, &cfg(json!({})), false, false).unwrap_err().contains("Whisper"));
+        let running = choose(&all("running", "stopped"), &[], 8000, &cfg(json!({})), false, false).unwrap();
         assert_eq!((running.runtime.as_str(), running.model), ("whisper-server", None));
+        // iOS: whisper.cpp is unsupported, the system recognizer comes before servers and peers.
+        let c = choose(&all("unsupported", "running"), &models, 8000, &cfg(json!({})), true, true).unwrap();
+        assert_eq!(c.runtime, NATIVE_STT);
         // Explicit choices win.
         let pinned = cfg(json!({"voice.stt_runtime": "whisper-server", "voice.stt_model": "ggml-small-q8_0"}));
-        assert_eq!(choose(&all("available", "running"), &models, 8000, &pinned, true).unwrap().model.as_deref(), Some("ggml-small-q8_0"));
-        assert!(choose(&all("available", "stopped"), &models, 8000, &cfg(json!({"voice.stt_runtime": "localai"})), true).is_err());
+        assert_eq!(
+            choose(&all("available", "running"), &models, 8000, &pinned, true, false).unwrap().model.as_deref(),
+            Some("ggml-small-q8_0")
+        );
+        assert!(choose(&all("available", "stopped"), &models, 8000, &cfg(json!({"voice.stt_runtime": "localai"})), true, false).is_err());
     }
 }

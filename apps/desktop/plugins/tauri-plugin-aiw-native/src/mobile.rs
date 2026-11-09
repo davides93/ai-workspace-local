@@ -42,6 +42,27 @@ impl<R: Runtime> NativeLlm<R> {
         self.0.run_mobile_plugin::<serde_json::Value>(method, payload).map_err(|e| Error::Runtime(e.to_string()))
     }
 
+    /// Speech to text with the system recognizer (iOS: SFSpeechRecognizer). The audio travels as a
+    /// WAV file in the temp folder; blocks until the recognizer is done.
+    pub fn transcribe(&self, wav: &[u8], language: Option<&str>) -> Result<String> {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "aiw-stt-{}-{}.wav",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, wav).map_err(|e| Error::Runtime(format!("audio temporaneo: {e}")))?;
+        let r = self
+            .0
+            .run_mobile_plugin::<serde_json::Value>(
+                "transcribe",
+                serde_json::json!({ "path": path.to_string_lossy(), "language": language }),
+            )
+            .map_err(|e| Error::Runtime(e.to_string()));
+        let _ = std::fs::remove_file(&path);
+        Ok(r?["text"].as_str().unwrap_or_default().trim().to_string())
+    }
+
     pub fn availability(&self) -> Result<Vec<NativeRuntime>> {
         self.0.run_mobile_plugin::<AvailabilityResponse>("availability", ()).map(|r| r.runtimes).map_err(|e| Error::Runtime(e.to_string()))
     }
