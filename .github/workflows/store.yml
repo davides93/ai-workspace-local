@@ -98,6 +98,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
       - uses: Swatinem/rust-cache@v2
+      # Come release.yml: Xcode 26 solo per l'helper Swift di Apple Foundation Models (build.rs);
+      # llama.cpp si compila con l'Xcode di default del runner.
+      - name: Xcode 26 per l'helper Swift
+        shell: bash
+        run: |
+          dev="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)"
+          [ -n "$dev" ] || { echo "::error::Xcode 26 non installato su questo runner"; exit 1; }
+          echo "AIW_APPLE_FM_DEVELOPER_DIR=$dev/Contents/Developer" >> "$GITHUB_ENV"
+      # `@available` in llama.cpp/Metal usa ___isPlatformVersionAtLeast, che sta nella runtime di clang:
+      # Rust non la linka (-nodefaultlibs), quindi la aggiungiamo a mano.
+      - name: Linka la runtime di clang
+        shell: bash
+        run: |
+          rt="$(clang --print-resource-dir)/lib/darwin/libclang_rt.osx.a"
+          [ -f "$rt" ] || { echo "::error::libclang_rt.osx.a non trovata in $rt"; exit 1; }
+          echo "RUSTFLAGS=-C link-arg=$rt" >> "$GITHUB_ENV"
       - run: npm ci --prefix apps/ui && npm ci --prefix apps/desktop
       - name: Certificati e profilo
         env:
@@ -125,6 +141,7 @@ jobs:
       - name: Build sandbox (senza computer-use) e pacchetto .pkg
         working-directory: apps/desktop
         env:
+          AIW_REQUIRE_APPLE_FM: "1"
           APP_SIGN: ${{ secrets.MAC_APP_SIGNING_IDENTITY }}        # es. "3rd Party Mac Developer Application: Nome (TEAMID)" o "Apple Distribution: ..."
           PKG_SIGN: ${{ secrets.MAC_INSTALLER_SIGNING_IDENTITY }}  # es. "3rd Party Mac Developer Installer: Nome (TEAMID)" o "Mac Installer Distribution: ..."
         run: |
