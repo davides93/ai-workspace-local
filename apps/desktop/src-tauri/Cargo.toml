@@ -30,6 +30,7 @@ aiw-core.workspace = true
 aiw-engine.workspace = true
 aiw-server.workspace = true
 aiw-runtimes.workspace = true
+aiw-tools.workspace = true
 tauri-plugin-aiw-native = { path = "../plugins/tauri-plugin-aiw-native" }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }

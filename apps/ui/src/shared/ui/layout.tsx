@@ -73,7 +73,7 @@ export function Section({ title, hint, actions, children, className }: {
 }
 
 /**
- * List and detail side by side. On phones (≤ 760 px) it becomes a single column: the list while
+ * List and detail side by side. On phones (≤ 700 px) it becomes a single column: the list while
  * nothing is selected, the detail as its own page once an item is open (`detailOpen`), with a
  * back link rendered by the caller through `PageHeader back` or `BackLink`.
  */

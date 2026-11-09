@@ -30,7 +30,7 @@
 .ev-delta[data-tone="worse"] { color: var(--crit); }
 .ev-delta[data-tone="same"], .ev-delta[data-tone="none"] { color: var(--fg-muted); font-weight: 500; }
 
-@media (max-width: 760px) {
+@media (max-width: 700px) {
   .ev-page:has(.ev-ws[data-detail="open"]) > .page-head { display: none; }
   .ev-ws[data-detail="closed"] .list-item[aria-current="true"] { background: transparent; }
   .ev-ws[data-detail="closed"] .list-item[aria-current="true"] .list-link > svg { color: var(--fg-muted); }

@@ -3,6 +3,7 @@
 pub mod adapters;
 #[cfg(feature = "llama-embedded")]
 pub mod embedded;
+pub mod fallback;
 pub mod install;
 pub mod job;
 pub mod manifest;
@@ -18,6 +19,7 @@ pub mod textproto;
 pub mod trainer;
 pub mod types;
 
+pub use fallback::{FallbackBackend, FallbackResolver};
 pub use manifest::RuntimeManifest;
 pub use ollama::OllamaBackend;
 pub use openai::OpenAiBackend;

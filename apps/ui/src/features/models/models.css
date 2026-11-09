@@ -129,7 +129,7 @@
 .mh-strip-list li { display: grid; grid-template-columns: auto minmax(0, 15rem) minmax(4rem, 1fr) auto; gap: var(--space-3); align-items: center; font-size: var(--fs-sm); }
 
 /* ---------- Narrow screens ---------- */
-@media (max-width: 760px) {
+@media (max-width: 700px) {
   .mh-providers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mh-provider .chips, .mh-provider-desc { display: none; }
   .mh-bar-desc { display: block; }
@@ -141,3 +141,7 @@
   .mh-toolbar .mh-search { flex-basis: 100%; }
   .mh-repo { max-width: 100%; margin-left: 0; }
 }
+
+/* Galleria: roomier cards with thumb-sized actions on touch screens */
+.mh-gallery-card .mh-card-foot .btn { min-height: 44px; }
+@media (pointer: coarse) { .mh-gallery { grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); } }

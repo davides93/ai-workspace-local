@@ -68,7 +68,7 @@ export function InstalledCard({ model: m, onUse, onDelete }: { model: LocalModel
   );
 }
 
-function SystemPreview({ model, onClose }: { model: LocalModel; onClose: () => void }) {
+export function SystemPreview({ model, onClose }: { model: LocalModel; onClose: () => void }) {
   const [prompt, setPrompt] = useState("");
   const api = useApi();
   const run = useMutation({

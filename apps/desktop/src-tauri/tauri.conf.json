@@ -50,6 +50,7 @@
       "bundleVersion": "5002"
     },
     "iOS": {
+      "minimumSystemVersion": "17.0",
       "bundleVersion": "5002"
     }
   }
