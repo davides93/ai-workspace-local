@@ -70,19 +70,31 @@ impl<R: Runtime> NativeLlm<R> {
 
 impl<R: Runtime> NativeGenerate for NativeLlm<R> {
     fn generate(&self, args: GenerateArgs, _cancel: CancellationToken, on_event: Box<dyn Fn(NativeEvent) + Send + Sync>) -> Result<()> {
+        // Tauri keeps every mobile-plugin `Channel` (and so its closure) in a global map forever.
+        // The callback owns the sender of the run's delta stream: if it stayed alive here, the
+        // stream would never end and the run would stay "in esecuzione" after the answer. It is
+        // therefore held in a slot that is emptied as soon as the native call returns.
+        type Slot = std::sync::Arc<std::sync::Mutex<Option<Box<dyn Fn(NativeEvent) + Send + Sync>>>>;
+        let slot: Slot = std::sync::Arc::new(std::sync::Mutex::new(Some(on_event)));
+        let channel_slot = slot.clone();
         let channel = Channel::new(move |body: InvokeResponseBody| {
             let value: serde_json::Value = match body {
                 InvokeResponseBody::Json(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
                 InvokeResponseBody::Raw(b) => serde_json::from_slice(&b).unwrap_or(serde_json::Value::Null),
             };
             if let Ok(ev) = serde_json::from_value::<NativeEvent>(value) {
-                on_event(ev);
+                if let Some(cb) = channel_slot.lock().unwrap().as_ref() {
+                    cb(ev);
+                }
             }
             Ok(())
         });
-        self.0
+        let result = self
+            .0
             .run_mobile_plugin::<serde_json::Value>("generate", GeneratePayload { args, on_event: channel })
             .map(|_| ())
-            .map_err(|e| Error::Runtime(e.to_string()))
+            .map_err(|e| Error::Runtime(e.to_string()));
+        slot.lock().unwrap().take();
+        result
     }
 }

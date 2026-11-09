@@ -44,6 +44,9 @@ class AgentBrowser(private val activity: Activity) {
     private var webView: WebView? = null
     private var pending: ((Result<String>) -> Unit)? = null
     private var timeout: Runnable? = null
+    private var address: TextView? = null
+    private var backButton: Button? = null
+    private var forwardButton: Button? = null
 
     /** Routes the WebView through the proxy; `done` gets an error when the system cannot. */
     fun configure(port: Int, done: (Result<Unit>) -> Unit) {
@@ -59,7 +62,12 @@ class AgentBrowser(private val activity: Activity) {
     }
 
     private fun ensurePanel(): WebView {
-        webView?.let { if (panel?.parent != null) return it }
+        webView?.let {
+            if (panel?.parent != null) {
+                panel?.visibility = View.VISIBLE // closed by the user with "Chiudi": same page, shown again
+                return it
+            }
+        }
         val wv = WebView(activity)
         wv.settings.javaScriptEnabled = true
         wv.settings.domStorageEnabled = true
@@ -72,29 +80,54 @@ class AgentBrowser(private val activity: Activity) {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
                 request.url.scheme?.lowercase() != "https"
 
-            override fun onPageFinished(view: WebView, url: String?) = finish(Result.success(url ?: view.url ?: ""))
+            override fun onPageFinished(view: WebView, url: String?) {
+                refreshBar(view)
+                finish(Result.success(url ?: view.url ?: ""))
+            }
+
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) = refreshBar(view)
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (request.isForMainFrame) finish(Result.failure(IllegalStateException("${error.description}")))
             }
         }
+        fun navButton(label: String, description: String, action: () -> Unit) = Button(activity).apply {
+            text = label
+            contentDescription = description
+            minWidth = 0
+            minimumWidth = 0
+            setOnClickListener { action() }
+        }
+        val back = navButton("‹", "Indietro") { if (wv.canGoBack()) wv.goBack() }
+        val forward = navButton("›", "Avanti") { if (wv.canGoForward()) wv.goForward() }
+        val reload = navButton("⟳", "Ricarica") { wv.reload() }
         val title = TextView(activity).apply {
             text = "Browser dell'agente"
             setTextColor(Color.GRAY)
             textSize = 13f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }
+        // "Chiudi" hides the panel and keeps the page: the chat's browser button brings it back.
         val close = Button(activity).apply {
             text = "Chiudi"
-            setOnClickListener { hide() }
+            setOnClickListener { panel?.visibility = View.GONE }
         }
         val bar = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.WHITE)
             setPadding(24, 8, 24, 8)
-            addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(back)
+            addView(forward)
+            addView(reload)
+            addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = 16; marginEnd = 16 })
             addView(close)
         }
+        address = title
+        backButton = back
+        forwardButton = forward
+        refreshBar(wv)
         val column = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -110,6 +143,23 @@ class AgentBrowser(private val activity: Activity) {
         panel = frame
         webView = wv
         return wv
+    }
+
+    /** Back/forward and the address follow the page. */
+    private fun refreshBar(view: WebView) {
+        backButton?.isEnabled = view.canGoBack()
+        forwardButton?.isEnabled = view.canGoForward()
+        address?.text = view.url?.let { runCatching { android.net.Uri.parse(it).host }.getOrNull() ?: it } ?: "Browser dell'agente"
+    }
+
+    /** The chat's browser button: shows the panel on the page it has (empty the first time). */
+    fun show(done: (Result<Unit>) -> Unit) = main.post {
+        if (proxyPort == 0) {
+            done(Result.failure(IllegalStateException("Browser non configurato")))
+            return@post
+        }
+        ensurePanel()
+        done(Result.success(Unit))
     }
 
     fun navigate(url: String, done: (Result<String>) -> Unit) = main.post {
@@ -162,6 +212,9 @@ class AgentBrowser(private val activity: Activity) {
             webView?.destroy()
             panel = null
             webView = null
+            address = null
+            backButton = null
+            forwardButton = null
             done?.invoke()
         }
     }

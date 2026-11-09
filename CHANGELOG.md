@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0-beta.5 - pre-release
+
+- Browser dell'agente su iPad e iPhone: «Ferma» ora interrompe anche una chiamata del browser che non risponde, e ogni chiamata finisce entro 75 secondi con un messaggio che indica la fase (configurazione, controllo dell'indirizzo, caricamento, lettura). Il pannello che non si apre e uno script che non risponde (15 s) ora danno un errore invece di lasciare il run «In esecuzione».
+- iPad, iPhone e Android: dopo la risposta di un modello di sistema (Apple Foundation Models, Gemini Nano) il run restava «In esecuzione» e «Ferma» non serviva. Tauri tiene per sempre i canali dei plugin mobile e il callback teneva aperto lo stream della risposta: ora viene liberato quando la chiamata nativa ritorna. Provato su un iPad mini reale con Apple Intelligence.
+- Browser dell'agente su iPhone, iPad e Android: pulsante con il globo in alto a destra nella chat per riaprirlo sempre, sulla pagina che aveva («Chiudi» non la butta più). Il pannello ha indietro, avanti, ricarica e dominio; su iOS scorrere la pagina non ridimensiona più il foglio.
+- Browser dell'agente, nuovi strumenti (anche su Chrome desktop): `browser_scroll`, `browser_back`, `browser_press` (Invio, Esc, frecce, PagSu/PagGiù…) e `browser_wait` (millisecondi o finché compare un testo). Lo snapshot dice a che punto della pagina si è e segna gli elementi fuori vista. Provato su iPad e su un Pixel con un modello simulato.
+- Android, Gemini Nano 4: oltre al Gemini Nano stabile l'app chiede ad AICore le varianti Nano 4 Fast (TPU) e Nano 4 Full (anteprima), con fallback tra varianti e l'esito di ognuna nell'errore; la finestra di contesto è quella dichiarata da AICore (32k). Su un Pixel 11 Pro AICore le dà come disponibili ma rifiuta ancora l'inferenza alle app di terze parti (NOT_AVAILABLE): riavviare il telefono o scaricare il modello stabile dall'app AICore.
+
 ## 0.5.0-beta.4 - pre-release
 
 - Mac App Store: Apple Foundation Models non poteva partire nella sandbox, perché l'helper veniva scritto dall'app in una cartella dei dati e lanciato da lì. Ora la build dello store mette l'helper firmato (sandbox + inherit) dentro il bundle e l'app lo usa da lì; il DMG non cambia. Provato con un'app di prova in sandbox; la validazione di App Store Connect si vede al primo upload.

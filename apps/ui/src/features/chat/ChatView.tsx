@@ -6,6 +6,8 @@ import { defaultAgentId } from "../../shared/lib/agents";
 import { forgetSessionRuns } from "../../shared/lib/runIndex";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
+import { useApi } from "../../shared/api/context";
+import { useSystem } from "../../shared/query/system";
 import type { Session } from "../../shared/api/types";
 import { Button, Drawer, EmptyState, Icon, ModalShell, Sheet } from "../../shared/ui";
 import { useMediaQuery } from "../../shared/lib/useMediaQuery";
@@ -41,6 +43,12 @@ export function ChatView() {
   const profiles = useProfiles();
   const config = useConfig();
   const createSession = useCreateSession();
+  // iPhone/iPad/Android: the agent's browser is a panel the user can close; this button brings it back.
+  const api = useApi();
+  const system = useSystem();
+  const browserButton = api.openBrowser && (system.data?.device.os === "ios" || system.data?.device.os === "android")
+    ? () => { void api.openBrowser?.().catch((e: unknown) => toast(e instanceof Error ? e.message : "Non riesco ad aprire il browser.", "crit")); }
+    : undefined;
 
   // The open session lives in the URL (#/chat/:sessionId): back/forward, links and view switches keep it.
   const urlId = useParams().sessionId ?? null;
@@ -180,7 +188,7 @@ export function ChatView() {
         <ChatHeader
           session={active} agent={agent} profile={profile} running={conv.running}
           sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
-          inspectorOpen={panel.open} onToggleInspector={panel.toggle} onOpenWorktree={panel.show}
+          inspectorOpen={panel.open} onToggleInspector={panel.toggle} onOpenWorktree={panel.show} onOpenBrowser={browserButton}
         />
         {noSessions ? (
           <div className="ws-nosession">

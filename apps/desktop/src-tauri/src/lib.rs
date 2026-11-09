@@ -26,6 +26,13 @@ fn aiw_run_events(state: tauri::State<'_, Shell>, run_id: String) -> Vec<Value> 
     state.engine.run_events(&run_id).into_iter().map(|e| json!({ "seq": e.seq, "event": e.event })).collect()
 }
 
+/// The "browser" button of the chat: shows the agent's in-app browser again (iOS, iPadOS, Android), on the
+/// page it has. `false` when this device has no in-app browser.
+#[tauri::command]
+async fn aiw_browser_show(state: tauri::State<'_, Shell>) -> Result<bool, String> {
+    state.engine.browser().show_webview().await.map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -115,7 +122,7 @@ pub fn run() {
             app.manage(Shell { engine, router });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![aiw_request, aiw_run_events])
+        .invoke_handler(tauri::generate_handler![aiw_request, aiw_run_events, aiw_browser_show])
         .build(tauri::generate_context!())
         .expect("error while building AI Workspace Local");
 
@@ -162,6 +169,9 @@ impl aiw_tools::webview::WebViewBridge for WebViewHandle {
     }
     fn close(&self) {
         let _ = self.call("browserClose", serde_json::json!({}));
+    }
+    fn show(&self) -> aiw_core::Result<()> {
+        self.call("browserShow", serde_json::json!({})).map(|_| ())
     }
 }
 

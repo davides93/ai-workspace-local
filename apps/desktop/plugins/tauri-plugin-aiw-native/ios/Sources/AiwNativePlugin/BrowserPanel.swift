@@ -17,6 +17,10 @@ final class BrowserPanel: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private var pending: ((Result<String, Error>) -> Void)?
     private var timeout: DispatchWorkItem?
     private let proxyPort: UInt16
+    private var backButton: UIButton!
+    private var forwardButton: UIButton!
+    private var addressLabel: UILabel!
+    private var observers: [NSKeyValueObservation] = []
 
     init(proxyPort: UInt16) {
         self.proxyPort = proxyPort
@@ -26,6 +30,8 @@ final class BrowserPanel: UIViewController, WKNavigationDelegate, WKUIDelegate {
             sheet.detents = [.medium(), .large()]
             sheet.prefersGrabberVisible = true
             sheet.largestUndimmedDetentIdentifier = .medium
+            // Scrolling the page must scroll the page: the sheet is resized by its grabber only.
+            sheet.prefersScrollingExpandsWhenScrolledToEdge = false
         }
     }
 
@@ -51,35 +57,56 @@ final class BrowserPanel: UIViewController, WKNavigationDelegate, WKUIDelegate {
         webView.uiDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
 
-        let bar = UIView()
+        webView.allowsBackForwardNavigationGestures = true
+        webView.scrollView.isScrollEnabled = true
+        webView.scrollView.alwaysBounceVertical = true
+        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
+
+        func iconButton(_ symbol: String, _ label: String, _ action: @escaping () -> Void) -> UIButton {
+            let b = UIButton(type: .system)
+            b.setImage(UIImage(systemName: symbol), for: .normal)
+            b.accessibilityLabel = label
+            b.addAction(UIAction { _ in action() }, for: .touchUpInside)
+            b.widthAnchor.constraint(equalToConstant: 40).isActive = true
+            return b
+        }
+        backButton = iconButton("chevron.backward", "Indietro") { [weak self] in self?.webView.goBack() }
+        forwardButton = iconButton("chevron.forward", "Avanti") { [weak self] in self?.webView.goForward() }
+        let reload = iconButton("arrow.clockwise", "Ricarica") { [weak self] in self?.webView.reload() }
+        addressLabel = UILabel()
+        addressLabel.text = "Browser dell'agente"
+        addressLabel.font = .preferredFont(forTextStyle: .footnote)
+        addressLabel.textColor = .secondaryLabel
+        addressLabel.lineBreakMode = .byTruncatingMiddle
+        addressLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let close = UIButton(type: .system)
+        close.setTitle("Chiudi", for: .normal)
+        close.addAction(UIAction { [weak self] _ in self?.dismiss(animated: true) }, for: .touchUpInside)
+        let bar = UIStackView(arrangedSubviews: [backButton, forwardButton, reload, addressLabel, close])
+        bar.axis = .horizontal
+        bar.alignment = .center
+        bar.spacing = 4
         bar.translatesAutoresizingMaskIntoConstraints = false
-        let label = UILabel()
-        label.text = "Browser dell'agente"
-        label.font = .preferredFont(forTextStyle: .footnote)
-        label.textColor = .secondaryLabel
-        label.translatesAutoresizingMaskIntoConstraints = false
-        let stop = UIButton(type: .system)
-        stop.setTitle("Chiudi", for: .normal)
-        stop.addAction(UIAction { [weak self] _ in self?.dismiss(animated: true) }, for: .touchUpInside)
-        stop.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(label)
-        bar.addSubview(stop)
         view.addSubview(bar)
         view.addSubview(webView)
         NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
-            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            bar.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            bar.heightAnchor.constraint(equalToConstant: 36),
-            label.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            label.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            stop.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            stop.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            webView.topAnchor.constraint(equalTo: bar.bottomAnchor),
+            bar.heightAnchor.constraint(equalToConstant: 40),
+            webView.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 4),
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+        // Back/forward and the address follow the page, however it navigates.
+        observers = [
+            webView.observe(\.canGoBack, options: [.initial, .new]) { [weak self] w, _ in self?.backButton.isEnabled = w.canGoBack },
+            webView.observe(\.canGoForward, options: [.initial, .new]) { [weak self] w, _ in self?.forwardButton.isEnabled = w.canGoForward },
+            webView.observe(\.url, options: [.initial, .new]) { [weak self] w, _ in
+                self?.addressLabel.text = w.url.map { $0.host ?? $0.absoluteString } ?? "Browser dell'agente"
+            },
+        ]
     }
 
     /// A fixed data store for the agent's browser, separate from the app's own web data.
@@ -106,9 +133,19 @@ final class BrowserPanel: UIViewController, WKNavigationDelegate, WKUIDelegate {
     }
 
     func evaluate(_ js: String, completion: @escaping (Result<String, Error>) -> Void) {
+        // The completion handler can be lost if the page's process dies: never wait forever.
+        var done = false
+        let finishOnce: (Result<String, Error>) -> Void = { r in
+            if done { return }
+            done = true
+            completion(r)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+            finishOnce(.failure(NSError(domain: "aiw.browser", code: 3, userInfo: [NSLocalizedDescriptionKey: "La pagina non risponde"])))
+        }
         webView.evaluateJavaScript(js) { value, error in
-            if let error = error { completion(.failure(error)); return }
-            if let s = value as? String { completion(.success(s)) } else { completion(.success("")) }
+            if let error = error { finishOnce(.failure(error)); return }
+            if let s = value as? String { finishOnce(.success(s)) } else { finishOnce(.success("")) }
         }
     }
 
@@ -192,9 +229,21 @@ extension AiwNativePlugin {
             }
             guard AiwNativePlugin.proxyPort != 0 else { invoke.reject("Browser non configurato"); return }
             guard let host = self.topController() else { invoke.reject("Nessuna schermata su cui mostrare il browser"); return }
-            let panel = BrowserPanel(proxyPort: AiwNativePlugin.proxyPort)
+            // A panel the user closed is shown again as it was: the page is not lost.
+            let panel = (AiwNativePlugin.panel as? BrowserPanel) ?? BrowserPanel(proxyPort: AiwNativePlugin.proxyPort)
             AiwNativePlugin.panel = panel
+            var shown = false
+            // If the system never completes the presentation, say so instead of leaving the agent waiting.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                if !shown {
+                    shown = true
+                    AiwNativePlugin.panel = nil
+                    invoke.reject("Il pannello del browser non si è aperto (presentazione di iOS non completata)")
+                }
+            }
             host.present(panel, animated: true) {
+                if shown { return }
+                shown = true
                 // `viewDidLoad` has run: the web view exists.
                 body(panel)
             }
@@ -248,6 +297,12 @@ extension AiwNativePlugin {
                 }
             }
         }
+    }
+
+    /// The chat's "browser" button: brings the panel back (or opens it empty the first time).
+    @objc public func browserShow(_ invoke: Invoke) {
+        guard #available(iOS 17.0, *) else { invoke.reject("Il browser dell'agente richiede iOS 17 o successivo"); return }
+        withPanel(invoke) { _ in invoke.resolve() }
     }
 
     @objc public func browserClose(_ invoke: Invoke) {

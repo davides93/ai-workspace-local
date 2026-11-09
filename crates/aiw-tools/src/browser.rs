@@ -27,6 +27,7 @@ pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
     if (r.width < 2 || r.height < 2 || st.visibility === 'hidden' || st.display === 'none' || el.disabled) continue;
     if (n >= 150) break;
     n++; el.setAttribute('data-aiw-ref', String(n));
+    const off = r.bottom < 0 || r.top > innerHeight ? ' (fuori vista)' : '';
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag);
     const type = el.getAttribute('type');
@@ -36,10 +37,13 @@ pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
     if (tag === 'a') extra = ` -> ${String(el.getAttribute('href')).slice(0, 90)}`;
     if (tag === 'select') extra = ` [${[...el.options].slice(0, 8).map(o => o.text.trim()).join(' | ')}]`;
     if (type === 'checkbox' || type === 'radio') extra += el.checked ? ' (selezionato)' : '';
-    out.push(`[${n}] ${role}${type ? '[' + type + ']' : ''} "${label}"${extra}`);
+    out.push(`[${n}] ${role}${type ? '[' + type + ']' : ''} "${label}"${extra}${off}`);
   }
   const text = (document.body ? document.body.innerText : '').replace(/\n{3,}/g, '\n\n').slice(0, 6000);
-  return `Titolo: ${document.title}\nURL: ${location.href}\n\nElementi interattivi (usa il numero come ref):\n${out.join('\n')}\n\nTesto visibile:\n${text}`;
+  const se = document.scrollingElement || document.documentElement;
+  const total = Math.max(se.scrollHeight, 1), seen = Math.min(100, Math.max(1, Math.round((se.scrollTop + innerHeight) / total * 100)));
+  const pos = se.scrollHeight <= innerHeight + 4 ? 'tutta la pagina è in vista' : `vista fino al ${seen}% della pagina (usa browser_scroll per vedere altro)`;
+  return `Titolo: ${document.title}\nURL: ${location.href}\nPosizione: ${pos}\n\nElementi interattivi (usa il numero come ref):\n${out.join('\n')}\n\nTesto visibile:\n${text}`;
 })()"#;
 
 struct Cdp {
@@ -281,6 +285,14 @@ impl BrowserManager {
         *self.webview.lock().unwrap() = Some(Arc::new(crate::webview::WebViewHost::new(bridge)));
     }
 
+    /// Opens the in-app browser panel on the page it has (the "browser" button of the chat).
+    /// `Ok(false)` when this device has no in-app WebView (desktop drives Chrome instead).
+    pub async fn show_webview(&self) -> Result<bool> {
+        let Some(host) = self.webview() else { return Ok(false) };
+        host.show(&self.policy).await?;
+        Ok(true)
+    }
+
     pub(crate) fn webview(&self) -> Option<Arc<crate::webview::WebViewHost>> {
         self.webview.lock().unwrap().clone()
     }
@@ -421,6 +433,10 @@ pub fn tools(mgr: Arc<BrowserManager>) -> Vec<Arc<dyn Tool>> {
         Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Snapshot }),
         Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Click }),
         Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Type }),
+        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Scroll }),
+        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Back }),
+        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Press }),
+        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Wait }),
         Arc::new(BrowserTool { mgr, op: Op::Screenshot }),
     ]
 }
@@ -432,6 +448,107 @@ pub(crate) enum Op {
     Click,
     Type,
     Screenshot,
+    Scroll,
+    Back,
+    Press,
+    Wait,
+}
+
+/// Keys `browser_press` accepts (anything else is refused before it reaches the page).
+const PRESS_KEYS: &[&str] =
+    &["Enter", "Escape", "Tab", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Backspace", "PageDown", "PageUp", "Home", "End"];
+
+/// Page script and settle time (ms) of the actions that only act on the page, shared by the
+/// Chrome and in-app WebView branches. `Ok(None)` for operations that are not of this kind.
+pub(crate) fn page_action(op: Op, args: &Value) -> Result<Option<(String, u64)>> {
+    Ok(match op {
+        Op::Scroll => {
+            let dir = args.get("direction").and_then(|v| v.as_str()).unwrap_or("down");
+            if !["up", "down", "top", "bottom"].contains(&dir) {
+                return Err(Error::Invalid("`direction` deve essere up, down, top o bottom".into()));
+            }
+            let amount = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.8).clamp(0.1, 2.0);
+            let target = match args.get("ref") {
+                Some(_) => format!("document.querySelector('[data-aiw-ref=\"{}\"]')", ref_arg(args)?),
+                None => "null".into(),
+            };
+            Some((
+                format!(
+                    "(() => {{ const t = {target}; if (t) {{ t.scrollIntoView({{block:'center'}}); return 'ok'; }}\
+                     const el = document.scrollingElement || document.documentElement; const before = el.scrollTop;\
+                     if ('{dir}' === 'top') el.scrollTo(0, 0); else if ('{dir}' === 'bottom') el.scrollTo(0, el.scrollHeight);\
+                     else el.scrollBy(0, ('{dir}' === 'up' ? -1 : 1) * Math.round(innerHeight * {amount}));\
+                     return el.scrollTop === before ? 'edge' : 'ok'; }})()"
+                ),
+                400,
+            ))
+        }
+        Op::Back => Some(("(() => { if (history.length <= 1) return 'none'; history.back(); return 'ok'; })()".into(), 1200)),
+        Op::Press => {
+            let key = arg_str(args, "key")?;
+            if !PRESS_KEYS.contains(&key) {
+                return Err(Error::Invalid(format!("tasto non consentito: {key} (consentiti: {})", PRESS_KEYS.join(", "))));
+            }
+            let target = match args.get("ref") {
+                Some(_) => format!("document.querySelector('[data-aiw-ref=\"{}\"]')", ref_arg(args)?),
+                None => "(document.activeElement || document.body)".into(),
+            };
+            Some((
+                format!(
+                    "(() => {{ const el = {target}; if (!el) return 'missing'; el.focus && el.focus();\
+                     const k = '{key}'; const init = {{key: k, bubbles: true, cancelable: true}};\
+                     const go = el.dispatchEvent(new KeyboardEvent('keydown', init));\
+                     if (k === 'Enter' && go) {{ const tag = el.tagName; if (tag === 'BUTTON' || tag === 'A' || el.getAttribute('role') === 'button') el.click(); else if (el.form && el.form.requestSubmit) el.form.requestSubmit(); }}\
+                     if (k === 'PageDown') scrollBy(0, innerHeight * 0.8); if (k === 'PageUp') scrollBy(0, -innerHeight * 0.8);\
+                     if (k === 'Home') scrollTo(0, 0); if (k === 'End') scrollTo(0, document.body.scrollHeight);\
+                     el.dispatchEvent(new KeyboardEvent('keyup', init)); return 'ok'; }})()"
+                ),
+                if key == "Enter" { 1200 } else { 300 },
+            ))
+        }
+        _ => None,
+    })
+}
+
+/// How long `browser_wait` waits (ms) and the text it waits for, if any.
+pub(crate) fn wait_args(args: &Value) -> (u64, Option<String>) {
+    let ms = args.get("ms").and_then(|v| v.as_u64()).unwrap_or(1500).clamp(100, 10_000);
+    (ms, args.get("text").and_then(|v| v.as_str()).filter(|t| !t.is_empty()).map(String::from))
+}
+
+/// Polls `eval` until the page shows `text` or `ms` passes. Whether it appeared.
+pub(crate) async fn wait_for_text<F, Fut>(eval: F, text: &str, ms: u64) -> bool
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Value>>,
+{
+    // The in-app WebViews hand back strings only (a boolean would arrive as ""): answer 'yes'/'no'.
+    let js = format!(
+        "(() => (document.body ? document.body.innerText : '').includes({}) ? 'yes' : 'no')()",
+        serde_json::to_string(text).unwrap()
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+    loop {
+        if eval(js.clone()).await.map(|v| v.as_str() == Some("yes")).unwrap_or(false) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+}
+
+/// What the model reads after an action that only acts on the page.
+pub(crate) fn page_action_note(op: Op, result: &str) -> String {
+    match (op, result) {
+        (Op::Scroll, "edge") => "Fine della pagina: non c'è altro da scorrere in quella direzione.".into(),
+        (Op::Scroll, _) => "Scorso.".into(),
+        (Op::Back, "none") => "Non c'è una pagina precedente.".into(),
+        (Op::Back, _) => "Tornato alla pagina precedente.".into(),
+        (Op::Press, _) => "Tasto premuto.".into(),
+        _ => String::new(),
+    }
 }
 
 struct BrowserTool {
@@ -454,6 +571,10 @@ impl Tool for BrowserTool {
             Op::Click => "browser_click",
             Op::Type => "browser_type",
             Op::Screenshot => "browser_screenshot",
+            Op::Scroll => "browser_scroll",
+            Op::Back => "browser_back",
+            Op::Press => "browser_press",
+            Op::Wait => "browser_wait",
         }
     }
     fn description(&self) -> &str {
@@ -463,6 +584,10 @@ impl Tool for BrowserTool {
             Op::Click => "Clicca l'elemento con il numero `ref` dell'ultimo snapshot.",
             Op::Type => "Scrive `text` nel campo `ref`; con submit=true invia il modulo.",
             Op::Screenshot => "Screenshot della pagina (immagine, per modelli con visione).",
+            Op::Scroll => "Scorre la pagina (up, down, top, bottom) o porta in vista l'elemento `ref`; restituisce il nuovo snapshot.",
+            Op::Back => "Torna alla pagina precedente della cronologia e restituisce lo snapshot.",
+            Op::Press => "Preme un tasto (Enter, Escape, Tab, frecce, PageDown…) sull'elemento `ref` o su quello attivo.",
+            Op::Wait => "Aspetta che la pagina cambi: fino a `ms` millisecondi o finché compare `text`; poi restituisce lo snapshot.",
         }
     }
     fn parameters(&self) -> Value {
@@ -473,13 +598,21 @@ impl Tool for BrowserTool {
             Op::Type => {
                 json!({"type":"object","properties":{"ref":{"type":"integer"},"text":{"type":"string"},"submit":{"type":"boolean"}},"required":["ref","text"]})
             }
+            Op::Scroll => {
+                json!({"type":"object","properties":{"direction":{"type":"string","enum":["up","down","top","bottom"]},"amount":{"type":"number","description":"frazione di schermata (0.1-2, default 0.8)"},"ref":{"type":"integer"}}})
+            }
+            Op::Back => json!({"type":"object","properties":{}}),
+            Op::Press => {
+                json!({"type":"object","properties":{"key":{"type":"string","enum":PRESS_KEYS},"ref":{"type":"integer"}},"required":["key"]})
+            }
+            Op::Wait => json!({"type":"object","properties":{"ms":{"type":"integer"},"text":{"type":"string"}}}),
         }
     }
     fn risk(&self) -> Risk {
         match self.op {
             Op::Navigate => Risk::Network,
-            Op::Snapshot | Op::Screenshot => Risk::Read,
-            Op::Click | Op::Type => Risk::Computer,
+            Op::Snapshot | Op::Screenshot | Op::Scroll | Op::Wait => Risk::Read,
+            Op::Click | Op::Type | Op::Back | Op::Press => Risk::Computer,
         }
     }
     fn available(&self) -> std::result::Result<(), String> {
@@ -584,6 +717,57 @@ impl Tool for BrowserTool {
                             tokio::time::sleep(Duration::from_millis(if submit { 1500 } else { 200 })).await;
                             let snap = cdp.eval(SNAPSHOT_JS).await?;
                             Ok(ToolOutput::text(format!("Scritto in [{r}].\n\n{}", snap.as_str().unwrap_or_default())))
+                        })
+                    })
+                    .await
+            }
+            Op::Scroll | Op::Back | Op::Press => {
+                let op = self.op;
+                let Some((js, settle)) = page_action(op, &args)? else { unreachable!() };
+                self.mgr
+                    .with(ctx, |cdp| {
+                        Box::pin(async move {
+                            let r = cdp.eval(&js).await?;
+                            let r = r.as_str().unwrap_or_default().to_string();
+                            if r == "missing" {
+                                return Ok(ToolOutput::error("Elemento non trovato: rifai browser_snapshot"));
+                            }
+                            tokio::time::sleep(Duration::from_millis(settle)).await;
+                            let snap = cdp.eval(SNAPSHOT_JS).await?;
+                            Ok(ToolOutput::text(format!("{}\n\n{}", page_action_note(op, &r), snap.as_str().unwrap_or_default())))
+                        })
+                    })
+                    .await
+            }
+            Op::Wait => {
+                let (ms, text) = wait_args(&args);
+                self.mgr
+                    .with(ctx, |cdp| {
+                        Box::pin(async move {
+                            let note = match text {
+                                Some(t) => {
+                                    let found = wait_for_text(
+                                        |js| {
+                                            let cdp = &cdp;
+                                            async move { cdp.eval(&js).await }
+                                        },
+                                        &t,
+                                        ms,
+                                    )
+                                    .await;
+                                    if found {
+                                        format!("Il testo «{t}» è comparso.")
+                                    } else {
+                                        format!("Il testo «{t}» non è comparso entro {} ms.", ms)
+                                    }
+                                }
+                                None => {
+                                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                                    format!("Atteso {ms} ms.")
+                                }
+                            };
+                            let snap = cdp.eval(SNAPSHOT_JS).await?;
+                            Ok(ToolOutput::text(format!("{note}\n\n{}", snap.as_str().unwrap_or_default())))
                         })
                     })
                     .await
