@@ -1,8 +1,12 @@
 name: Publish to stores (App Store Connect, Google Play)
 
-# Manuale: firma e carica le build su TestFlight (iOS, macOS) e sul track Google Play scelto.
+# Con un tag `v*` parte da solo, insieme a release.yml (DMG + Windows su GitHub Release): iOS e
+# macOS (Mac App Store, sandbox) su TestFlight, Android sul track alpha (test chiuso) con release
+# completed. A mano (Run workflow) si scelgono piattaforme, track e stato.
 # Segreti richiesti: vedi docs/store/README.md. Nessun segreto è nel repo.
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       ios:
@@ -45,12 +49,17 @@ jobs:
       - id: v
         run: |
           full=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          # Su un tag la versione dei file deve essere quella del tag: niente upload con numeri sbagliati.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${full}" ]; then
+            echo "::error::il tag ${GITHUB_REF_NAME} non corrisponde alla versione ${full} di tauri.conf.json"
+            exit 1
+          fi
           # Apple accetta solo X.Y.Z numerico come versione breve: 0.5.0-beta.2 -> 0.5.0
           echo "full=$full" >> "$GITHUB_OUTPUT"
           echo "short=${full%%-*}" >> "$GITHUB_OUTPUT"
 
   ios:
-    if: inputs.ios
+    if: github.event_name == 'push' || inputs.ios
     needs: version
     runs-on: macos-15
     environment: app-store
@@ -95,7 +104,7 @@ jobs:
           rm -f ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
 
   macos:
-    if: inputs.macos
+    if: github.event_name == 'push' || inputs.macos
     needs: version
     runs-on: macos-15
     environment: app-store
@@ -183,7 +192,8 @@ jobs:
           rm -f ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
 
   android:
-    if: inputs.android
+    if: github.event_name == 'push' || inputs.android
+    needs: version  # su un tag controlla anche qui che versione e tag coincidano
     runs-on: ubuntu-latest
     environment: google-play
     steps:
@@ -231,5 +241,6 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: ${{ env.BUNDLE_ID }}
           releaseFiles: ${{ env.AAB }}
-          track: ${{ inputs.play_track }}
-          status: ${{ inputs.play_status }}
+          # Con un tag (nessun input): test chiuso (alpha), release completed, come da default.
+          track: ${{ inputs.play_track || 'alpha' }}
+          status: ${{ inputs.play_status || 'completed' }}
