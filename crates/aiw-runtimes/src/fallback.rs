@@ -63,6 +63,10 @@ impl ChatBackend for FallbackBackend {
     fn availability(&self) -> std::result::Result<(), String> {
         self.primary.availability()
     }
+
+    fn served_context(&self) -> Option<u32> {
+        self.primary.served_context()
+    }
 }
 
 #[cfg(test)]

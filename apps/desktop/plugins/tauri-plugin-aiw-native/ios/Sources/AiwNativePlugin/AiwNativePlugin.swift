@@ -14,12 +14,17 @@ class GenerateArgs: Decodable {
     let prompt: String
     let temperature: Double?
     let maxTokens: Int?
+    let tools: [AFMToolSpec]?
+    let transcript: [AFMTurn]?
+    let contextTokens: Int?
     let onEvent: Channel
 }
 
 /// On-device inference for Apple platforms through the Foundation Models framework
 /// (iOS / iPadOS / macOS 26+): the ~3B system model behind Apple Intelligence.
-/// Tokens are streamed back to Rust through `onEvent` as {type: "text", delta}.
+/// The answer is streamed back to Rust through `onEvent` ({type: "text" | "toolcall" | "done" |
+/// "error"}); the tools of the app are offered to the model as native tools and their calls
+/// handed back, not run here (see AppleFMCore.swift, shared with the macOS helper).
 class AiwNativePlugin: Plugin {
     @objc public func availability(_ invoke: Invoke) {
         var runtimes: [[String: Any]] = []
@@ -27,7 +32,7 @@ class AiwNativePlugin: Plugin {
         if #available(iOS 26.0, macOS 26.0, *) {
             switch SystemLanguageModel.default.availability {
             case .available:
-                runtimes.append(["id": "apple-fm", "available": true, "models": []])
+                runtimes.append(["id": "apple-fm", "available": true, "models": [], "contextTokens": afmDefaultWindow()])
             case .unavailable(let reason):
                 runtimes.append(["id": "apple-fm", "available": false, "detail": "\(reason)", "models": []])
             }
@@ -81,28 +86,13 @@ class AiwNativePlugin: Plugin {
         let args = try invoke.parseArgs(GenerateArgs.self)
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
+            let request = AFMRequest(
+                system: args.system, prompt: args.prompt, temperature: args.temperature, maxTokens: args.maxTokens,
+                tools: args.tools, transcript: args.transcript, contextTokens: args.contextTokens)
             Task {
-                do {
-                    let session = LanguageModelSession(instructions: args.system)
-                    var options = GenerationOptions()
-                    if let t = args.temperature { options.temperature = t }
-                    if let m = args.maxTokens { options.maximumResponseTokens = m }
-                    var emitted = ""
-                    // Snapshots contain the whole text so far: forward only the new suffix.
-                    for try await snapshot in session.streamResponse(to: args.prompt, options: options) {
-                        let text = snapshot.content
-                        if text.count > emitted.count {
-                            let delta = String(text.dropFirst(emitted.count))
-                            emitted = text
-                            try args.onEvent.send(["type": "text", "delta": delta])
-                        }
-                    }
-                    try args.onEvent.send(["type": "done"])
-                    invoke.resolve()
-                } catch {
-                    try? args.onEvent.send(["type": "error", "message": "\(error)"])
-                    invoke.reject("\(error)")
-                }
+                // Failures reach Rust as an `error` event; the command itself always completes.
+                await afmGenerate(request) { event in args.onEvent.send(event) }
+                invoke.resolve()
             }
             return
         }

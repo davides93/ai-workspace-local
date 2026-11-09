@@ -62,7 +62,8 @@ pub fn run() {
                     }
                     for rt in list.into_iter().filter(|r| r.available) {
                         let bridge: Arc<dyn tauri_plugin_aiw_native::NativeGenerate> = Arc::new(NativeHandle(app.handle().clone()));
-                        let backend = Arc::new(tauri_plugin_aiw_native::NativeBackend::new(rt.id.clone(), bridge));
+                        let backend =
+                            Arc::new(tauri_plugin_aiw_native::NativeBackend::new(rt.id.clone(), bridge).with_context(rt.context_tokens));
                         if rt.id == "apple-fm" {
                             // Not ready / refused / failing: continue on a downloaded local model.
                             engine.register_system_runtime(&rt.id, backend);

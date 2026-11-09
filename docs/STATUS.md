@@ -84,7 +84,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Ollama | `ollama` | ✅ **v0.4** elenco dei modelli installati da `/api/tags`, `OLLAMA_CONTEXT_LENGTH` e `OLLAMA_KEEP_ALIVE` |
 | Distribuito | llama.cpp RPC worker, exo | ✅ |
 | Embedded in-process | llama.cpp (FFI), ONNX Runtime GenAI (dlopen) | ✅ **v0.4** llama.cpp ora registrato anche con Metal/CUDA/Vulkan; ORT GenAI richiede la libreria installata |
-| Di sistema | Apple Foundation Models (iOS e macOS), Gemini Nano e LiteRT-LM (Android) | 🟡 plugin Swift e Kotlin reali ma minimi; **macOS desktop** tramite il helper Swift `aiw-apple-fm` (processo, JSON per riga), da provare su un Mac con macOS 26 e Apple Intelligence |
+| Di sistema | Apple Foundation Models (iOS e macOS), Gemini Nano e LiteRT-LM (Android) | 🟡 plugin Swift e Kotlin reali ma minimi; **macOS desktop** tramite il helper Swift `aiw-apple-fm` (processo, JSON per riga); strumenti e cronologia nativi (`Tool` e `Transcript` di Foundation Models, codice Swift condiviso con iOS in `AppleFMCore.swift`), provati su un Mac con macOS 27 e Apple Intelligence; il percorso iOS compila ma non è stato eseguito su un dispositivo |
 | Solo manifest | Windows ML, MLX Swift, Core AI, ExecuTorch, MLC LLM, Phi Silica | 📄 la UI li mostra come "non ancora implementato" |
 | Voce | whisper-server | ✅ trascrizione (sidecar `whisper-server` o già avviato, modelli ggml) |
 | Remoti | OpenAI-compatibile, peer AIW | ✅ |

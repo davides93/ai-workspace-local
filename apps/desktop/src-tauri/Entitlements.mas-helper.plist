@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Helper `aiw-apple-fm` dentro Contents/MacOS dell'app Mac App Store: un programma lanciato dall'app
+     deve avere sandbox + inherit (altrimenti App Store Connect rifiuta la build). Lo firma store.yml. -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.inherit</key>
+	<true/>
+</dict>
+</plist>

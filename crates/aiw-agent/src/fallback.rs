@@ -78,20 +78,88 @@ pub fn bare_json_call(text: &str) -> Option<(String, Value)> {
 fn parse_call(body: &str) -> Option<(String, Value)> {
     let v = first_json_value(&body[body.find('{')?..])?;
     let name = v.get("name")?.as_str()?.to_string();
-    let args = v.get("arguments").or_else(|| v.get("parameters")).cloned().unwrap_or(Value::Object(Default::default()));
-    let args = match args {
-        Value::String(s) => serde_json::from_str(&s).unwrap_or(Value::String(s)),
-        other => other,
+    let args = match v.get("arguments").or_else(|| v.get("parameters")).or_else(|| v.get("args")).or_else(|| v.get("input")) {
+        Some(Value::String(s)) => serde_json::from_str(s).unwrap_or(Value::String(s.clone())),
+        Some(other) => other.clone(),
+        // The model put the arguments next to the name: `{"name": "x", "url": "..."}`.
+        None => Value::Object(
+            v.as_object()?
+                .iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "name" | "type" | "id"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        ),
     };
     Some((name, args))
 }
 
-/// First JSON value of `s` (trailing text ignored); closes up to three objects left open.
+/// First JSON value of `s` (trailing text ignored); a truncated value is closed: open string,
+/// objects and arrays left open.
 fn first_json_value(s: &str) -> Option<Value> {
     match serde_json::Deserializer::from_str(s).into_iter::<Value>().next()? {
         Ok(v) => Some(v),
-        Err(e) if e.is_eof() => (1..=3).find_map(|n| serde_json::from_str(&format!("{}{}", s.trim_end(), "}".repeat(n))).ok()),
+        Err(e) if e.is_eof() => serde_json::from_str(&close_json(s)).ok(),
         Err(_) => None,
+    }
+}
+
+fn close_json(s: &str) -> String {
+    let mut out = s.trim_end().to_string();
+    let (mut stack, mut in_str, mut esc) = (Vec::new(), false, false);
+    for c in out.chars() {
+        if in_str {
+            match (esc, c) {
+                (true, _) => esc = false,
+                (false, '\\') => esc = true,
+                (false, '"') => in_str = false,
+                _ => {}
+            }
+        } else {
+            match c {
+                '"' => in_str = true,
+                '{' => stack.push('}'),
+                '[' => stack.push(']'),
+                '}' | ']' => {
+                    stack.pop();
+                }
+                _ => {}
+            }
+        }
+    }
+    if in_str {
+        out.push('"');
+    }
+    while let Some(c) = stack.pop() {
+        out.push(c);
+    }
+    out
+}
+
+/// Rewrites call-tag variants to the canonical tags in a stream, holding back a tail that may be
+/// the start of a variant split across chunks.
+#[derive(Default)]
+pub struct MarkerNormaliser {
+    buf: String,
+}
+
+impl MarkerNormaliser {
+    pub fn push(&mut self, chunk: &str) -> String {
+        self.buf.push_str(chunk);
+        let all = normalise_markers(&self.buf);
+        let keep = OPEN_VARIANTS
+            .iter()
+            .chain(CLOSE_VARIANTS)
+            .flat_map(|v| (1..v.len()).filter(|n| v.is_char_boundary(*n)).map(move |n| &v[..n]))
+            .filter(|p| all.ends_with(*p))
+            .map(str::len)
+            .max()
+            .unwrap_or(0);
+        self.buf = all[all.len() - keep..].to_string();
+        all[..all.len() - keep].to_string()
+    }
+
+    pub fn finish(&mut self) -> String {
+        normalise_markers(&std::mem::take(&mut self.buf))
     }
 }
 
@@ -138,6 +206,24 @@ mod tests {
         assert_eq!(ui.0, "render_ui");
         assert!(bare_json_call("Ciao {\"a\": 1}").is_none());
         assert_eq!(bare_json_call("{\"name\":\"glob\",\"arguments\":{}}").unwrap().0, "glob");
+
+        // Arguments next to the name, one closing brace, truncated JSON (seen on iPad, beta.3).
+        let (t, calls) = extract_text_tool_calls("{tool_call}{\"name\": \"browser_navigate\", \"url\": \"https://www.comune.it\"}");
+        assert_eq!(t, "");
+        assert_eq!(calls, vec![("browser_navigate".to_string(), serde_json::json!({"url": "https://www.comune.it"}))]);
+        let (_, calls) = extract_text_tool_calls("{tool_call}{\"name\": \"browser_navigate\", \"url\": \"https://www.com");
+        assert_eq!(calls[0].1, serde_json::json!({"url": "https://www.com"}));
+        let (_, calls) = extract_text_tool_calls("{tool_call}{\"name\": \"glob\", \"arguments\": {\"pattern\": \"*.md\"");
+        assert_eq!(calls[0].1, serde_json::json!({"pattern": "*.md"}));
+
+        // Markers split across stream chunks.
+        let mut n = MarkerNormaliser::default();
+        let mut out = String::new();
+        for c in ["Vado. {tool", "_call}{\"name\"", ": \"x\"}"] {
+            out.push_str(&n.push(c));
+        }
+        out.push_str(&n.finish());
+        assert_eq!(out, "Vado. <tool_call>{\"name\": \"x\"}");
 
         // Not a call: left as text.
         let (t, calls) = extract_text_tool_calls("Uso il tag <tool_call> per chiamare gli strumenti.");

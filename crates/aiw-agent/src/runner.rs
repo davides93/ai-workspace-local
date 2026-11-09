@@ -2,7 +2,7 @@
 //! emitting AG-UI events and returning the messages to persist.
 
 use crate::budget::RunBudget;
-use crate::fallback::{bare_json_call, extract_text_tool_calls, has_text_tool_call};
+use crate::fallback::{bare_json_call, extract_text_tool_calls, has_text_tool_call, MarkerNormaliser};
 use crate::hooks::{run_hooks, HookConfig};
 use crate::policy::{risk_level, Decision, Policy};
 use crate::skills::{self, Skill};
@@ -372,6 +372,35 @@ pub(crate) async fn delegate(input: &RunInput, host: &Arc<dyn RunHost>, agent_id
 }
 
 pub struct AgentRunner;
+
+/// Holds back the visible text of an answer that starts with `{` (or a code fence): it may be a
+/// tool call written as bare JSON, which must not flash in the chat.
+#[derive(Default)]
+struct JsonGate {
+    holding: Option<bool>,
+    held: String,
+}
+
+impl JsonGate {
+    fn feed(&mut self, s: String) -> String {
+        if self.holding.is_none() {
+            match s.trim_start().chars().next() {
+                None => return s,
+                Some(c) => self.holding = Some(c == '{' || c == '`'),
+            }
+        }
+        if self.holding == Some(true) {
+            self.held.push_str(&s);
+            String::new()
+        } else {
+            s
+        }
+    }
+
+    fn take(&mut self) -> String {
+        std::mem::take(&mut self.held)
+    }
+}
 
 impl AgentRunner {
     pub async fn run(input: RunInput, host: Arc<dyn RunHost>) -> Result<RunOutcome> {
@@ -852,6 +881,10 @@ impl AgentRunner {
         // Text tool calls are parsed from `raw` at the end but never streamed as visible text.
         let mut tool_filter = crate::think::TagSplitter::new("<tool_call>", "</tool_call>");
         let mut raw = String::new();
+        // Call tags written in other forms (`{tool_call}`) are rewritten before they are filtered.
+        let mut markers = MarkerNormaliser::default();
+        // An answer that starts with `{` may be a bare JSON call: held back until it is known.
+        let mut gate = JsonGate::default();
         let pieces = |p: Piece, text: &mut String, reasoning: &mut String, text_open: &mut bool, reason_open: &mut bool| match p {
             Piece::Text(t) => {
                 if t.is_empty() || (!*text_open && t.trim().is_empty()) {
@@ -892,13 +925,14 @@ impl AgentRunner {
             };
             match d {
                 ChatDelta::Text(t) => {
+                    let t = markers.push(&t);
                     for p in splitter.push(&t) {
                         match p {
                             Piece::Text(visible) => {
                                 raw.push_str(&visible);
                                 for (inside, s) in tool_filter.push(&visible) {
                                     if !inside {
-                                        pieces(Piece::Text(s), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
+                                        pieces(Piece::Text(gate.feed(s)), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
                                     }
                                 }
                             }
@@ -942,13 +976,16 @@ impl AgentRunner {
                 ChatDelta::Done { .. } => {}
             }
         }
-        for p in splitter.finish() {
+        let tail = markers.finish();
+        let mut last = splitter.push(&tail);
+        last.extend(splitter.finish());
+        for p in last {
             match p {
                 Piece::Text(visible) => {
                     raw.push_str(&visible);
                     for (inside, s) in tool_filter.push(&visible) {
                         if !inside {
-                            pieces(Piece::Text(s), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
+                            pieces(Piece::Text(gate.feed(s)), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
                         }
                     }
                 }
@@ -957,8 +994,13 @@ impl AgentRunner {
         }
         for (inside, s) in tool_filter.finish() {
             if !inside {
-                pieces(Piece::Text(s), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
+                pieces(Piece::Text(gate.feed(s)), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
             }
+        }
+        // Held JSON that is not a call is ordinary text after all.
+        let held = gate.take();
+        if !held.is_empty() && !(calls.is_empty() && bare_json_call(&held).is_some()) {
+            pieces(Piece::Text(held), &mut text, &mut reasoning, &mut text_open, &mut reason_open);
         }
         if reason_open {
             ev.emit(AgEvent::ReasoningEnd { message_id: reason_id.clone() });
@@ -971,7 +1013,11 @@ impl AgentRunner {
             ev.emit(AgEvent::ToolCallEnd { tool_call_id: c.id.clone() });
         }
         // When the model wrote tool calls as text, hand the raw text to the caller for parsing.
-        let text_out = if stream_error.is_none() && calls.is_empty() && raw.contains("<tool_call>") { raw } else { text };
+        let text_out = if stream_error.is_none() && calls.is_empty() && (raw.contains("<tool_call>") || bare_json_call(&raw).is_some()) {
+            raw
+        } else {
+            text
+        };
         (text_out.trim_end().to_string(), reasoning, calls, usage, stream_error)
     }
 

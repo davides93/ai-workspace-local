@@ -104,7 +104,7 @@ export const runtimes: RuntimeInfo[] = [
 ];
 
 export const system: SystemInfo = {
-  version: "0.5.0-beta.3",
+  version: "0.5.0-beta.4",
   mode: "demo",
   data_dir: "C:\\Users\\demo\\.aiw",
   workspace_root: "C:\\Users\\demo\\Workspace",
