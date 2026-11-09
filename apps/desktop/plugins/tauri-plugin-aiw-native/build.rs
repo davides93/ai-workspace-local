@@ -6,6 +6,7 @@ const COMMANDS: &[&str] = &["availability", "generate"];
 fn main() {
     tauri_plugin::Builder::new(COMMANDS).android_path("android").ios_path("ios").build();
     println!("cargo:rerun-if-changed=macos-helper");
+    println!("cargo:rerun-if-changed=ios/Sources/AiwNativePlugin/AppleFMCore.swift");
     println!("cargo:rerun-if-env-changed=AIW_REQUIRE_APPLE_FM");
     println!("cargo:rerun-if-env-changed=AIW_APPLE_FM_DEVELOPER_DIR");
     println!("cargo:rustc-check-cfg=cfg(aiw_apple_fm_helper)");
@@ -59,22 +60,19 @@ fn build_apple_helper() {
 
     let out: PathBuf = std::env::var_os("OUT_DIR").expect("OUT_DIR").into();
     let exe = out.join("aiw-apple-fm");
-    let src = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR")).join("macos-helper/main.swift");
+    // The helper is `macos-helper/*.swift` plus `AppleFMCore.swift`, which the iOS plugin shares.
+    let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let sources = [
+        manifest.join("macos-helper/main.swift"),
+        manifest.join("macos-helper/selftest.swift"),
+        manifest.join("ios/Sources/AiwNativePlugin/AppleFMCore.swift"),
+    ];
     // Built for macOS 26 itself: the app only runs it there (it checks the OS first), so
     // FoundationModels needs no weak linking.
-    let built = xcrun(&[
-        "--sdk",
-        "macosx",
-        "swiftc",
-        "-O",
-        "-target",
-        "arm64-apple-macos26.0",
-        "-module-name",
-        "aiw_apple_fm",
-        "-o",
-        exe.to_str().expect("utf-8 path"),
-        src.to_str().expect("utf-8 path"),
-    ]);
+    let mut args = vec!["--sdk", "macosx", "swiftc", "-O", "-target", "arm64-apple-macos26.0", "-module-name", "aiw_apple_fm", "-o"];
+    args.push(exe.to_str().expect("utf-8 path"));
+    args.extend(sources.iter().map(|s| s.to_str().expect("utf-8 path")));
+    let built = xcrun(&args);
     match built {
         Ok(o) if o.status.success() => {
             println!("cargo:rustc-cfg=aiw_apple_fm_helper");

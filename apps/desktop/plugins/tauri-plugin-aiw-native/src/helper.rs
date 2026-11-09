@@ -24,6 +24,9 @@ pub struct HelperAvailability {
     pub available: bool,
     #[serde(default)]
     pub detail: Option<String>,
+    /// Context window of the system model, in tokens.
+    #[serde(default, rename = "contextTokens")]
+    pub context_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,12 +88,19 @@ impl Helper {
             .spawn()
             .map_err(|e| Error::Runtime(format!("helper nativo: {e}")))?;
         // The request is one line; stdin then stays open so that closing it means "stop".
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "system": args.system,
             "prompt": args.prompt,
             "temperature": args.temperature,
             "maxTokens": args.max_tokens,
+            "contextTokens": args.context_tokens,
         });
+        if !args.tools.is_empty() {
+            request["tools"] = serde_json::json!(args.tools);
+        }
+        if let Some(t) = &args.transcript {
+            request["transcript"] = serde_json::json!(t);
+        }
         let mut stdin = child.stdin.take().expect("piped stdin");
         if let Err(e) = writeln!(stdin, "{request}").and_then(|_| stdin.flush()) {
             let _ = child.kill();
@@ -255,7 +265,9 @@ mod tests {
         let _serial = serial();
         let dir = tempfile::tempdir().unwrap();
         let ok = fake(dir.path(), r#"echo '{"available": true}'"#);
-        assert_eq!(ok.availability().unwrap(), HelperAvailability { available: true, detail: None });
+        assert_eq!(ok.availability().unwrap(), HelperAvailability { available: true, detail: None, context_tokens: None });
+        let ctx = fake(dir.path(), r#"echo '{"available": true, "contextTokens": 8192}'"#);
+        assert_eq!(ctx.availability().unwrap().context_tokens, Some(8192));
         let no = fake(dir.path(), r#"echo '{"available": false, "detail": "Apple Intelligence è disattivata"}'"#);
         let a = no.availability().unwrap();
         assert!(!a.available && a.detail.unwrap().contains("disattivata"));
@@ -283,6 +295,42 @@ printf '{"type":"done"}\n'"#,
         assert!(matches!(&ev[1], NativeEvent::Text { delta } if delta == "o"));
         assert!(
             matches!(&ev[2], NativeEvent::Text { delta } if delta.contains("\"prompt\":\"ciao\"") && delta.contains("\"system\":\"sys\"")),
+            "{ev:?}"
+        );
+        assert!(matches!(ev.last(), Some(NativeEvent::Done)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tools_and_history_reach_the_helper_and_its_tool_calls_come_back() {
+        use crate::{NativeCall, NativeTool, NativeTurn};
+        let _serial = serial();
+        let dir = tempfile::tempdir().unwrap();
+        // Answers with a tool call only if the request carries the tools and the history.
+        let h = fake(
+            dir.path(),
+            r#"read req
+case "$req" in
+  *'"tools":[{'*'"transcript":[{"role":"user","text":"ciao"}]'*)
+    printf '{"type":"toolcall","calls":[{"id":"c1","name":"glob","arguments":"{}"}]}\n{"type":"done"}\n' ;;
+  *) printf '{"type":"error","message":"richiesta senza strumenti"}
+' ;;
+esac"#,
+        );
+        let args = GenerateArgs {
+            system: "sys".into(),
+            prompt: "elenca".into(),
+            tools: vec![NativeTool { name: "glob".into(), description: "Cerca".into(), parameters: serde_json::json!({"type": "object"}) }],
+            transcript: Some(vec![NativeTurn::User { text: "ciao".into() }]),
+            context_tokens: Some(4096),
+            ..Default::default()
+        };
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let sink = events.clone();
+        h.generate(&args, &CancellationToken::new(), &move |e| sink.lock().unwrap().push(e)).unwrap();
+        let ev = events.lock().unwrap().clone();
+        assert!(
+            matches!(&ev[0], NativeEvent::ToolCall { calls } if calls == &vec![NativeCall { id: "c1".into(), name: "glob".into(), arguments: "{}".into() }]),
             "{ev:?}"
         );
         assert!(matches!(ev.last(), Some(NativeEvent::Done)));
