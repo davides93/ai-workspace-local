@@ -41,7 +41,7 @@ Base64: `base64 -i file.p12 | pbcopy` (macOS).
 3. **Provisioning profile**: uno *iOS App Store* e uno *Mac App Store Connect* per `dev.aiworkspace.local`; scaricali.
 4. **Chiave API**: App Store Connect → Utenti e accessi → Integrazioni → Chiavi → ruolo *App Manager*. Scarica il .p8 (una sola volta).
 5. Il record app in App Store Connect esiste già (stesso Bundle ID, iOS + macOS). Servono poi: privacy policy URL, categoria, schermate, informazioni di export crittografia.
-6. Il numero di build (`bundleVersion` in `tauri.conf.json`, oggi 5006) deve **crescere a ogni upload**; la versione breve viene ricavata dal tag togliendo il suffisso (`0.5.0-beta.2` → `0.5.0`), perché Apple accetta solo `X.Y.Z`.
+6. Il numero di build (`bundleVersion` in `tauri.conf.json`, oggi 5007) deve **crescere a ogni upload**; la versione breve viene ricavata dal tag togliendo il suffisso (`0.5.0-beta.2` → `0.5.0`), perché Apple accetta solo `X.Y.Z`.
 
 ### App Sandbox (macOS)
 Si imposta nel file entitlements del target macOS, non nell'App ID: `apps/desktop/src-tauri/Entitlements.mas.plist` (già nel repo), caricato da `tauri.mas.conf.json`. Chiavi: `com.apple.security.app-sandbox`, `network.client`, `network.server` (daemon/llama-server locali), `files.user-selected.read-write`, `device.audio-input` (dettatura), più `application-identifier` e `team-identifier` (riempiti dalla CI).
