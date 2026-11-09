@@ -106,9 +106,19 @@ final class BrowserPanel: UIViewController, WKNavigationDelegate, WKUIDelegate {
     }
 
     func evaluate(_ js: String, completion: @escaping (Result<String, Error>) -> Void) {
+        // The completion handler can be lost if the page's process dies: never wait forever.
+        var done = false
+        let finishOnce: (Result<String, Error>) -> Void = { r in
+            if done { return }
+            done = true
+            completion(r)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+            finishOnce(.failure(NSError(domain: "aiw.browser", code: 3, userInfo: [NSLocalizedDescriptionKey: "La pagina non risponde"])))
+        }
         webView.evaluateJavaScript(js) { value, error in
-            if let error = error { completion(.failure(error)); return }
-            if let s = value as? String { completion(.success(s)) } else { completion(.success("")) }
+            if let error = error { finishOnce(.failure(error)); return }
+            if let s = value as? String { finishOnce(.success(s)) } else { finishOnce(.success("")) }
         }
     }
 
@@ -194,7 +204,18 @@ extension AiwNativePlugin {
             guard let host = self.topController() else { invoke.reject("Nessuna schermata su cui mostrare il browser"); return }
             let panel = BrowserPanel(proxyPort: AiwNativePlugin.proxyPort)
             AiwNativePlugin.panel = panel
+            var shown = false
+            // If the system never completes the presentation, say so instead of leaving the agent waiting.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                if !shown {
+                    shown = true
+                    AiwNativePlugin.panel = nil
+                    invoke.reject("Il pannello del browser non si è aperto (presentazione di iOS non completata)")
+                }
+            }
             host.present(panel, animated: true) {
+                if shown { return }
+                shown = true
                 // `viewDidLoad` has run: the web view exists.
                 body(panel)
             }

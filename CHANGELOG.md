@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0-beta.5 - pre-release
+
+- Browser dell'agente su iPad e iPhone: «Ferma» ora interrompe anche una chiamata del browser che non risponde, e ogni chiamata finisce entro 75 secondi con un messaggio che indica la fase (configurazione, controllo dell'indirizzo, caricamento, lettura). Il pannello che non si apre e uno script che non risponde (15 s) ora danno un errore invece di lasciare il run «In esecuzione».
+
 ## 0.5.0-beta.4 - pre-release
 
 - Mac App Store: Apple Foundation Models non poteva partire nella sandbox, perché l'helper veniva scritto dall'app in una cartella dei dati e lanciato da lì. Ora la build dello store mette l'helper firmato (sandbox + inherit) dentro il bundle e l'app lo usa da lì; il DMG non cambia. Provato con un'app di prova in sandbox; la validazione di App Store Connect si vede al primo upload.

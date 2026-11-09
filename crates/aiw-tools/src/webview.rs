@@ -77,10 +77,36 @@ fn snapshot_text(v: &Value) -> String {
     v.as_str().unwrap_or_default().to_string()
 }
 
-/// One browser tool call on the WebView (the counterpart of the CDP branch of the tools).
+/// A whole browser call must end within this time, whatever the native side does.
+const CALL_TIMEOUT: Duration = Duration::from_secs(75);
+
+/// One browser tool call on the WebView (the counterpart of the CDP branch of the tools). It ends
+/// when the run is stopped, and with a message naming the stage if the native side never answers.
 pub(crate) async fn call(mgr: &BrowserManager, host: Arc<WebViewHost>, op: Op, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    let stage = std::sync::Mutex::new("avvio");
+    tokio::select! {
+        r = call_inner(mgr, host, op, args, ctx, &stage) => r,
+        _ = ctx.cancel.cancelled() => Ok(ToolOutput::error("Annullato: il run è stato fermato.")),
+        _ = tokio::time::sleep(CALL_TIMEOUT) => Ok(ToolOutput::error(format!(
+            "Il browser non ha risposto entro {} secondi (fase: {}).",
+            CALL_TIMEOUT.as_secs(),
+            stage.lock().unwrap()
+        ))),
+    }
+}
+
+async fn call_inner(
+    mgr: &BrowserManager,
+    host: Arc<WebViewHost>,
+    op: Op,
+    args: Value,
+    ctx: &ToolContext,
+    stage: &std::sync::Mutex<&'static str>,
+) -> Result<ToolOutput> {
     *mgr.policy.ctx.lock().unwrap() = ctx.clone();
+    *stage.lock().unwrap() = "proxy e configurazione del browser";
     host.ensure(&mgr.policy).await?;
+    *stage.lock().unwrap() = "apertura del pannello e operazione sulla pagina";
     match op {
         Op::Navigate => {
             let url = arg_str(&args, "url")?.to_string();
@@ -88,7 +114,9 @@ pub(crate) async fn call(mgr: &BrowserManager, host: Arc<WebViewHost>, op: Op, a
                 return Ok(ToolOutput::error("Su questo dispositivo il browser apre solo pagine https."));
             }
             let resolve = mgr.policy.resolve.clone();
+            *stage.lock().unwrap() = "controllo dell'indirizzo";
             let url = vet_with(&url, ctx, &resolve).await?.to_string();
+            *stage.lock().unwrap() = "caricamento della pagina";
             mgr.policy.blocked.lock().unwrap().clear();
             let landed = match tokio::time::timeout(NAVIGATE_TIMEOUT, host.blocking(move |b| b.navigate(&url))).await {
                 Ok(r) => r?,
@@ -103,6 +131,7 @@ pub(crate) async fn call(mgr: &BrowserManager, host: Arc<WebViewHost>, op: Op, a
                     )));
                 }
             }
+            *stage.lock().unwrap() = "lettura della pagina";
             let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
             Ok(ToolOutput::text(snapshot_text(&snap)))
         }
@@ -295,6 +324,42 @@ mod tests {
 
     async fn run(m: &BrowserManager, op: Op, args: Value) -> ToolOutput {
         call(m, m.webview().unwrap(), op, args, &ctx()).await.unwrap()
+    }
+
+    /// Native side that never answers a navigation.
+    struct Stuck;
+    impl WebViewBridge for Stuck {
+        fn configure(&self, _: u16) -> Result<()> {
+            Ok(())
+        }
+        fn navigate(&self, _: &str) -> Result<String> {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }
+        fn eval(&self, _: &str) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        fn screenshot(&self) -> Result<String> {
+            Ok(String::new())
+        }
+        fn close(&self) {}
+    }
+
+    #[tokio::test]
+    async fn stopping_the_run_ends_a_browser_call_that_never_answers() {
+        let mut m = BrowserManager::new(std::env::temp_dir().join("aiw-webview-test"));
+        m.policy.resolve = Arc::new(|_, _| Box::pin(async { Ok(vec!["93.184.216.34".parse().unwrap()]) }));
+        m.set_webview(Arc::new(Stuck));
+        let c = ctx();
+        let cancel = c.cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            cancel.cancel();
+        });
+        let started = std::time::Instant::now();
+        let out = call(&m, m.webview().unwrap(), Op::Navigate, serde_json::json!({"url": "https://example.org/"}), &c).await.unwrap();
+        assert!(out.is_error && out.content.contains("Annullato"), "{}", out.content);
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[tokio::test]
