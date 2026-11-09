@@ -51,7 +51,8 @@
     },
     "iOS": {
       "minimumSystemVersion": "17.0",
-      "bundleVersion": "5002"
+      "bundleVersion": "5002",
+      "frameworks": ["Accelerate"]
     }
   }
 }
