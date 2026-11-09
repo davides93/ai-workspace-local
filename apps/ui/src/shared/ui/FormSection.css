@@ -8,7 +8,7 @@
 /* Actions in the header of a detail panel (agent, workflow): one group that wraps as a unit. */
 .detail-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; justify-content: flex-end; }
 
-@media (max-width: 760px) {
+@media (max-width: 700px) {
   .form-section + .form-section { padding-top: var(--space-5); }
   /* On a phone the title takes a whole line and the actions sit below it. */
   .panel-head:has(.detail-actions) h2 { flex: 1 1 100%; }

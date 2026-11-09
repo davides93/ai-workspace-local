@@ -103,7 +103,7 @@ select.input.placeholder-select { width: auto; max-width: 100%; font-size: var(-
 .run-output pre { margin: 0; padding: var(--space-2) var(--space-3); max-height: 16rem; overflow: auto; background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--r-sm); font-size: 0.78rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ---------- Narrow screens ---------- */
-@media (max-width: 760px) {
+@media (max-width: 700px) {
   .check-inline { min-height: 32px; }
   select.input.placeholder-select { padding-block: 6px; font-size: var(--fs-sm); }
   .targets .chip-btn { min-height: 32px; padding-inline: 10px; font-size: var(--fs-sm); }

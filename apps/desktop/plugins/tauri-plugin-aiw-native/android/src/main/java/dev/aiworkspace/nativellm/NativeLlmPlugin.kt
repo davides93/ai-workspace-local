@@ -16,6 +16,21 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 @InvokeArg
+class BrowserConfigureArgs {
+    var proxyPort: Int = 0
+}
+
+@InvokeArg
+class BrowserNavigateArgs {
+    lateinit var url: String
+}
+
+@InvokeArg
+class BrowserEvalArgs {
+    lateinit var js: String
+}
+
+@InvokeArg
 class GenerateArgs {
     lateinit var runtime: String
     var model: String? = null
@@ -37,6 +52,7 @@ class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val gemini by lazy { GeminiNanoBackend(activity) }
     private val litert by lazy { LiteRtLmBackend(activity) }
+    private val browser by lazy { AgentBrowser(activity) }
 
     private fun modelsDir(): File = File(activity.filesDir, "models").apply { mkdirs() }
 
@@ -83,5 +99,34 @@ class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.reject(e.message ?: "errore di inferenza")
             }
         }
+    }
+
+    // In-app browser of the agent tools (see AgentBrowser); called from Rust, which blocks on each.
+    @Command
+    fun browserConfigure(invoke: Invoke) {
+        val args = invoke.parseArgs(BrowserConfigureArgs::class.java)
+        browser.configure(args.proxyPort) { r -> r.fold({ invoke.resolve() }, { invoke.reject(it.message ?: "browser non disponibile") }) }
+    }
+
+    @Command
+    fun browserNavigate(invoke: Invoke) {
+        val args = invoke.parseArgs(BrowserNavigateArgs::class.java)
+        browser.navigate(args.url) { r -> r.fold({ invoke.resolve(JSObject().put("url", it)) }, { invoke.reject(it.message ?: "navigazione fallita") }) }
+    }
+
+    @Command
+    fun browserEval(invoke: Invoke) {
+        val args = invoke.parseArgs(BrowserEvalArgs::class.java)
+        browser.evaluate(args.js) { r -> r.fold({ invoke.resolve(JSObject().put("value", it)) }, { invoke.reject(it.message ?: "script fallito") }) }
+    }
+
+    @Command
+    fun browserScreenshot(invoke: Invoke) {
+        browser.screenshot { r -> r.fold({ invoke.resolve(JSObject().put("dataUrl", it)) }, { invoke.reject(it.message ?: "screenshot fallito") }) }
+    }
+
+    @Command
+    fun browserClose(invoke: Invoke) {
+        browser.hide { invoke.resolve() }
     }
 }

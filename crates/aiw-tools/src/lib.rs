@@ -8,6 +8,7 @@ pub mod fs;
 pub mod mcp;
 pub mod shell;
 pub mod web;
+pub mod webview;
 
 use aiw_core::{Error, Result};
 use async_trait::async_trait;

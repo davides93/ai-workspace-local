@@ -182,7 +182,7 @@
   .ws-composer-hint { display: none; }
   .ws-composer-box textarea { font-size: max(16px, var(--fs-md)); }
 }
-@media (max-width: 760px) { .ws-composer-hint { display: none; } }
+@media (max-width: 700px) { .ws-composer-hint { display: none; } }
 
 /* ---------- Voice ---------- */
 .ws-mic, .ws-talk { position: relative; flex: none; }
@@ -234,7 +234,7 @@
 .ws-diff .meta { color: var(--fg-faint); }
 
 /* ---------- Narrow screens ---------- */
-@media (max-width: 760px) {
+@media (max-width: 700px) {
   .ws-head { padding-inline: max(12px, env(safe-area-inset-left, 0px)) max(12px, env(safe-area-inset-right, 0px)); }
   .ws-log { padding-inline: max(12px, env(safe-area-inset-left, 0px)) max(12px, env(safe-area-inset-right, 0px)); padding-block: var(--space-4); }
   .ws-composer { padding-inline: max(12px, env(safe-area-inset-left, 0px)) max(12px, env(safe-area-inset-right, 0px)); }

@@ -41,7 +41,7 @@
 .hm-step.is-done .hm-step-text > b { color: var(--fg-muted); font-weight: 600; }
 .hm-step-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
 .hm-step-progress { display: flex; flex-direction: column; gap: 6px; max-width: 28rem; }
-@media (max-width: 760px) {
+@media (max-width: 700px) {
   .hm-step { grid-template-columns: 28px minmax(0, 1fr); }
   .hm-step-actions { grid-column: 2; justify-content: flex-start; }
 }
