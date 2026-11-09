@@ -7,6 +7,9 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tauri::{Emitter, Manager, RunEvent};
 
+#[cfg(all(feature = "mas", feature = "computer-use"))]
+compile_error!("`mas` (App Sandbox) cannot be combined with `computer-use`: the sandbox forbids synthetic input and screen control");
+
 struct Shell {
     engine: Engine,
     router: aiw_server::AxumRouter,
@@ -32,8 +35,11 @@ pub fn run() {
         .plugin(tauri_plugin_aiw_native::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
-            // Desktop: agents work in ~/AIW-Workspace by default; mobile: inside the app sandbox.
-            let workspace_root = if cfg!(mobile) {
+            // Mac App Store build: App Sandbox, no external programs (see the `mas` feature).
+            let sandboxed = cfg!(feature = "mas");
+            // Desktop: agents work in ~/AIW-Workspace by default (changeable in Settings); mobile and the
+            // sandboxed Mac App Store build: inside the app's own container.
+            let workspace_root = if cfg!(mobile) || sandboxed {
                 Some(app.path().document_dir().unwrap_or_else(|_| data_dir.join("workspace")).join("AIW-Workspace"))
             } else {
                 None
@@ -42,6 +48,7 @@ pub fn run() {
                 data_dir: Some(data_dir),
                 workspace_root,
                 mode: "embedded".into(),
+                sandboxed,
                 ..Default::default()
             }))
             .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;

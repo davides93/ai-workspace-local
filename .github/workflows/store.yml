@@ -146,7 +146,7 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: |
           sed -i '' -e "s/TEAM_ID_PLACEHOLDER/${{ secrets.APPLE_TEAM_ID }}/g" -e "s/BUNDLE_ID_PLACEHOLDER/$BUNDLE_ID/g" Entitlements.mas.plist
-      - name: Build sandbox (senza computer-use) e pacchetto .pkg
+      - name: Build sandbox (--features mas, senza computer-use) e pacchetto .pkg
         working-directory: apps/desktop
         env:
           AIW_REQUIRE_APPLE_FM: "1"
@@ -154,7 +154,7 @@ jobs:
           PKG_SIGN: ${{ secrets.MAC_INSTALLER_SIGNING_IDENTITY }}  # es. "3rd Party Mac Developer Installer: Nome (TEAMID)" o "Mac Installer Distribution: ..."
         run: |
           export APPLE_SIGNING_IDENTITY="$APP_SIGN"
-          npx tauri build --target universal-apple-darwin --bundles app \
+          npx tauri build --features mas --target universal-apple-darwin --bundles app \
             --config src-tauri/tauri.mas.conf.json \
             --config "{\"version\":\"${{ needs.version.outputs.short }}\"}"
           app=$(find ../../target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n1)

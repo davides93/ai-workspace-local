@@ -41,12 +41,28 @@ Base64: `base64 -i file.p12 | pbcopy` (macOS).
 3. **Provisioning profile**: uno *iOS App Store* e uno *Mac App Store Connect* per `dev.aiworkspace.local`; scaricali.
 4. **Chiave API**: App Store Connect → Utenti e accessi → Integrazioni → Chiavi → ruolo *App Manager*. Scarica il .p8 (una sola volta).
 5. Il record app in App Store Connect esiste già (stesso Bundle ID, iOS + macOS). Servono poi: privacy policy URL, categoria, schermate, informazioni di export crittografia.
-6. Il numero di build (`bundleVersion` in `tauri.conf.json`, oggi 5002) deve **crescere a ogni upload**; la versione breve viene ricavata dal tag togliendo il suffisso (`0.5.0-beta.2` → `0.5.0`), perché Apple accetta solo `X.Y.Z`.
+6. Il numero di build (`bundleVersion` in `tauri.conf.json`, oggi 5003) deve **crescere a ogni upload**; la versione breve viene ricavata dal tag togliendo il suffisso (`0.5.0-beta.2` → `0.5.0`), perché Apple accetta solo `X.Y.Z`.
 
 ### App Sandbox (macOS)
 Si imposta nel file entitlements del target macOS, non nell'App ID: `apps/desktop/src-tauri/Entitlements.mas.plist` (già nel repo), caricato da `tauri.mas.conf.json`. Chiavi: `com.apple.security.app-sandbox`, `network.client`, `network.server` (daemon/llama-server locali), `files.user-selected.read-write`, `device.audio-input` (dettatura), più `application-identifier` e `team-identifier` (riempiti dalla CI).
 
-**Limiti sandbox da conoscere**: la build Mac App Store esclude `computer-use` (controllo schermo/accessibilità non ammesso) e il processo non può eseguire binari scaricati a runtime (llama-server, vLLM): i runtime avviati come sidecar vanno incorporati nel bundle e firmati, oppure la versione MAS usa solo i runtime nativi Apple. Va verificato su un Mac con una build TestFlight prima di inviare in revisione. Il `.dmg` fuori store (Developer ID) resta senza sandbox e con tutte le funzioni.
+### Due versioni per macOS
+| | DMG (fuori store, `release.yml`) | Mac App Store (`store.yml`) |
+|---|---|---|
+| Sandbox | no | sì (`--features mas`) |
+| Cartella di lavoro | scelta in Impostazioni → `workspace.root` | quella dell'app (container), non modificabile |
+| Runtime esterni (llama-server, Ollama, vLLM, MLX…) | installabili e avviabili da AIW | non installabili né avviabili; un server già attivo (es. Ollama, LM Studio) viene usato |
+| Motore incorporato (`llama-embedded`, Metal), Apple Foundation Models | sì | sì |
+| `computer-use` (schermo e input sintetico) | sì | no (la build fallisce se `mas` e `computer-use` sono insieme) |
+| Addestramento (trainer Python) | sì | no |
+
+La UI mostra già "non supportato" con il motivo per ciò che la sandbox impedisce (stato `unsupported` dei runtime) e, in Dispositivi, la riga *Versione: Mac App Store (sandbox)*. Il flag `mas` si legge in `apps/desktop/src-tauri/src/lib.rs` e arriva al motore come `EngineOptions::sandboxed`.
+
+Da verificare su un Mac con la build TestFlight prima di inviare in revisione: avvio, download di un modello dalla gallery, chat con il motore incorporato, accesso a un server Ollama/LM Studio locale. Gli strumenti dell'agente che lanciano programmi (shell, browser CDP) restano soggetti alla sandbox.
+
+## Cosa esce dove
+- **GitHub Release** (`release.yml`): solo il `.dmg` macOS e l'installer Windows `.exe`.
+- **Mac App Store, iOS e Android** (`store.yml`): solo da qui, mai come file della release.
 
 ## Android: guida passo-passo
 1. **Account Play Console** (play.google.com/console): 25 $ una tantum, verifica identità. Per account personali nuovi, per andare in produzione servono 12 tester per 14 giorni di test chiuso.

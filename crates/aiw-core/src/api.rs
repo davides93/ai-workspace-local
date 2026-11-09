@@ -146,6 +146,9 @@ pub struct SystemInfo {
     pub mode: String,
     pub data_dir: String,
     pub workspace_root: String,
+    /// Mac App Store build (App Sandbox): see `EngineOptions::sandboxed`.
+    #[serde(default)]
+    pub sandboxed: bool,
     pub uptime_s: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_code: Option<String>,

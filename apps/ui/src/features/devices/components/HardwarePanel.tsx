@@ -62,6 +62,7 @@ export function HardwarePanel({ system }: { system: SystemInfo }) {
           ["Istruzioni", <Chips label="Istruzioni della CPU">{d.cpu.features.map((f) => <Chip key={f}>{f}</Chip>)}</Chips>],
           ["Dati", <span className="mono">{system.data_dir}</span>],
           ["Workspace", <span className="mono">{system.workspace_root}</span>],
+          system.sandboxed && ["Versione", "Mac App Store (sandbox): nessun programma esterno, cartella di lavoro dell'app"],
         ]} />
         <MemoryBudget device={d} />
         <section className="stack stack-sm" aria-label="Acceleratori">
