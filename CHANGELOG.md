@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0-beta.6 - pre-release
+
+- Solo flusso di rilascio: con un tag `v*` ora partono tutte le piattaforme da sole: DMG macOS e installer Windows sulla GitHub Release, iOS e macOS su TestFlight, Android sul track alpha (test chiuso). Nessuna modifica all'app rispetto alla beta.5.
+
 ## 0.5.0-beta.5 - pre-release
 
 - Browser dell'agente su iPad e iPhone: «Ferma» ora interrompe anche una chiamata del browser che non risponde, e ogni chiamata finisce entro 75 secondi con un messaggio che indica la fase (configurazione, controllo dell'indirizzo, caricamento, lettura). Il pannello che non si apre e uno script che non risponde (15 s) ora danno un errore invece di lasciare il run «In esecuzione».
