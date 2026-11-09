@@ -56,6 +56,8 @@ Si imposta nel file entitlements del target macOS, non nell'App ID: `apps/deskto
 | `computer-use` (schermo e input sintetico) | sì | no (la build fallisce se `mas` e `computer-use` sono insieme) |
 | Addestramento (trainer Python) | sì | no |
 
+Apple Foundation Models nella versione sandbox: l'App Sandbox non lascia eseguire un programma che l'app ha scritto da sé (l'helper `aiw-apple-fm` estratto in `app_data_dir/bin` non parte; provato con un'app di prova in sandbox). Per questo `store.yml` copia l'helper compilato da `build.rs` in `Contents/MacOS/aiw-apple-fm`, lo firma con `Entitlements.mas-helper.plist` (`app-sandbox` + `inherit`, richiesti da App Store Connect per i programmi lanciati dall'app) e firma di nuovo l'app; a runtime l'app preferisce l'helper accanto al proprio eseguibile a quello incorporato. Con un'app di prova in sandbox, helper nel bundle con `inherit`: disponibilità, chiamata di strumento e risultato funzionano; la firma con i certificati veri e la validazione di App Store Connect si vedono solo al primo upload.
+
 La UI mostra già "non supportato" con il motivo per ciò che la sandbox impedisce (stato `unsupported` dei runtime) e, in Dispositivi, la riga *Versione: Mac App Store (sandbox)*. Il flag `mas` si legge in `apps/desktop/src-tauri/src/lib.rs` e arriva al motore come `EngineOptions::sandboxed`.
 
 Da verificare su un Mac con la build TestFlight prima di inviare in revisione: avvio, download di un modello dalla gallery, chat con il motore incorporato, accesso a un server Ollama/LM Studio locale. Gli strumenti dell'agente che lanciano programmi (shell, browser CDP) restano soggetti alla sandbox.

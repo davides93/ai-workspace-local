@@ -346,9 +346,19 @@ impl ChatBackend for NativeBackend {
                 // before giving up. Twice in a row, and it is not tried first any more.
                 Outcome::Failed(first) => {
                     eprintln!("aiw-native: native tools failed ({first}); retrying with the text protocol");
-                    let worked = matches!(run_native(&*native, text_args, &stop, &tx, false), Outcome::Done);
-                    if worked && !stop.is_cancelled() && state.failures.fetch_add(1, Ordering::Relaxed) + 1 >= 2 {
+                    // Counted before the retry runs: its `Done` reaches the caller while this thread
+                    // is still going, and the next request must already see the verdict.
+                    let strikes = state.failures.fetch_add(1, Ordering::Relaxed) + 1;
+                    if strikes >= 2 {
                         state.off.store(true, Ordering::Relaxed);
+                    }
+                    let worked = matches!(run_native(&*native, text_args, &stop, &tx, false), Outcome::Done);
+                    // If the text protocol failed too, nothing says the native path is to blame.
+                    if !worked || stop.is_cancelled() {
+                        state.failures.fetch_sub(1, Ordering::Relaxed);
+                        if strikes >= 2 {
+                            state.off.store(false, Ordering::Relaxed);
+                        }
                     }
                 }
             }

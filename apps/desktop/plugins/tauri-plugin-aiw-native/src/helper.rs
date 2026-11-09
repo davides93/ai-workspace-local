@@ -227,17 +227,20 @@ pub fn macos_major() -> Option<u32> {
     String::from_utf8_lossy(&out.stdout).trim().split('.').next()?.parse().ok()
 }
 
+/// Tests that write and run a script (or spawn a process) one after the other: a parallel test
+/// forking in between would inherit the open file and make `exec` fail with "Text file busy".
+#[cfg(test)]
+pub(crate) fn serial() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
 
-    /// Tests that write and run a script one after the other: a parallel test forking in
-    /// between would inherit the open file and make `exec` fail with "Text file busy".
-    static SERIAL: StdMutex<()> = StdMutex::new(());
-    fn serial() -> std::sync::MutexGuard<'static, ()> {
-        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    use super::serial;
 
     /// A fake helper: a shell script that follows the protocol.
     #[cfg(unix)]
@@ -366,14 +369,18 @@ esac"#,
         let dir = tempfile::tempdir().unwrap();
         // Streams forever, like a long generation.
         let h = fake(dir.path(), r#"read req; while true; do printf '{"type":"text","delta":"x"}\n'; sleep 0.02; done"#);
+        // Cancelled as soon as the first event arrives (not after a fixed time: a slow start of
+        // the script must not make the test flaky).
         let cancel = CancellationToken::new();
         let c2 = cancel.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(150));
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let sink = events.clone();
+        let start = Instant::now();
+        let r = h.generate(&GenerateArgs { system: "sys".into(), prompt: "ciao".into(), ..Default::default() }, &cancel, &move |e| {
+            sink.lock().unwrap().push(e);
             c2.cancel();
         });
-        let start = Instant::now();
-        let (r, ev) = collect(&h, &cancel);
+        let ev = events.lock().unwrap().clone();
         r.unwrap();
         assert!(start.elapsed() < Duration::from_secs(5));
         assert!(!ev.is_empty() && !matches!(ev.last(), Some(NativeEvent::Done)));

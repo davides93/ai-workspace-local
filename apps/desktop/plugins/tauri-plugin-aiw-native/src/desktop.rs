@@ -2,6 +2,7 @@ use crate::helper::Helper;
 use crate::{GenerateArgs, NativeEvent, NativeGenerate, NativeRuntime};
 use aiw_core::{Error, Result};
 use serde::de::DeserializeOwned;
+use std::path::{Path, PathBuf};
 use tauri::plugin::PluginApi;
 #[cfg(aiw_apple_fm_helper)]
 use tauri::Manager;
@@ -24,6 +25,11 @@ fn locate_helper<R: Runtime>(app: &AppHandle<R>) -> Option<Helper> {
     if let Some(p) = std::env::var_os("AIW_NATIVE_HELPER") {
         return Some(Helper::new(p));
     }
+    // A helper shipped inside the app bundle (Mac App Store build): the App Sandbox does not let
+    // an app run a program it wrote itself, only the signed ones inside its bundle.
+    if let Some(p) = bundled_helper() {
+        return Some(Helper::new(p));
+    }
     #[cfg(aiw_apple_fm_helper)]
     {
         let dir = app.path().app_data_dir().ok()?.join("bin");
@@ -34,6 +40,18 @@ fn locate_helper<R: Runtime>(app: &AppHandle<R>) -> Option<Helper> {
     }
     let _ = app;
     None
+}
+
+/// File name of the helper when it is shipped next to the app's executable.
+const BUNDLED_HELPER: &str = "aiw-apple-fm";
+
+/// `Contents/MacOS/aiw-apple-fm` of the running app, if it is there.
+fn bundled_helper() -> Option<PathBuf> {
+    bundled_helper_beside(&std::env::current_exe().ok()?)
+}
+
+fn bundled_helper_beside(exe: &Path) -> Option<PathBuf> {
+    Some(exe.parent()?.join(BUNDLED_HELPER)).filter(|p| p.is_file())
 }
 
 /// Desktop: native system models. macOS 26+ on Apple Silicon has Apple Foundation Models, reached
@@ -94,6 +112,7 @@ mod helper_tests {
     /// Schemas, native history and context fitting, without the model.
     #[test]
     fn swift_selftest_passes() {
+        let _serial = crate::helper::serial();
         let (_dir, h) = helper();
         let out = std::process::Command::new(h.path()).arg("selftest").output().unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -104,6 +123,7 @@ mod helper_tests {
     #[test]
     #[ignore = "needs Apple Intelligence"]
     fn model_calls_a_tool_and_then_uses_its_result() {
+        let _serial = crate::helper::serial();
         let (_dir, h) = helper();
         if !h.availability().map(|a| a.available).unwrap_or(false) {
             eprintln!("Apple Intelligence not available: skipped");
@@ -233,5 +253,24 @@ mod helper_tests {
         let text: String = second.iter().filter_map(|d| if let ChatDelta::Text(t) = d { Some(t.as_str()) } else { None }).collect();
         assert!(text.to_lowercase().contains("example"), "{text}");
         assert!(matches!(second.last(), Some(ChatDelta::Done { finish_reason: Some(r) }) if r == "stop"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_helper_is_found_next_to_the_executable_only_when_it_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("AI Workspace");
+        std::fs::write(&exe, b"app").unwrap();
+        assert_eq!(bundled_helper_beside(&exe), None);
+        std::fs::write(dir.path().join(BUNDLED_HELPER), b"helper").unwrap();
+        assert_eq!(bundled_helper_beside(&exe), Some(dir.path().join(BUNDLED_HELPER)));
+        // A folder with that name is not a helper.
+        std::fs::remove_file(dir.path().join(BUNDLED_HELPER)).unwrap();
+        std::fs::create_dir(dir.path().join(BUNDLED_HELPER)).unwrap();
+        assert_eq!(bundled_helper_beside(&exe), None);
     }
 }
