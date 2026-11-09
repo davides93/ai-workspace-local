@@ -61,6 +61,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "aarch64-apple-ios" }
       - uses: Swatinem/rust-cache@v2
+      # App Store Connect accetta solo app iOS compilate con l'SDK iOS 26 (Xcode 26+).
+      - name: Xcode 26 (SDK iOS 26)
+        shell: bash
+        run: |
+          dev="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)"
+          [ -n "$dev" ] || { echo "::error::Xcode 26 non installato su questo runner"; exit 1; }
+          sudo xcode-select -s "$dev/Contents/Developer"
+          xcodebuild -version
       - run: npm ci --prefix apps/ui && npm ci --prefix apps/desktop
       - name: Build firmato (.ipa)
         working-directory: apps/desktop
