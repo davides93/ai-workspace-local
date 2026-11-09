@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "targets": ["app"],
+    "macOS": {
+      "entitlements": "Entitlements.mas.plist",
+      "files": { "embedded.provisionprofile": "embedded.provisionprofile" }
+    }
+  }
+}
