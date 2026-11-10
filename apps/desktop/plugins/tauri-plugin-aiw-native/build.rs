@@ -11,6 +11,55 @@ fn main() {
     println!("cargo:rerun-if-env-changed=AIW_APPLE_FM_DEVELOPER_DIR");
     println!("cargo:rustc-check-cfg=cfg(aiw_apple_fm_helper)");
     build_apple_helper();
+    build_macos_browser();
+}
+
+/// Native browser is linked into the sandboxed app, never launched as an external helper.
+fn build_macos_browser() {
+    println!("cargo:rerun-if-changed=macos-browser");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") || std::env::var_os("CARGO_FEATURE_MACOS_BROWSER").is_none() {
+        return;
+    }
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let arch = if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") { "arm64" } else { "x86_64" };
+    let target = format!("{arch}-apple-macos11.0");
+    let sdk = Command::new("xcrun").args(["--sdk", "macosx", "--show-sdk-path"]).output().expect("macOS SDK");
+    assert!(sdk.status.success(), "macOS SDK unavailable");
+    let sdk = String::from_utf8(sdk.stdout).unwrap();
+    let built = Command::new("xcrun")
+        .args([
+            "--sdk",
+            "macosx",
+            "swiftc",
+            "-O",
+            "-parse-as-library",
+            "-emit-library",
+            "-static",
+            "-module-name",
+            "AiwBrowser",
+            "-target",
+            &target,
+            "-sdk",
+            sdk.trim(),
+            "macos-browser/Browser.swift",
+            "-o",
+        ])
+        .arg(out.join("libaiw_browser.a"))
+        .output()
+        .expect("swiftc for native browser");
+    assert!(built.status.success(), "native browser: {}", String::from_utf8_lossy(&built.stderr));
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=aiw_browser");
+    // Apple's linker consumes LC_LINKER_OPTION entries in the Swift object, including its
+    // framework/runtime libraries. Supply the SDK stubs; the OS provides the Swift runtime.
+    println!("cargo:rustc-link-search=native={}/usr/lib/swift", sdk.trim());
+    // Older deployment targets also need Swift's static compatibility shims from the toolchain.
+    let swiftc = Command::new("xcrun").args(["--sdk", "macosx", "--find", "swiftc"]).output().expect("Swift toolchain");
+    assert!(swiftc.status.success(), "Swift toolchain unavailable");
+    let swiftc = PathBuf::from(String::from_utf8(swiftc.stdout).unwrap().trim());
+    let runtime = swiftc.parent().unwrap().parent().unwrap().join("lib/swift/macosx");
+    println!("cargo:rustc-link-search=native={}", runtime.display());
+    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
 }
 
 /// Builds the Apple Foundation Models helper (`macos-helper/main.swift`) for macOS on Apple

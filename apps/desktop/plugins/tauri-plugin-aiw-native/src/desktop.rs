@@ -63,6 +63,11 @@ pub struct NativeLlm<R: Runtime> {
 }
 
 impl<R: Runtime> NativeLlm<R> {
+    #[cfg(all(target_os = "macos", feature = "macos-browser"))]
+    pub fn browser_call(&self, method: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
+        crate::macos_browser::call(method, payload)
+    }
+
     pub fn availability(&self) -> Result<Vec<NativeRuntime>> {
         let Some(helper) = &self.helper else { return Ok(vec![]) };
         // The helper is built for macOS 26: on an older system it cannot even start.

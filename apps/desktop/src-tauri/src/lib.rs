@@ -29,7 +29,7 @@ fn aiw_run_events(state: tauri::State<'_, Shell>, run_id: String) -> Vec<Value> 
     state.engine.run_events(&run_id).into_iter().map(|e| json!({ "seq": e.seq, "event": e.event })).collect()
 }
 
-/// The "browser" button of the chat: shows the agent's in-app browser again (iOS, iPadOS, Android), on the
+/// The "browser" button of the chat: shows the native browser again (mobile and Mac App Store), on the
 /// page it has. `false` when this device has no in-app browser.
 #[tauri::command]
 async fn aiw_browser_show(state: tauri::State<'_, Shell>) -> Result<bool, String> {
@@ -102,8 +102,8 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             engine.register_native_stt(Arc::new(NativeSpeech(app.handle().clone())));
 
-            // Mobile: the browser tools drive the app's own WebView (a visible panel).
-            #[cfg(mobile)]
+            // App Sandbox cannot launch/control Chrome. Use an isolated native WebView, as on mobile.
+            #[cfg(any(mobile, all(target_os = "macos", feature = "mas")))]
             engine.browser().set_webview(Arc::new(WebViewHandle(app.handle().clone())));
 
             // Forward the run-event bus to the webview.
@@ -164,17 +164,17 @@ pub fn run() {
 }
 
 /// Adapter between the browser tools and the plugin's in-app WebView.
-#[cfg(mobile)]
+#[cfg(any(mobile, all(target_os = "macos", feature = "mas")))]
 struct WebViewHandle(tauri::AppHandle<tauri::Wry>);
 
-#[cfg(mobile)]
+#[cfg(any(mobile, all(target_os = "macos", feature = "mas")))]
 impl WebViewHandle {
     fn call(&self, method: &str, payload: serde_json::Value) -> aiw_core::Result<serde_json::Value> {
         self.0.state::<tauri_plugin_aiw_native::NativeLlm<tauri::Wry>>().browser_call(method, payload)
     }
 }
 
-#[cfg(mobile)]
+#[cfg(any(mobile, all(target_os = "macos", feature = "mas")))]
 impl aiw_tools::webview::WebViewBridge for WebViewHandle {
     fn configure(&self, proxy_port: u16) -> aiw_core::Result<()> {
         self.call("browserConfigure", serde_json::json!({ "proxyPort": proxy_port })).map(|_| ())

@@ -22,6 +22,8 @@ use tokio_util::sync::CancellationToken;
 #[cfg(desktop)]
 mod desktop;
 pub mod helper;
+#[cfg(all(target_os = "macos", feature = "macos-browser"))]
+mod macos_browser;
 #[cfg(mobile)]
 mod mobile;
 pub mod native_tools;
