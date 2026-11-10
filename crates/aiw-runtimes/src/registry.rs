@@ -867,9 +867,9 @@ fn make_backend(
     served_name: Option<String>,
 ) -> Arc<dyn ChatBackend> {
     if m.api == "ollama" {
-        Arc::new(OllamaBackend::new(endpoint, api_key, timeout))
+        Arc::new(OllamaBackend::new(endpoint, api_key, timeout).with_thinking(m.thinking.clone()))
     } else {
-        Arc::new(OpenAiBackend::new(endpoint, api_key, timeout).with_model_override(served_name))
+        Arc::new(OpenAiBackend::new(endpoint, api_key, timeout).with_model_override(served_name).with_thinking(m.thinking.clone()))
     }
 }
 

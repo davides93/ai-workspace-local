@@ -1,6 +1,7 @@
 [
  {
   "id": "llama-server",
+  "thinking": { "style": "template-kwargs", "budget_field": "reasoning_budget_tokens" },
   "name": "llama.cpp server",
   "vendor": "ggml-org",
   "kind": "sidecar",
@@ -193,6 +194,7 @@
  },
  {
   "id": "ollama",
+  "thinking": { "style": "reasoning-effort" },
   "name": "Ollama",
   "vendor": "Ollama",
   "kind": "sidecar",
@@ -291,6 +293,7 @@
  },
  {
   "id": "lmstudio",
+  "thinking": { "style": "prompt-suffix" },
   "name": "LM Studio",
   "vendor": "Element Labs",
   "kind": "sidecar",
@@ -354,6 +357,7 @@
  },
  {
   "id": "vllm",
+  "thinking": { "style": "template-kwargs" },
   "name": "vLLM",
   "vendor": "vLLM project",
   "kind": "sidecar",
@@ -683,6 +687,7 @@
  },
  {
   "id": "mlx-lm",
+  "thinking": { "style": "prompt-suffix" },
   "name": "MLX LM",
   "vendor": "Apple ML Research",
   "kind": "sidecar",
@@ -1134,6 +1139,7 @@
  },
  {
   "id": "koboldcpp",
+  "thinking": { "style": "prompt-suffix" },
   "name": "KoboldCpp",
   "vendor": "LostRuins",
   "kind": "sidecar",
@@ -1237,6 +1243,7 @@
  },
  {
   "id": "llamafile",
+  "thinking": { "style": "prompt-suffix" },
   "name": "llamafile",
   "vendor": "Mozilla.ai",
   "kind": "sidecar",
@@ -1778,6 +1785,7 @@
  },
  {
   "id": "llama-embedded",
+  "thinking": { "style": "prompt-suffix" },
   "name": "llama.cpp (embedded)",
   "vendor": "ggml-org",
   "kind": "embedded",
@@ -1841,6 +1849,7 @@
  },
  {
   "id": "ort-genai",
+  "thinking": { "style": "prompt-suffix" },
   "name": "ONNX Runtime GenAI",
   "vendor": "Microsoft",
   "kind": "embedded",

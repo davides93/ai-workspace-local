@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { models, profiles, runtimes } from "../../../shared/api/mock/fixtures";
 import type { InferenceProfile, LocalModel } from "../../../shared/api/types";
 import {
-  blankProfile, chatRuntimes, compatibleModels, hasProfileErrors, idForProfile, incompatibility, modelAfterRuntimeChange, normalizeProfile, validateProfile,
+  blankProfile, chatRuntimes, compatibleModels, hasProfileErrors, hiddenProfileErrors, idForProfile, incompatibility, modelAfterRuntimeChange, normalizeProfile, validateProfile,
 } from "./profiles";
 
 const model = (id: string, compat: { id: string; available: boolean; reason?: string }[], over: Partial<LocalModel> = {}): LocalModel => ({
@@ -111,5 +111,24 @@ describe("validateProfile", () => {
     expect(wrong).toEqual([expect.objectContaining({ field: "model", level: "warn" })]);
     const ctxModel = { ...ctx, models: [model("a", [{ id: "llama-server", available: true }], { context_length: 8192 })] };
     expect(validateProfile(ok({ params: { context: 16384 } }), ctxModel).map((i) => i.field)).toEqual(["context"]);
+  });
+});
+
+describe("what saving the simple form keeps", () => {
+  it("keeps the numbers, the adapters and the reasoning already stored", () => {
+    const stored = ok({ params: { temperature: 0.45, top_p: 0.8, context: 16384, max_tokens: 3000, thinking: "deep", thinking_budget: 4096, adapters: [{ path: "/a/lora.gguf", scale: 0.5 }] } });
+    expect(normalizeProfile(stored).params).toEqual(stored.params);
+  });
+  it("drops a reasoning value that is not one of the three and a budget that is not a number", () => {
+    const n = normalizeProfile(ok({ params: { thinking: "tanto" as never, thinking_budget: Number.NaN } }));
+    expect(n.params).toEqual({});
+  });
+  it("checks the reasoning budget", () => {
+    expect(validateProfile(ok({ params: { thinking_budget: 0 } }), ctx).map((i) => i.field)).toEqual(["thinking_budget"]);
+    expect(hasProfileErrors(validateProfile(ok({ params: { thinking_budget: 2048 } }), ctx))).toBe(false);
+  });
+  it("tells errors in fields the simple form hides from the ones it shows", () => {
+    const issues = validateProfile(ok({ name: "", params: { context: 100 } }), ctx);
+    expect(hiddenProfileErrors(issues).map((i) => i.field)).toEqual(["context"]);
   });
 });

@@ -5,7 +5,7 @@ import type {
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
+  PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus, ThinkingMode,
 } from "./types";
 
 /** What the current carrier can do; the UI branches on this instead of sniffing `kind`. */
@@ -127,7 +127,8 @@ export interface Transport {
   /** Asks the agent for a lesson on this conversation now (the answer waits for the model). */
   reflectSession(sessionId: string): Promise<Lesson>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
-  startRun(sessionId: string, input: string, kind?: "a2ui.action"): Promise<{ run_id: string }>;
+  /** `thinking` is the reasoning of this run only: it wins over the profile's. */
+  startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode): Promise<{ run_id: string }>;
   cancelRun(runId: string): Promise<void>;
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void): () => void;
   activeRun(sessionId: string): Promise<string | null>;

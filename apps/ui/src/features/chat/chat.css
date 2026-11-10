@@ -177,6 +177,8 @@
 .ws-composer-box textarea { flex: 1; min-width: 0; min-height: 24px; max-height: 200px; padding: 4px 0; border: 0; outline: none; background: transparent; resize: none; overflow-y: auto; font-family: var(--font-body); font-size: var(--fs-md); line-height: 1.5; }
 .ws-composer-box textarea:disabled { cursor: not-allowed; }
 .ws-composer-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-top: 6px; font-size: var(--fs-xs); color: var(--fg-faint); }
+.ws-think { display: inline-flex; align-items: center; gap: 6px; }
+.ws-think select { width: auto; min-height: 0; padding-block: 2px; font-size: var(--fs-xs); }
 .ws-composer-model { min-width: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (pointer: coarse) {
   .ws-composer-hint { display: none; }

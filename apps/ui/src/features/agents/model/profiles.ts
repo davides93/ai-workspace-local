@@ -1,6 +1,7 @@
 // Inference profiles: which models a runtime can serve, defaults, ids and checks. Pure logic.
 
 import type { InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
+import { isThinkingMode } from "../../../shared/lib/thinking";
 import { slugify, uniqueId } from "./agents";
 
 /** A speech-to-text model (Whisper): it serves the voice mode, never a chat profile. */
@@ -44,13 +45,16 @@ export function idForProfile(name: string, existing: readonly InferenceProfile[]
 /** Empty optional fields are left out so the backend keeps its own defaults. */
 export function normalizeProfile(p: InferenceProfile): InferenceProfile {
   const params: InferenceProfile["params"] = {};
-  const put = <K extends Exclude<keyof InferenceProfile["params"], "adapters">>(k: K, v: number | undefined) => {
+  const put = <K extends "temperature" | "top_p" | "max_tokens" | "context">(k: K, v: number | undefined) => {
     if (v !== undefined && Number.isFinite(v)) params[k] = v;
   };
   put("temperature", p.params.temperature);
   put("top_p", p.params.top_p);
   put("max_tokens", p.params.max_tokens === undefined ? undefined : Math.round(p.params.max_tokens));
   put("context", p.params.context === undefined ? undefined : Math.round(p.params.context));
+  if (isThinkingMode(p.params.thinking)) params.thinking = p.params.thinking;
+  const budget = p.params.thinking_budget;
+  if (budget !== undefined && Number.isFinite(budget) && budget >= 1) params.thinking_budget = Math.round(budget);
   const adapters = (p.params.adapters ?? [])
     .map((a) => ({ path: a.path.trim(), scale: a.scale !== undefined && Number.isFinite(a.scale) ? a.scale : undefined }))
     .filter((a) => a.path !== "")
@@ -61,7 +65,7 @@ export function normalizeProfile(p: InferenceProfile): InferenceProfile {
 }
 
 export interface ProfileIssue {
-  field: "name" | "runtime_id" | "model" | "temperature" | "top_p" | "context" | "max_tokens" | "adapters";
+  field: "name" | "runtime_id" | "model" | "temperature" | "top_p" | "context" | "max_tokens" | "thinking_budget" | "adapters";
   level: "error" | "warn";
   message: string;
 }
@@ -82,6 +86,8 @@ export function validateProfile(p: InferenceProfile, ctx: { runtimes: readonly R
   if (c !== undefined && m !== undefined && Number.isFinite(c) && Number.isFinite(m) && m >= c) {
     issues.push({ field: "max_tokens", level: "warn", message: "La risposta massima è pari o superiore al contesto: non resta spazio per la conversazione." });
   }
+  const tb = p.params.thinking_budget;
+  if (tb !== undefined && (!Number.isFinite(tb) || tb < 1)) issues.push({ field: "thinking_budget", level: "error", message: "Indica almeno 1 token di ragionamento." });
   const named = (p.params.adapters ?? []).filter((a) => a.path.trim() !== "");
   const runtime = ctx.runtimes.find((r) => r.id === p.runtime_id);
   if (named.length > 0 && runtime && !runtime.adapter_format) {
@@ -100,5 +106,11 @@ export function validateProfile(p: InferenceProfile, ctx: { runtimes: readonly R
   }
   return issues;
 }
+
+/** Fields the simple form does not show: a problem in one of them must be said, or "Salva" is off for no visible reason. */
+const SIMPLE_FIELDS: ProfileIssue["field"][] = ["name", "model"];
+
+export const hiddenProfileErrors = (issues: readonly ProfileIssue[]): ProfileIssue[] =>
+  issues.filter((i) => i.level === "error" && !SIMPLE_FIELDS.includes(i.field));
 
 export const hasProfileErrors = (issues: readonly ProfileIssue[]): boolean => issues.some((i) => i.level === "error");

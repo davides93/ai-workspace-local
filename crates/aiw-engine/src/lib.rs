@@ -1285,6 +1285,7 @@ impl Engine {
             .chain(self.remote_subagents())
             .collect();
         let agent_budget = agent.budget.clone().unwrap_or_default();
+        let thinking = self.thinking_for(&profile, None);
         RunInput {
             run_id: run_id.into(),
             thread_id: thread_id.into(),
@@ -1310,7 +1311,16 @@ impl Engine {
             in_team: false,
             shared: Default::default(),
             root_run: run_id.into(),
+            thinking,
         }
+    }
+
+    /// The reasoning mode of a run: the override of the run, else the profile's. A model that does
+    /// not have the `reasoning` capability (or is not known) gets none: nothing is sent to it.
+    pub(crate) fn thinking_for(&self, profile: &aiw_core::api::InferenceProfile, over: Option<ThinkingMode>) -> Option<ThinkingMode> {
+        let mode = over.or(profile.params.thinking)?;
+        let models = self.0.models.read().unwrap();
+        models.iter().any(|m| m.id == profile.model && m.capabilities.iter().any(|c| c == "reasoning")).then_some(mode)
     }
 
     /// The budget of a new top-level run: the agent's own limits, else the `agents.budget.*` settings
@@ -1335,6 +1345,18 @@ impl Engine {
 
     /// `kind: Some("a2ui.action")` marks the user turn as an A2UI action sent by a surface.
     pub async fn start_run_with(&self, session_id: &str, input: String, kind: Option<&str>) -> Result<String> {
+        self.start_run_opts(session_id, input, kind, None).await
+    }
+
+    /// [`Engine::start_run_with`] with the reasoning of this run: `thinking` wins over the one of
+    /// the profile (the "Ragionamento" selector of the chat). `None` keeps the profile's.
+    pub async fn start_run_opts(
+        &self,
+        session_id: &str,
+        input: String,
+        kind: Option<&str>,
+        thinking: Option<ThinkingMode>,
+    ) -> Result<String> {
         if input.trim().is_empty() {
             return Err(Error::Invalid("messaggio vuoto".into()));
         }
@@ -1348,7 +1370,7 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
-        self.start_run_inner(session_id, input, name, 0).await
+        self.start_run_inner(session_id, input, name, 0, thinking).await
     }
 
     /// Most handoffs one user message can chain before the conversation stops with a note.
@@ -1362,11 +1384,19 @@ impl Engine {
         input: String,
         name: Option<String>,
         hops: u32,
+        thinking: Option<ThinkingMode>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(self.start_run_body(session_id, input, name, hops))
+        Box::pin(self.start_run_body(session_id, input, name, hops, thinking))
     }
 
-    async fn start_run_body(&self, session_id: &str, input: String, name: Option<String>, hops: u32) -> Result<String> {
+    async fn start_run_body(
+        &self,
+        session_id: &str,
+        input: String,
+        name: Option<String>,
+        hops: u32,
+        thinking: Option<ThinkingMode>,
+    ) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
         // removed meanwhile is a conflict the user can fix (the UI must not treat it as deleted).
@@ -1429,8 +1459,10 @@ impl Engine {
         session.updated_at = now_rfc3339();
         session.last_status = Some("running".into());
         self.0.store.upsert_session(&session)?;
+        let mode = self.thinking_for(&profile, thinking);
         let mut run_input =
             self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
+        run_input.thinking = mode;
         if let Some(team) = &team {
             self.apply_team(&mut run_input, team);
         }
@@ -1492,7 +1524,7 @@ impl Engine {
                 engine.maybe_reflect(&session.id, Some(rid.clone()), learning::ReflectTrigger::Failure);
             }
             if let (Ok(()), Some((to, summary))) = (&res, out.handoff) {
-                engine.continue_handoff(&session.id, &from_name, &from_mode, &to, &summary, hops).await;
+                engine.continue_handoff(&session.id, &from_name, &from_mode, &to, &summary, hops, thinking).await;
             }
         });
         Ok(run_id)
@@ -1500,7 +1532,17 @@ impl Engine {
 
     /// The run of a session ended asking for a handoff: moves the session to the new agent and
     /// starts it with the summary. A handoff that cannot be carried out leaves a note instead.
-    async fn continue_handoff(&self, session_id: &str, from_name: &str, from_mode: &str, to: &str, summary: &str, hops: u32) {
+    #[allow(clippy::too_many_arguments)]
+    async fn continue_handoff(
+        &self,
+        session_id: &str,
+        from_name: &str,
+        from_mode: &str,
+        to: &str,
+        summary: &str,
+        hops: u32,
+        thinking: Option<ThinkingMode>,
+    ) {
         let note = |text: String| {
             let msg = ChatMessage {
                 id: new_id("msg"),
@@ -1532,7 +1574,7 @@ impl Engine {
         }
         self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
         let input = format!("[Passaggio da {from_name}] {summary}");
-        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1).await {
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking).await {
             note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
         }
     }
@@ -2266,6 +2308,8 @@ mod tests_learning;
 mod tests_optimize;
 #[cfg(test)]
 mod tests_routing;
+#[cfg(test)]
+mod tests_thinking;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]

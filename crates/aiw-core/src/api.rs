@@ -451,6 +451,16 @@ pub enum PullRequest {
 
 // ---------------------------------------------------------------- profiles & agents
 
+/// Reasoning ("thinking") of a model that can do it: `off` never, `deep` always (larger budget),
+/// `auto` only where it pays: the first model call of a run and the one after a failure.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingMode {
+    Off,
+    Auto,
+    Deep,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct InferenceParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -461,6 +471,14 @@ pub struct InferenceParams {
     pub max_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<u32>,
+    /// How much the model reasons before answering ("Ragionamento" in the UI). `None` keeps the
+    /// model's own default and sends nothing to the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingMode>,
+    /// Most tokens the model may spend reasoning, when the runtime can limit it. `None`: the
+    /// defaults of the mode (see `aiw_agent::thinking`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<u32>,
     /// LoRA adapters applied to the model of the profile, by path (an adapter of the registry
     /// has its path in `AdapterInfo.path`). Only runtimes that declare `adapters` accept them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1478,5 +1496,20 @@ mod tests {
         let v = serde_json::to_value(info).unwrap();
         assert_eq!(v["name"], "fs");
         assert_eq!(v["status"], "connected");
+    }
+
+    #[test]
+    fn thinking_is_lowercase_optional_and_absent_from_old_profiles() {
+        let old: InferenceParams = serde_json::from_value(serde_json::json!({"temperature": 0.6, "context": 8192})).unwrap();
+        assert_eq!((old.thinking, old.thinking_budget), (None, None));
+        let v = serde_json::to_value(&old).unwrap();
+        assert!(v.get("thinking").is_none() && v.get("thinking_budget").is_none(), "{v}");
+        let new: InferenceParams = serde_json::from_value(serde_json::json!({"thinking": "deep", "thinking_budget": 4096})).unwrap();
+        assert_eq!((new.thinking, new.thinking_budget), (Some(ThinkingMode::Deep), Some(4096)));
+        assert_eq!(serde_json::to_value(&new).unwrap()["thinking"], "deep");
+        for (m, s) in [(ThinkingMode::Off, "off"), (ThinkingMode::Auto, "auto"), (ThinkingMode::Deep, "deep")] {
+            assert_eq!(serde_json::to_value(m).unwrap(), s);
+        }
+        assert!(serde_json::from_value::<InferenceParams>(serde_json::json!({"thinking": "tanto"})).is_err());
     }
 }

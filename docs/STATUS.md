@@ -136,7 +136,7 @@ su hash con parametri (sessione, agente e workflow nell'URL), nuova architettura
 estratto, contrasto AA in entrambi i temi, layout corretti su telefono e tablet. Dettagli in
 [UI-ARCHITECTURE.md](design/UI-ARCHITECTURE.md). La UI mostra l'errore di un run salvato come quello
 dal vivo, raggruppa i tool interni, mostra i segreti MCP mascherati e riporta a `#/chat` se la
-sessione aperta è stata eliminata altrove. L'impostazione `ui.mode` (default `simple`) riduce le
+sessione aperta è stata eliminata altrove. Il profilo ha `thinking`/`thinking_budget` (Ragionamento spento, automatico o approfondito, risolto a ogni chiamata del ciclo agente e traducibile per runtime dal campo `thinking` del manifest; override per run nella richiesta di avvio) e la UI semplice parla di «Stile» e «Ragionamento». L'impostazione `ui.mode` (default `simple`) riduce le
 sezioni a cinque e la prima esecuzione a un solo pulsante; `developer` (vista «Sviluppatore») mostra tutto; in modalità semplice la Panoramica mostra solo «Nuova chat», «Scarica un modello», «Il tuo assistente», approvazioni, conversazioni recenti e lezioni.
 
 ### 2.7 Piattaforme e build

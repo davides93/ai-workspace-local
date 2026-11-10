@@ -496,6 +496,8 @@ async fn main() -> Result<()> {
                     top_p: Some(0.95),
                     max_tokens: Some(4096),
                     context: Some(context.unwrap_or(8192)),
+                    thinking: None,
+                    thinking_budget: None,
                     adapters: adapter.into_iter().map(|path| aiw_core::api::AdapterRef { path, scale: None }).collect(),
                 },
             })?;

@@ -394,7 +394,21 @@ export interface InferenceProfile {
   description?: string;
   runtime_id: string;
   model: string;
-  params: { temperature?: number; top_p?: number; max_tokens?: number; context?: number; adapters?: AdapterRef[] };
+  params: InferenceParams;
+}
+
+/** How much a model reasons before answering ("Ragionamento"): `off`, `auto` (where it pays) or `deep` (always, longer). Absent: the model's own default. */
+export type ThinkingMode = "off" | "auto" | "deep";
+
+export interface InferenceParams {
+  temperature?: number;
+  top_p?: number;
+  max_tokens?: number;
+  context?: number;
+  thinking?: ThinkingMode;
+  /** Most tokens spent reasoning, when the runtime can limit it. */
+  thinking_budget?: number;
+  adapters?: AdapterRef[];
 }
 
 /** A LoRA adapter on disk: a GGUF file for llama.cpp, a folder for MLX and PEFT. */

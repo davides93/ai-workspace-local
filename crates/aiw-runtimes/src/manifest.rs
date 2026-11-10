@@ -1,5 +1,6 @@
 //! Declarative runtime manifests (ADR 0003).
 
+use crate::thinking::ThinkingControl;
 use aiw_core::schema::SettingsSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -56,6 +57,9 @@ pub struct RuntimeManifest {
     /// refusal).
     #[serde(default)]
     pub adapter_hint: Option<String>,
+    /// How the runtime lets a request switch reasoning on and off. Without it nothing is sent.
+    #[serde(default)]
+    pub thinking: ThinkingControl,
 }
 
 /// Launch arguments that load LoRA adapters (see [`crate::adapters`]).
@@ -272,6 +276,20 @@ pub fn builtin() -> Vec<RuntimeManifest> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn manifests_say_how_each_runtime_takes_the_reasoning_switch() {
+        use crate::thinking::ThinkingStyle::*;
+        let style = |id: &str| builtin().into_iter().find(|m| m.id == id).unwrap().thinking;
+        assert_eq!(style("llama-server").style, TemplateKwargs);
+        assert_eq!(style("llama-server").budget_field.as_deref(), Some("reasoning_budget_tokens"));
+        assert_eq!(style("ollama").style, ReasoningEffort);
+        assert_eq!(style("llama-embedded").style, PromptSuffix);
+        // System models, remote endpoints and runtimes whose switch is not documented get nothing.
+        for id in ["apple-fm", "gemini-nano", "phi-silica", "remote-openai", "sglang"] {
+            assert_eq!(style(id).style, crate::thinking::ThinkingStyle::None, "{id}");
+        }
+    }
 
     #[test]
     fn builtin_catalog_is_valid_and_covers_every_platform() {

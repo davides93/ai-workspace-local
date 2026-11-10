@@ -16,6 +16,7 @@ pub mod scripted;
 pub mod stt;
 pub mod supervisor;
 pub mod textproto;
+pub mod thinking;
 pub mod trainer;
 pub mod types;
 

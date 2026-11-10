@@ -622,9 +622,12 @@ struct RunBody {
     input: String,
     /// a2ui.action when a surface sends a user action
     kind: Option<String>,
+    /// Reasoning for this run only (`off` | `auto` | `deep`): wins over the profile's. Absent: the profile's.
+    #[serde(default)]
+    thinking: Option<aiw_core::api::ThinkingMode>,
 }
 async fn start_run(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<RunBody>) -> ApiResult<Value> {
-    ok(json!({"run_id": s.engine.start_run_with(&id, b.input, b.kind.as_deref()).await?}))
+    ok(json!({"run_id": s.engine.start_run_opts(&id, b.input, b.kind.as_deref(), b.thinking).await?}))
 }
 async fn cancel_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.cancel_run(&id)?;

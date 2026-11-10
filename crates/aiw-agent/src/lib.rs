@@ -13,6 +13,7 @@ pub mod schema;
 pub mod skills;
 pub mod team;
 pub mod think;
+pub mod thinking;
 
 pub use budget::RunBudget;
 pub use hooks::HookConfig;
@@ -148,6 +149,7 @@ mod tests {
             in_team: false,
             shared: Default::default(),
             root_run: "run_1".into(),
+            thinking: None,
         }
     }
 
@@ -350,6 +352,54 @@ mod tests {
         assert_eq!(note.role, "user");
         assert!(note.content.contains("write_file"));
         assert!(host.events.lock().unwrap().iter().any(|e| matches!(e, AgEvent::Custom { name, .. } if name == "aiw.self_check")));
+    }
+
+    fn thinking_of(host: &TestHost) -> Vec<Option<(bool, bool)>> {
+        host.backend.requests.lock().unwrap().iter().map(|r| r.thinking.map(|t| (t.enabled, t.deep))).collect()
+    }
+
+    #[tokio::test]
+    async fn auto_thinks_on_the_first_call_and_not_after_successful_tool_results() {
+        let turns = vec![ScriptedBackend::tool_turn("c1", "list_dir", json!({"path": "."})), ScriptedBackend::text_turn("Vuota.")];
+        let (host, dir) = setup(turns, true);
+        let mut inp = input(dir.path(), "ask");
+        inp.thinking = Some(aiw_core::api::ThinkingMode::Auto);
+        AgentRunner::run(inp, host.clone()).await.unwrap();
+        assert_eq!(thinking_of(&host), vec![Some((true, false)), Some((false, false))]);
+    }
+
+    #[tokio::test]
+    async fn auto_thinks_again_after_a_tool_error_and_a_failed_self_check() {
+        let turns = vec![
+            ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "note.md", "content": "- nuova"})),
+            ScriptedBackend::text_turn("Fatto, ho aggiunto la riga."),
+            ScriptedBackend::tool_turn("c2", "write_file", json!({"path": "note.md", "content": "- nuova", "append": true})),
+            ScriptedBackend::text_turn("Ora la riga è in fondo al file."),
+        ];
+        let (host, dir) = setup(turns, true);
+        std::fs::write(dir.path().join("note.md"), "Note:\n").unwrap();
+        let mut inp = input(dir.path(), "auto");
+        inp.tool_ctx.require_read_before_overwrite = true;
+        inp.thinking = Some(aiw_core::api::ThinkingMode::Auto);
+        AgentRunner::run(inp, host.clone()).await.unwrap();
+        // 1 first call · 2 after the tool error · 3 after the failed self-check · 4 after a good result
+        assert_eq!(thinking_of(&host), vec![Some((true, false)), Some((true, false)), Some((true, false)), Some((false, false))]);
+    }
+
+    #[tokio::test]
+    async fn off_and_deep_do_not_depend_on_the_turn_and_no_mode_sends_nothing() {
+        for (mode, want) in [
+            (Some(aiw_core::api::ThinkingMode::Off), Some((false, false))),
+            (Some(aiw_core::api::ThinkingMode::Deep), Some((true, true))),
+            (None, None),
+        ] {
+            let turns = vec![ScriptedBackend::tool_turn("c1", "list_dir", json!({"path": "."})), ScriptedBackend::text_turn("Vuota.")];
+            let (host, dir) = setup(turns, true);
+            let mut inp = input(dir.path(), "ask");
+            inp.thinking = mode;
+            AgentRunner::run(inp, host.clone()).await.unwrap();
+            assert_eq!(thinking_of(&host), vec![want, want], "{mode:?}");
+        }
     }
 
     /// Returns images like `browser_screenshot` and the `computer_*` tools do.

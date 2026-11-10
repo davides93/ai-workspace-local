@@ -1,10 +1,13 @@
 import { pickRuntime } from "../../models/model/profile";
 import { useMemo, useState } from "react";
+import { useUiMode } from "../../../app/useUiMode";
+import { canReason, effectiveThinking, isThinkingMode, THINKING_HINT, THINKING_LABEL, THINKING_MODES } from "../../../shared/lib/thinking";
+import { STYLE_PRESETS, styleOf, withStyle, type StyleChoice } from "../model/style";
 import { Button, Dialog, Field, Input, Select, StatusPill } from "../../../shared/ui";
 import { formatBytes, formatContext } from "../../../shared/lib/format";
 import type { AdapterRef, InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
 import {
-  blankProfile, chatRuntimes, compatibleModels, CONTEXT_PRESETS, hasProfileErrors, idForProfile, modelAfterRuntimeChange, normalizeProfile, validateProfile,
+  blankProfile, chatRuntimes, compatibleModels, CONTEXT_PRESETS, hasProfileErrors, hiddenProfileErrors, idForProfile, modelAfterRuntimeChange, normalizeProfile, validateProfile,
   type ProfileIssue,
 } from "../model/profiles";
 
@@ -30,6 +33,8 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
   onClose: () => void;
 }) {
   const isNew = profile === null;
+  const [uiMode] = useUiMode();
+  const developer = uiMode === "developer";
   const usable = useMemo(() => chatRuntimes(runtimes), [runtimes]);
   const [draft, setDraft] = useState<InferenceProfile>(() => {
     if (profile) return structuredClone(profile);
@@ -56,6 +61,9 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
 
   const availableModels = models.filter((model) => pickRuntime(model) !== null);
   const chosenModel = availableModels.find((model) => model.id === draft.model);
+  const style = styleOf(draft.params);
+  const thinking = effectiveThinking(undefined, draft.params.thinking);
+  const hiddenErrors = hiddenProfileErrors(all);
   const changeModel = (id: string) => {
     const model = availableModels.find((item) => item.id === id);
     const runtimeId = model && pickRuntime(model, draft.runtime_id);
@@ -94,25 +102,31 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
           </Field>
         </div>
 
-        <Field label="Modello disponibile qui" htmlFor="pf-model-simple" hint={chosenModel ? `Runtime: ${runtime?.name ?? draft.runtime_id}` : undefined}>
+        <Field label="Modello disponibile qui" htmlFor="pf-model-simple" error={developer ? undefined : err(issues, "model")} hint={chosenModel ? `Runtime: ${runtime?.name ?? draft.runtime_id}` : undefined}>
           <Select id="pf-model-simple" value={chosenModel?.id ?? ""} onChange={(event) => changeModel(event.target.value)}>
             <option value="">{draft.model && !chosenModel ? draft.model : "Scegli un modello…"}</option>
             {availableModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
           </Select>
         </Field>
-        <Field label="Stile di risposta" htmlFor="pf-style">
-          <Select id="pf-style" value={draft.params.temperature === undefined ? "default" :
-            [0.2, 0.7, 1].includes(draft.params.temperature) ? String(draft.params.temperature) : "custom"}
-            onChange={(event) => setParam({ temperature: event.target.value === "default" ? undefined : Number(event.target.value) })}>
+        <Field label="Stile di risposta" htmlFor="pf-style" hint={STYLE_PRESETS.find((p) => p.id === style)?.hint}>
+          <Select id="pf-style" value={style} onChange={(event) => setDraft((d) => ({ ...d, params: withStyle(d.params, event.target.value as StyleChoice) }))}>
             <option value="default">Predefinito del modello</option>
-            <option value="0.2">Preciso</option>
-            <option value="0.7">Bilanciato</option>
-            <option value="1">Creativo</option>
+            {STYLE_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
             <option value="custom" disabled>Personalizzato</option>
           </Select>
         </Field>
+        {(canReason(chosenModel) || draft.params.thinking !== undefined) && (
+          <Field label="Ragionamento" htmlFor="pf-thinking" hint={THINKING_HINT[thinking]}>
+            <Select id="pf-thinking" value={thinking} onChange={(event) => isThinkingMode(event.target.value) && setParam({ thinking: event.target.value })}>
+              {THINKING_MODES.map((m) => <option key={m} value={m}>{THINKING_LABEL[m]}</option>)}
+            </Select>
+          </Field>
+        )}
+        {!developer && hiddenErrors.length > 0 && (
+          <p className="field-error" role="alert">{hiddenErrors[0].message} Questo valore si corregge nella vista Sviluppatore (Impostazioni).</p>
+        )}
 
-        <details open={!chosenModel && !availableModels.length || undefined}>
+        {developer && <details open={!chosenModel && !availableModels.length || undefined}>
           <summary>Runtime e parametri avanzati</summary>
         <div className="cols-2">
           <Field label="Runtime" htmlFor="pf-runtime" error={err(issues, "runtime_id")} hint={runtime ? <span className="row"><StatusPill status={runtime.status} /><span>{runtime.status_detail ?? ""}</span></span> : undefined}>
@@ -153,6 +167,9 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
             <Field label="Risposta massima (token)" htmlFor="pf-max" error={err(issues, "max_tokens")} hint={warn(issues, "max_tokens")}>
               <Input id="pf-max" className="num" type="number" step={256} min={1} value={num(draft.params.max_tokens)} onChange={(e) => setParam({ max_tokens: parse(e.target.value) })} />
             </Field>
+            <Field label="Budget di ragionamento (token)" htmlFor="pf-tbudget" error={err(issues, "thinking_budget")} hint="Facoltativo: il tetto per ciò che il modello pensa prima di rispondere">
+              <Input id="pf-tbudget" className="num" type="number" step={256} min={1} value={num(draft.params.thinking_budget)} onChange={(e) => setParam({ thinking_budget: parse(e.target.value) })} />
+            </Field>
             <Field label="Top-p" htmlFor="pf-topp" error={err(issues, "top_p")} hint="Facoltativo, da 0 a 1">
               <Input id="pf-topp" className="num" type="number" step={0.05} min={0} max={1} value={num(draft.params.top_p)} onChange={(e) => setParam({ top_p: parse(e.target.value) })} />
             </Field>
@@ -175,7 +192,7 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
             />
           </div>
         </Field>
-        </details>
+        </details>}
         <button type="submit" className="sr-only" tabIndex={-1}>Salva</button>
       </form>
     </Dialog>

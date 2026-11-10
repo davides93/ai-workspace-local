@@ -169,6 +169,9 @@ impl RunHost for EngineHost {
         input.in_team = parent.in_team;
         input.shared = parent.shared.clone();
         input.root_run = parent.root_run.clone();
+        // Same reasoning rule as the parent (`auto` is resolved per call inside the sub-agent's own run);
+        // a sub-agent whose model cannot reason still gets nothing.
+        input.thinking = parent.thinking.and_then(|m| self.engine.thinking_for(&input.profile, Some(m)));
         if input.in_team && !input.agent.tools.iter().any(|t| t == "*" || t == aiw_agent::internal::TEAM_STATE) {
             input.agent.tools.push(aiw_agent::internal::TEAM_STATE.into());
         }

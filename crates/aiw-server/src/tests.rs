@@ -488,3 +488,26 @@ async fn voice_endpoints_refuse_in_the_api_error_shape() {
         .unwrap();
     assert_eq!(res.headers().get("x-frame-options").map(|v| v.to_str().unwrap()), Some("DENY"));
 }
+
+#[tokio::test]
+async fn a_run_takes_an_optional_reasoning_override() {
+    let (app, e, _d, _w) = app().await;
+    let (_, ses) = dispatch(app.clone(), "POST", "/api/sessions", Some(json!({"agent_id": "planner"}))).await;
+    let sid = ses["id"].as_str().unwrap().to_string();
+    let path = format!("/api/sessions/{sid}/runs");
+    // an unknown value is refused before anything starts
+    let (st, _) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ciao", "thinking": "tanto"}))).await;
+    assert!(st == 400 || st == 422, "{st}");
+    // a known value, like the old body without it, starts the run
+    let (st, run) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ciao", "thinking": "off"}))).await;
+    assert_eq!(st, 200, "{run}");
+    let rid = run["run_id"].as_str().unwrap().to_string();
+    for _ in 0..200 {
+        if e.run_done(&rid) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let (st, run) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ancora"}))).await;
+    assert_eq!(st, 200, "{run}");
+}

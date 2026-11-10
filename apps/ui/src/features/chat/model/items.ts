@@ -14,7 +14,7 @@ export interface ToolImage {
 export type Item =
   | { kind: "user"; id: string; text: string }
   | { kind: "text"; id: string; text: string; streaming: boolean }
-  | { kind: "reasoning"; id: string; text: string; streaming: boolean }
+  | { kind: "reasoning"; id: string; text: string; streaming: boolean; startedAt?: number; endedAt?: number }
   | { kind: "tool"; id: string; name: string; args: string; result?: string; status: ToolStatus; images?: ToolImage[]; startedAt?: number; endedAt?: number }
   | { kind: "approval"; req: ApprovalRequest; resolved?: boolean }
   | { kind: "subagent"; id: string; name: string; /** Run of the sub-agent, when the backend named it: its events are its trace. */ runId?: string; result?: string; interrupted?: boolean }
@@ -25,6 +25,14 @@ export type Item =
 
 export type ToolItem = Extract<Item, { kind: "tool" }>;
 export type ApprovalItem = Extract<Item, { kind: "approval" }>;
+
+/** Summary line of a reasoning row: while it goes on, afterwards how long it took (known for live runs only). */
+export function reasoningLabel(it: Extract<Item, { kind: "reasoning" }>): string {
+  if (it.streaming) return "Sta ragionando…";
+  if (it.startedAt === undefined || it.endedAt === undefined) return "Ragionamento";
+  const seconds = Math.max(1, Math.round((it.endedAt - it.startedAt) / 1000));
+  return `Ha ragionato per ${seconds} ${seconds === 1 ? "secondo" : "secondi"}`;
+}
 
 /** Stable React key of a row. */
 export const itemKey = (it: Item, index: number): string => `${it.kind}-${it.kind === "approval" ? it.req.id : it.id}-${index}`;

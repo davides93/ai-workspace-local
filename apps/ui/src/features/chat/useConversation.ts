@@ -5,7 +5,7 @@ import { errorMessage, isNotFound } from "../../shared/lib/errors";
 import { rememberRun } from "../../shared/lib/runIndex";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { AgEvent, ApprovalRequest, RunState } from "../../shared/api/types";
+import type { AgEvent, ApprovalRequest, RunState, ThinkingMode } from "../../shared/api/types";
 import { useRespondApproval } from "../approvals/api";
 import { actionText, type A2uiAction } from "./a2ui";
 import { useCancelRun, useStartRun } from "./api";
@@ -25,7 +25,7 @@ export type HistoryState = { status: "loading" | "ready" | "error"; error?: unkn
  * `onGone` runs when the backend answers 404 for the open session (it was deleted from another client):
  * loading its history, or sending to it. The view then leaves the conversation.
  */
-export function useConversation(sessionId: string | null, opts: { onGone?: (sessionId: string) => void } = {}) {
+export function useConversation(sessionId: string | null, opts: { onGone?: (sessionId: string) => void; /** Reasoning for the next runs of this conversation (the "Ragionamento" selector). */ thinking?: ThinkingMode } = {}) {
   const api = useApi();
   const qc = useQueryClient();
   const startRun = useStartRun();
@@ -45,6 +45,8 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
   current.current = sessionId;
   const onGone = useRef(opts.onGone);
   onGone.current = opts.onGone;
+  const thinking = useRef(opts.thinking);
+  thinking.current = opts.thinking;
 
   const handle = useCallback(
     (forSession: string, e: AgEvent) => {
@@ -150,7 +152,7 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
     const tempId = `u-${Date.now()}`;
     setItems((prev) => [...prev, { kind: "user", id: tempId, text }]);
     start.mutate(
-      { sessionId: sid, input: text },
+      { sessionId: sid, input: text, thinking: thinking.current },
       {
         onSuccess: ({ run_id }) => join(run_id, sid),
         onError: (e) => {
@@ -168,7 +170,7 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
     if (!sid || rid) return;
     setItems((prev) => [...prev, { kind: "action", id: `a-${Date.now()}`, name: a.name, context: a.context }]);
     start.mutate(
-      { sessionId: sid, input: actionText(a), kind: "a2ui.action" },
+      { sessionId: sid, input: actionText(a), kind: "a2ui.action", thinking: thinking.current },
       {
         onSuccess: ({ run_id }) => join(run_id, sid),
         onError: (e) => {

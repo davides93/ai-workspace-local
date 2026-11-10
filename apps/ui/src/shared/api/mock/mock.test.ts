@@ -506,6 +506,14 @@ describe("backend fixes in the demo", () => {
     await expect(api.removeMcpServer("nope")).rejects.toMatchObject({ status: 404 });
   });
 
+  it("takes the reasoning of a run and keeps it optional", async () => {
+    const api = new MockTransport();
+    const s = await api.createSession({ agent_id: "operator" });
+    const a = await api.startRun(s.id, "uno", undefined, "deep");
+    const b = await api.startRun(s.id, "due");
+    expect(api.runThinking).toEqual([{ runId: a.run_id, thinking: "deep" }, { runId: b.run_id, thinking: undefined }]);
+  });
+
   it("keeps one rating per reply, like the engine", async () => {
     const api = new MockTransport();
     const msgs = await api.messages("ses_bug");

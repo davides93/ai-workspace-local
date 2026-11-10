@@ -1,6 +1,7 @@
 //! OpenAI-compatible adapter (`api: "openai"`): llama-server, vLLM, SGLang, mlx-lm, TensorRT-LLM,
 //! Foundry Local, Lemonade, LM Studio, LocalAI, Ollama's /v1, paired AIW devices…
 
+use crate::thinking::{self, ThinkingControl, ThinkingStyle};
 use crate::types::*;
 use aiw_core::{Error, Result};
 use async_trait::async_trait;
@@ -18,18 +19,32 @@ pub struct OpenAiBackend {
     /// Model name the server actually serves, sent instead of the requested one (single-model
     /// sidecars started from a local path serve the model under another name).
     model_override: Option<String>,
+    /// How this runtime takes the reasoning switch (from its manifest).
+    thinking: ThinkingControl,
 }
 
 impl OpenAiBackend {
     /// `base` is the URL that ends with `/v1` (e.g. `http://127.0.0.1:8080/v1`).
     pub fn new(base: impl Into<String>, api_key: Option<String>, timeout: Duration) -> Self {
         let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).read_timeout(timeout).build().expect("http client");
-        Self { base: base.into().trim_end_matches('/').to_string(), api_key, http, model_override: None }
+        Self {
+            base: base.into().trim_end_matches('/').to_string(),
+            api_key,
+            http,
+            model_override: None,
+            thinking: ThinkingControl::default(),
+        }
     }
 
     /// Sends `model` in every request instead of the one the caller asked for.
     pub fn with_model_override(mut self, model: Option<String>) -> Self {
         self.model_override = model;
+        self
+    }
+
+    /// Sets how requests carry the reasoning switch ([`crate::thinking`]).
+    pub fn with_thinking(mut self, thinking: ThinkingControl) -> Self {
+        self.thinking = thinking;
         self
     }
 
@@ -44,10 +59,14 @@ impl OpenAiBackend {
         }
     }
 
-    fn body(req: &ChatRequest) -> Value {
+    fn body(&self, req: &ChatRequest) -> Value {
+        let mut messages = req.messages.clone();
+        if let (ThinkingStyle::PromptSuffix, Some(t)) = (self.thinking.style, &req.thinking) {
+            thinking::apply_prompt_suffix(&req.model, t, &mut messages);
+        }
         let mut b = json!({
             "model": req.model,
-            "messages": req.messages,
+            "messages": messages,
             "stream": true,
             "stream_options": {"include_usage": true},
         });
@@ -67,6 +86,9 @@ impl OpenAiBackend {
         }
         if !req.stop.is_empty() {
             b["stop"] = json!(req.stop);
+        }
+        if let Some(t) = &req.thinking {
+            thinking::apply_to_body(&self.thinking, t, &mut b);
         }
         b
     }
@@ -158,7 +180,7 @@ impl ChatBackend for OpenAiBackend {
             req.model = m.clone();
         }
         let res = tokio::select! {
-            r = self.auth(self.http.post(format!("{}/chat/completions", self.base))).json(&Self::body(&req)).send() => r.map_err(|e| Error::Runtime(format!("runtime non raggiungibile ({}): {e}", self.base)))?,
+            r = self.auth(self.http.post(format!("{}/chat/completions", self.base))).json(&self.body(&req)).send() => r.map_err(|e| Error::Runtime(format!("runtime non raggiungibile ({}): {e}", self.base)))?,
             _ = cancel.cancelled() => return Err(Error::Cancelled),
         };
         if !res.status().is_success() {
@@ -221,6 +243,49 @@ mod tests {
         assert!(p.feed(b"data: {\"a\":").is_empty());
         let out = p.feed(b"1}\n\ndata: [DONE]\n\n");
         assert_eq!(out, vec!["{\"a\":1}".to_string(), "[DONE]".to_string()]);
+    }
+
+    fn backend(style: ThinkingStyle, budget_field: Option<&str>) -> OpenAiBackend {
+        OpenAiBackend::new("http://127.0.0.1:1/v1", None, Duration::from_secs(1))
+            .with_thinking(ThinkingControl { style, budget_field: budget_field.map(String::from) })
+    }
+
+    fn request(model: &str, thinking: Option<ThinkingRequest>) -> ChatRequest {
+        ChatRequest { model: model.into(), messages: vec![Msg::user("ciao")], thinking, ..Default::default() }
+    }
+
+    #[test]
+    fn nothing_about_reasoning_is_sent_without_a_request() {
+        for style in [ThinkingStyle::None, ThinkingStyle::TemplateKwargs, ThinkingStyle::ReasoningEffort, ThinkingStyle::PromptSuffix] {
+            let b = backend(style, Some("reasoning_budget_tokens")).body(&request("qwen3-4b", None));
+            for key in ["chat_template_kwargs", "reasoning_effort", "reasoning_budget_tokens"] {
+                assert!(b.get(key).is_none(), "{style:?} {key}");
+            }
+            assert_eq!(b["messages"][0]["content"], "ciao");
+        }
+    }
+
+    #[test]
+    fn the_manifest_style_decides_what_the_body_carries() {
+        let on = Some(ThinkingRequest { enabled: true, deep: false, budget: Some(1024) });
+        let off = Some(ThinkingRequest { enabled: false, deep: false, budget: None });
+        let b = backend(ThinkingStyle::TemplateKwargs, Some("reasoning_budget_tokens")).body(&request("x", on));
+        assert_eq!(b["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(b["reasoning_budget_tokens"], 1024);
+        let b = backend(ThinkingStyle::ReasoningEffort, None).body(&request("x", off));
+        assert_eq!(b["reasoning_effort"], "none");
+        let b = backend(ThinkingStyle::None, None).body(&request("qwen3-4b", on));
+        assert!(b.get("chat_template_kwargs").is_none() && b.get("reasoning_effort").is_none());
+        assert_eq!(b["messages"][0]["content"], "ciao");
+    }
+
+    #[test]
+    fn the_prompt_suffix_style_edits_the_messages_of_qwen3_only() {
+        let off = Some(ThinkingRequest { enabled: false, deep: false, budget: None });
+        let b = backend(ThinkingStyle::PromptSuffix, None).body(&request("qwen3-4b", off));
+        assert_eq!(b["messages"][0]["content"], "ciao /no_think");
+        let b = backend(ThinkingStyle::PromptSuffix, None).body(&request("llama-3.2-3b", off));
+        assert_eq!(b["messages"][0]["content"], "ciao");
     }
 
     #[test]
