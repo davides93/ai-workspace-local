@@ -47,7 +47,7 @@
     },
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "bundleVersion": "5008"
+      "bundleVersion": "5009"
     },
     "iOS": {
       "minimumSystemVersion": "17.0",

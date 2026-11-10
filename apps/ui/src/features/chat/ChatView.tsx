@@ -48,10 +48,11 @@ export function ChatView() {
   const profiles = useProfiles();
   const config = useConfig();
   const createSession = useCreateSession();
-  // iPhone/iPad/Android: the agent's browser is a panel the user can close; this button brings it back.
+  // Mobile and Mac App Store: bring back the agent's native browser after the user closes it.
   const api = useApi();
   const system = useSystem();
-  const browserButton = api.openBrowser && (system.data?.device.os === "ios" || system.data?.device.os === "android")
+  const browserButton = api.openBrowser && (system.data?.device.os === "ios" || system.data?.device.os === "android"
+    || (system.data?.device.os === "macos" && system.data.sandboxed))
     ? () => { void api.openBrowser?.().catch((e: unknown) => toast(e instanceof Error ? e.message : "Non riesco ad aprire il browser.", "crit")); }
     : undefined;
 

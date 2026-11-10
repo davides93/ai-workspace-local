@@ -22,7 +22,7 @@ default = []
 computer-use = ["aiw-engine/computer-use"]
 # Mac App Store build (App Sandbox): no external programs are installed or launched, the agents work in
 # the app's own folder. Mutually exclusive with `computer-use`. See docs/store/README.md.
-mas = []
+mas = ["tauri-plugin-aiw-native/macos-browser"]
 # GPU variants of the embedded engine: `aiw-engine/llama-cuda|vulkan` imply `llama-embedded`
 # (see crates/aiw-engine/Cargo.toml). Never enable them on macOS/iOS, where Metal is automatic.
 cuda = ["aiw-engine/llama-cuda"]

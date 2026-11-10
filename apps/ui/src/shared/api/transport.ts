@@ -32,8 +32,8 @@ export interface Transport {
   /** Exchanges the 6-digit pairing code shown on the host device for the API token. */
   pair?(code: string): Promise<void>;
   /**
-   * Shows the agent's in-app browser again, on the page it has (iPhone/iPad shell only: there the
-   * browser is a panel the user can close). Resolves to false when this device has none.
+   * Shows the agent's native browser again, on the page it has (mobile and Mac App Store).
+   * Resolves to false when this device has none.
    */
   openBrowser?(): Promise<boolean>;
 

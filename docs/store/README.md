@@ -54,13 +54,16 @@ Si imposta nel file entitlements del target macOS, non nell'App ID: `apps/deskto
 | Runtime esterni (llama-server, Ollama, vLLM, MLX…) | installabili e avviabili da AIW | non installabili né avviabili; un server già attivo (es. Ollama, LM Studio) viene usato |
 | Motore incorporato (`llama-embedded`, Metal), Apple Foundation Models | sì | sì |
 | `computer-use` (schermo e input sintetico) | sì | no (la build fallisce se `mas` e `computer-use` sono insieme) |
+| Browser dell'agente | Chrome/Edge/Chromium con profilo dedicato | WebKit interno (macOS 14+), separato dalla UI, HTTPS tramite proxy di policy; nessun avvio di Chrome |
 | Addestramento (trainer Python) | sì | no |
 
 Apple Foundation Models nella versione sandbox: l'App Sandbox non lascia eseguire un programma che l'app ha scritto da sé (l'helper `aiw-apple-fm` estratto in `app_data_dir/bin` non parte; provato con un'app di prova in sandbox). Per questo `store.yml` copia l'helper compilato da `build.rs` in `Contents/MacOS/aiw-apple-fm`, lo firma con `Entitlements.mas-helper.plist` (`app-sandbox` + `inherit`, richiesti da App Store Connect per i programmi lanciati dall'app) e firma di nuovo l'app; a runtime l'app preferisce l'helper accanto al proprio eseguibile a quello incorporato. Con un'app di prova in sandbox, helper nel bundle con `inherit`: disponibilità, chiamata di strumento e risultato funzionano; la firma con i certificati veri e la validazione di App Store Connect si vedono solo al primo upload.
 
 La UI mostra già "non supportato" con il motivo per ciò che la sandbox impedisce (stato `unsupported` dei runtime) e, in Dispositivi, la riga *Versione: Mac App Store (sandbox)*. Il flag `mas` si legge in `apps/desktop/src-tauri/src/lib.rs` e arriva al motore come `EngineOptions::sandboxed`.
 
-Da verificare su un Mac con la build TestFlight prima di inviare in revisione: avvio, download di un modello dalla gallery, chat con il motore incorporato, accesso a un server Ollama/LM Studio locale. Gli strumenti dell'agente che lanciano programmi (shell, browser CDP) restano soggetti alla sandbox.
+Da verificare su un Mac con la build TestFlight prima di inviare in revisione: avvio, download di un modello dalla gallery, chat con il motore incorporato, accesso a un server Ollama/LM Studio locale e navigazione con l'agente. Gli strumenti che lanciano programmi esterni (shell) restano soggetti alla sandbox.
+
+Il flag `mas` abilita `tauri-plugin-aiw-native/macos-browser`: una WKWebView AppKit collegata staticamente all'app, senza IPC Tauri sulle pagine remote. Usa il proxy Rust e gli stessi strumenti del browser mobile. La finestra può essere chiusa e riaperta; il kill switch interrompe il caricamento e svuota la pagina. Su macOS precedenti al 14 viene mostrato un errore esplicito, senza tentare Chrome. Verifica locale in un'app di prova firmata ad hoc con App Sandbox: `bash apps/desktop/plugins/tauri-plugin-aiw-native/macos-browser/selftest.sh`; aggiungere `--online` per caricare anche example.com attraverso un tunnel HTTPS. Non modifica l'app installata.
 
 ## Cosa esce dove
 - **GitHub Release** (`release.yml`): solo il `.dmg` macOS e l'installer Windows `.exe`.
