@@ -3,7 +3,7 @@ import { useApi } from "../../shared/api/context";
 import { ignoreNotFound } from "../../shared/lib/errors";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { Feedback, Session } from "../../shared/api/types";
+import type { Feedback, Session, ThinkingMode } from "../../shared/api/types";
 import { withoutRating, withRating } from "./model/feedback";
 
 export function useSessions() {
@@ -85,7 +85,7 @@ export function useDeleteFeedback(sessionId: string | null) {
 export function useStartRun() {
   const api = useApi();
   return useMutation({
-    mutationFn: (v: { sessionId: string; input: string; kind?: "a2ui.action" }) => api.startRun(v.sessionId, v.input, v.kind),
+    mutationFn: (v: { sessionId: string; input: string; kind?: "a2ui.action"; thinking?: ThinkingMode }) => api.startRun(v.sessionId, v.input, v.kind, v.thinking),
     // The chat reports the failure itself (with the right wording): skip the generic toast.
     meta: { handled: true },
   });

@@ -4,11 +4,13 @@ import { Button, EmptyState, Field, Icon, Input, QueryState, Select } from "../.
 import { formatBytes } from "../../../shared/lib/format";
 import type { LocalModel } from "../../../shared/api/types";
 import { useModels } from "../api";
+import { hiddenCount, runnableOnly } from "../model/adviser";
 import { filterInstalled, installedFormats, originCounts, summarizeInstalled } from "../model/filters";
 import { ORIGINS, ORIGIN_ORDER } from "../model/origin";
 import { useQueryText } from "../useQueryText";
 import { DeleteModelDialog } from "./DeleteModelDialog";
 import { InstalledCard } from "./InstalledCard";
+import { ShowAllToggle, useRunnableFilter } from "./ShowAll";
 import { UseInProfileDialog } from "./UseInProfileDialog";
 
 /** Models on this device: AIW's own downloads plus the ones other apps already have, read in place. */
@@ -31,8 +33,11 @@ export function InstalledTab() {
   );
 }
 
-function InstalledList({ list }: { list: LocalModel[] }) {
+function InstalledList({ list: all }: { list: LocalModel[] }) {
   const query = useQueryParams();
+  // Simple mode: only the models that can run on this device, until "Mostra tutti".
+  const { simple, showAll } = useRunnableFilter();
+  const list = simple ? runnableOnly(all, showAll) : all;
   const [text, setText] = useQueryText("q");
   const origin = query.origin ?? "";
   const format = query.format ?? "";
@@ -71,6 +76,7 @@ function InstalledList({ list }: { list: LocalModel[] }) {
             {formats.map((f) => <option key={f} value={f}>.{f}</option>)}
           </Select>
         </Field>
+        {simple && hiddenCount(all) > 0 && <ShowAllToggle showAll={showAll} hidden={hiddenCount(all)} />}
         {filtered && <Button variant="ghost" size="sm" icon="close" onClick={clear}>Azzera filtri</Button>}
       </div>
       <p className="mh-count" role="status" aria-live="polite">

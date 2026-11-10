@@ -3,6 +3,7 @@
 
 import type { AgentProfile, BudgetLimits } from "../../../shared/api/types";
 import { slugify as slug, uniqueSlug } from "../../../shared/lib/slug";
+import { isAutoProfile } from "../../models/model/adviser";
 import { ALL, normalizeTools } from "./tools";
 
 /** Seeded on first run by crates/aiw-engine/src/defaults.rs `agents()`; the backend refuses to delete them (409). */
@@ -142,7 +143,8 @@ export function validateAgent(a: AgentProfile, ctx: AgentContext): AgentIssue[] 
   }
   const profilesLoaded = ctx.profilesLoaded ?? ctx.profileIds.length > 0;
   if (!a.inference_profile) issues.push({ field: "inference_profile", level: "error", message: "Scegli un profilo di inferenza." });
-  else if (profilesLoaded && !ctx.profileIds.includes(a.inference_profile)) {
+  // `auto:<task>` is not a stored profile: the adviser resolves it when a run starts.
+  else if (profilesLoaded && !isAutoProfile(a.inference_profile) && !ctx.profileIds.includes(a.inference_profile)) {
     issues.push({ field: "inference_profile", level: "error", message: "Il profilo scelto non esiste più: sceglierne un altro." });
   }
   if (!Number.isFinite(a.max_turns) || a.max_turns < 1 || a.max_turns > MAX_TURNS_LIMIT) {

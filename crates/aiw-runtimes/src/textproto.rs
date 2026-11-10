@@ -3,7 +3,7 @@
 //! `<tool_call>{"name": …, "arguments": …}</tool_call>` blocks (parsed by the agent loop) and
 //! results come back as `<tool_response>` user turns.
 
-use crate::types::ChatRequest;
+use crate::types::{ChatRequest, Msg};
 
 /// The conversation as `(role, content)` turns ready for a chat template.
 pub fn chat_turns(req: &ChatRequest) -> Vec<(String, String)> {
@@ -22,6 +22,7 @@ pub fn chat_turns(req: &ChatRequest) -> Vec<(String, String)> {
     };
     let mut turns: Vec<(String, String)> = Vec::new();
     let mut system_done = false;
+    let mut last_user: Option<usize> = None;
     for m in &req.messages {
         let text = m.text();
         match m.role.as_str() {
@@ -51,8 +52,18 @@ pub fn chat_turns(req: &ChatRequest) -> Vec<(String, String)> {
                 "user".into(),
                 format!("<tool_response name=\"{}\">\n{text}\n</tool_response>", m.name.clone().unwrap_or_default()),
             )),
-            _ => turns.push(("user".into(), text)),
+            _ => {
+                last_user = Some(turns.len());
+                turns.push(("user".into(), text));
+            }
         }
+    }
+    // These engines have no request field for it: Qwen3 takes the reasoning switch as text in the
+    // last thing the user said (see [`crate::thinking`]).
+    if let (Some(t), Some(i)) = (&req.thinking, last_user) {
+        let mut one = [Msg::user(std::mem::take(&mut turns[i].1))];
+        crate::thinking::apply_prompt_suffix(&req.model, t, &mut one);
+        turns[i].1 = one[0].text();
     }
     if !system_done && !tools.is_empty() {
         turns.insert(0, ("system".into(), tools.trim_start().to_string()));
@@ -90,5 +101,21 @@ mod tests {
         assert_eq!(t[2].0, "user");
         assert!(t[2].1.starts_with("<tool_response name=\"list_dir\">"));
         assert!(chatml(&t).ends_with("<|im_start|>assistant\n"));
+    }
+
+    #[test]
+    fn the_reasoning_switch_is_text_in_the_last_user_turn_not_in_a_tool_response() {
+        use crate::types::ThinkingRequest;
+        let req = ChatRequest {
+            model: "qwen3-4b".into(),
+            messages: vec![Msg::system("s"), Msg::user("elenca"), Msg::tool("c1", "list_dir", "a.txt")],
+            thinking: Some(ThinkingRequest { enabled: false, deep: false, budget: None }),
+            ..Default::default()
+        };
+        let t = chat_turns(&req);
+        assert_eq!(t[1].1, "elenca /no_think");
+        assert!(!t[2].1.contains("/no_think"));
+        let plain = ChatRequest { thinking: None, ..req.clone() };
+        assert_eq!(chat_turns(&plain)[1].1, "elenca");
     }
 }

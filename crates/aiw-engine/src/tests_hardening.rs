@@ -348,7 +348,10 @@ async fn an_agent_used_by_a_workflow_is_not_deleted() {
 #[tokio::test]
 async fn a_profile_in_use_is_not_deleted() {
     let (e, _d, _w) = scripted(vec![]).await;
-    // `default` is the profile of every seeded agent.
+    // `default` is the profile of the agents of an install that predates `auto:agent`.
+    let mut operator = e.agent("operator").unwrap();
+    operator.inference_profile = "default".into();
+    e.save_agent(operator).unwrap();
     let err = e.delete_profile("default").unwrap_err();
     assert!(matches!(err, Error::Conflict(ref m) if m.contains("Operatore")), "{err}");
     assert_eq!(err.status(), 409);

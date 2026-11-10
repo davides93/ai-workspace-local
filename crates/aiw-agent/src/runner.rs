@@ -7,8 +7,10 @@ use crate::hooks::{run_hooks, HookConfig};
 use crate::policy::{risk_level, Decision, Policy};
 use crate::skills::{self, Skill};
 use crate::think::{Piece, ThinkSplitter};
+use crate::thinking::{self, CallSite};
 use aiw_core::api::{
-    AgentProfile, ApprovalOutcome, ApprovalRequest, AuditEntry, ChatMessage, InferenceProfile, RunState, Todo, ToolCall, Usage,
+    AgentProfile, ApprovalOutcome, ApprovalRequest, AuditEntry, ChatMessage, InferenceProfile, RunState, ThinkingMode, Todo, ToolCall,
+    Usage,
 };
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
@@ -81,6 +83,10 @@ pub struct RunInput {
     pub shared: Arc<Mutex<serde_json::Map<String, Value>>>,
     /// The run at the top of the delegation chain: where the state snapshots of the shared state go.
     pub root_run: String,
+    /// How much the model reasons in this run: the override of the run, else the profile's
+    /// `thinking`, already dropped for a model that cannot reason. Sub-agents get the parent's.
+    /// `None` sends nothing to the runtime.
+    pub thinking: Option<ThinkingMode>,
 }
 
 #[derive(Debug, Default)]
@@ -506,6 +512,9 @@ impl AgentRunner {
         let mut unresolved: Vec<(String, String)> = Vec::new();
         let mut self_checks = 0u32;
         let mut format_retried = false;
+        // Reasoning (`auto`): on for the first model call and for the call after a failure.
+        let mut made_call = false;
+        let mut after_failure = false;
         // Text of the previous turn, kept for the answer when the budget runs out.
         let mut last_text = String::new();
 
@@ -544,6 +553,11 @@ impl AgentRunner {
                 top_p: input.profile.params.top_p,
                 max_tokens: input.profile.params.max_tokens,
                 stop: vec![],
+                thinking: thinking::resolve(
+                    input.thinking,
+                    input.profile.params.thinking_budget,
+                    CallSite { first_call: !made_call, after_failure },
+                ),
             };
             let stream = match backend.chat(req, input.tool_ctx.cancel.clone()).await {
                 Ok(s) => s,
@@ -562,6 +576,7 @@ impl AgentRunner {
                 }
             };
             input.budget.record_turn();
+            made_call = true;
             // The stored message keeps the id its live events carry, so that clients can refer to it (feedback).
             let msg_id = new_id("msg");
             let (text, reasoning, mut calls, usage, stream_error) = Self::consume(stream, &ev, turn, &msg_id).await;
@@ -681,6 +696,7 @@ impl AgentRunner {
                         created_at: now_rfc3339(),
                     });
                     unresolved.clear();
+                    after_failure = true;
                     continue;
                 }
                 // Structured output: the answer must be JSON that conforms to the schema. The model
@@ -697,6 +713,7 @@ impl AgentRunner {
                         }
                         Err(errors) if !format_retried && turn + 1 < input.agent.max_turns => {
                             format_retried = true;
+                            after_failure = true;
                             let note = format!(
                                 "[Controllo del formato] La risposta non rispetta lo schema richiesto:\n{}\nRispondi di nuovo solo con il JSON corretto.",
                                 errors.iter().map(|e| format!("- {e}")).collect::<Vec<_>>().join("\n")
@@ -770,7 +787,9 @@ impl AgentRunner {
             }
             let mut images = Vec::new();
             let mut handoff: Option<(String, String)> = None;
+            let mut batch_failed = false;
             for (_, (tc, out)) in results {
+                batch_failed |= out.is_error;
                 if tc.name == crate::internal::HANDOFF && !out.is_error && handoff.is_none() {
                     let a: Value = serde_json::from_str(&tc.arguments).unwrap_or_default();
                     let to = a["agent"].as_str().unwrap_or_default().to_string();
@@ -806,6 +825,7 @@ impl AgentRunner {
                     images.push((tc.name.clone(), img));
                 }
             }
+            after_failure = batch_failed;
             // A handoff ends the run: the answer says who continues, the engine starts that agent.
             if let Some((to, summary)) = handoff {
                 let name = host.handoff_target(input, &to).unwrap_or_else(|_| to.clone());

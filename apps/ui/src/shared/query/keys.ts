@@ -21,6 +21,7 @@ export const qk = {
     all: () => ["models"] as const,
     installed: () => ["models", "installed"] as const,
     catalog: () => ["models", "catalog"] as const,
+    recommend: () => ["models", "recommend"] as const,
     providers: () => ["models", "providers"] as const,
     search: (p: Omit<ModelSearchParams, "cursor">) => ["models", "search", p] as const,
     remoteAll: () => ["models", "remote"] as const,

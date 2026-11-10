@@ -111,6 +111,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/models", get(models))
         .route("/api/model-preview", post(preview_system_model))
         .route("/api/models/catalog", get(catalog))
+        .route("/api/recommend", get(recommend))
         .route("/api/models/providers", get(model_providers))
         .route("/api/models/providers/{id}/auth", put(provider_auth))
         .route("/api/models/search", get(search_models))
@@ -386,6 +387,11 @@ async fn models(State(s): State<AppState>) -> ApiResult<Vec<LocalModel>> {
 async fn catalog(State(s): State<AppState>) -> ApiResult<Vec<CatalogModel>> {
     ok(s.engine.catalog())
 }
+/// The model adviser: per task (chat, agent, reasoning, vision, embeddings) the best installed
+/// model for this device and the best one to download.
+async fn recommend(State(s): State<AppState>) -> ApiResult<Recommendations> {
+    ok(s.engine.recommend())
+}
 async fn model_providers(State(s): State<AppState>) -> ApiResult<Vec<ModelProviderInfo>> {
     ok(s.engine.model_providers())
 }
@@ -622,9 +628,12 @@ struct RunBody {
     input: String,
     /// a2ui.action when a surface sends a user action
     kind: Option<String>,
+    /// Reasoning for this run only (`off` | `auto` | `deep`): wins over the profile's. Absent: the profile's.
+    #[serde(default)]
+    thinking: Option<aiw_core::api::ThinkingMode>,
 }
 async fn start_run(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<RunBody>) -> ApiResult<Value> {
-    ok(json!({"run_id": s.engine.start_run_with(&id, b.input, b.kind.as_deref()).await?}))
+    ok(json!({"run_id": s.engine.start_run_opts(&id, b.input, b.kind.as_deref(), b.thinking).await?}))
 }
 async fn cancel_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.cancel_run(&id)?;
@@ -1206,6 +1215,8 @@ mod tests_learning;
 mod tests_models;
 #[cfg(test)]
 mod tests_optimize;
+#[cfg(test)]
+mod tests_recommend;
 #[cfg(test)]
 mod tests_remote;
 #[cfg(test)]

@@ -1,12 +1,14 @@
 import { useMemo } from "react";
-import { setQuery, useQueryParams } from "../../../app/router";
+import { setQuery } from "../../../app/router";
 import { EmptyState, Field, Input, QueryState, Segmented, Skeleton } from "../../../shared/ui";
 import type { CatalogModel, DownloadProgress } from "../../../shared/api/types";
 import { useCatalog } from "../api";
 import { findCatalogJob } from "../model/catalog";
+import { hiddenCount } from "../model/adviser";
 import { filterCatalog } from "../model/filters";
 import { useQueryText } from "../useQueryText";
 import { CatalogCard } from "./CatalogCard";
+import { ShowAllToggle, useRunnableFilter } from "./ShowAll";
 import { useProviderAuthDialog } from "./ProviderAuthDialog";
 
 /** Catalogo (Consigliati): curated models with the fit computed for this device. */
@@ -24,7 +26,9 @@ export function CatalogTab({ jobs }: { jobs: DownloadProgress[] }) {
 
 function CatalogList({ list, jobs }: { list: CatalogModel[]; jobs: DownloadProgress[] }) {
   const [text, setText] = useQueryText("q");
-  const fitOnly = useQueryParams().compat === "1";
+  const { simple, showAll, compatOnly } = useRunnableFilter();
+  // Simple mode: only what runs here unless "Mostra tutti"; the developer view keeps its own filter.
+  const fitOnly = simple ? !showAll : compatOnly;
   const auth = useProviderAuthDialog();
   const shown = useMemo(() => filterCatalog(list, { q: text, fitOnly }), [list, text, fitOnly]);
 
@@ -38,13 +42,17 @@ function CatalogList({ list, jobs }: { list: CatalogModel[]; jobs: DownloadProgr
         <Field label="Cerca nel catalogo" htmlFor="cat-q" className="mh-search">
           <Input id="cat-q" type="search" placeholder="agent, vision, mobile, coding…" value={text} onChange={(e) => setText(e.target.value)} />
         </Field>
-        <div className="field">
-          <span className="field-label">Mostra</span>
-          <Segmented
-            label="Filtro di compatibilità" value={fitOnly ? "fit" : "all"} onChange={(v) => setQuery({ compat: v === "fit" ? "1" : "" })}
-            options={[{ id: "all", label: "Tutti" }, { id: "fit", label: "Che ci stanno" }]}
-          />
-        </div>
+        {simple ? (
+          <ShowAllToggle showAll={showAll} hidden={hiddenCount(list)} />
+        ) : (
+          <div className="field">
+            <span className="field-label">Mostra</span>
+            <Segmented
+              label="Filtro di compatibilità" value={fitOnly ? "fit" : "all"} onChange={(v) => setQuery({ compat: v === "fit" ? "1" : "" })}
+              options={[{ id: "all", label: "Tutti" }, { id: "fit", label: "Che ci stanno" }]}
+            />
+          </div>
+        )}
       </div>
       <p className="mh-count" role="status" aria-live="polite">{shown.length === list.length ? `${list.length} modelli` : `${shown.length} di ${list.length} modelli`}</p>
       {shown.length === 0 ? (

@@ -123,6 +123,23 @@ pub struct ChatRequest {
     pub max_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stop: Vec<String>,
+    /// Whether this call should reason; `None` sends nothing (the model's own default). The
+    /// backend translates it as its manifest says ([`crate::thinking`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingRequest>,
+}
+
+/// Reasoning asked for one model call, already resolved from the profile and the run
+/// (`aiw_agent::thinking::resolve`).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThinkingRequest {
+    pub enabled: bool,
+    /// `deep` mode: the highest effort the runtime offers.
+    #[serde(default)]
+    pub deep: bool,
+    /// Most tokens to spend reasoning, for runtimes that can limit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

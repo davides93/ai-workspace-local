@@ -1,12 +1,13 @@
 import type { Transport, TransportCapabilities } from "../transport";
 import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
+import { mockRecommend } from "./recommend";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  DatasetSpec, TrainJobRequest,
+  DatasetSpec, TrainJobRequest, ThinkingMode,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
@@ -141,6 +142,7 @@ export class MockTransport implements Transport {
 
   async models() { return structuredClone(models); }
   async catalog() { return structuredClone(catalog); }
+  async recommend() { return mockRecommend(); }
 
   // ---------------------------------------------------------------- model hub
 
@@ -714,9 +716,13 @@ export class MockTransport implements Transport {
     this.runListeners.get(runId)?.forEach((fn) => fn(ev));
   }
 
-  async startRun(sessionId: string, input: string, kind?: "a2ui.action") {
+  /** Reasoning asked for each run, newest last (tests read it). */
+  readonly runThinking: Array<{ runId: string; thinking?: ThinkingMode }> = [];
+
+  async startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode) {
     if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     const runId = nid("run");
+    this.runThinking.push({ runId, thinking });
     const msgs = sessionMessages[sessionId] ?? (sessionMessages[sessionId] = []);
     msgs.push({ id: nid("m"), role: "user", content: input, name: kind, created_at: now() });
     const s = sessions.find((x) => x.id === sessionId);

@@ -3,7 +3,7 @@ import { Icon, Led, Markdown } from "../../../shared/ui";
 import { ApprovalCard } from "../../approvals/components/ApprovalCard";
 import { A2uiSurface, type A2uiAction } from "../a2ui";
 import type { ApprovalRequest, Feedback } from "../../../shared/api/types";
-import type { Item } from "../model/items";
+import { reasoningLabel, type Item } from "../model/items";
 import { describeRunError, errorDetail } from "../model/runNotice";
 import { MessageActions } from "./MessageActions";
 import { RunNote } from "./RunNote";
@@ -65,7 +65,7 @@ export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, 
       return (
         <div className="ws-msg ws-assistant">
           <details className="ws-reasoning" open={it.streaming || undefined}>
-            <summary>{it.streaming && <Led tone="run" small />}{it.streaming ? "Sta ragionando…" : "Ragionamento"}</summary>
+            <summary>{it.streaming && <Led tone="run" small />}{reasoningLabel(it)}</summary>
             <div className="ws-reasoning-text">{it.text}</div>
           </details>
         </div>

@@ -12,6 +12,9 @@ import type { Session } from "../../shared/api/types";
 import { Button, Drawer, EmptyState, Icon, ModalShell, Sheet } from "../../shared/ui";
 import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
+import { useModels, useRecommend } from "../models/api";
+import { autoProfileFromAdvice } from "../models/model/adviser";
+import { canReason } from "../../shared/lib/thinking";
 import { useLessons } from "../learning/api";
 import { pendingFor } from "../learning/model/lessons";
 import { useTeams } from "../teams/api";
@@ -25,10 +28,12 @@ import { ConversationLog, type ConversationLogHandle } from "./components/Conver
 import { InspectorBody } from "./components/Inspector";
 import { SessionList, type NewSessionInput } from "./components/SessionList";
 import { setDraft } from "./model/drafts";
+import { forgetThinkingChoice } from "./model/thinkingChoice";
 import { forgetSessionImages } from "./model/imageCache";
 import { describeRunError, lastRunNotice } from "./model/runNotice";
 import { useConversation } from "./useConversation";
 import { useFeedback } from "./useFeedback";
+import { useThinking } from "./useThinking";
 import { useVoice } from "./useVoice";
 import { COMPACT_SESSIONS_QUERY, useDraft, useInspectorMode, useInspectorOpen } from "./useLayout";
 import "./chat.css";
@@ -61,7 +66,10 @@ export function ChatView() {
   const agent = sessionTeamId
     ? (sessionTeam ? teamAsAgent(sessionTeam, agents.data ?? []) : null)
     : agents.data?.find((a) => a.id === active?.agent_id) ?? null;
-  const profile = profiles.data?.find((p) => p.id === agent?.inference_profile) ?? null;
+  // An `auto:*` profile is not stored: show what the adviser resolves it to.
+  const recommend = useRecommend();
+  const profile = profiles.data?.find((p) => p.id === agent?.inference_profile)
+    ?? (agent ? autoProfileFromAdvice(agent.inference_profile, recommend.data) : null);
   const defaultAgent = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
 
   // No session in the URL (or a stale one): open the last used one, else the most recent.
@@ -82,6 +90,7 @@ export function ChatView() {
       forgetSessionImages(id);
       forgetSessionRuns(id);
       setDraft(id, "");
+      forgetThinkingChoice(id);
       if (lastChatSession() === id) rememberChatSession(null);
       // Out of the list at once, so the redirect below never picks it again.
       qc.setQueryData<Session[]>(qk.sessions.list(), (l) => l?.filter((x) => x.id !== id));
@@ -91,7 +100,11 @@ export function ChatView() {
     },
     [qc],
   );
-  const conv = useConversation(openId, { onGone: gone });
+  // "Ragionamento": offered only when the model of the session's profile can reason; the choice goes with every run.
+  const models = useModels();
+  const reasons = canReason(models.data?.find((m) => m.id === profile?.model));
+  const [thinking, setThinking] = useThinking(openId, profile?.params.thinking);
+  const conv = useConversation(openId, { onGone: gone, thinking: reasons ? thinking : undefined });
   const feedback = useFeedback(openId, conv.items, conv.running);
   // After a thumbs down the agent may have proposed a lesson: point to it.
   const lessonToReview = pendingFor(useLessons("pending").data, openId);
@@ -139,6 +152,7 @@ export function ChatView() {
     forgetSessionImages(id);
     forgetSessionRuns(id);
     setDraft(id, "");
+    forgetThinkingChoice(id);
     if (id === openId) {
       rememberChatSession(null);
       navigate("/chat", { replace: true });
@@ -217,7 +231,7 @@ export function ChatView() {
         )}
         <Composer
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}
-          focusKey={`${openId}:${focusTick}`} voice={voice}
+          focusKey={`${openId}:${focusTick}`} voice={voice} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined}
           modelLabel={profile ? `${profile.runtime_id} · ${profile.model || "nessun modello"}` : undefined}
           placeholder={!openId ? "Crea una sessione per iniziare" : logState.status === "loading" ? "Carico la conversazione…" : `Scrivi a ${agent?.name ?? "l'agente"}…`}
         />

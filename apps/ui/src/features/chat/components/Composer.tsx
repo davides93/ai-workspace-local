@@ -1,5 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, type CSSProperties } from "react";
-import { Button, IconButton } from "../../../shared/ui";
+import { Button, IconButton, Select } from "../../../shared/ui";
+import type { ThinkingMode } from "../../../shared/api/types";
+import { isThinkingMode, THINKING_HINT, THINKING_LABEL, THINKING_MODES } from "../../../shared/lib/thinking";
 import type { VoiceController } from "../useVoice";
 import { VoiceBar } from "./VoiceBar";
 
@@ -12,7 +14,7 @@ const finePointer = () => typeof window !== "undefined" && !!window.matchMedia?.
  * ring is drawn on the box (`:focus-within`), the textarea grows with its text, and the box takes
  * the focus back when a session opens or a run ends (on touch screens it never pops the keyboard).
  */
-export function Composer({ value, onChange, onSend, onStop, running, disabled, placeholder, modelLabel, focusKey, voice }: {
+export function Composer({ value, onChange, onSend, onStop, running, disabled, placeholder, modelLabel, focusKey, voice, thinking }: {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
@@ -27,6 +29,8 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
   focusKey: string | null;
   /** Dictation and voice conversation; without it the box has no microphone. */
   voice?: VoiceController;
+  /** "Ragionamento" of the conversation; only given when the model can reason. */
+  thinking?: { value: ThinkingMode; onChange: (mode: ThinkingMode) => void };
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -112,6 +116,17 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
         )}
       </div>
       <div className="ws-composer-meta">
+        {thinking && (
+          <label className="ws-think" title={THINKING_HINT[thinking.value]}>
+            <span>Ragionamento:</span>
+            <Select
+              aria-label="Ragionamento" value={thinking.value}
+              onChange={(e) => isThinkingMode(e.target.value) && thinking.onChange(e.target.value)}
+            >
+              {THINKING_MODES.map((m) => <option key={m} value={m}>{THINKING_LABEL[m]}</option>)}
+            </Select>
+          </label>
+        )}
         {modelLabel && <span className="mono ws-composer-model" title="Runtime e modello della sessione">{modelLabel}</span>}
         <span id={hintId} className="ws-composer-hint">
           {running ? (

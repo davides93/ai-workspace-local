@@ -70,6 +70,12 @@ impl OllamaBackend {
         Self { inner: OpenAiBackend::new(base, api_key.clone(), timeout), http, api_key }
     }
 
+    /// Sets how requests carry the reasoning switch (the manifest says `reasoning-effort`).
+    pub fn with_thinking(mut self, thinking: crate::thinking::ThinkingControl) -> Self {
+        self.inner = self.inner.with_thinking(thinking);
+        self
+    }
+
     pub fn base(&self) -> &str {
         self.inner.base()
     }

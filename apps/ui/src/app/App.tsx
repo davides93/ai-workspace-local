@@ -9,6 +9,8 @@ import { EmptyState, PageSkeleton, ToastHost } from "../shared/ui";
 import { CommandPalette } from "./palette/CommandPalette";
 import { onOpenPalette } from "./palette/openPalette";
 import { useCommands } from "./palette/useCommands";
+import { routeLabel } from "./navigation";
+import { useUiMode } from "./useUiMode";
 import { RouteProvider, Link, useRoute } from "./router";
 import { ROUTES } from "./routes";
 import { ConnectionBanner, DemoBanner } from "./shell/Banners";
@@ -20,6 +22,7 @@ import { TabBar } from "./shell/TabBar";
 export function App() {
   const resolved = useRoute(ROUTES);
   const { needsPairing } = useConnection();
+  const [mode] = useUiMode();
   const commands = useCommands();
   const [moreOpen, setMoreOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -49,8 +52,8 @@ export function App() {
 
   // Announce the page to assistive tech and in the tab title.
   useEffect(() => {
-    document.title = resolved ? `${resolved.route.label} · AI Workspace` : "Pagina non trovata · AI Workspace";
-  }, [resolved]);
+    document.title = resolved ? `${routeLabel(resolved.route, mode)} · AI Workspace` : "Pagina non trovata · AI Workspace";
+  }, [resolved, mode]);
 
   const View = resolved?.route.View;
   return (

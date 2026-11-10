@@ -1,12 +1,14 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
 pub mod a2a_client;
+pub mod adviser;
 mod dataset;
 pub mod defaults;
 pub mod eval;
 mod host;
 mod learning;
 mod models;
+pub mod notices;
 pub mod optimize;
 pub mod pairing;
 pub mod peers;
@@ -657,12 +659,55 @@ impl Engine {
     pub fn profiles(&self) -> Result<Vec<InferenceProfile>> {
         self.0.store.list_docs("profile")
     }
+    /// An inference profile by id. `auto:<task>` (chat, agent, reasoning, vision) is not stored:
+    /// the model adviser resolves it to what is installed now (see [`Engine::resolve_auto_profile`]).
     pub fn profile(&self, id: &str) -> Result<InferenceProfile> {
+        if let Some(task) = adviser::parse_auto_profile(id) {
+            return self.resolve_auto_profile(task);
+        }
         self.0.store.get_doc("profile", id)?.ok_or_else(|| Error::NotFound(format!("profilo {id} non trovato")))
+    }
+    /// The model adviser's answer for this device, from the models found on disk right now.
+    pub fn recommend(&self) -> aiw_core::api::Recommendations {
+        let local = self.models();
+        let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
+        adviser::advise(&self.device(), &local, &self.catalog(), &avail)
+    }
+    /// What `auto:<task>` stands for right now. Looks at the models already known (no disk scan:
+    /// this runs at the start of every run) and the runtimes' current state.
+    ///
+    /// When the adviser finds nothing installed for chat, agent or reasoning but the `default`
+    /// profile points at a model, that profile is used, so installs that picked their model by
+    /// hand (an Ollama or remote model the adviser cannot see) keep working. Nothing usable is a
+    /// conflict the person can fix, like a profile without a model.
+    pub fn resolve_auto_profile(&self, task: aiw_core::api::AdviserTask) -> Result<InferenceProfile> {
+        use aiw_core::api::AdviserTask;
+        let mut local = self.0.models.read().unwrap().clone();
+        let system = self.available_system_models();
+        local.retain(|m| !system.iter().any(|s| s.id == m.id));
+        local.extend(system);
+        let local = self.local_enrichment(local);
+        let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
+        let rec = adviser::advise(&self.device(), &local, &aiw_models::builtin_catalog(), &avail);
+        if let Some(p) = adviser::auto_profile(task, &rec) {
+            return Ok(p);
+        }
+        if task != AdviserTask::Vision {
+            if let Some(p) = self.0.store.get_doc::<InferenceProfile>("profile", "default")?.filter(|p| !p.model.is_empty()) {
+                return Ok(p);
+            }
+        }
+        Err(Error::Conflict(match task {
+            AdviserTask::Vision => "Nessun modello installato sa leggere le immagini: scaricane uno da Modelli (cerca «vision») o scegli un altro profilo in Agenti.".into(),
+            _ => "Non c'è ancora un modello adatto a questo dispositivo: scaricane uno da Modelli e riprova.".into(),
+        }))
     }
     pub fn save_profile(&self, p: InferenceProfile) -> Result<InferenceProfile> {
         if p.id.trim().is_empty() || p.runtime_id.trim().is_empty() {
             return Err(Error::Invalid("profilo senza id o runtime".into()));
+        }
+        if p.id.starts_with("auto:") {
+            return Err(Error::Invalid("gli id che iniziano con «auto:» sono riservati ai profili automatici".into()));
         }
         let manifest = self.0.runtimes.manifest(&p.runtime_id)?;
         // A runtime that cannot load an adapter says so now, not at the first message.
@@ -696,7 +741,10 @@ impl Engine {
         if let Some(schema) = &a.output_schema {
             aiw_agent::schema::check_schema(schema).map_err(|e| Error::Invalid(format!("output_schema non valido: {e}")))?;
         }
-        if self.0.store.get_doc::<InferenceProfile>("profile", &a.inference_profile)?.is_none() {
+        // `auto:<task>` is resolved when a run starts: nothing to look up (or to be installed) yet.
+        if adviser::parse_auto_profile(&a.inference_profile).is_none()
+            && self.0.store.get_doc::<InferenceProfile>("profile", &a.inference_profile)?.is_none()
+        {
             return Err(Error::Invalid(format!("il profilo di inferenza `{}` non esiste", a.inference_profile)));
         }
         let unknown: Vec<&str> = a.tools.iter().map(String::as_str).filter(|t| !self.is_known_tool(t)).collect();
@@ -920,6 +968,9 @@ impl Engine {
     }
     /// Deletes an inference profile that no agent (or workflow step) uses any more.
     pub fn delete_profile(&self, id: &str) -> Result<()> {
+        if adviser::parse_auto_profile(id).is_some() {
+            return Err(Error::Invalid("i profili automatici non si eliminano: seguono il modello consigliato".into()));
+        }
         let profile = self.profile(id)?;
         let mut used_by: Vec<String> = self.agents()?.into_iter().filter(|a| a.inference_profile == id).map(|a| a.name).collect();
         used_by.extend(
@@ -1285,6 +1336,7 @@ impl Engine {
             .chain(self.remote_subagents())
             .collect();
         let agent_budget = agent.budget.clone().unwrap_or_default();
+        let thinking = self.thinking_for(&profile, None);
         RunInput {
             run_id: run_id.into(),
             thread_id: thread_id.into(),
@@ -1310,7 +1362,16 @@ impl Engine {
             in_team: false,
             shared: Default::default(),
             root_run: run_id.into(),
+            thinking,
         }
+    }
+
+    /// The reasoning mode of a run: the override of the run, else the profile's. A model that does
+    /// not have the `reasoning` capability (or is not known) gets none: nothing is sent to it.
+    pub(crate) fn thinking_for(&self, profile: &aiw_core::api::InferenceProfile, over: Option<ThinkingMode>) -> Option<ThinkingMode> {
+        let mode = over.or(profile.params.thinking)?;
+        let models = self.0.models.read().unwrap();
+        models.iter().any(|m| m.id == profile.model && m.capabilities.iter().any(|c| c == "reasoning")).then_some(mode)
     }
 
     /// The budget of a new top-level run: the agent's own limits, else the `agents.budget.*` settings
@@ -1335,6 +1396,18 @@ impl Engine {
 
     /// `kind: Some("a2ui.action")` marks the user turn as an A2UI action sent by a surface.
     pub async fn start_run_with(&self, session_id: &str, input: String, kind: Option<&str>) -> Result<String> {
+        self.start_run_opts(session_id, input, kind, None).await
+    }
+
+    /// [`Engine::start_run_with`] with the reasoning of this run: `thinking` wins over the one of
+    /// the profile (the "Ragionamento" selector of the chat). `None` keeps the profile's.
+    pub async fn start_run_opts(
+        &self,
+        session_id: &str,
+        input: String,
+        kind: Option<&str>,
+        thinking: Option<ThinkingMode>,
+    ) -> Result<String> {
         if input.trim().is_empty() {
             return Err(Error::Invalid("messaggio vuoto".into()));
         }
@@ -1348,7 +1421,7 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
-        self.start_run_inner(session_id, input, name, 0).await
+        self.start_run_inner(session_id, input, name, 0, thinking).await
     }
 
     /// Most handoffs one user message can chain before the conversation stops with a note.
@@ -1362,11 +1435,19 @@ impl Engine {
         input: String,
         name: Option<String>,
         hops: u32,
+        thinking: Option<ThinkingMode>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(self.start_run_body(session_id, input, name, hops))
+        Box::pin(self.start_run_body(session_id, input, name, hops, thinking))
     }
 
-    async fn start_run_body(&self, session_id: &str, input: String, name: Option<String>, hops: u32) -> Result<String> {
+    async fn start_run_body(
+        &self,
+        session_id: &str,
+        input: String,
+        name: Option<String>,
+        hops: u32,
+        thinking: Option<ThinkingMode>,
+    ) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
         // removed meanwhile is a conflict the user can fix (the UI must not treat it as deleted).
@@ -1429,8 +1510,10 @@ impl Engine {
         session.updated_at = now_rfc3339();
         session.last_status = Some("running".into());
         self.0.store.upsert_session(&session)?;
+        let mode = self.thinking_for(&profile, thinking);
         let mut run_input =
             self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
+        run_input.thinking = mode;
         if let Some(team) = &team {
             self.apply_team(&mut run_input, team);
         }
@@ -1492,7 +1575,7 @@ impl Engine {
                 engine.maybe_reflect(&session.id, Some(rid.clone()), learning::ReflectTrigger::Failure);
             }
             if let (Ok(()), Some((to, summary))) = (&res, out.handoff) {
-                engine.continue_handoff(&session.id, &from_name, &from_mode, &to, &summary, hops).await;
+                engine.continue_handoff(&session.id, &from_name, &from_mode, &to, &summary, hops, thinking).await;
             }
         });
         Ok(run_id)
@@ -1500,7 +1583,17 @@ impl Engine {
 
     /// The run of a session ended asking for a handoff: moves the session to the new agent and
     /// starts it with the summary. A handoff that cannot be carried out leaves a note instead.
-    async fn continue_handoff(&self, session_id: &str, from_name: &str, from_mode: &str, to: &str, summary: &str, hops: u32) {
+    #[allow(clippy::too_many_arguments)]
+    async fn continue_handoff(
+        &self,
+        session_id: &str,
+        from_name: &str,
+        from_mode: &str,
+        to: &str,
+        summary: &str,
+        hops: u32,
+        thinking: Option<ThinkingMode>,
+    ) {
         let note = |text: String| {
             let msg = ChatMessage {
                 id: new_id("msg"),
@@ -1532,7 +1625,7 @@ impl Engine {
         }
         self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
         let input = format!("[Passaggio da {from_name}] {summary}");
-        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1).await {
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking).await {
             note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
         }
     }
@@ -2255,6 +2348,8 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_auto;
+#[cfg(test)]
 mod tests_eval;
 #[cfg(test)]
 mod tests_hardening;
@@ -2266,6 +2361,8 @@ mod tests_learning;
 mod tests_optimize;
 #[cfg(test)]
 mod tests_routing;
+#[cfg(test)]
+mod tests_thinking;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]

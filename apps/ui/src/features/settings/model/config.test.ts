@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigView, SettingsSchema } from "../../../shared/api/types";
 import {
-  configTheme, definingLayers, formatValue, groupSettings, hasOwn, hintOf, overriddenBy, parseNumber, sectionOf, shortTitle, shownValue, winningLayer,
+  configTheme, configUiMode, definingLayers, formatValue, groupSettings, hasOwn, hintOf, overriddenBy, parseNumber, sectionOf, shortTitle, shownValue, uiModeLayer, winningLayer,
 } from "./config";
 
 const schema: SettingsSchema = {
@@ -122,5 +122,18 @@ describe("values", () => {
     expect(configTheme(view)).toBe("dark");
     expect(configTheme({ ...view, effective: { "ui.theme": "pink" } })).toBeUndefined();
     expect(configTheme(undefined)).toBeUndefined();
+  });
+  it("reads the interface mode the configuration asks for, only when valid", () => {
+    expect(configUiMode({ ...view, effective: { "ui.mode": "developer" } })).toBe("developer");
+    expect(configUiMode({ ...view, effective: { "ui.mode": "simple" } })).toBe("simple");
+    expect(configUiMode({ ...view, effective: { "ui.mode": "expert" } })).toBeUndefined();
+    expect(configUiMode(view)).toBeUndefined();
+    expect(configUiMode(undefined)).toBeUndefined();
+  });
+  it("writes the interface mode to the layer that wins today, else to the global one", () => {
+    expect(uiModeLayer(undefined)).toBe("global");
+    expect(uiModeLayer(view)).toBe("global");
+    const inDevice = { ...view, layers: view.layers.map((l) => (l.name === "device" ? { ...l, values: { "ui.mode": "developer" } } : l)) };
+    expect(uiModeLayer(inDevice)).toBe("device");
   });
 });

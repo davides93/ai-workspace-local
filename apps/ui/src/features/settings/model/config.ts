@@ -1,5 +1,6 @@
 import type { ConfigLayer, ConfigView, FieldSchema, SettingsSchema } from "../../../shared/api/types";
 import type { Theme } from "../../../shared/lib/theme";
+import { isUiMode, type UiMode } from "../../../shared/lib/uiMode";
 
 export type LayerName = ConfigLayer["name"];
 export type WritableLayer = Exclude<LayerName, "defaults">;
@@ -62,7 +63,8 @@ export interface SettingsSection {
 }
 
 export const SECTIONS: SettingsSection[] = [
-  { id: "ui", title: "Interfaccia", description: "Tema e lingua.", prefixes: ["ui"] },
+  { id: "ui", title: "Interfaccia", description: "Modalità, tema e lingua.", prefixes: ["ui"] },
+  { id: "app", title: "Programma", description: "Cosa fa l'app quando chiudi la finestra, all'accesso al computer e per gli avvisi (solo nell'app per computer).", prefixes: ["app"] },
   { id: "agents", title: "Agenti", description: "Agente predefinito, subagenti, budget dei run e gestione del contesto.", prefixes: ["agent", "agents", "context"] },
   { id: "security", title: "Sicurezza e rete", description: "Conferme, sandbox e siti raggiungibili da web e browser.", prefixes: ["policy", "sandbox", "network"] },
   { id: "server", title: "Server e accesso", description: "Come altri dispositivi e programmi raggiungono il workspace.", prefixes: ["server"] },
@@ -147,6 +149,7 @@ export function formatValue(v: unknown): string {
 
 /** Readable names of the choices of enum settings; a value without a name is shown as it is. */
 const OPTION_LABEL: Record<string, Record<string, string>> = {
+  "ui.mode": { simple: "Semplice", developer: "Sviluppatore" },
   "ui.theme": { system: "Sistema", light: "Chiaro", dark: "Scuro" },
   "ui.language": { it: "Italiano", en: "English" },
   "policy.mode": {
@@ -178,4 +181,20 @@ export const isTheme = (v: unknown): v is Theme => typeof v === "string" && (THE
 export function configTheme(view: ConfigView | undefined): Theme | undefined {
   const v = view?.effective["ui.theme"];
   return isTheme(v) ? v : undefined;
+}
+
+/** The interface mode the configuration asks for, when it is a valid one. */
+export function configUiMode(view: ConfigView | undefined): UiMode | undefined {
+  const v = view?.effective["ui.mode"];
+  return isUiMode(v) ? v : undefined;
+}
+
+/**
+ * Layer a mode switch is written to: the one that wins today (so the change is visible), else the
+ * global one, like the other preferences of the person rather than of a device or folder.
+ */
+export function uiModeLayer(view: ConfigView | undefined): WritableLayer {
+  if (!view) return "global";
+  const w = winningLayer(view, "ui.mode");
+  return w === "defaults" ? "global" : w;
 }

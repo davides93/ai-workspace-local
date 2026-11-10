@@ -1,12 +1,12 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus,
+  PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus, ThinkingMode,
 } from "./types";
 
 export class ApiError extends Error {
@@ -92,6 +92,7 @@ export class HttpTransport implements Transport {
 
   models = () => this.req<LocalModel[]>("GET", "/models");
   catalog = () => this.req<CatalogModel[]>("GET", "/models/catalog");
+  recommend = () => this.req<Recommendations>("GET", "/recommend");
   modelProviders = () => this.req<ModelProviderInfo[]>("GET", "/models/providers");
   setProviderAuth = (id: string, token: string | null | undefined, endpoint?: string) =>
     this.req<ModelProviderInfo>("PUT", `/models/providers/${enc(id)}/auth`, authBody(token, endpoint));
@@ -163,8 +164,8 @@ export class HttpTransport implements Transport {
     this.req<Feedback>("PUT", `/sessions/${enc(sessionId)}/messages/${enc(messageId)}/feedback`, note ? { rating, note } : { rating });
   deleteFeedback = (sessionId: string, messageId: string) =>
     this.req<void>("DELETE", `/sessions/${enc(sessionId)}/messages/${enc(messageId)}/feedback`);
-  startRun = (sessionId: string, input: string, kind?: "a2ui.action") =>
-    this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, kind ? { input, kind } : { input });
+  startRun = (sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode) =>
+    this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, { input, ...(kind ? { kind } : {}), ...(thinking ? { thinking } : {}) });
   sessionCheckpoints = (sessionId: string) => this.req<CheckpointInfo[]>("GET", `/sessions/${enc(sessionId)}/checkpoints`);
   rewindRun = (runId: string) => this.req<RewindResult>("POST", `/runs/${enc(runId)}/rewind`);
   cancelRun = (runId: string) => this.req<void>("POST", `/runs/${enc(runId)}/cancel`);

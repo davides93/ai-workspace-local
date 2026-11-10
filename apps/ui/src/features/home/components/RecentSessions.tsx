@@ -11,7 +11,7 @@ import { useConfig } from "../../settings/api";
 const ledTone = (s: Session): LedTone => (s.last_status === "failed" ? "crit" : s.last_status === "running" ? "run" : s.last_status === "cancelled" ? "warn" : s.last_status ? "ok" : "off");
 
 /** The five most recently updated sessions. */
-export function RecentSessions() {
+export function RecentSessions({ simple = false }: { simple?: boolean }) {
   const sessions = useSessions();
   const agents = useAgents();
   const config = useConfig();
@@ -19,7 +19,7 @@ export function RecentSessions() {
   const recent = useMemo(() => [...(sessions.data ?? [])].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 5), [sessions.data]);
   const agentId = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
   return (
-    <Panel title="Sessioni recenti" icon="chat" actions={<Link to="/chat" className="btn sm ghost">Apri il Workspace</Link>}>
+    <Panel title={simple ? "Conversazioni recenti" : "Sessioni recenti"} icon="chat" actions={<Link to="/chat" className="btn sm ghost">{simple ? "Apri la chat" : "Apri il Workspace"}</Link>}>
       <QueryState
         query={sessions}
         isEmpty={(l) => l.length === 0}

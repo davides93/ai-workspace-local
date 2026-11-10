@@ -7,10 +7,10 @@ import { Button, Icon, Meter, Panel } from "../../../shared/ui";
 import type { CatalogModel, DownloadProgress, InferenceProfile, LocalModel, RuntimeInfo, SystemInfo } from "../../../shared/api/types";
 import { useAgents } from "../../agents/api";
 import { useCreateSession } from "../../chat/api";
-import { isActiveDownload, useCatalog, useDownloads, usePullModel } from "../../models/api";
+import { isActiveDownload, useCatalog, useDownloads, usePullModel, useRecommend } from "../../models/api";
 import { useRefreshRuntimes } from "../../runtimes/api";
 import { useConfig } from "../../settings/api";
-import { currentStep, downloadFraction, recommendedModel, type ChecklistId, type ChecklistStep } from "../model/overview";
+import { currentStep, downloadFraction, firstRunModel, type ChecklistId, type ChecklistStep } from "../model/overview";
 
 interface StepContext {
   runtimes: RuntimeInfo[];
@@ -87,6 +87,7 @@ export function FirstRun({ steps, runtimes, models, profile, device, onDismiss }
   onDismiss: () => void;
 }) {
   const catalog = useCatalog();
+  const recommend = useRecommend();
   const downloads = useDownloads();
   const pull = usePullModel();
   const refresh = useRefreshRuntimes();
@@ -94,7 +95,7 @@ export function FirstRun({ steps, runtimes, models, profile, device, onDismiss }
   const config = useConfig();
   const createSession = useCreateSession();
 
-  const rec = catalog.data ? recommendedModel(catalog.data) : undefined;
+  const rec = catalog.data && !recommend.isFetching ? firstRunModel(catalog.data, recommend.isError ? null : recommend.data) : undefined;
   const agentId = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
   const ctx: StepContext = {
     runtimes, models, profile, device, rec, agentId,

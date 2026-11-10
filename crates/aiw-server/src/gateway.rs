@@ -55,6 +55,7 @@ pub async fn chat_completions(State(s): State<AppState>, Json(b): Json<Completio
         top_p: b.top_p,
         max_tokens: b.max_tokens.or(b.max_completion_tokens),
         stop,
+        thinking: None,
     };
     let mut stream = backend.chat(req, CancellationToken::new()).await?;
     let id = format!("chatcmpl-{}", aiw_core::ids::new_id("gw"));

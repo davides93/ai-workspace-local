@@ -51,3 +51,16 @@ aiw-engine = { workspace = true, features = ["llama-metal"] }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "ios")))'.dependencies]
 aiw-engine = { workspace = true, features = ["llama-embedded"] }
+
+# Desktop only (Windows, macOS, Linux): the app stays alive in the tray, starts at login and tells
+# the person what happened while the window was away. Mobile builds do not pull any of this in.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
+# Start at login. The Mac App Store build (`mas`) links it but never registers it: the App Sandbox
+# forbids writing the launch agent (or driving System Events) that the plugin uses on macOS.
+tauri-plugin-autostart = "2"
+
+# A second launch focuses the running window. macOS already opens one instance per app by itself.
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"

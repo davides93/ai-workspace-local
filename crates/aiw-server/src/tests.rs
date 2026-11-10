@@ -8,7 +8,7 @@ pub(crate) async fn app() -> (Router, Engine, tempfile::TempDir, tempfile::TempD
 }
 
 /// `device` overrides the probed hardware (two engines in one test are two devices).
-async fn app_on(device: Option<DeviceProfile>) -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
+pub(crate) async fn app_on(device: Option<DeviceProfile>) -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
     let data = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     let e = Engine::new(EngineOptions {
@@ -111,7 +111,7 @@ async fn lan_requests_need_the_token() {
 }
 
 /// Minimal HTTP GET without extra dependencies.
-async fn reqwest_like_get(url: &str, token: Option<&str>) -> (u16, Value) {
+pub(crate) async fn reqwest_like_get(url: &str, token: Option<&str>) -> (u16, Value) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let u = url.strip_prefix("http://").unwrap();
     let (host, path) = u.split_once('/').unwrap();
@@ -487,4 +487,27 @@ async fn voice_endpoints_refuse_in_the_api_error_shape() {
         .await
         .unwrap();
     assert_eq!(res.headers().get("x-frame-options").map(|v| v.to_str().unwrap()), Some("DENY"));
+}
+
+#[tokio::test]
+async fn a_run_takes_an_optional_reasoning_override() {
+    let (app, e, _d, _w) = app().await;
+    let (_, ses) = dispatch(app.clone(), "POST", "/api/sessions", Some(json!({"agent_id": "planner"}))).await;
+    let sid = ses["id"].as_str().unwrap().to_string();
+    let path = format!("/api/sessions/{sid}/runs");
+    // an unknown value is refused before anything starts
+    let (st, _) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ciao", "thinking": "tanto"}))).await;
+    assert!(st == 400 || st == 422, "{st}");
+    // a known value, like the old body without it, starts the run
+    let (st, run) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ciao", "thinking": "off"}))).await;
+    assert_eq!(st, 200, "{run}");
+    let rid = run["run_id"].as_str().unwrap().to_string();
+    for _ in 0..200 {
+        if e.run_done(&rid) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let (st, run) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ancora"}))).await;
+    assert_eq!(st, 200, "{run}");
 }

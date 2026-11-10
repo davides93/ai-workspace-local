@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { useUiMode } from "../../app/useUiMode";
 import { useTheme } from "../../shared/lib/theme";
+import { UI_MODE_LABEL, UI_MODES } from "../../shared/lib/uiMode";
 import { Button, EmptyState, Field, Icon, Input, Page, PageHeader, QueryState, Section, Segmented } from "../../shared/ui";
 import { useConfig, useSetConfig } from "./api";
 import { LayerBar } from "./components/LayerBar";
@@ -13,6 +15,7 @@ export function SettingsView() {
   const cfg = useConfig();
   const setConfig = useSetConfig();
   const [theme, setTheme] = useTheme();
+  const [uiMode, setUiMode] = useUiMode();
   const [layer, setLayer] = useState<WritableLayer>("global");
   const [query, setQuery] = useState("");
 
@@ -43,6 +46,18 @@ export function SettingsView() {
           <Button size="sm" onClick={() => setTheme(wanted)}>Usa la configurazione</Button>
         </p>
       )}
+
+      <div className="panel set-mode">
+        <div className="set-mode-text">
+          <b>Modalità dell'interfaccia</b>
+          <span className="faint text-sm">
+            {uiMode === "simple"
+              ? "Semplice mostra solo Panoramica, Chat, Assistenti, Modelli e Impostazioni. Le altre sezioni (runtime, profili, sicurezza, valutazioni, addestramento…) si vedono nella vista Sviluppatore."
+              : "La vista Sviluppatore mostra tutte le sezioni: runtime, profili, sicurezza, valutazioni, addestramento… Semplice le riduce a Panoramica, Chat, Assistenti, Modelli e Impostazioni."}
+          </span>
+        </div>
+        <Segmented label="Modalità dell'interfaccia" value={uiMode} onChange={setUiMode} options={UI_MODES.map((m) => ({ id: m, label: UI_MODE_LABEL[m] }))} />
+      </div>
 
       <UpdatePanel />
 

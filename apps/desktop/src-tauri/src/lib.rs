@@ -5,6 +5,9 @@
 use aiw_engine::{Engine, EngineOptions};
 use serde_json::{json, Value};
 use std::sync::Arc;
+#[cfg(desktop)]
+mod desktop;
+
 use tauri::{Emitter, Manager, RunEvent};
 
 #[cfg(all(feature = "mas", feature = "computer-use"))]
@@ -38,7 +41,20 @@ pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .try_init();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Registered first, as the plugin requires: a second launch focuses the window that is already
+    // there (possibly hidden in the tray). macOS opens one instance per app by itself.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| desktop::show_main(app)));
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_notification::init());
+    // Start at login, minimised to the tray. Not in the Mac App Store build (App Sandbox).
+    #[cfg(all(desktop, not(feature = "mas")))]
+    let builder = builder
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![desktop::MINIMIZED_ARG])));
+    #[cfg(desktop)]
+    let builder = builder.on_window_event(desktop::on_window_event);
+    let app = builder
         .plugin(tauri_plugin_aiw_native::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -119,6 +135,8 @@ pub fn run() {
             }
 
             let router = aiw_server::router(engine.clone(), None);
+            #[cfg(desktop)]
+            desktop::setup(app, &engine);
             app.manage(Shell { engine, router });
             Ok(())
         })
@@ -127,6 +145,12 @@ pub fn run() {
         .expect("error while building AI Workspace Local");
 
     app.run(|handle, event| {
+        // macOS: a click on the Dock icon while the window is hidden in the tray brings it back.
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen { has_visible_windows: false, .. } = event {
+            desktop::show_main(handle);
+            return;
+        }
         if let RunEvent::ExitRequested { .. } = event {
             // Stop sidecars (llama-server, vLLM…) started by the app.
             if let Some(shell) = handle.try_state::<Shell>() {

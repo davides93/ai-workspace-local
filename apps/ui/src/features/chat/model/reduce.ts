@@ -73,11 +73,11 @@ export function reduce(items: Item[], e: AgEvent): Item[] {
     case "TEXT_MESSAGE_END":
       return update(items, "text", e.messageId, (it) => ({ ...it, streaming: false }));
     case "REASONING_START":
-      return [...items, { kind: "reasoning", id: e.messageId, text: "", streaming: true }];
+      return [...items, { kind: "reasoning", id: e.messageId, text: "", streaming: true, startedAt: e.timestamp }];
     case "REASONING_MESSAGE_CONTENT":
       return update(items, "reasoning", e.messageId, (it) => ({ ...it, text: it.text + e.delta }));
     case "REASONING_END":
-      return update(items, "reasoning", e.messageId, (it) => ({ ...it, streaming: false }));
+      return update(items, "reasoning", e.messageId, (it) => ({ ...it, streaming: false, endedAt: e.timestamp }));
     case "TOOL_CALL_START":
       return [...items, { kind: "tool", id: e.toolCallId, name: e.toolCallName, args: "", status: "running", startedAt: e.timestamp }];
     case "TOOL_CALL_ARGS":

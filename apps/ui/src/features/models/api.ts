@@ -26,6 +26,15 @@ export function useCatalog() {
   return useQuery({ queryKey: qk.models.catalog(), queryFn: () => api.catalog() });
 }
 
+/**
+ * The model adviser. An older server or another transport may not have the endpoint: the query then
+ * fails (once, no retries) and callers fall back to what they computed before.
+ */
+export function useRecommend() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.models.recommend(), queryFn: () => api.recommend(), retry: false, staleTime: 60_000 });
+}
+
 export function useDownloads() {
   const api = useApi();
   return useQuery({
@@ -54,6 +63,7 @@ export function useDownloadsWatcher() {
         toast(`Download completato: ${d.model_ref || d.model_id}`);
         void qc.invalidateQueries({ queryKey: qk.models.installed() });
         void qc.invalidateQueries({ queryKey: qk.models.catalog() });
+        void qc.invalidateQueries({ queryKey: qk.models.recommend() });
         void qc.invalidateQueries({ queryKey: qk.models.remoteAll() });
       }
       if (d.status === "error" && before !== undefined && before !== "error") toast(`Download non riuscito: ${d.error ?? d.model_ref}`, "crit");

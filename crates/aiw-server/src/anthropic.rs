@@ -127,6 +127,7 @@ pub fn to_chat_request(body: &Value, model: &str) -> Result<ChatRequest, Error> 
             .as_array()
             .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
             .unwrap_or_default(),
+        thinking: None,
     })
 }
 
