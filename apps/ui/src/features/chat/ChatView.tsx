@@ -12,7 +12,8 @@ import type { Session } from "../../shared/api/types";
 import { Button, Drawer, EmptyState, Icon, ModalShell, Sheet } from "../../shared/ui";
 import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
-import { useModels } from "../models/api";
+import { useModels, useRecommend } from "../models/api";
+import { autoProfileFromAdvice } from "../models/model/adviser";
 import { canReason } from "../../shared/lib/thinking";
 import { useLessons } from "../learning/api";
 import { pendingFor } from "../learning/model/lessons";
@@ -65,7 +66,10 @@ export function ChatView() {
   const agent = sessionTeamId
     ? (sessionTeam ? teamAsAgent(sessionTeam, agents.data ?? []) : null)
     : agents.data?.find((a) => a.id === active?.agent_id) ?? null;
-  const profile = profiles.data?.find((p) => p.id === agent?.inference_profile) ?? null;
+  // An `auto:*` profile is not stored: show what the adviser resolves it to.
+  const recommend = useRecommend();
+  const profile = profiles.data?.find((p) => p.id === agent?.inference_profile)
+    ?? (agent ? autoProfileFromAdvice(agent.inference_profile, recommend.data) : null);
   const defaultAgent = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
 
   // No session in the URL (or a stale one): open the last used one, else the most recent.

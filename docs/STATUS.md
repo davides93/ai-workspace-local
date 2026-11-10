@@ -137,7 +137,7 @@ estratto, contrasto AA in entrambi i temi, layout corretti su telefono e tablet.
 [UI-ARCHITECTURE.md](design/UI-ARCHITECTURE.md). La UI mostra l'errore di un run salvato come quello
 dal vivo, raggruppa i tool interni, mostra i segreti MCP mascherati e riporta a `#/chat` se la
 sessione aperta è stata eliminata altrove. Il profilo ha `thinking`/`thinking_budget` (Ragionamento spento, automatico o approfondito, risolto a ogni chiamata del ciclo agente e traducibile per runtime dal campo `thinking` del manifest; override per run nella richiesta di avvio) e la UI semplice parla di «Stile» e «Ragionamento». L'impostazione `ui.mode` (default `simple`) riduce le
-sezioni a cinque e la prima esecuzione a un solo pulsante; `developer` (vista «Sviluppatore») mostra tutto; in modalità semplice la Panoramica mostra solo «Nuova chat», «Scarica un modello», «Il tuo assistente», approvazioni, conversazioni recenti e lezioni.
+sezioni a cinque e la prima esecuzione a un solo pulsante; `developer` (vista «Sviluppatore») mostra tutto; in modalità semplice la Panoramica mostra solo «Nuova chat», «Scarica un modello», «Il tuo assistente», approvazioni, conversazioni recenti e lezioni. Il consigliere dei modelli (`aiw-engine::adviser`, `GET /api/recommend`) sceglie per compito il modello installato e quello da scaricare; i profili `auto:chat|agent|reasoning|vision` (usati dagli agenti nuovi) sono risolti da lui all'avvio del run, e la UI semplice nasconde i modelli che non girano sul dispositivo (interruttore «Mostra tutti»).
 
 ### 2.7 Piattaforme e build
 

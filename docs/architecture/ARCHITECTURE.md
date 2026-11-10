@@ -601,6 +601,7 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET | `/api/system` | DeviceProfile + versione + stato |
 | GET | `/api/runtimes` · POST `/api/runtimes/{id}/start` · `/stop` · PUT `/settings` | Catalogo e ciclo di vita dei runtime |
 | GET | `/api/models` · POST `/api/models/pull` · GET `/api/models/catalog` | Modelli locali, download, catalogo consigliato |
+| GET | `/api/recommend` | Consigliere: per compito (chat, agent, reasoning, vision, embeddings) il modello installato migliore e quello da scaricare |
 | GET/PUT | `/api/profiles` | Profili di inferenza |
 | GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run |
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |

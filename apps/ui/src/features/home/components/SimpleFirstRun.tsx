@@ -14,15 +14,17 @@ import { downloadFraction, isUsableProfile, profileForModel, type SimpleFirstRun
 
 /**
  * First run of the simple interface: one sentence and one button. "Prepara tutto" downloads the
- * recommended model (progress stays here), makes the default profile use it once it is on disk and
- * opens a new chat. With a model already ready the button is just "Inizia una chat".
+ * model the adviser recommends (progress stays here), makes sure the default agent uses it once it
+ * is on disk (nothing to do with `auto:agent`, the default profile is patched otherwise) and opens a new chat. With a model already ready the button is just "Inizia una chat".
  */
-export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, onDismiss }: {
+export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, followsAdviser, onDismiss }: {
   state: SimpleFirstRun;
   models: LocalModel[];
   runtimes: RuntimeInfo[];
   profile?: InferenceProfile;
   device?: SystemInfo["device"];
+  /** The default agent's profile is `auto:*`: it picks up the downloaded model by itself. */
+  followsAdviser?: boolean;
   onDismiss: () => void;
 }) {
   const [, setMode] = useUiMode();
@@ -47,13 +49,14 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
       onError: (e) => { setFailure(errorMessage(e)); setWorking(false); started.current = false; },
     });
 
-  // Once the model is on disk: point the default profile at it (if it does not already), then chat.
+  // Once the model is on disk, chat. An agent on `auto:*` already follows it; only an existing install
+  // whose agent points at a stored profile needs that profile pointed at the model first.
   useEffect(() => {
     if (!working || started.current || !agentId) return;
     const target = state.kind === "connect" ? { model: state.model, runtimeId: state.runtimeId } : state.kind === "chat" ? "chat" : undefined;
     if (!target) return;
     started.current = true;
-    if (target === "chat" || isUsableProfile(profile, models, runtimes)) return openChat();
+    if (target === "chat" || followsAdviser || isUsableProfile(profile, models, runtimes)) return openChat();
     saveProfile.mutate(profileForModel(profile, target.model, target.runtimeId), {
       onSuccess: openChat,
       onError: (e) => { setFailure(errorMessage(e)); setWorking(false); started.current = false; },

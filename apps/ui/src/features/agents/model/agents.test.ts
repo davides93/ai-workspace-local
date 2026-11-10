@@ -96,6 +96,14 @@ describe("validateAgent", () => {
     expect(validateAgent(valid({ inference_profile: "balanced" }), { profileIds: [], otherNames: [], profilesLoaded: false })).toEqual([]);
   });
 
+  it("accepts an automatic profile, which is not a stored one", () => {
+    for (const id of ["auto:agent", "auto:chat", "auto:reasoning", "auto:vision"]) {
+      expect(validateAgent(valid({ inference_profile: id }), { profileIds: [], otherNames: [], profilesLoaded: true })).toEqual([]);
+    }
+    // Only the four tasks exist.
+    expect(hasErrors(validateAgent(valid({ inference_profile: "auto:nope" }), { profileIds: [], otherNames: [], profilesLoaded: true }))).toBe(true);
+  });
+
   it("lists the tools the catalogue does not know, as the backend does (MCP tools and * are always fine)", () => {
     const known = ["read_file", "todo"];
     expect(unknownTools(["*", "read_file", "mcp__gone__x", "writ_file", "ghost"], known)).toEqual(["writ_file", "ghost"]);

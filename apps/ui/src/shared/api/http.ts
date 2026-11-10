@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -92,6 +92,7 @@ export class HttpTransport implements Transport {
 
   models = () => this.req<LocalModel[]>("GET", "/models");
   catalog = () => this.req<CatalogModel[]>("GET", "/models/catalog");
+  recommend = () => this.req<Recommendations>("GET", "/recommend");
   modelProviders = () => this.req<ModelProviderInfo[]>("GET", "/models/providers");
   setProviderAuth = (id: string, token: string | null | undefined, endpoint?: string) =>
     this.req<ModelProviderInfo>("PUT", `/models/providers/${enc(id)}/auth`, authBody(token, endpoint));

@@ -8,7 +8,7 @@ pub(crate) async fn app() -> (Router, Engine, tempfile::TempDir, tempfile::TempD
 }
 
 /// `device` overrides the probed hardware (two engines in one test are two devices).
-async fn app_on(device: Option<DeviceProfile>) -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
+pub(crate) async fn app_on(device: Option<DeviceProfile>) -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
     let data = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     let e = Engine::new(EngineOptions {
@@ -111,7 +111,7 @@ async fn lan_requests_need_the_token() {
 }
 
 /// Minimal HTTP GET without extra dependencies.
-async fn reqwest_like_get(url: &str, token: Option<&str>) -> (u16, Value) {
+pub(crate) async fn reqwest_like_get(url: &str, token: Option<&str>) -> (u16, Value) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let u = url.strip_prefix("http://").unwrap();
     let (host, path) = u.split_once('/').unwrap();

@@ -25,7 +25,14 @@
   "tags": [
    "mobile",
    "fast"
-  ]
+  ],
+  "suitability": {
+   "chat": 1,
+   "agent": 1,
+   "reasoning": 1,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "qwen3-1.7b",
@@ -53,7 +60,14 @@
   "tags": [
    "mobile",
    "agent"
-  ]
+  ],
+  "suitability": {
+   "chat": 2,
+   "agent": 2,
+   "reasoning": 1,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "qwen3-4b",
@@ -81,7 +95,14 @@
   "tags": [
    "agent",
    "laptop"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 2,
+   "reasoning": 2,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "qwen3-8b",
@@ -108,7 +129,14 @@
   "min_memory_mb": 5976,
   "tags": [
    "agent"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 3,
+   "reasoning": 3,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "qwen3-30b-a3b",
@@ -137,7 +165,14 @@
    "agent",
    "moe"
   ],
-  "active_params_b": 3.3
+  "active_params_b": 3.3,
+  "suitability": {
+   "chat": 3,
+   "agent": 3,
+   "reasoning": 3,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "qwen3-coder-30b-a3b",
@@ -165,7 +200,14 @@
    "coding",
    "moe"
   ],
-  "active_params_b": 3.3
+  "active_params_b": 3.3,
+  "suitability": {
+   "chat": 3,
+   "agent": 3,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "gpt-oss-20b",
@@ -194,7 +236,14 @@
    "agent",
    "moe"
   ],
-  "active_params_b": 3.6
+  "active_params_b": 3.6,
+  "suitability": {
+   "chat": 3,
+   "agent": 3,
+   "reasoning": 3,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "gemma-3-4b",
@@ -221,7 +270,14 @@
   "tags": [
    "vision",
    "laptop"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 2,
+   "embeddings": 0
+  }
  },
  {
   "id": "gemma-3n-e4b",
@@ -250,7 +306,14 @@
    "mobile",
    "vision"
   ],
-  "active_params_b": 4
+  "active_params_b": 4,
+  "suitability": {
+   "chat": 3,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 3,
+   "embeddings": 0
+  }
  },
  {
   "id": "llama-3.2-3b",
@@ -277,7 +340,14 @@
   "tags": [
    "mobile",
    "fast"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 2,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "llama-3.3-70b",
@@ -304,7 +374,14 @@
   "tags": [
    "general",
    "large"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 3,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "qwen2.5-vl-7b",
@@ -332,7 +409,14 @@
   "tags": [
    "vision",
    "computer-use"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 3,
+   "embeddings": 0
+  }
  },
  {
   "id": "qwen3-embedding-0.6b",
@@ -358,7 +442,14 @@
   "tags": [
    "embeddings",
    "mobile"
-  ]
+  ],
+  "suitability": {
+   "chat": 0,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 3
+  }
  },
  {
   "id": "gemma-3n-e2b-litert",
@@ -386,7 +477,14 @@
   "tags": [
    "mobile"
   ],
-  "active_params_b": 2
+  "active_params_b": 2,
+  "suitability": {
+   "chat": 3,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 2,
+   "embeddings": 0
+  }
  },
  {
   "id": "qwen3-4b-mlx",
@@ -412,7 +510,14 @@
   "min_memory_mb": 3112,
   "tags": [
    "apple"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 2,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "apple-fm-system",
@@ -439,7 +544,14 @@
   "tags": [
    "system",
    "mobile"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 2,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "gemini-nano-4-fast-system",
@@ -465,7 +577,14 @@
   "tags": [
    "system",
    "mobile"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 2,
+   "embeddings": 0
+  }
  },
  {
   "id": "gemini-nano-4-full-system",
@@ -491,7 +610,14 @@
   "tags": [
    "system",
    "mobile"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 2,
+   "embeddings": 0
+  }
  },
  {
   "id": "gemini-nano-system",
@@ -517,7 +643,14 @@
   "tags": [
    "system",
    "mobile"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 2,
+   "embeddings": 0
+  }
  },
  {
   "id": "phi-silica-system",
@@ -541,7 +674,14 @@
   "min_memory_mb": 0,
   "tags": [
    "system"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "whisper-base-q8",
@@ -568,7 +708,14 @@
    "voce",
    "mobile",
    "fast"
-  ]
+  ],
+  "suitability": {
+   "chat": 0,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "whisper-small-q8",
@@ -593,7 +740,14 @@
   "min_memory_mb": 900,
   "tags": [
    "voce"
-  ]
+  ],
+  "suitability": {
+   "chat": 0,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "whisper-large-v3-turbo-q5",
@@ -619,7 +773,14 @@
   "tags": [
    "voce",
    "quality"
-  ]
+  ],
+  "suitability": {
+   "chat": 0,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "gemma-3-1b",
@@ -645,7 +806,14 @@
   "tags": [
    "mobile",
    "fast"
-  ]
+  ],
+  "suitability": {
+   "chat": 2,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "gemma-3n-e2b",
@@ -670,7 +838,14 @@
   "min_memory_mb": 3400,
   "tags": [
    "mobile"
-  ]
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  },
  {
   "id": "llama-3.2-1b",
@@ -697,6 +872,13 @@
   "tags": [
    "mobile",
    "fast"
-  ]
+  ],
+  "suitability": {
+   "chat": 2,
+   "agent": 1,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  }
 ]

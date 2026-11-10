@@ -800,3 +800,14 @@ describe("checkpoint rewind", () => {
     await expect(api.rewindRun(ck.run_id)).rejects.toMatchObject({ status: 404 });
   });
 });
+
+describe("the model adviser of the demo", () => {
+  it("answers one entry per task, and only suggests a download when nothing installed is suited", async () => {
+    const r = await new MockTransport().recommend();
+    for (const task of ["chat", "agent", "reasoning", "vision", "embeddings"] as const) {
+      // The demo models are shared with the tests that delete them: only the invariant is stable.
+      expect(r[task].installed && r[task].download, task).toBeFalsy();
+    }
+    expect(r.tier).toBe("xl");
+  });
+});

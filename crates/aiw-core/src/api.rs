@@ -272,6 +272,116 @@ pub struct CatalogModel {
     /// False for system models (Apple FM, Gemini Nano, Phi Silica): nothing to download.
     #[serde(default)]
     pub downloadable: bool,
+    /// How well the model suits each task (see [`TaskScores`]). Optional: entries without it get
+    /// the value the adviser derives from their capabilities and size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suitability: Option<TaskScores>,
+}
+
+/// Coarse ordinal suitability of a model for each task of the model adviser:
+/// 0 = not suited (a required capability is missing), 1 = acceptable, 2 = good, 3 = very good.
+/// It is a ranking aid derived from what a catalog entry declares, not a benchmark result.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskScores {
+    #[serde(default)]
+    pub chat: u8,
+    #[serde(default)]
+    pub agent: u8,
+    #[serde(default)]
+    pub reasoning: u8,
+    #[serde(default)]
+    pub vision: u8,
+    #[serde(default)]
+    pub embeddings: u8,
+}
+
+/// What a model is advised for. `auto:<task>` as an inference profile id selects one of the
+/// first four at run time.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AdviserTask {
+    /// Fast everyday chat.
+    Chat,
+    /// Reliable tool calling, with memory left for the context.
+    Agent,
+    /// As `Agent`, with the model's reasoning on.
+    Reasoning,
+    /// Needs the `vision` capability.
+    Vision,
+    /// Small and fixed.
+    Embeddings,
+}
+
+impl AdviserTask {
+    pub const ALL: [AdviserTask; 5] = [Self::Chat, Self::Agent, Self::Reasoning, Self::Vision, Self::Embeddings];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Agent => "agent",
+            Self::Reasoning => "reasoning",
+            Self::Vision => "vision",
+            Self::Embeddings => "embeddings",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.as_str() == s)
+    }
+}
+
+/// One model the adviser proposes, installed (`model` = local model id) or to download
+/// (`catalog_id` is set and `model` is the id it will have once installed).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelChoice {
+    pub model: String,
+    pub name: String,
+    pub runtime_id: String,
+    /// Context window to use (tokens).
+    pub context: u32,
+    /// Reasoning default for the task; `None` sends nothing to the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingMode>,
+    /// great | ok | tight — how comfortably it runs on this device.
+    pub fit: String,
+    #[serde(default)]
+    pub size_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_id: Option<String>,
+    /// One sentence in Italian for a non-technical person.
+    pub reason: String,
+}
+
+/// The best installed choice for a task and the best one to download, when there is one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskAdvice {
+    #[serde(default)]
+    pub installed: Option<ModelChoice>,
+    /// Present when nothing installed fits the task or something clearly better would.
+    #[serde(default)]
+    pub download: Option<ModelChoice>,
+}
+
+/// Answer of `GET /api/recommend`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Recommendations {
+    /// Device class: xs | s | m | l | xl.
+    pub tier: String,
+    pub chat: TaskAdvice,
+    pub agent: TaskAdvice,
+    pub reasoning: TaskAdvice,
+    pub vision: TaskAdvice,
+    pub embeddings: TaskAdvice,
+}
+
+impl Recommendations {
+    pub fn for_task(&self, t: AdviserTask) -> &TaskAdvice {
+        match t {
+            AdviserTask::Chat => &self.chat,
+            AdviserTask::Agent => &self.agent,
+            AdviserTask::Reasoning => &self.reasoning,
+            AdviserTask::Vision => &self.vision,
+            AdviserTask::Embeddings => &self.embeddings,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

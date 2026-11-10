@@ -111,6 +111,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/models", get(models))
         .route("/api/model-preview", post(preview_system_model))
         .route("/api/models/catalog", get(catalog))
+        .route("/api/recommend", get(recommend))
         .route("/api/models/providers", get(model_providers))
         .route("/api/models/providers/{id}/auth", put(provider_auth))
         .route("/api/models/search", get(search_models))
@@ -385,6 +386,11 @@ async fn models(State(s): State<AppState>) -> ApiResult<Vec<LocalModel>> {
 }
 async fn catalog(State(s): State<AppState>) -> ApiResult<Vec<CatalogModel>> {
     ok(s.engine.catalog())
+}
+/// The model adviser: per task (chat, agent, reasoning, vision, embeddings) the best installed
+/// model for this device and the best one to download.
+async fn recommend(State(s): State<AppState>) -> ApiResult<Recommendations> {
+    ok(s.engine.recommend())
 }
 async fn model_providers(State(s): State<AppState>) -> ApiResult<Vec<ModelProviderInfo>> {
     ok(s.engine.model_providers())
@@ -1209,6 +1215,8 @@ mod tests_learning;
 mod tests_models;
 #[cfg(test)]
 mod tests_optimize;
+#[cfg(test)]
+mod tests_recommend;
 #[cfg(test)]
 mod tests_remote;
 #[cfg(test)]

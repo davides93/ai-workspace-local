@@ -1,4 +1,5 @@
-import type { AgentProfile, CatalogModel, Fit, InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
+import type { AgentProfile, CatalogModel, Fit, InferenceProfile, LocalModel, Recommendations, RuntimeInfo } from "../../../shared/api/types";
+import { catalogForChoice, isAutoProfile } from "../../models/model/adviser";
 import { applyModelToProfile, newProfileFor, pickRuntime } from "../../models/model/profile";
 
 export type ChecklistId = "runtime" | "model" | "profile" | "chat";
@@ -15,17 +16,27 @@ export const isUsableRuntime = (r: RuntimeInfo): boolean => r.status === "runnin
 /** A runtime the "Avvia" action can start: detected, not running (a failed one may be retried). */
 export const isStartableRuntime = (r: RuntimeInfo): boolean => r.status === "available" || r.status === "stopped" || r.status === "error";
 
-/** Best model to download first: the largest that fits comfortably, not yet installed, downloadable. */
+/**
+ * Fallback of the first-run recommendation, for a server without the model adviser: the largest
+ * model that fits comfortably, not yet installed, downloadable.
+ */
 export function recommendedModel(catalog: CatalogModel[]): CatalogModel | undefined {
   const candidates = catalog.filter((c) => c.downloadable !== false && !c.installed && c.fit === "great");
   return candidates.sort((a, b) => b.size_bytes - a.size_bytes)[0] ?? catalog.find((c) => c.downloadable !== false && !c.installed && c.fit === "ok");
 }
 
-/** Profile of the default agent (config `agent.default`, else the first agent). */
+/** The default agent (config `agent.default`, else the first agent). */
+export const defaultAgent = (agents: AgentProfile[], defaultAgentId?: unknown): AgentProfile | undefined =>
+  agents.find((a) => a.id === defaultAgentId) ?? agents[0];
+
+/** Profile of the default agent. An `auto:*` profile is not stored: it is not in the list, and the first profile stands in. */
 export function defaultProfile(agents: AgentProfile[], profiles: InferenceProfile[], defaultAgentId?: unknown): InferenceProfile | undefined {
-  const agent = agents.find((a) => a.id === defaultAgentId) ?? agents[0];
+  const agent = defaultAgent(agents, defaultAgentId);
   return profiles.find((p) => p.id === agent?.inference_profile) ?? profiles[0];
 }
+
+/** The default agent follows the model adviser, so no profile has to be patched when a model arrives. */
+export const followsAdviser = (agents: AgentProfile[], defaultAgentId?: unknown): boolean => isAutoProfile(defaultAgent(agents, defaultAgentId)?.inference_profile);
 
 /** The four first-run steps, in the order they unlock each other: runtime → model → profile → first session. */
 export function checklist(opts: { runtimes: RuntimeInfo[]; models: LocalModel[]; profiles: InferenceProfile[]; sessions: number }): ChecklistStep[] {
@@ -99,16 +110,37 @@ export function isUsableProfile(profile: InferenceProfile | undefined, models: L
   return !!rt && isUsableRuntime(rt) && models.some((m) => m.id === profile.model);
 }
 
-export function simpleFirstRun(opts: { runtimes: RuntimeInfo[]; models: LocalModel[]; profile?: InferenceProfile; catalog?: CatalogModel[] }): SimpleFirstRun {
-  const { runtimes, models, profile, catalog } = opts;
+/**
+ * The model to offer for the first download: the adviser's `agent` proposal when the server has one,
+ * else (older server, no endpoint) the largest that fits comfortably.
+ */
+export function firstRunModel(catalog: CatalogModel[], recommendation?: Recommendations | null): CatalogModel | undefined {
+  return catalogForChoice(recommendation?.agent.download, catalog) ?? (recommendation ? undefined : recommendedModel(catalog));
+}
+
+export function simpleFirstRun(opts: {
+  runtimes: RuntimeInfo[];
+  models: LocalModel[];
+  profile?: InferenceProfile;
+  catalog?: CatalogModel[];
+  /** The adviser's answer; `null` when the server cannot give one (the old rule is used), `undefined` when not asked. */
+  recommendation?: Recommendations | null;
+  /** The adviser is still being asked: wait instead of showing a guess. */
+  recommendationPending?: boolean;
+  /** The default agent's profile is `auto:*`: it follows the installed model by itself. */
+  followsAdviser?: boolean;
+}): SimpleFirstRun {
+  const { runtimes, models, profile, catalog, recommendation } = opts;
+  if (opts.recommendationPending) return { kind: "loading" };
   if (models.length > 0) {
+    if (opts.followsAdviser && recommendation?.agent.installed) return { kind: "chat" };
     if (isUsableProfile(profile, models, runtimes)) return { kind: "chat" };
     const best = bestInstalledModel(models);
     return best ? { kind: "connect", ...best } : { kind: "no-runtime" };
   }
   if (!runtimes.some(isUsableRuntime)) return { kind: "no-runtime" };
   if (!catalog) return { kind: "loading" };
-  const rec = recommendedModel(catalog);
+  const rec = firstRunModel(catalog, recommendation);
   if (!rec) return { kind: "no-model" };
   return pickRuntime(rec) === null ? { kind: "no-runtime" } : { kind: "prepare", model: rec };
 }

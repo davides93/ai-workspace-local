@@ -183,7 +183,7 @@ impl Engine {
     }
 
     // ------------------------------------------------------------------ local models
-    fn local_enrichment(&self, mut models: Vec<LocalModel>) -> Vec<LocalModel> {
+    pub(crate) fn local_enrichment(&self, mut models: Vec<LocalModel>) -> Vec<LocalModel> {
         let device = self.device();
         let infos = self.0.runtimes.list();
         let mlx_lm = runtime_compat(&infos, &device.os, "mlx").into_iter().find(|runtime| runtime.id == "mlx-lm");

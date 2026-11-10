@@ -281,7 +281,43 @@ export interface CatalogModel {
   runtime_compat: RuntimeCompat[];
   /** False for system models (nothing to download). */
   downloadable: boolean;
+  /** How well it suits each task, 0 (not suited) to 3 (very good). */
+  suitability?: TaskScores;
 }
+
+export interface TaskScores {
+  chat: number;
+  agent: number;
+  reasoning: number;
+  vision: number;
+  embeddings: number;
+}
+
+/** What the model adviser recommends for: `auto:<task>` (all but embeddings) is an agent's inference profile. */
+export type AdviserTask = "chat" | "agent" | "reasoning" | "vision" | "embeddings";
+
+/** A model the adviser proposes, installed (`model` is the local id) or to download (`catalog_id` is set). */
+export interface ModelChoice {
+  model: string;
+  name: string;
+  runtime_id: string;
+  context: number;
+  thinking?: ThinkingMode;
+  fit: Fit;
+  size_bytes: number;
+  catalog_id?: string;
+  /** One sentence in Italian. */
+  reason: string;
+}
+
+export interface TaskAdvice {
+  installed: ModelChoice | null;
+  /** Set when nothing installed fits the task or something clearly better would. */
+  download: ModelChoice | null;
+}
+
+/** `GET /api/recommend`. */
+export type Recommendations = { tier: "xs" | "s" | "m" | "l" | "xl" } & Record<AdviserTask, TaskAdvice>;
 
 export type DownloadStatus = "queued" | "running" | "verifying" | "done" | "error" | "cancelled";
 

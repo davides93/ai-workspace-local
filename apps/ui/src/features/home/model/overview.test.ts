@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { catalog, models, profiles, agents, runtimes } from "../../../shared/api/mock/fixtures";
-import type { CatalogModel, LocalModel, RuntimeInfo } from "../../../shared/api/types";
-import { bestInstalledModel, checklist, currentStep, defaultProfile, downloadFraction, firstRunPending, isStartableRuntime, isUsableProfile, isUsableRuntime, profileForModel, recommendedModel, runtimeShortcut, simpleFirstRun, simpleFirstRunPending } from "./overview";
+import type { AgentProfile, CatalogModel, LocalModel, ModelChoice, Recommendations, RuntimeInfo, TaskAdvice } from "../../../shared/api/types";
+import { bestInstalledModel, checklist, currentStep, defaultAgent, defaultProfile, firstRunModel, followsAdviser, downloadFraction, firstRunPending, isStartableRuntime, isUsableProfile, isUsableRuntime, profileForModel, recommendedModel, runtimeShortcut, simpleFirstRun, simpleFirstRunPending } from "./overview";
 
 describe("first-run checklist", () => {
   it("lists the four steps in order", () => {
@@ -135,5 +135,50 @@ describe("simple first run", () => {
     expect(next).toMatchObject({ id: profile.id, model: "m1", runtime_id: "llama-server" });
     expect(next.params.context).toBe(4096);
     expect(profileForModel(undefined, m, "llama-server")).toMatchObject({ id: "default", model: "m1", runtime_id: "llama-server" });
+  });
+});
+
+describe("first run with the model adviser", () => {
+  const choice = (over: Partial<ModelChoice> = {}): ModelChoice => ({ model: "m", name: "Modello", runtime_id: "llama-server", context: 8192, fit: "great", size_bytes: 1, reason: "r", ...over });
+  const adv = (installed: ModelChoice | null, download: ModelChoice | null = null): TaskAdvice => ({ installed, download });
+  const rec = (agent: TaskAdvice): Recommendations => ({ tier: "m", chat: adv(null), agent, reasoning: adv(null), vision: adv(null), embeddings: adv(null) });
+  const live = runtimes.map((r) => (r.id === "llama-server" ? { ...r, status: "running" as const } : r));
+  const profile = { ...profiles[0], runtime_id: "llama-server" };
+  const free = catalog.filter((c) => c.downloadable && !c.installed && c.fit !== "no" && c.format === "gguf");
+
+  it("offers the adviser's agent download instead of the old rule", () => {
+    const pick = free[free.length - 1];
+    const r = rec(adv(null, choice({ catalog_id: pick.id })));
+    expect(firstRunModel(catalog, r)).toEqual(pick);
+    expect(simpleFirstRun({ runtimes: live, models: [], profile, catalog, recommendation: r })).toEqual({ kind: "prepare", model: pick });
+  });
+  it("falls back to the old rule when the server has no adviser", () => {
+    expect(firstRunModel(catalog, null)).toEqual(recommendedModel(catalog));
+    expect(simpleFirstRun({ runtimes: live, models: [], profile, catalog, recommendation: null })).toEqual({ kind: "prepare", model: recommendedModel(catalog) });
+  });
+  it("trusts the adviser when it finds nothing that fits", () => {
+    expect(simpleFirstRun({ runtimes: live, models: [], profile, catalog, recommendation: rec(adv(null)) }).kind).toBe("no-model");
+  });
+  it("waits while the adviser is being asked", () => {
+    expect(simpleFirstRun({ runtimes: live, models: [], profile, catalog, recommendationPending: true }).kind).toBe("loading");
+  });
+  it("is ready to chat as soon as the model is installed when the agent follows the adviser", () => {
+    const m: LocalModel = { ...models[0], id: "m1" };
+    // The default profile does not point at it, yet nothing has to be patched.
+    const stale = { ...profile, model: "" };
+    expect(simpleFirstRun({ runtimes: live, models: [m], profile: stale, catalog, recommendation: rec(adv(choice())), followsAdviser: true })).toEqual({ kind: "chat" });
+    // An agent on a stored profile (existing install) still goes through the patch path.
+    expect(simpleFirstRun({ runtimes: live, models: [m], profile: stale, catalog, recommendation: rec(adv(choice())), followsAdviser: false }).kind).toBe("connect");
+  });
+  it("knows when the default agent follows the adviser", () => {
+    const agent = (id: string, inference_profile: string): AgentProfile => ({ ...agents[0], id, inference_profile });
+    const list = [agent("a", "default"), agent("b", "auto:agent")];
+    expect(defaultAgent(list, "b")?.id).toBe("b");
+    expect(followsAdviser(list, "b")).toBe(true);
+    expect(followsAdviser(list, "a")).toBe(false);
+    expect(followsAdviser(list, "missing")).toBe(false);
+    expect(followsAdviser([], undefined)).toBe(false);
+    // An auto profile is not in the stored list: the first stored profile stands in for the shortcuts.
+    expect(defaultProfile(list, profiles, "b")).toEqual(profiles[0]);
   });
 });

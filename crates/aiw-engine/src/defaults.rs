@@ -1,14 +1,18 @@
 //! First-run seed data: agent presets, the default inference profile and an example workflow.
 
+use crate::adviser::{context_for, local_fit, Fit};
 use aiw_core::api::{AgentProfile, DeviceProfile, InferenceParams, InferenceProfile, LocalModel, RuntimeInfo, WorkflowDef};
 use serde_json::json;
 
+/// Agents seeded on a fresh install. They follow the model adviser (`auto:agent`, the planner
+/// `auto:reasoning`): they use what is installed now, so a model downloaded later is picked up
+/// without editing any profile. Installs that already have these agents keep their profile.
 pub fn agents() -> Vec<AgentProfile> {
     let a = |id: &str, name: &str, desc: &str, prompt: &str, tools: &[&str], mode: &str, sandbox: &str, turns: u32| AgentProfile {
         id: id.into(),
         name: name.into(),
         description: desc.into(),
-        inference_profile: "default".into(),
+        inference_profile: if id == "planner" { "auto:reasoning" } else { "auto:agent" }.into(),
         system_prompt: prompt.into(),
         tools: tools.iter().map(|s| s.to_string()).collect(),
         mode: mode.into(),
@@ -117,35 +121,9 @@ impl Availability {
 }
 
 /// `nomic-embed-text:latest`, `bge-m3`, `all-minilm`, rerankers… cannot be a chat default.
-fn looks_like_embedding_model(name: &str) -> bool {
+pub(crate) fn looks_like_embedding_model(name: &str) -> bool {
     let n = name.to_lowercase();
     n.contains("embed") || n.contains("minilm") || n.contains("rerank") || n.starts_with("bge-")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Fit {
-    No,
-    Tight,
-    Ok,
-    Great,
-}
-
-/// Fit of a model file already on disk. Same formula and bands as `aiw_models::fit` (the
-/// catalog works on `min_memory_mb`; for a file the size is real): `size × 1.1 + 700 MB` against
-/// the device memory budget.
-fn local_fit(m: &LocalModel, device: &DeviceProfile) -> Fit {
-    let need = (m.size_bytes / (1024 * 1024) * 11 / 10 + 700).max(1);
-    let budget = aiw_hw::model_budget_mb(device);
-    let offload = aiw_hw::offload_limit_mb(device);
-    if need * 4 <= budget * 3 {
-        Fit::Great
-    } else if need <= budget {
-        Fit::Ok
-    } else if need <= offload {
-        Fit::Tight
-    } else {
-        Fit::No
-    }
 }
 
 /// Largest model first; equal sizes are ordered by id so the choice never depends on scan order.
@@ -180,18 +158,7 @@ fn pick_local<'a>(models: &'a [LocalModel], device: &DeviceProfile) -> Option<(&
     })
 }
 
-/// Context window for a profile: what the model supports, capped by how comfortably it fits
-/// (the KV cache grows with it) and never below 2048.
-fn context_for(m: &LocalModel, fit: Fit) -> u32 {
-    let cap: u32 = match fit {
-        Fit::Great => 16384,
-        Fit::Ok => 8192,
-        Fit::Tight | Fit::No => 4096,
-    };
-    m.context_length.map(|c| c.min(cap as u64) as u32).unwrap_or(cap.min(8192)).max(2048)
-}
-
-fn profile(description: String, runtime_id: &str, model: &str, ctx: u32) -> InferenceProfile {
+pub(crate) fn profile(description: String, runtime_id: &str, model: &str, ctx: u32) -> InferenceProfile {
     InferenceProfile {
         id: "default".into(),
         name: "Predefinito".into(),
@@ -226,14 +193,14 @@ pub fn default_profile(models: &[LocalModel], device: &DeviceProfile, avail: &Av
     match (gguf_rt, local) {
         (Some(rt), Some((m, fit))) => {
             let place = if rt == "llama-embedded" { "llama.cpp (in-process)" } else { "llama.cpp" };
-            return profile(format!("{} su {place}", m.name), rt, &m.id, context_for(m, fit));
+            return profile(format!("{} su {place}", m.name), rt, &m.id, context_for(m.context_length, fit));
         }
         // A local model, but no engine for it yet: an Ollama that is up wins, otherwise keep the
         // pairing with llama-server, which the user is told to install on first use.
         (None, Some((m, fit))) => {
             return match ollama {
                 Some(o) => ollama_profile(o),
-                None => profile(format!("{} su llama.cpp", m.name), "llama-server", &m.id, context_for(m, fit)),
+                None => profile(format!("{} su llama.cpp", m.name), "llama-server", &m.id, context_for(m.context_length, fit)),
             };
         }
         (_, None) => {}

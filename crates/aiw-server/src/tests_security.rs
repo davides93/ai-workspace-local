@@ -511,7 +511,10 @@ async fn delete_and_rename_routes() {
     let (_, agents) = dispatch(app.clone(), "GET", "/api/agents", None).await;
     assert!(agents.as_array().unwrap().iter().all(|a| a["id"] != "revisore"));
 
-    // A profile an agent points to is refused; a free one is deleted.
+    // A profile an agent points to is refused (an agent that predates `auto:agent` points at `default`); a free one is deleted.
+    let mut operator = e.agent("operator").unwrap();
+    operator.inference_profile = "default".into();
+    e.save_agent(operator).unwrap();
     let (st, body) = dispatch(app.clone(), "DELETE", "/api/profiles/default", None).await;
     assert_eq!(st, 409, "{body}");
     assert!(body["error"].as_str().unwrap().contains("Operatore"), "{body}");

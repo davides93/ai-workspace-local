@@ -1,6 +1,7 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
 pub mod a2a_client;
+pub mod adviser;
 mod dataset;
 pub mod defaults;
 pub mod eval;
@@ -657,12 +658,55 @@ impl Engine {
     pub fn profiles(&self) -> Result<Vec<InferenceProfile>> {
         self.0.store.list_docs("profile")
     }
+    /// An inference profile by id. `auto:<task>` (chat, agent, reasoning, vision) is not stored:
+    /// the model adviser resolves it to what is installed now (see [`Engine::resolve_auto_profile`]).
     pub fn profile(&self, id: &str) -> Result<InferenceProfile> {
+        if let Some(task) = adviser::parse_auto_profile(id) {
+            return self.resolve_auto_profile(task);
+        }
         self.0.store.get_doc("profile", id)?.ok_or_else(|| Error::NotFound(format!("profilo {id} non trovato")))
+    }
+    /// The model adviser's answer for this device, from the models found on disk right now.
+    pub fn recommend(&self) -> aiw_core::api::Recommendations {
+        let local = self.models();
+        let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
+        adviser::advise(&self.device(), &local, &self.catalog(), &avail)
+    }
+    /// What `auto:<task>` stands for right now. Looks at the models already known (no disk scan:
+    /// this runs at the start of every run) and the runtimes' current state.
+    ///
+    /// When the adviser finds nothing installed for chat, agent or reasoning but the `default`
+    /// profile points at a model, that profile is used, so installs that picked their model by
+    /// hand (an Ollama or remote model the adviser cannot see) keep working. Nothing usable is a
+    /// conflict the person can fix, like a profile without a model.
+    pub fn resolve_auto_profile(&self, task: aiw_core::api::AdviserTask) -> Result<InferenceProfile> {
+        use aiw_core::api::AdviserTask;
+        let mut local = self.0.models.read().unwrap().clone();
+        let system = self.available_system_models();
+        local.retain(|m| !system.iter().any(|s| s.id == m.id));
+        local.extend(system);
+        let local = self.local_enrichment(local);
+        let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
+        let rec = adviser::advise(&self.device(), &local, &aiw_models::builtin_catalog(), &avail);
+        if let Some(p) = adviser::auto_profile(task, &rec) {
+            return Ok(p);
+        }
+        if task != AdviserTask::Vision {
+            if let Some(p) = self.0.store.get_doc::<InferenceProfile>("profile", "default")?.filter(|p| !p.model.is_empty()) {
+                return Ok(p);
+            }
+        }
+        Err(Error::Conflict(match task {
+            AdviserTask::Vision => "Nessun modello installato sa leggere le immagini: scaricane uno da Modelli (cerca «vision») o scegli un altro profilo in Agenti.".into(),
+            _ => "Non c'è ancora un modello adatto a questo dispositivo: scaricane uno da Modelli e riprova.".into(),
+        }))
     }
     pub fn save_profile(&self, p: InferenceProfile) -> Result<InferenceProfile> {
         if p.id.trim().is_empty() || p.runtime_id.trim().is_empty() {
             return Err(Error::Invalid("profilo senza id o runtime".into()));
+        }
+        if p.id.starts_with("auto:") {
+            return Err(Error::Invalid("gli id che iniziano con «auto:» sono riservati ai profili automatici".into()));
         }
         let manifest = self.0.runtimes.manifest(&p.runtime_id)?;
         // A runtime that cannot load an adapter says so now, not at the first message.
@@ -696,7 +740,10 @@ impl Engine {
         if let Some(schema) = &a.output_schema {
             aiw_agent::schema::check_schema(schema).map_err(|e| Error::Invalid(format!("output_schema non valido: {e}")))?;
         }
-        if self.0.store.get_doc::<InferenceProfile>("profile", &a.inference_profile)?.is_none() {
+        // `auto:<task>` is resolved when a run starts: nothing to look up (or to be installed) yet.
+        if adviser::parse_auto_profile(&a.inference_profile).is_none()
+            && self.0.store.get_doc::<InferenceProfile>("profile", &a.inference_profile)?.is_none()
+        {
             return Err(Error::Invalid(format!("il profilo di inferenza `{}` non esiste", a.inference_profile)));
         }
         let unknown: Vec<&str> = a.tools.iter().map(String::as_str).filter(|t| !self.is_known_tool(t)).collect();
@@ -920,6 +967,9 @@ impl Engine {
     }
     /// Deletes an inference profile that no agent (or workflow step) uses any more.
     pub fn delete_profile(&self, id: &str) -> Result<()> {
+        if adviser::parse_auto_profile(id).is_some() {
+            return Err(Error::Invalid("i profili automatici non si eliminano: seguono il modello consigliato".into()));
+        }
         let profile = self.profile(id)?;
         let mut used_by: Vec<String> = self.agents()?.into_iter().filter(|a| a.inference_profile == id).map(|a| a.name).collect();
         used_by.extend(
@@ -2296,6 +2346,8 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_auto;
 #[cfg(test)]
 mod tests_eval;
 #[cfg(test)]

@@ -90,6 +90,7 @@ describe("HttpTransport", () => {
     await t.startTrainJob({ method: "sft", base_model: "m", dataset_id: "ds_1" });
     await t.cancelTrainJob("trn/1");
     await t.trainJobLog("trn_1", 50);
+    await t.recommend();
     await t.adapters();
     await t.deleteAdapter("ad 1");
     vi.unstubAllGlobals();
@@ -141,6 +142,7 @@ describe("HttpTransport", () => {
       "POST /train/jobs",
       "POST /train/jobs/trn%2F1/cancel",
       "GET /train/jobs/trn_1/log?lines=50",
+      "GET /recommend",
       "GET /adapters",
       "DELETE /adapters/ad%201",
     ]);

@@ -1,6 +1,7 @@
 import type { Transport, TransportCapabilities } from "../transport";
 import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
+import { mockRecommend } from "./recommend";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
@@ -141,6 +142,7 @@ export class MockTransport implements Transport {
 
   async models() { return structuredClone(models); }
   async catalog() { return structuredClone(catalog); }
+  async recommend() { return mockRecommend(); }
 
   // ---------------------------------------------------------------- model hub
 
