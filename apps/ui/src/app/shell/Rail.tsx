@@ -47,7 +47,7 @@ export function Rail({ current, onOpenPalette }: { current?: RouteId; onOpenPale
       ))}
       <div className="rail-foot">
         {mode === "simple" && (
-          <button type="button" className="rail-more nav-text" onClick={() => setMode("advanced")}>Mostra tutte le sezioni</button>
+          <button type="button" className="rail-more nav-text" onClick={() => setMode("developer")}>Mostra tutte le sezioni</button>
         )}
         <KillSwitch />
       </div>

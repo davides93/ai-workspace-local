@@ -21,7 +21,7 @@ export interface AppRoute extends RoutePattern {
   group: GroupId;
   /** Position in the phone tab bar (the fifth slot is always "Altro"). */
   tab?: number;
-  /** Shown in simple mode (`ui.mode`); advanced mode shows every route. */
+  /** Shown in simple mode (`ui.mode`); developer mode shows every route. */
   simple?: boolean;
   /** Plainer name used in simple mode. */
   simpleLabel?: string;

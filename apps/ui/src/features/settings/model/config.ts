@@ -148,7 +148,7 @@ export function formatValue(v: unknown): string {
 
 /** Readable names of the choices of enum settings; a value without a name is shown as it is. */
 const OPTION_LABEL: Record<string, Record<string, string>> = {
-  "ui.mode": { simple: "Semplice", advanced: "Avanzate" },
+  "ui.mode": { simple: "Semplice", developer: "Sviluppatore" },
   "ui.theme": { system: "Sistema", light: "Chiaro", dark: "Scuro" },
   "ui.language": { it: "Italiano", en: "English" },
   "policy.mode": {

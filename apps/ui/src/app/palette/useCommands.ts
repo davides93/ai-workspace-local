@@ -36,9 +36,9 @@ export function useCommands(): Command[] {
         },
       },
       { id: "download-model", label: "Scarica un modello", group: "Azioni", icon: "download", keywords: ["modello", "scopri", "hugging face", "ollama", "gguf"], run: () => navigate("/models/discover") },
-      ...(mode === "advanced" ? [{ id: "detect-runtimes", label: "Rileva runtime", group: "Azioni" as const, icon: "refresh", keywords: ["runtime", "cerca", "aggiorna"], run: () => refresh.mutate() }] : []),
+      ...(mode === "developer" ? [{ id: "detect-runtimes", label: "Rileva runtime", group: "Azioni" as const, icon: "refresh", keywords: ["runtime", "cerca", "aggiorna"], run: () => refresh.mutate() }] : []),
       mode === "simple"
-        ? { id: "mode-advanced", label: "Mostra tutte le sezioni", group: "Azioni" as const, icon: "settings", keywords: ["avanzate", "modalità", "interfaccia", "tutto"], run: () => setMode("advanced") }
+        ? { id: "mode-developer", label: "Mostra tutte le sezioni", group: "Azioni" as const, icon: "settings", keywords: ["sviluppatore", "avanzate", "modalità", "interfaccia", "tutto"], run: () => setMode("developer") }
         : { id: "mode-simple", label: "Passa all'interfaccia semplice", group: "Azioni" as const, icon: "settings", keywords: ["semplice", "modalità", "interfaccia", "meno sezioni"], run: () => setMode("simple") },
       { id: "kill", label: "Kill switch", hint: "ferma tutti i run", group: "Azioni", icon: "power", keywords: ["stop", "emergenza", "ferma", "arresta"], run: () => kill.mutate() },
       { id: "theme-light", label: "Tema chiaro", group: "Azioni", icon: "sun", keywords: ["aspetto", "colori"], run: () => setTheme("light") },

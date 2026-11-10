@@ -2,7 +2,8 @@
 
 ## Non rilasciato
 
-- Interfaccia semplice: nuova impostazione «Modalità dell'interfaccia» (`ui.mode`), semplice per default. Mostra solo Panoramica, Chat, Assistenti, Modelli e Impostazioni; alla prima apertura un solo riquadro con «Prepara tutto» scarica il modello consigliato per il dispositivo, lo collega al profilo predefinito e apre la prima chat. «Avanzate» mostra tutto com'era (le sezioni nascoste si aprono sempre da indirizzo). Si cambia da Impostazioni, da «Altro», dalla palette comandi o da «Mostra tutte le sezioni» in fondo alla barra laterale.
+- Vista «Sviluppatore»: la seconda modalità dell'interfaccia (`ui.mode` = `developer`, prima «Avanzate») si attiva da Impostazioni con la frase che spiega che mostra ogni sezione. In modalità semplice la Panoramica ha solo «Nuova chat» e «Scarica un modello», la scheda «Il tuo assistente» con il nome del modello e «Cambia», le conferme in attesa, le conversazioni recenti e le lezioni da rivedere, senza runtime, profili o acceleratori; la vista Sviluppatore resta com'era.
+- Interfaccia semplice: nuova impostazione «Modalità dell'interfaccia» (`ui.mode`), semplice per default. Mostra solo Panoramica, Chat, Assistenti, Modelli e Impostazioni; alla prima apertura un solo riquadro con «Prepara tutto» scarica il modello consigliato per il dispositivo, lo collega al profilo predefinito e apre la prima chat. «Sviluppatore» (valore `developer`) mostra tutto com'era (le sezioni nascoste si aprono sempre da indirizzo). Si cambia da Impostazioni, da «Altro», dalla palette comandi o da «Mostra tutte le sezioni» in fondo alla barra laterale.
 
 ## 0.5.0-beta.6 - pre-release
 

@@ -404,7 +404,7 @@ export const audit: AuditEntry[] = [
 export const configSchema: SettingsSchema = {
   type: "object",
   properties: {
-    "ui.mode": { type: "string", title: "Modalità dell'interfaccia", description: "Semplice mostra solo le sezioni di uso quotidiano; Avanzate le mostra tutte", enum: ["simple", "advanced"], default: "simple" },
+    "ui.mode": { type: "string", title: "Modalità dell'interfaccia", description: "Semplice mostra solo le sezioni di uso quotidiano; Sviluppatore le mostra tutte", enum: ["simple", "developer"], default: "simple" },
     "ui.theme": { type: "string", title: "Tema", enum: ["system", "light", "dark"], default: "system" },
     "ui.language": { type: "string", title: "Lingua", enum: ["it", "en"], default: "it" },
     "agent.default": { type: "string", title: "Agente predefinito", default: "operator" },

@@ -7,7 +7,7 @@ describe("ui mode", () => {
   });
   it("accepts only the two known modes", () => {
     expect(isUiMode("simple")).toBe(true);
-    expect(isUiMode("advanced")).toBe(true);
+    expect(isUiMode("developer")).toBe(true);
     expect(isUiMode("expert")).toBe(false);
     expect(isUiMode(undefined)).toBe(false);
   });

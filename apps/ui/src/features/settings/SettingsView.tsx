@@ -52,8 +52,8 @@ export function SettingsView() {
           <b>Modalità dell'interfaccia</b>
           <span className="faint text-sm">
             {uiMode === "simple"
-              ? "Semplice mostra solo Panoramica, Chat, Assistenti, Modelli e Impostazioni. Le altre sezioni restano disponibili in modalità Avanzate."
-              : "Avanzate mostra tutte le sezioni. Semplice le riduce a Panoramica, Chat, Assistenti, Modelli e Impostazioni."}
+              ? "Semplice mostra solo Panoramica, Chat, Assistenti, Modelli e Impostazioni. Le altre sezioni (runtime, profili, sicurezza, valutazioni, addestramento…) si vedono nella vista Sviluppatore."
+              : "La vista Sviluppatore mostra tutte le sezioni: runtime, profili, sicurezza, valutazioni, addestramento… Semplice le riduce a Panoramica, Chat, Assistenti, Modelli e Impostazioni."}
           </span>
         </div>
         <Segmented label="Modalità dell'interfaccia" value={uiMode} onChange={setUiMode} options={UI_MODES.map((m) => ({ id: m, label: UI_MODE_LABEL[m] }))} />

@@ -38,7 +38,7 @@ pub fn app_schema() -> SettingsSchema {
     serde_json::from_value(json!({
         "type": "object",
         "properties": {
-            "ui.mode": {"type": "string", "title": "Modalità dell'interfaccia", "description": "Semplice mostra solo le sezioni di uso quotidiano; Avanzate le mostra tutte", "enum": ["simple", "advanced"], "default": "simple"},
+            "ui.mode": {"type": "string", "title": "Modalità dell'interfaccia", "description": "Semplice mostra solo le sezioni di uso quotidiano; Sviluppatore le mostra tutte", "enum": ["simple", "developer"], "default": "simple"},
             "ui.theme": {"type": "string", "title": "Tema", "enum": ["system", "light", "dark"], "default": "system"},
             "ui.language": {"type": "string", "title": "Lingua", "enum": ["it", "en"], "default": "it"},
             "agent.default": {"type": "string", "title": "Agente predefinito", "default": "operator"},
@@ -323,8 +323,8 @@ mod tests {
         let cfg = LayeredConfig::load(app_schema(), dir.path().join("config.json"), dir.path().join("dev.json"), None);
         assert_eq!(cfg.get_str("ui.mode").as_deref(), Some("simple"));
         assert_eq!(cfg.source_of("ui.mode"), "defaults");
-        cfg.set(Layer::Global, "ui.mode", json!("advanced")).unwrap();
-        assert_eq!(cfg.get_str("ui.mode").as_deref(), Some("advanced"));
+        cfg.set(Layer::Global, "ui.mode", json!("developer")).unwrap();
+        assert_eq!(cfg.get_str("ui.mode").as_deref(), Some("developer"));
         assert!(cfg.set(Layer::Global, "ui.mode", json!("expert")).is_err());
     }
 

@@ -124,7 +124,7 @@ describe("values", () => {
     expect(configTheme(undefined)).toBeUndefined();
   });
   it("reads the interface mode the configuration asks for, only when valid", () => {
-    expect(configUiMode({ ...view, effective: { "ui.mode": "advanced" } })).toBe("advanced");
+    expect(configUiMode({ ...view, effective: { "ui.mode": "developer" } })).toBe("developer");
     expect(configUiMode({ ...view, effective: { "ui.mode": "simple" } })).toBe("simple");
     expect(configUiMode({ ...view, effective: { "ui.mode": "expert" } })).toBeUndefined();
     expect(configUiMode(view)).toBeUndefined();
@@ -133,7 +133,7 @@ describe("values", () => {
   it("writes the interface mode to the layer that wins today, else to the global one", () => {
     expect(uiModeLayer(undefined)).toBe("global");
     expect(uiModeLayer(view)).toBe("global");
-    const inDevice = { ...view, layers: view.layers.map((l) => (l.name === "device" ? { ...l, values: { "ui.mode": "advanced" } } : l)) };
+    const inDevice = { ...view, layers: view.layers.map((l) => (l.name === "device" ? { ...l, values: { "ui.mode": "developer" } } : l)) };
     expect(uiModeLayer(inDevice)).toBe("device");
   });
 });

@@ -9,6 +9,7 @@ import { useCreateSession } from "../../chat/api";
 import { useRuntimeAction, useRuntimes } from "../../runtimes/api";
 import { useConfig } from "../../settings/api";
 import { defaultProfile, runtimeShortcut } from "../model/overview";
+import { SIMPLE_ACTIONS } from "../model/simple";
 
 function Action({ icon, title, hint, onClick, primary, disabled }: { icon: string; title: string; hint: ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean }) {
   return (
@@ -22,8 +23,8 @@ function Action({ icon, title, hint, onClick, primary, disabled }: { icon: strin
   );
 }
 
-/** New session, download a model, start the runtime of the default profile, open the command palette. */
-export function QuickActions() {
+/** New session, download a model, start the runtime of the default profile, open the command palette. Simple mode: new chat and download only. */
+export function QuickActions({ simple = false }: { simple?: boolean }) {
   const agents = useAgents();
   const profiles = useProfiles();
   const config = useConfig();
@@ -41,6 +42,20 @@ export function QuickActions() {
     else if (shortcut.kind === "running") navigate(`/runtimes/${encodeURIComponent(shortcut.runtime.id)}`);
     else navigate("/runtimes");
   };
+
+  if (simple) {
+    const [chat, download] = SIMPLE_ACTIONS;
+    return (
+      <section className="hm-actions hm-actions-simple" aria-label="Azioni rapide">
+        <Action
+          primary icon="plus" title={chat.title} hint={chat.hint}
+          disabled={!agentId || createSession.isPending}
+          onClick={() => createSession.mutate({ agent_id: agentId }, { onSuccess: (s) => navigate(`/chat/${encodeURIComponent(s.id)}`) })}
+        />
+        <Action icon="download" title={download.title} hint={download.hint} onClick={() => navigate("/models/discover")} />
+      </section>
+    );
+  }
 
   return (
     <section className="hm-actions" aria-label="Azioni rapide">

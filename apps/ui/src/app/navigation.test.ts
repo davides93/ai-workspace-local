@@ -9,8 +9,8 @@ describe("visibleRoutes", () => {
   it("shows the five everyday sections in simple mode", () => {
     expect(ids(visibleRoutes(ROUTES, "simple"))).toEqual(["home", "chat", "agents", "models", "settings"]);
   });
-  it("shows the whole table in advanced mode", () => {
-    expect(visibleRoutes(ROUTES, "advanced")).toEqual(ROUTES);
+  it("shows the whole table in developer mode", () => {
+    expect(visibleRoutes(ROUTES, "developer")).toEqual(ROUTES);
     expect(ROUTES).toHaveLength(15);
   });
   it("hides routes without the simple marker, but they still resolve by URL", () => {
@@ -23,15 +23,15 @@ describe("visibleRoutes", () => {
 describe("labels", () => {
   it("uses the plainer names in simple mode only", () => {
     expect(routeLabel(routeById("chat"), "simple")).toBe("Chat");
-    expect(routeLabel(routeById("chat"), "advanced")).toBe("Workspace");
+    expect(routeLabel(routeById("chat"), "developer")).toBe("Workspace");
     expect(routeLabel(routeById("agents"), "simple")).toBe("Assistenti");
-    expect(routeLabel(routeById("agents"), "advanced")).toBe("Agenti");
+    expect(routeLabel(routeById("agents"), "developer")).toBe("Agenti");
     expect(routeLabel(routeById("models"), "simple")).toBe("Modelli");
   });
   it("renames the inference group in simple mode", () => {
     const g = GROUPS.find((x) => x.id === "inference")!;
     expect(groupLabel(g, "simple")).not.toMatch(/inferenza/i);
-    expect(groupLabel(g, "advanced")).toBe("Inferenza");
+    expect(groupLabel(g, "developer")).toBe("Inferenza");
   });
 });
 
@@ -39,8 +39,8 @@ describe("visibleTabRoutes", () => {
   it("has no Runtime tab in simple mode", () => {
     expect(ids(visibleTabRoutes(ROUTES, "simple"))).toEqual(["home", "chat", "models"]);
   });
-  it("keeps the four tabs in advanced mode", () => {
-    expect(ids(visibleTabRoutes(ROUTES, "advanced"))).toEqual(["home", "chat", "models", "runtimes"]);
+  it("keeps the four tabs in developer mode", () => {
+    expect(ids(visibleTabRoutes(ROUTES, "developer"))).toEqual(["home", "chat", "models", "runtimes"]);
   });
 });
 
@@ -50,8 +50,8 @@ describe("navGroups", () => {
     expect(simple.map((g) => g.group.id)).toEqual(["overview", "work", "inference", "control"]);
     expect(simple.find((g) => g.group.id === "work")?.routes.map((r) => r.id)).toEqual(["chat", "agents"]);
   });
-  it("keeps every group in advanced mode, with every route", () => {
-    const all = navGroups(GROUPS, ROUTES, "advanced");
+  it("keeps every group in developer mode, with every route", () => {
+    const all = navGroups(GROUPS, ROUTES, "developer");
     expect(all).toHaveLength(GROUPS.length);
     expect(all.flatMap((g) => g.routes)).toHaveLength(ROUTES.length);
   });

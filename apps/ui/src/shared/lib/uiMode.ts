@@ -1,13 +1,13 @@
 import { useSyncExternalStore } from "react";
 
-/** `simple` shows a handful of sections; `advanced` shows everything (setting `ui.mode`). */
-export type UiMode = "simple" | "advanced";
+/** `simple` shows a handful of sections; `developer` shows everything (setting `ui.mode`). */
+export type UiMode = "simple" | "developer";
 
-export const UI_MODES: UiMode[] = ["simple", "advanced"];
+export const UI_MODES: UiMode[] = ["simple", "developer"];
 export const DEFAULT_UI_MODE: UiMode = "simple";
-export const UI_MODE_LABEL: Record<UiMode, string> = { simple: "Semplice", advanced: "Avanzate" };
+export const UI_MODE_LABEL: Record<UiMode, string> = { simple: "Semplice", developer: "Sviluppatore" };
 
-export const isUiMode = (v: unknown): v is UiMode => v === "simple" || v === "advanced";
+export const isUiMode = (v: unknown): v is UiMode => v === "simple" || v === "developer";
 
 const KEY = "aiw.ui.mode";
 const listeners = new Set<() => void>();

@@ -74,12 +74,12 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
 
   const where = device ? ` per ${device.name}` : " per questo dispositivo";
   let sentence: string;
-  let action: "go" | "advanced" | "models" | "none" = "go";
+  let action: "go" | "developer" | "models" | "none" = "go";
   switch (state.kind) {
     case "chat": sentence = "Il tuo assistente è pronto: puoi iniziare una conversazione."; break;
     case "prepare": sentence = `Ti consiglio ${state.model.name} (${formatBytes(state.model.size_bytes)}), il modello più adatto${where}. ${state.model.fit_detail}`; break;
     case "connect": sentence = `Hai già ${state.model.name} sul disco: lo preparo e apro una conversazione.`; break;
-    case "no-runtime": sentence = "Su questo dispositivo non c'è ancora nulla in grado di far funzionare un modello. Le sezioni avanzate permettono di sistemarlo."; action = "advanced"; break;
+    case "no-runtime": sentence = "Su questo dispositivo non c'è ancora nulla in grado di far funzionare un modello. La vista Sviluppatore permette di sistemarlo."; action = "developer"; break;
     case "no-model": sentence = "Nessun modello del catalogo è adatto a questo dispositivo: puoi cercarne uno a mano."; action = "models"; break;
     case "loading": sentence = "Cerco il modello più adatto a questo dispositivo…"; action = "none"; break;
   }
@@ -105,7 +105,7 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
         {error && <p className="mh-alert warn" role="alert">{error}</p>}
         <div className="row">
           {action === "go" && <Button variant="primary" icon={state.kind === "chat" ? "plus" : "download"} disabled={busy && !error} onClick={go}>{error && working ? "Riprova" : label}</Button>}
-          {action === "advanced" && <Button onClick={() => setMode("advanced")}>Mostra tutte le sezioni</Button>}
+          {action === "developer" && <Button onClick={() => setMode("developer")}>Mostra tutte le sezioni</Button>}
           {action === "models" && <Button variant="primary" onClick={() => navigate("/models/discover")}>Cerca un modello</Button>}
         </div>
       </div>

@@ -92,7 +92,7 @@ describe("simple first run", () => {
   it("says there is no model when the catalog has nothing that fits", () => {
     expect(simpleFirstRun({ runtimes: live, models: [], profile, catalog: catalog.map((c) => ({ ...c, installed: true })) }).kind).toBe("no-model");
   });
-  it("sends to the advanced mode when no runtime can run a model", () => {
+  it("sends to the developer view when no runtime can run a model", () => {
     expect(simpleFirstRun({ runtimes: none(), models: [], profile, catalog }).kind).toBe("no-runtime");
     const unrunnable: CatalogModel[] = catalog.map((c) => ({ ...c, runtime_compat: c.runtime_compat.map((r) => ({ ...r, available: false })) }));
     expect(simpleFirstRun({ runtimes: live, models: [], profile, catalog: unrunnable }).kind).toBe("no-runtime");

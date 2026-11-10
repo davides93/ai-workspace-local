@@ -604,9 +604,9 @@ describe("voice mode (demo)", () => {
   it("offers the interface mode, simple by default, and saves a change in a layer", async () => {
     const api = new MockTransport();
     const view = await api.config();
-    expect(view.schema.properties["ui.mode"]).toMatchObject({ enum: ["simple", "advanced"], default: "simple", title: "Modalità dell'interfaccia" });
+    expect(view.schema.properties["ui.mode"]).toMatchObject({ enum: ["simple", "developer"], default: "simple", title: "Modalità dell'interfaccia" });
     expect(view.effective["ui.mode"] ?? view.schema.properties["ui.mode"].default).toBe("simple");
-    expect((await api.setConfig("global", "ui.mode", "advanced")).effective["ui.mode"]).toBe("advanced");
+    expect((await api.setConfig("global", "ui.mode", "developer")).effective["ui.mode"]).toBe("developer");
     expect((await api.setConfig("global", "ui.mode", null)).effective["ui.mode"]).toBe("simple");
   });
 

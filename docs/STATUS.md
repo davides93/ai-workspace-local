@@ -137,7 +137,7 @@ estratto, contrasto AA in entrambi i temi, layout corretti su telefono e tablet.
 [UI-ARCHITECTURE.md](design/UI-ARCHITECTURE.md). La UI mostra l'errore di un run salvato come quello
 dal vivo, raggruppa i tool interni, mostra i segreti MCP mascherati e riporta a `#/chat` se la
 sessione aperta è stata eliminata altrove. L'impostazione `ui.mode` (default `simple`) riduce le
-sezioni a cinque e la prima esecuzione a un solo pulsante; `advanced` mostra tutto.
+sezioni a cinque e la prima esecuzione a un solo pulsante; `developer` (vista «Sviluppatore») mostra tutto; in modalità semplice la Panoramica mostra solo «Nuova chat», «Scarica un modello», «Il tuo assistente», approvazioni, conversazioni recenti e lezioni.
 
 ### 2.7 Piattaforme e build
 
