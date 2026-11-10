@@ -41,6 +41,9 @@ pub fn app_schema() -> SettingsSchema {
             "ui.mode": {"type": "string", "title": "Modalità dell'interfaccia", "description": "Semplice mostra solo le sezioni di uso quotidiano; Sviluppatore le mostra tutte", "enum": ["simple", "developer"], "default": "simple"},
             "ui.theme": {"type": "string", "title": "Tema", "enum": ["system", "light", "dark"], "default": "system"},
             "ui.language": {"type": "string", "title": "Lingua", "enum": ["it", "en"], "default": "it"},
+            "app.close_to_tray": {"type": "boolean", "title": "Chiudendo la finestra l'app resta attiva", "description": "Solo nell'app per computer: la finestra si nasconde e l'app continua a lavorare accanto all'orologio; per chiuderla davvero usa «Esci» dal suo menu", "default": true},
+            "app.start_at_login": {"type": "boolean", "title": "Avvia l'app all'accesso al computer", "description": "Solo nell'app per computer (non nella versione dell'App Store): parte da sola, nascosta accanto all'orologio, quando accedi", "default": false},
+            "app.notifications": {"type": "boolean", "title": "Avvisi sul computer", "description": "Solo nell'app per computer: ti avvisa quando serve una tua conferma, quando un lavoro è finito o un download è completo", "default": true},
             "agent.default": {"type": "string", "title": "Agente predefinito", "default": "operator"},
             "approvals.timeout_s": {"type": "integer", "title": "Tempo massimo per rispondere a una richiesta di approvazione (secondi)", "description": "0 = nessun limite. Allo scadere la richiesta dell'agente viene rifiutata", "default": 0, "minimum": 0, "maximum": 86400},
             "policy.mode": {"type": "string", "title": "Modalità di approvazione (default)", "enum": ["plan", "ask", "auto-edit", "auto", "yolo"], "default": "ask"},
@@ -89,6 +92,10 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "update.channel",
     "update.auto_check",
     "update.auto_download",
+    // The app's own behaviour on this computer: a repository must not make the app autostart or hide.
+    "app.close_to_tray",
+    "app.start_at_login",
+    "app.notifications",
 ];
 
 pub struct LayeredConfig {
@@ -355,6 +362,12 @@ mod tests {
         let mut ignored = cfg.ignored_workspace_keys();
         ignored.sort();
         assert_eq!(ignored, ["models.dir", "network.allow_domains", "policy.mode", "sandbox.mode", "server.lan"]);
+        // The desktop shell's keys are machine-level too.
+        std::fs::write(ws.join(".aiw/config.json"), r#"{"app.start_at_login":true,"app.close_to_tray":false,"app.notifications":false}"#)
+            .unwrap();
+        cfg.set_workspace_root(Some(&ws));
+        assert!(cfg.get_bool("app.close_to_tray") && cfg.get_bool("app.notifications") && !cfg.get_bool("app.start_at_login"));
+        assert!(cfg.set(Layer::Workspace, "app.start_at_login", json!(true)).is_err() || !cfg.get_bool("app.start_at_login"));
         // Making things stricter is allowed, also relative to what the user chose.
         cfg.set(Layer::Global, "sandbox.mode", json!("off")).unwrap();
         cfg.set(Layer::Workspace, "sandbox.mode", json!("read-only")).unwrap();

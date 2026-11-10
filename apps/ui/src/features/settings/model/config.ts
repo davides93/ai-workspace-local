@@ -64,6 +64,7 @@ export interface SettingsSection {
 
 export const SECTIONS: SettingsSection[] = [
   { id: "ui", title: "Interfaccia", description: "Modalità, tema e lingua.", prefixes: ["ui"] },
+  { id: "app", title: "Programma", description: "Cosa fa l'app quando chiudi la finestra, all'accesso al computer e per gli avvisi (solo nell'app per computer).", prefixes: ["app"] },
   { id: "agents", title: "Agenti", description: "Agente predefinito, subagenti, budget dei run e gestione del contesto.", prefixes: ["agent", "agents", "context"] },
   { id: "security", title: "Sicurezza e rete", description: "Conferme, sandbox e siti raggiungibili da web e browser.", prefixes: ["policy", "sandbox", "network"] },
   { id: "server", title: "Server e accesso", description: "Come altri dispositivi e programmi raggiungono il workspace.", prefixes: ["server"] },

@@ -8,6 +8,7 @@ pub mod eval;
 mod host;
 mod learning;
 mod models;
+pub mod notices;
 pub mod optimize;
 pub mod pairing;
 pub mod peers;
