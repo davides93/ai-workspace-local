@@ -1,4 +1,5 @@
-import type { AgentProfile, CatalogModel, InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
+import type { AgentProfile, CatalogModel, Fit, InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
+import { applyModelToProfile, newProfileFor, pickRuntime } from "../../models/model/profile";
 
 export type ChecklistId = "runtime" | "model" | "profile" | "chat";
 
@@ -58,3 +59,64 @@ export function runtimeShortcut(runtimes: RuntimeInfo[], profile: InferenceProfi
 
 /** Share of a download that has arrived, 0..1. */
 export const downloadFraction = (received: number, total: number): number => (total > 0 ? Math.min(1, received / total) : 0);
+
+// ---------------------------------------------------------------- simple mode
+
+/**
+ * What the single first-run panel of the simple interface offers (no step list):
+ * - `chat`: a model is installed and the default profile can use it;
+ * - `prepare`: nothing installed yet, download `model` (the one recommended for this device);
+ * - `connect`: a model is installed but the default profile does not point at a usable one;
+ * - `no-runtime`: nothing on this device can run a model;
+ * - `no-model`: a runtime exists but the catalog has nothing that fits;
+ * - `loading`: the catalog has not answered yet.
+ */
+export type SimpleFirstRun =
+  | { kind: "chat" }
+  | { kind: "prepare"; model: CatalogModel }
+  | { kind: "connect"; model: LocalModel; runtimeId: string }
+  | { kind: "no-runtime" }
+  | { kind: "no-model" }
+  | { kind: "loading" };
+
+const FIT_RANK: Record<Fit | "", number> = { great: 3, ok: 2, tight: 1, no: -1, "": 0 };
+
+/** Best installed chat model that a runtime of this device can open: fits well, has tools, then the largest. */
+export function bestInstalledModel(models: LocalModel[]): { model: LocalModel; runtimeId: string } | undefined {
+  const tools = (m: LocalModel) => (m.capabilities.includes("tools") ? 1 : 0);
+  const ranked = models
+    .filter((m) => (m.capabilities.length === 0 || m.capabilities.includes("chat")) && m.fit !== "no" && pickRuntime(m) !== null)
+    .sort((a, b) => FIT_RANK[b.fit] - FIT_RANK[a.fit] || tools(b) - tools(a) || b.size_bytes - a.size_bytes || a.id.localeCompare(b.id));
+  const model = ranked[0];
+  const runtimeId = model ? pickRuntime(model) : null;
+  return model && runtimeId ? { model, runtimeId } : undefined;
+}
+
+/** The profile points at a model that is on disk and at a runtime that can serve requests. */
+export function isUsableProfile(profile: InferenceProfile | undefined, models: LocalModel[], runtimes: RuntimeInfo[]): boolean {
+  if (!profile || !profile.model) return false;
+  const rt = runtimes.find((r) => r.id === profile.runtime_id);
+  return !!rt && isUsableRuntime(rt) && models.some((m) => m.id === profile.model);
+}
+
+export function simpleFirstRun(opts: { runtimes: RuntimeInfo[]; models: LocalModel[]; profile?: InferenceProfile; catalog?: CatalogModel[] }): SimpleFirstRun {
+  const { runtimes, models, profile, catalog } = opts;
+  if (models.length > 0) {
+    if (isUsableProfile(profile, models, runtimes)) return { kind: "chat" };
+    const best = bestInstalledModel(models);
+    return best ? { kind: "connect", ...best } : { kind: "no-runtime" };
+  }
+  if (!runtimes.some(isUsableRuntime)) return { kind: "no-runtime" };
+  if (!catalog) return { kind: "loading" };
+  const rec = recommendedModel(catalog);
+  if (!rec) return { kind: "no-model" };
+  return pickRuntime(rec) === null ? { kind: "no-runtime" } : { kind: "prepare", model: rec };
+}
+
+/** The simple panel stays until a model is ready for chat and a first session exists. */
+export const simpleFirstRunPending = (state: SimpleFirstRun, sessions: number): boolean => state.kind !== "chat" || sessions === 0;
+
+/** Profile to save so the default agent talks to `model`: the existing one with the new model, or a new "default". */
+export function profileForModel(profile: InferenceProfile | undefined, model: LocalModel, runtimeId: string): InferenceProfile {
+  return profile ? applyModelToProfile(profile, model, runtimeId) : { ...newProfileFor(model, runtimeId, "Predefinito", []), id: "default" };
+}

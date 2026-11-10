@@ -1,5 +1,9 @@
 # Changelog
 
+## Non rilasciato
+
+- Interfaccia semplice: nuova impostazione «Modalità dell'interfaccia» (`ui.mode`), semplice per default. Mostra solo Panoramica, Chat, Assistenti, Modelli e Impostazioni; alla prima apertura un solo riquadro con «Prepara tutto» scarica il modello consigliato per il dispositivo, lo collega al profilo predefinito e apre la prima chat. «Avanzate» mostra tutto com'era (le sezioni nascoste si aprono sempre da indirizzo). Si cambia da Impostazioni, da «Altro», dalla palette comandi o da «Mostra tutte le sezioni» in fondo alla barra laterale.
+
 ## 0.5.0-beta.6 - pre-release
 
 - Solo flusso di rilascio: con un tag `v*` ora partono tutte le piattaforme da sole: DMG macOS e installer Windows sulla GitHub Release, iOS e macOS su TestFlight, Android sul track alpha (test chiuso). Nessuna modifica all'app rispetto alla beta.5.

@@ -37,3 +37,6 @@
 .upd-line { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
 .upd-release { padding-top: var(--space-3); border-top: 1px solid var(--line); }
 .upd-notes { max-height: 14rem; overflow: auto; }
+
+.set-mode { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+.set-mode-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 16rem; min-width: 0; }

@@ -2,7 +2,9 @@ import { useUpdateStatus } from "../../features/settings/updateApi";
 import { useSystem } from "../../shared/query/system";
 import { Icon } from "../../shared/ui";
 import { Link } from "../router";
+import { navGroups, routeLabel } from "../navigation";
 import { GROUPS, ROUTES, routeHref, type RouteId } from "../routes";
+import { useUiMode } from "../useUiMode";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
 
@@ -10,6 +12,7 @@ import { KillSwitch } from "./KillSwitch";
 export function Rail({ current, onOpenPalette }: { current?: RouteId; onOpenPalette: () => void }) {
   const { data: system } = useSystem();
   const update = useUpdateStatus().data?.available;
+  const [mode, setMode] = useUiMode();
   return (
     <nav className="rail" aria-label="Sezioni">
       <div className="brand">
@@ -31,18 +34,21 @@ export function Rail({ current, onOpenPalette }: { current?: RouteId; onOpenPale
         <span className="nav-text">Cerca…</span>
         <kbd className="nav-text">Ctrl K</kbd>
       </button>
-      {GROUPS.map((g) => (
-        <div className="nav-group" key={g.id}>
-          {g.label ? <div className="nav-label eyebrow">{g.label}</div> : <div className="nav-label-spacer" />}
-          {ROUTES.filter((r) => r.group === g.id).map((r) => (
-            <Link key={r.id} to={routeHref(r)} className="nav-item" aria-current={current === r.id ? "page" : undefined} title={r.label}>
+      {navGroups(GROUPS, ROUTES, mode).map(({ group, label, routes }) => (
+        <div className="nav-group" key={group.id}>
+          {label ? <div className="nav-label eyebrow">{label}</div> : <div className="nav-label-spacer" />}
+          {routes.map((r) => (
+            <Link key={r.id} to={routeHref(r)} className="nav-item" aria-current={current === r.id ? "page" : undefined} title={routeLabel(r, mode)}>
               <Icon name={r.icon} />
-              <span className="nav-text">{r.label}</span>
+              <span className="nav-text">{routeLabel(r, mode)}</span>
             </Link>
           ))}
         </div>
       ))}
       <div className="rail-foot">
+        {mode === "simple" && (
+          <button type="button" className="rail-more nav-text" onClick={() => setMode("advanced")}>Mostra tutte le sezioni</button>
+        )}
         <KillSwitch />
       </div>
     </nav>

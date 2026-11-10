@@ -601,6 +601,15 @@ describe("voice mode (demo)", () => {
     expect(Object.keys(view.schema.properties).filter((k) => k.startsWith("voice."))).toEqual(["voice.language", "voice.stt_runtime", "voice.stt_model", "voice.tts_voice"]);
   });
 
+  it("offers the interface mode, simple by default, and saves a change in a layer", async () => {
+    const api = new MockTransport();
+    const view = await api.config();
+    expect(view.schema.properties["ui.mode"]).toMatchObject({ enum: ["simple", "advanced"], default: "simple", title: "Modalità dell'interfaccia" });
+    expect(view.effective["ui.mode"] ?? view.schema.properties["ui.mode"].default).toBe("simple");
+    expect((await api.setConfig("global", "ui.mode", "advanced")).effective["ui.mode"]).toBe("advanced");
+    expect((await api.setConfig("global", "ui.mode", null)).effective["ui.mode"]).toBe("simple");
+  });
+
   it("transcribes with a plausible sentence per request and the duration of the audio", async () => {
     vi.useFakeTimers();
     try {

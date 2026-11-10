@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { catalog, models, profiles, agents, runtimes } from "../../../shared/api/mock/fixtures";
-import { checklist, currentStep, defaultProfile, downloadFraction, firstRunPending, isStartableRuntime, isUsableRuntime, recommendedModel, runtimeShortcut } from "./overview";
+import type { CatalogModel, LocalModel, RuntimeInfo } from "../../../shared/api/types";
+import { bestInstalledModel, checklist, currentStep, defaultProfile, downloadFraction, firstRunPending, isStartableRuntime, isUsableProfile, isUsableRuntime, profileForModel, recommendedModel, runtimeShortcut, simpleFirstRun, simpleFirstRunPending } from "./overview";
 
 describe("first-run checklist", () => {
   it("lists the four steps in order", () => {
@@ -71,5 +72,68 @@ describe("downloadFraction", () => {
     expect(downloadFraction(50, 200)).toBe(0.25);
     expect(downloadFraction(300, 200)).toBe(1);
     expect(downloadFraction(5, 0)).toBe(0);
+  });
+});
+
+describe("simple first run", () => {
+  const rec = recommendedModel(catalog)!;
+  const none = (): RuntimeInfo[] => runtimes.map((r) => ({ ...r, status: "unsupported" as const }));
+  const local = (over: Partial<LocalModel> = {}): LocalModel => ({ ...models[0], ...over });
+  const profile = { ...profiles[0], runtime_id: "llama-server" };
+  const live = runtimes.map((r) => (r.id === "llama-server" ? { ...r, status: "running" as const } : r));
+
+  it("offers the recommended model when nothing is installed", () => {
+    const s = simpleFirstRun({ runtimes: live, models: [], profile, catalog });
+    expect(s).toEqual({ kind: "prepare", model: rec });
+  });
+  it("waits for the catalog instead of guessing", () => {
+    expect(simpleFirstRun({ runtimes: live, models: [], profile, catalog: undefined }).kind).toBe("loading");
+  });
+  it("says there is no model when the catalog has nothing that fits", () => {
+    expect(simpleFirstRun({ runtimes: live, models: [], profile, catalog: catalog.map((c) => ({ ...c, installed: true })) }).kind).toBe("no-model");
+  });
+  it("sends to the advanced mode when no runtime can run a model", () => {
+    expect(simpleFirstRun({ runtimes: none(), models: [], profile, catalog }).kind).toBe("no-runtime");
+    const unrunnable: CatalogModel[] = catalog.map((c) => ({ ...c, runtime_compat: c.runtime_compat.map((r) => ({ ...r, available: false })) }));
+    expect(simpleFirstRun({ runtimes: live, models: [], profile, catalog: unrunnable }).kind).toBe("no-runtime");
+  });
+  it("is just a chat when a model is installed and the profile can use it", () => {
+    const m = local({ id: "m1" });
+    expect(simpleFirstRun({ runtimes: live, models: [m], profile: { ...profile, model: "m1" }, catalog })).toEqual({ kind: "chat" });
+  });
+  it("connects an installed model when the default profile has none", () => {
+    const m = local({ id: "m1", runtime_compat: [{ id: "llama-server", name: "llama.cpp", available: true, reason: "" }] });
+    const s = simpleFirstRun({ runtimes: live, models: [m], profile: { ...profile, model: "" }, catalog });
+    expect(s).toMatchObject({ kind: "connect", runtimeId: "llama-server" });
+    expect(simpleFirstRun({ runtimes: live, models: [m], profile: undefined, catalog }).kind).toBe("connect");
+  });
+  it("has no usable profile when its model is gone or its runtime is down", () => {
+    const m = local({ id: "m1" });
+    expect(isUsableProfile({ ...profile, model: "other" }, [m], live)).toBe(false);
+    expect(isUsableProfile({ ...profile, model: "m1" }, [m], none())).toBe(false);
+    expect(isUsableProfile({ ...profile, model: "m1" }, [m], live)).toBe(true);
+    expect(isUsableProfile(undefined, [m], live)).toBe(false);
+  });
+  it("stays on the overview until there is a chat ready and a first session", () => {
+    expect(simpleFirstRunPending({ kind: "chat" }, 0)).toBe(true);
+    expect(simpleFirstRunPending({ kind: "chat" }, 3)).toBe(false);
+    expect(simpleFirstRunPending({ kind: "no-runtime" }, 3)).toBe(true);
+  });
+  it("picks the best installed chat model that something can run", () => {
+    const compat = [{ id: "llama-server", name: "llama.cpp", available: true, reason: "" }];
+    const small = local({ id: "small", size_bytes: 1, capabilities: ["chat", "tools"], fit: "great", runtime_compat: compat });
+    const big = local({ id: "big", size_bytes: 9, capabilities: ["chat", "tools"], fit: "great", runtime_compat: compat });
+    const tooBig = local({ id: "huge", size_bytes: 99, capabilities: ["chat", "tools"], fit: "no", runtime_compat: compat });
+    const speech = local({ id: "whisper", size_bytes: 50, capabilities: ["stt"], fit: "great", runtime_compat: compat });
+    const stuck = local({ id: "stuck", size_bytes: 70, capabilities: ["chat"], fit: "great", runtime_compat: [{ id: "x", name: "x", available: false, reason: "no" }] });
+    expect(bestInstalledModel([small, big, tooBig, speech, stuck])).toEqual({ model: big, runtimeId: "llama-server" });
+    expect(bestInstalledModel([speech, stuck])).toBeUndefined();
+  });
+  it("points the existing default profile at the model, or creates one called default", () => {
+    const m = local({ id: "m1", context_length: 4096 });
+    const next = profileForModel({ ...profile, params: { ...profile.params, context: 8192 } }, m, "llama-server");
+    expect(next).toMatchObject({ id: profile.id, model: "m1", runtime_id: "llama-server" });
+    expect(next.params.context).toBe(4096);
+    expect(profileForModel(undefined, m, "llama-server")).toMatchObject({ id: "default", model: "m1", runtime_id: "llama-server" });
   });
 });
