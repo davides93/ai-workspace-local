@@ -73,13 +73,145 @@ jobs:
           echo "RUSTFLAGS=-C link-arg=$rt" >> "$GITHUB_ENV"
       - run: npm ci --prefix apps/ui
       - run: npm ci --prefix apps/desktop
+      # ---- Firma del codice (docs/release/FIRMA.md) -------------------------------------------
+      # Senza i segreti questi passi non fanno nulla e la build resta identica a prima (DMG e
+      # installer non firmati). Con i segreti: macOS firma con Developer ID e notarizza; Windows
+      # firma con un PFX oppure con Azure Trusted Signing (si sceglie in base ai segreti presenti).
+      # I segreti non si passano mai a Tauri vuoti: una variabile vuota sarebbe letta come "presente".
+      - name: Firma macOS (Developer ID e notarizzazione, solo con i segreti)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          S_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          S_CERT_PW: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          S_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          S_APPLE_ID: ${{ secrets.APPLE_ID }}
+          S_APPLE_PW: ${{ secrets.APPLE_PASSWORD }}
+          S_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$S_CERT" ] || [ -z "$S_CERT_PW" ] || [ -z "$S_IDENTITY" ]; then
+            echo "::notice::Firma macOS non configurata: il DMG esce non firmato, come prima (vedi docs/release/FIRMA.md)."
+            exit 0
+          fi
+          {
+            echo "APPLE_CERTIFICATE=$(printf '%s' "$S_CERT" | tr -d '[:space:]')"
+            echo "APPLE_CERTIFICATE_PASSWORD=$S_CERT_PW"
+            echo "APPLE_SIGNING_IDENTITY=$S_IDENTITY"
+            # Entitlements per l'hardened runtime (richiesto dalla notarizzazione): src-tauri/tauri.devid.conf.json
+            echo "AIW_SIGN_ARGS=--config src-tauri/tauri.devid.conf.json"
+            echo "AIW_SIGN_MAC=1"
+          } >> "$GITHUB_ENV"
+          if [ -n "$S_APPLE_ID" ] && [ -n "$S_APPLE_PW" ] && [ -n "$S_TEAM" ]; then
+            {
+              echo "APPLE_ID=$S_APPLE_ID"
+              echo "APPLE_PASSWORD=$S_APPLE_PW"
+              echo "APPLE_TEAM_ID=$S_TEAM"
+              echo "AIW_NOTARIZE_MAC=1"
+            } >> "$GITHUB_ENV"
+            echo "::notice::Firma macOS Developer ID con notarizzazione."
+          else
+            echo "::warning::Firma macOS senza notarizzazione: mancano APPLE_ID, APPLE_PASSWORD o APPLE_TEAM_ID. Gatekeeper avviserà comunque."
+          fi
+
+      - name: Firma Windows - scelta del metodo
+        if: runner.os == 'Windows'
+        id: winsign
+        shell: pwsh
+        env:
+          S_PFX: ${{ secrets.WINDOWS_CERTIFICATE }}
+          S_PFX_PW: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          S_AZ_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          S_AZ_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          S_AZ_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          S_AZ_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          S_AZ_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          S_AZ_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+        run: |
+          $azure = $env:S_AZ_CLIENT -and $env:S_AZ_SECRET -and $env:S_AZ_TENANT -and $env:S_AZ_ENDPOINT -and $env:S_AZ_ACCOUNT -and $env:S_AZ_PROFILE
+          $pfx = $env:S_PFX -and $env:S_PFX_PW
+          if ($azure) { $mode = 'azure' } elseif ($pfx) { $mode = 'pfx' } else { $mode = 'none' }
+          if ($mode -eq 'none' -and ($env:S_AZ_CLIENT -or $env:S_AZ_SECRET -or $env:S_AZ_TENANT -or $env:S_AZ_ENDPOINT -or $env:S_AZ_ACCOUNT -or $env:S_AZ_PROFILE -or $env:S_PFX -or $env:S_PFX_PW)) {
+            Write-Output "::warning::Segreti di firma Windows incompleti: l'installer esce non firmato (vedi docs/release/FIRMA.md)."
+          } elseif ($mode -eq 'none') {
+            Write-Output "::notice::Firma Windows non configurata: l'installer esce non firmato, come prima (vedi docs/release/FIRMA.md)."
+          } else {
+            Write-Output "::notice::Firma Windows: $mode."
+          }
+          "mode=$mode" >> $env:GITHUB_OUTPUT
+
+      - name: Firma Windows - certificato PFX
+        if: runner.os == 'Windows' && steps.winsign.outputs.mode == 'pfx'
+        shell: pwsh
+        env:
+          S_PFX: ${{ secrets.WINDOWS_CERTIFICATE }}
+          S_PFX_PW: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String(($env:S_PFX -replace '\s', '')))
+          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:S_PFX_PW -Force -AsPlainText)
+          Remove-Item $pfxPath
+          $ts = if ($env:TIMESTAMP_URL) { $env:TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }
+          $conf = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = 'sha256'; timestampUrl = $ts } } }
+          $conf | ConvertTo-Json -Depth 5 | Set-Content -Path apps/desktop/src-tauri/signing.windows.conf.json
+          "AIW_SIGN_ARGS=--config src-tauri/signing.windows.conf.json" >> $env:GITHUB_ENV
+          "AIW_SIGN_WIN=1" >> $env:GITHUB_ENV
+
+      - name: Firma Windows - Azure Trusted Signing
+        if: runner.os == 'Windows' && steps.winsign.outputs.mode == 'azure'
+        shell: pwsh
+        env:
+          S_AZ_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          S_AZ_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          S_AZ_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          S_AZ_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          S_AZ_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          S_AZ_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+        run: |
+          cargo install artifact-signing-cli --locked
+          $cmd = "artifact-signing-cli -e $($env:S_AZ_ENDPOINT) -a $($env:S_AZ_ACCOUNT) -c $($env:S_AZ_PROFILE) -d `"AI Workspace Local`" %1"
+          $conf = @{ bundle = @{ windows = @{ signCommand = $cmd } } }
+          $conf | ConvertTo-Json -Depth 5 | Set-Content -Path apps/desktop/src-tauri/signing.windows.conf.json
+          "AZURE_CLIENT_ID=$($env:S_AZ_CLIENT)" >> $env:GITHUB_ENV
+          "AZURE_CLIENT_SECRET=$($env:S_AZ_SECRET)" >> $env:GITHUB_ENV
+          "AZURE_TENANT_ID=$($env:S_AZ_TENANT)" >> $env:GITHUB_ENV
+          "AIW_SIGN_ARGS=--config src-tauri/signing.windows.conf.json" >> $env:GITHUB_ENV
+          "AIW_SIGN_WIN=1" >> $env:GITHUB_ENV
+
       - name: Build bundles
         working-directory: apps/desktop
         # On macOS the build fails instead of silently leaving the Apple Foundation Models helper
         # out (tauri-plugin-aiw-native/build.rs).
         env:
           AIW_REQUIRE_APPLE_FM: ${{ runner.os == 'macOS' && '1' || '0' }}
-        run: npx tauri build ${{ matrix.args }}
+        run: npx tauri build ${{ matrix.args }} ${{ env.AIW_SIGN_ARGS }}
+      # Se la firma era configurata, una build non firmata o non notarizzata deve far fallire il lavoro:
+      # meglio nessuna release di un DMG o un installer che il sistema blocca.
+      - name: Verifica firma macOS
+        if: runner.os == 'macOS' && env.AIW_SIGN_MAC == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$(find target -path '*release/bundle/macos/*.app' -maxdepth 8 -type d | head -n 1)"
+          test -n "$app" || { echo "::error::app non trovata per la verifica"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=2 "$app" 2>&1 | grep -E "Authority|TeamIdentifier|flags"
+          if [ "${AIW_NOTARIZE_MAC:-}" = "1" ]; then
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+          fi
+      - name: Verifica firma Windows
+        if: runner.os == 'Windows' && env.AIW_SIGN_WIN == '1'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path target -Recurse -Filter '*-setup.exe'
+          if (-not $files) { throw 'installer non trovato per la verifica' }
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            Write-Output "$($f.Name): $($sig.Status) - $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { throw "firma non valida: $($f.Name)" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: aiw-desktop-${{ matrix.os }}

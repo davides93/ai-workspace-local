@@ -150,7 +150,7 @@ sezioni a cinque e la prima esecuzione a un solo pulsante; `developer` (vista «
 | App Tauri + motore in-process | ✅ | ✅ | ✅ | ✅ APK non firmato | 🟡 solo simulatore in CI |
 | llama.cpp embedded | CPU | Metal **v0.4** | CPU | CPU | Metal **v0.4** |
 | Computer-use | ✅ | ✅ | ❌ escluso in CI | ❌ | ❌ |
-| Firma e notarizzazione | ❌ | ❌ | — | ❌ | ❌ |
+| Firma e notarizzazione | 🟡 flusso pronto, attivo solo con i segreti (PFX o Azure), mai eseguito | 🟡 flusso pronto (Developer ID + notarizzazione), attivo solo con i segreti, mai eseguito | — | ❌ | ❌ (lo store firma a parte, `store.yml`) |
 
 Non costruiti: Windows arm64, Linux arm64, Android x86_64/armv7.
 
@@ -213,7 +213,7 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 13. Rete della shell chiusa di default, `~/.aiw` fuori dalla sandbox, server MCP stdio in sandbox e
     con conferma, protezione SSRF anche dietro proxy, regole di policy sulla shell che non si aggirano con comandi concatenati.
 14. Token per dispositivo con revoca (oggi un solo token condiviso) e TLS per la LAN.
-15. Firma e notarizzazione delle release, pubblicazione su GitHub Releases, target arm64.
+15. Firma e notarizzazione delle release (il flusso c'è, mancano i segreti e una prima prova: `docs/release/FIRMA.md`), pubblicazione su GitHub Releases, target arm64.
 16. Font inclusi nell'app invece di Google Fonts, i18n it/en.
 
 ## iOS e iPadOS (v0.5)
