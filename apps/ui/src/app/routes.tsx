@@ -9,7 +9,7 @@ import type { IconName } from "../shared/ui";
  */
 
 export type RouteId =
-  | "home" | "chat" | "agents" | "teach" | "teams" | "workflows" | "evals" | "training" | "capabilities" | "integrations"
+  | "home" | "chat" | "inbox" | "agents" | "teach" | "teams" | "workflows" | "evals" | "training" | "capabilities" | "integrations"
   | "models" | "runtimes" | "devices" | "security" | "activity" | "settings";
 
 export type GroupId = "overview" | "work" | "capabilities" | "inference" | "control";
@@ -46,6 +46,7 @@ const view = <K extends string>(load: () => Promise<Record<K, ComponentType>>, n
 export const ROUTES: AppRoute[] = [
   { id: "home", path: "/", label: "Panoramica", icon: "home", group: "overview", tab: 0, simple: true, keywords: ["home", "dashboard", "inizio"], View: view(() => import("../features/home/HomeView"), "HomeView") },
   { id: "chat", path: "/chat/:sessionId?", label: "Workspace", simpleLabel: "Chat", icon: "chat", group: "work", tab: 1, simple: true, keywords: ["chat", "workspace", "conversazione", "sessioni"], View: view(() => import("../features/chat/ChatView"), "ChatView") },
+  { id: "inbox", path: "/inbox", label: "Proposte", icon: "sparkle", group: "work", simple: true, keywords: ["proposte", "inbox", "suggerimenti", "promemoria", "riepilogo", "proattivo", "notato"], View: view(() => import("../features/inbox/InboxView"), "InboxView") },
   { id: "agents", path: "/agents/:agentId?", label: "Agenti", simpleLabel: "Assistenti", icon: "agent", group: "work", simple: true, keywords: ["agenti", "assistenti", "profili", "prompt"], View: view(() => import("../features/agents/AgentsView"), "AgentsView") },
   { id: "teach", path: "/teach", label: "Insegna", icon: "bulb", group: "work", simpleTab: 2, simple: true, keywords: ["insegna", "memoria", "ricorda", "ricordi", "cosa sai di me", "preferenze", "impara"], View: view(() => import("../features/teach/TeachView"), "TeachView") },
   { id: "teams", path: "/teams/:teamId?", label: "Team", icon: "team", group: "work", keywords: ["squadra", "supervisore", "multi-agente", "parallelo", "catena"], View: view(() => import("../features/teams/TeamsView"), "TeamsView") },

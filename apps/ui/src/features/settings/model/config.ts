@@ -71,6 +71,7 @@ export const SECTIONS: SettingsSection[] = [
   { id: "folders", title: "Cartelle", description: "Dove stanno i modelli e dove lavorano gli agenti.", prefixes: ["models", "workspace"] },
   { id: "memory", title: "Memoria", description: "Ciò che l'assistente ricorda di te resta su questo dispositivo; lo gestisci dalla sezione Insegna.", prefixes: ["memory"] },
   { id: "learning", title: "Apprendimento", description: "Lezioni che gli agenti propongono dopo una conversazione e ottimizzazione del prompt: niente cambia senza la tua approvazione.", prefixes: ["learning"] },
+  { id: "proactive", title: "Assistente proattivo", description: "Spento finché non lo accendi. Controlla ogni tanto cosa c'è di nuovo e ti lascia delle proposte nella sezione Proposte: non fa mai nulla da solo.", prefixes: ["proactive"] },
   { id: "voice", title: "Voce", description: "Dettatura e conversazione a voce: lingua, motore di trascrizione e voce che legge le risposte.", prefixes: ["voice"] },
   { id: "update", title: "Canale e aggiornamenti", description: "Quale canale seguire (produzione, beta, alpha) e se cercare e scaricare gli aggiornamenti da soli.", prefixes: ["update"] },
   { id: "telemetry", title: "Telemetria", description: "Esportazione di tracce e metriche.", prefixes: ["telemetry"] },
@@ -82,6 +83,9 @@ export function sectionOf(key: string): SettingsSection {
   const prefix = key.split(".")[0];
   return SECTIONS.find((s) => s.prefixes.includes(prefix)) ?? OTHER;
 }
+
+/** Settings only the developer view shows: they are plumbing for the person who set the assistant up, not choices of an everyday user. */
+export const DEVELOPER_ONLY: readonly string[] = ["proactive.watch_folders", "proactive.agent"];
 
 export interface SettingEntry {
   key: string;
@@ -152,6 +156,7 @@ export function formatValue(v: unknown): string {
 const OPTION_LABEL: Record<string, Record<string, string>> = {
   "ui.mode": { simple: "Semplice", developer: "Sviluppatore" },
   "ui.theme": { system: "Sistema", light: "Chiaro", dark: "Scuro" },
+  "proactive.level": { off: "Spento", propose: "Propone", act_readonly: "Propone e legge (anche il web, sola lettura)" },
   "ui.language": { it: "Italiano", en: "English" },
   "policy.mode": {
     plan: "plan · solo lettura",

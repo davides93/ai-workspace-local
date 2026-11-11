@@ -5,6 +5,7 @@ import { Link } from "../router";
 import { navGroups, routeLabel } from "../navigation";
 import { GROUPS, ROUTES, routeHref, type RouteId } from "../routes";
 import { useUiMode } from "../useUiMode";
+import { InboxBadge } from "../../features/inbox/components/InboxBadge";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
 
@@ -41,6 +42,7 @@ export function Rail({ current, onOpenPalette }: { current?: RouteId; onOpenPale
             <Link key={r.id} to={routeHref(r)} className="nav-item" aria-current={current === r.id ? "page" : undefined} title={routeLabel(r, mode)}>
               <Icon name={r.icon} />
               <span className="nav-text">{routeLabel(r, mode)}</span>
+              {r.id === "inbox" && <InboxBadge />}
             </Link>
           ))}
         </div>

@@ -21,6 +21,7 @@ pub struct RunRow {
 
 mod memory;
 pub use memory::MemoryFilter;
+mod proposals;
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -74,6 +75,7 @@ impl Store {
         )
         .map_err(db)?;
         let fts = memory::migrate(&conn)?;
+        proposals::migrate(&conn)?;
         Ok(Self { conn: Mutex::new(conn), fts })
     }
 

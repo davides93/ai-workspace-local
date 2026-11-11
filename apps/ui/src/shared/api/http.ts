@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -257,6 +257,16 @@ export class HttpTransport implements Transport {
   approveMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/approve`, {});
   rejectMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/reject`, {});
   deleteMemory = (id: string) => this.req<void>("DELETE", `/memories/${enc(id)}`);
+  proposals = (query?: ProposalQuery) => {
+    const qs = new URLSearchParams();
+    if (query?.status) qs.set("status", query.status);
+    if (query?.kind) qs.set("kind", query.kind);
+    return this.req<Proposal[]>("GET", qs.size ? `/proposals?${qs}` : "/proposals");
+  };
+  approveProposal = (id: string, instruction?: string) => this.req<Proposal>("POST", `/proposals/${enc(id)}/approve`, instruction ? { instruction } : {});
+  dismissProposal = (id: string) => this.req<Proposal>("POST", `/proposals/${enc(id)}/dismiss`, {});
+  proactiveStatus = () => this.req<ProactiveStatus>("GET", "/proactive/status");
+  proactiveTick = () => this.req<TickResult>("POST", "/proactive/tick", {});
   deleteAllMemories = () => this.req<{ deleted: number }>("DELETE", "/memories?confirm=true");
   evalSuites = () => this.req<EvalSuite[]>("GET", "/evals");
   saveEvalSuite = (s: EvalSuite) => this.req<EvalSuite>("PUT", `/evals/${enc(s.id)}`, s);

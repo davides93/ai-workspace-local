@@ -7,7 +7,7 @@ import { useConfig, useSetConfig } from "./api";
 import { LayerBar } from "./components/LayerBar";
 import { UpdatePanel } from "./components/UpdatePanel";
 import { SettingRow } from "./components/SettingRow";
-import { configTheme, groupSettings, isTheme, LAYER_LABEL, THEME_LABEL, THEMES, winningLayer, type WritableLayer } from "./model/config";
+import { configTheme, DEVELOPER_ONLY, groupSettings, isTheme, LAYER_LABEL, THEME_LABEL, THEMES, winningLayer, type WritableLayer } from "./model/config";
 import "./settings.css";
 
 /** `#/settings` — the layered configuration (default → global → device → workspace) with the winning layer of every value. */
@@ -64,7 +64,7 @@ export function SettingsView() {
       <QueryState query={cfg}>
         {(view) => {
           const groups = groupSettings(view.schema, query)
-            .map((group) => ({ ...group, entries: group.entries.filter((entry) => entry.key !== "update.channel") }))
+            .map((group) => ({ ...group, entries: group.entries.filter((entry) => entry.key !== "update.channel" && (uiMode === "developer" || !DEVELOPER_ONLY.includes(entry.key))) }))
             .filter((group) => group.entries.length > 0);
           return (
             <>

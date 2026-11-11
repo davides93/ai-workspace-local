@@ -407,6 +407,39 @@ quindi un passo con effetti collaterali dovrebbe poter essere ripetuto), un'appr
 viene richiesta di nuovo, un run il cui workflow non esiste più diventa `failed`. L'audit registra
 `workflow.resume`.
 
+### 5.3 bis Assistente proattivo
+
+`aiw_engine::proactive`. Spento di serie (`proactive.level` = `off` | `propose` | `act_readonly`, chiavi a livello di
+macchina: il workspace non le cambia). Non agisce mai da solo: lascia **proposte** (tabella `proposals`: tipo
+`proposal` | `briefing`, titolo, cosa ha notato, istruzione pronta, origine, agente, stato
+`open|approved|dismissed|expired|done`, scadenza a 7 giorni) e solo l'approvazione avvia un run normale in una sessione
+nuova, con la policy dell'agente, collegando run e proposta.
+
+- **Battito**: fonti di risveglio = intervallo (`proactive.interval_minutes`, 30), ora del riepilogo
+  (`proactive.briefing_time`), promemoria della memoria scaduti e `POST /api/proactive/tick`. Le prime due riusano
+  `aiw_workflow::Scheduler::due` con workflow virtuali (interval, cron); l'orologio è un parametro
+  (`proactive_tick_at`) perché i test lo muovono. Un solo controllo alla volta (`try_lock`), idempotente (chiave di
+  origine per cosa notata: `reminder:<id>`, `files:<cartella>:<ts>`, `workflow_failed:<run>`, `approval:<id>`,
+  `briefing:<data>`). Saltato, con la ragione in `ProactiveStatus.skipped_reason`, a livello `off`, dopo il kill switch
+  (riparte reimpostando il livello), nell'orario di silenzio, a batteria con `only_on_power`, a budget giornaliero
+  finito, con un run in corso.
+- **Filtro**: contesto compatto (workflow falliti dall'ultimo controllo, conferme in attesa, file nuovi nelle
+  `proactive.watch_folders`, fino a 8 voci non ancora proposte); contesto vuoto = nessuna chiamata; una domanda sola,
+  risposta `{"act":true,"item":N}` o `{"act":false}`, al modello più piccolo adatto (ruolo `summarize` dei ruoli
+  automatici o scelta del consigliere). Su un runtime che regge un solo modello (`Registry::holds_one_model`) usa quello
+  già servito (`serving_model`), mai uno diverso. Una risposta non valida o un no non propongono nulla; un promemoria
+  scaduto diventa proposta senza modello.
+- **Run della proposta**: l'agente `proactive:<agente>` derivato dall'agente configurato: modalità plan, sandbox di sola
+  lettura, solo strumenti che leggono (rete solo con `act_readonly`), budget piccolo, schema di uscita
+  `{title, noticed, instruction}`; delle regole di policy restano solo i `deny`, le conferme sono negate da sole (un run
+  proattivo non blocca e non agisce).
+- **Riepilogo del mattino**: una proposta `briefing` al giorno, dai dati (promemoria, proposte aperte, lavori di ieri,
+  file nuovi), senza modello e senza connettori; vuoto = «Niente da segnalare per oggi.», già `done`, senza notifica.
+- **Notifiche**: `notices::NoticeTracker::on_proposals` (le proposte aperte all'avvio non sono notizie; nell'orario di
+  silenzio resta tutto in sospeso e si dice dopo); il guscio decide solo `app.notifications` e la finestra in primo piano.
+- API: `GET /api/proposals?status=&kind=`, `GET /api/proposals/{id}`, `POST /api/proposals/{id}/approve|dismiss`,
+  `GET /api/proactive/status`, `POST /api/proactive/tick`.
+
 ### 5.4 Valutazione e tracce
 
 Ogni sessione è già una traiettoria completa (messaggi, eventi AG-UI, run, audit). Il motore la
@@ -622,6 +655,7 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run |
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
+| GET | `/api/proposals` · `/api/proposals/{id}` · POST `…/approve` `…/dismiss` · GET `/api/proactive/status` · POST `/api/proactive/tick` | Assistente proattivo |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
 | PUT/DELETE | `/api/sessions/{id}/messages/{mid}/feedback` · GET `/api/sessions/{id}/feedback` | Feedback sulle risposte |
 | GET/PUT/DELETE | `/api/evals[/{id}]` | Suite di valutazione (PUT: JSON della suite o `{"text": yaml|json}`; i grader `command` non si scrivono via API) |

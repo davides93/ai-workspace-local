@@ -1,0 +1,85 @@
+# Suite del filtro dell'assistente proattivo: una sola domanda, una risposta in JSON stretto.
+# Ogni task ripete la domanda che il filtro pone al modello più piccolo (crates/aiw-engine/src/proactive.rs,
+# `filter_messages`) e controlla che la risposta sia un JSON valido con la decisione giusta.
+# Si esegue con `aiw eval run docs/evals/proattivo-filtro.yaml` (o, importata, con `aiw eval run proattivo-filtro`).
+# Nel dubbio il filtro deve dire no: i casi «no» pesano quanto quelli «sì». Formato e grader: ARCHITECTURE.md §5.4.
+id: proattivo-filtro
+name: Filtro dell'assistente proattivo
+description: Decidere se una cosa notata merita una proposta. Risposta solo JSON, «act» vero o falso, mai testo libero.
+agent: operator
+tasks:
+  - id: file-nuovi-fatture
+    prompt: >-
+      Sei un filtro. Decidi se UNA delle cose elencate merita che l'assistente prepari ora una proposta per l'utente.
+      Nel dubbio, no. Rispondi SOLO con un JSON: {"act": true, "item": <numero>, "why": "<una frase>"} oppure {"act": false}.
+
+      Cose da guardare:
+      1. 4 file nuovi in ~/Scaricati: fattura-001.pdf, fattura-002.pdf, fattura-003.pdf
+    graders:
+      - kind: json_schema
+        schema: { type: object, required: [act, item], properties: { act: { enum: [true] }, item: { enum: [1] } } }
+
+  - id: workflow-fallito
+    prompt: >-
+      Sei un filtro. Decidi se UNA delle cose elencate merita che l'assistente prepari ora una proposta per l'utente.
+      Nel dubbio, no. Rispondi SOLO con un JSON: {"act": true, "item": <numero>, "why": "<una frase>"} oppure {"act": false}.
+
+      Cose da guardare:
+      1. Il workflow «Copia di sicurezza» è fallito.
+      2. 1 file nuovo in ~/Scaricati: .DS_Store
+    graders:
+      - kind: json_schema
+        schema: { type: object, required: [act, item], properties: { act: { enum: [true] }, item: { enum: [1] } } }
+
+  - id: solo-rumore
+    prompt: >-
+      Sei un filtro. Decidi se UNA delle cose elencate merita che l'assistente prepari ora una proposta per l'utente.
+      Nel dubbio, no. Rispondi SOLO con un JSON: {"act": true, "item": <numero>, "why": "<una frase>"} oppure {"act": false}.
+
+      Cose da guardare:
+      1. 1 file nuovo in ~/Scaricati: desktop.ini
+    graders:
+      - kind: json_schema
+        schema: { type: object, required: [act], properties: { act: { enum: [false] } } }
+
+  - id: gia-proposto
+    prompt: >-
+      Sei un filtro. Decidi se UNA delle cose elencate merita che l'assistente prepari ora una proposta per l'utente.
+      Nel dubbio, no. Rispondi SOLO con un JSON: {"act": true, "item": <numero>, "why": "<una frase>"} oppure {"act": false}.
+
+      Cose da guardare:
+      1. 2 file nuovi in ~/Scaricati: fattura-004.pdf, fattura-005.pdf
+
+      Proposte già in attesa (non ripeterle):
+      - Riordinare le fatture in Scaricati
+    graders:
+      - kind: json_schema
+        schema: { type: object, required: [act], properties: { act: { enum: [false] } } }
+
+  - id: conferma-in-attesa
+    prompt: >-
+      Sei un filtro. Decidi se UNA delle cose elencate merita che l'assistente prepari ora una proposta per l'utente.
+      Nel dubbio, no. Rispondi SOLO con un JSON: {"act": true, "item": <numero>, "why": "<una frase>"} oppure {"act": false}.
+
+      Cose da guardare:
+      1. 1 file nuovo in ~/Scaricati: foto-vacanza.jpg
+      2. Una conferma aspetta una risposta: Eseguire `rm -rf build`
+
+      Cose che l'utente vuole sempre presenti:
+      - Non lasciare conferme senza risposta
+    graders:
+      - kind: json_schema
+        schema: { type: object, required: [act, item], properties: { act: { enum: [true] }, item: { enum: [2] } } }
+
+  - id: solo-json
+    prompt: >-
+      Sei un filtro. Decidi se UNA delle cose elencate merita che l'assistente prepari ora una proposta per l'utente.
+      Nel dubbio, no. Rispondi SOLO con un JSON: {"act": true, "item": <numero>, "why": "<una frase>"} oppure {"act": false}.
+
+      Cose da guardare:
+      1. 3 file nuovi in ~/Documenti: contratto-affitto.pdf, note-riunione.md
+    timeout_s: 180
+    graders:
+      - { kind: output_matches, pattern: "^\\s*\\{.*\\}\\s*$" }
+      - kind: json_schema
+        schema: { type: object, required: [act], properties: { act: { type: boolean } } }

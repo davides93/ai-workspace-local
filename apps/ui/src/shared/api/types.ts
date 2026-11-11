@@ -1202,3 +1202,58 @@ export interface AdapterInfo {
   format: "mlx" | "peft" | "gguf";
   job_id?: string;
 }
+
+// ---- proactive assistant (crates/aiw-engine/src/proactive.rs)
+
+export type ProposalKind = "proposal" | "briefing";
+export type ProposalStatus = "open" | "approved" | "dismissed" | "expired" | "done";
+
+/** What the assistant noticed and what it would do. It never acts by itself: approving starts a normal run. */
+export interface Proposal {
+  id: string;
+  kind: ProposalKind;
+  title: string;
+  /** What was noticed, in plain words. */
+  noticed: string;
+  /** What the assistant would do, ready to run (empty for a briefing). */
+  instruction: string;
+  /** `reminder:<id>`, `workflow_failed:<run>`, `files:<folder>:<ts>`, `approval:<id>`, `briefing:<date>`… */
+  source: string;
+  agent_id: string;
+  status: ProposalStatus;
+  created_at: string;
+  expires_at: string;
+  decided_at?: string;
+  /** The run and session an approval started. */
+  run_id?: string;
+  session_id?: string;
+}
+
+export interface ProposalQuery {
+  status?: ProposalStatus;
+  kind?: ProposalKind;
+}
+
+export type ProactiveLevel = "off" | "propose" | "act_readonly";
+
+export interface TickResult {
+  wake: "interval" | "briefing" | "reminder" | "manual";
+  outcome: "proposed" | "nothing" | "skipped";
+  reason?: string;
+  proposals: string[];
+  model_called: boolean;
+  at: string;
+}
+
+export interface ProactiveStatus {
+  level: ProactiveLevel;
+  last_tick?: TickResult;
+  /** Why the last tick could not run (quiet hours, budget, power, kill switch…). */
+  skipped_reason?: string;
+  next_wake?: string;
+  budget_used_minutes: number;
+  budget_minutes: number;
+  open_proposals: number;
+  stopped_by_kill_switch: boolean;
+  on_power?: boolean;
+}

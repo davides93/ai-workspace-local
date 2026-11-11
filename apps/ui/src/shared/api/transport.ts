@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -143,6 +143,14 @@ export interface Transport {
   deleteMemory(id: string): Promise<void>;
   /** Deletes every memory for good; returns how many. */
   deleteAllMemories(): Promise<{ deleted: number }>;
+  /** What the proactive assistant noticed, newest first (`status`/`kind` narrow it). */
+  proposals(query?: ProposalQuery): Promise<Proposal[]>;
+  /** Approving starts a normal run in a new session; `instruction` replaces the proposed one. */
+  approveProposal(id: string, instruction?: string): Promise<Proposal>;
+  dismissProposal(id: string): Promise<Proposal>;
+  proactiveStatus(): Promise<ProactiveStatus>;
+  /** Wakes the assistant once, now (the same gates apply: off, quiet hours, budget). */
+  proactiveTick(): Promise<TickResult>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
   /** `thinking` is the reasoning of this run only: it wins over the profile's. */
   startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode): Promise<{ run_id: string }>;

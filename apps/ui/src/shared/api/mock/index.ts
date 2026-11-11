@@ -4,7 +4,7 @@ import { isSecretName } from "../../lib/secrets";
 import { mockRecommend } from "./recommend";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   DatasetSpec, TrainJobRequest, ThinkingMode,
@@ -15,6 +15,7 @@ import {
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
 import * as mem from "./memories";
+import { proactiveState, PROPOSAL_KINDS, PROPOSAL_STATUSES, proposals } from "./proposals";
 import { teacherTurn } from "./teacher";
 import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
@@ -665,6 +666,51 @@ export class MockTransport implements Transport {
     const deleted = mem.memories.length;
     mem.memories.length = 0;
     return { deleted };
+  }
+
+  // ---- proactive assistant (crates/aiw-engine/src/proactive.rs)
+  private proposal(id: string): Proposal {
+    const p = proposals.find((x) => x.id === id);
+    if (!p) throw new ApiError(404, `proposta ${id} non trovata`);
+    return p;
+  }
+  async proposals(query: ProposalQuery = {}) {
+    if (query.status && !PROPOSAL_STATUSES.includes(query.status)) throw new ApiError(400, `stato non valido «${query.status}»: usa ${PROPOSAL_STATUSES.join(", ")}`);
+    if (query.kind && !PROPOSAL_KINDS.includes(query.kind)) throw new ApiError(400, `tipo non valido «${query.kind}»: usa ${PROPOSAL_KINDS.join(", ")}`);
+    const list = proposals.filter((p) => (!query.status || p.status === query.status) && (!query.kind || p.kind === query.kind));
+    return structuredClone(list.sort((a, b) => b.created_at.localeCompare(a.created_at)));
+  }
+  async approveProposal(id: string, instruction?: string) {
+    const p = this.proposal(id);
+    if (p.kind !== "proposal") throw new ApiError(409, "un riepilogo non si esegue: puoi solo leggerlo o scartarlo");
+    if (p.status !== "open") throw new ApiError(409, `la proposta «${p.title}» non è più in attesa (${p.status})`);
+    const text = instruction?.trim() || p.instruction;
+    const session = await this.createSession({ agent_id: p.agent_id, title: p.title });
+    const { run_id } = await this.startRun(session.id, text);
+    Object.assign(p, { status: "approved", decided_at: now(), run_id, session_id: session.id });
+    return structuredClone(p);
+  }
+  async dismissProposal(id: string) {
+    const p = this.proposal(id);
+    if (p.status !== "open") throw new ApiError(409, `la proposta «${p.title}» non è più in attesa (${p.status})`);
+    Object.assign(p, { status: "dismissed", decided_at: now() });
+    return structuredClone(p);
+  }
+  async proactiveStatus(): Promise<ProactiveStatus> {
+    const level = String(effective()["proactive.level"] ?? proactiveState.level) as ProactiveStatus["level"];
+    return {
+      level, last_tick: proactiveState.lastTick, next_wake: level === "off" ? undefined : new Date(Date.now() + 30 * 60_000).toISOString(),
+      budget_used_minutes: 2.5, budget_minutes: 15, open_proposals: proposals.filter((p) => p.kind === "proposal" && p.status === "open").length,
+      stopped_by_kill_switch: false,
+    };
+  }
+  async proactiveTick(): Promise<TickResult> {
+    const level = String(effective()["proactive.level"] ?? proactiveState.level);
+    const r: TickResult = level === "off"
+      ? { wake: "manual", outcome: "skipped", reason: "L'assistente proattivo è spento: lo accendi dalle impostazioni.", proposals: [], model_called: false, at: now() }
+      : { wake: "manual", outcome: "nothing", reason: "Niente di nuovo da guardare.", proposals: [], model_called: false, at: now() };
+    proactiveState.lastTick = r;
+    return r;
   }
 
   async activeRun(sessionId?: string) {

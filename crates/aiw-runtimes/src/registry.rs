@@ -191,6 +191,14 @@ impl RuntimeRegistry {
         }
     }
 
+    /// The model a sidecar that AIW started is serving right now (`None`: not running, or not one of ours).
+    pub async fn serving_model(&self, id: &str) -> Option<String> {
+        if !self.supervisor.is_running(id).await {
+            return None;
+        }
+        self.supervisor.endpoint(id).await.and_then(|(_, m)| m)
+    }
+
     pub fn manifests(&self) -> Vec<RuntimeManifest> {
         self.manifests.read().unwrap().clone()
     }

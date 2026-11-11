@@ -13,6 +13,7 @@ pub mod notices;
 pub mod optimize;
 pub mod pairing;
 pub mod peers;
+pub mod proactive;
 pub mod reward;
 mod roles;
 pub mod routing;
@@ -140,6 +141,8 @@ pub(crate) struct Inner {
     pub bus: broadcast::Sender<RunEventMsg>,
     pub workflow_runs: Mutex<Vec<WorkflowRun>>,
     pub scheduler: Mutex<aiw_workflow::Scheduler>,
+    /// The proactive assistant's heartbeat (see `proactive`).
+    pub proactive: proactive::ProactiveRuntime,
     pub token: String,
     pub pairing: Mutex<(String, Instant)>,
     /// Failed-attempt limiter of the pairing endpoint.
@@ -268,6 +271,7 @@ impl Engine {
             bus,
             workflow_runs: Default::default(),
             scheduler: Default::default(),
+            proactive: Default::default(),
             token,
             pairing: Mutex::new((random_digits(6), Instant::now())),
             pair_guard: Default::default(),
@@ -382,6 +386,7 @@ impl Engine {
                     tracing::info!(workflow = %id, "scheduled trigger");
                     let _ = e.run_workflow(&id, Map::new(), "workflow").await;
                 }
+                e.proactive_pass();
                 if tick % 3 == 0 {
                     e.0.runtimes.refresh().await;
                 }
@@ -552,6 +557,7 @@ impl Engine {
         for token in &training {
             token.cancel();
         }
+        self.proactive_killed();
         let sidecars = self.0.runtimes.stop_all().await;
         let browser = self.0.browser.close().await;
         let detail = format!(
@@ -830,6 +836,9 @@ impl Engine {
     /// other strategies have no model in charge, so they run under a neutral profile that never
     /// narrows the members: the widest mode and sandbox among them.
     pub(crate) fn session_agent(&self, agent_id: &str) -> Result<(AgentProfile, Option<TeamDef>)> {
+        if let Some(base) = agent_id.strip_prefix(proactive::PROACTIVE_PREFIX) {
+            return Ok((self.proactive_agent(base)?, None));
+        }
         let Some(team_id) = agent_id.strip_prefix(TEAM_PREFIX) else { return Ok((self.agent(agent_id)?, None)) };
         let team = self.team(team_id)?;
         let locals: Vec<AgentProfile> = team
@@ -1064,7 +1073,7 @@ impl Engine {
     pub fn create_session_with(&self, agent_id: &str, title: Option<String>, isolation: Option<&str>) -> Result<Session> {
         match agent_id.strip_prefix(TEAM_PREFIX) {
             Some(team_id) => self.team(team_id).map(|_| ())?,
-            None => self.agent(agent_id).map(|_| ())?,
+            None => self.agent(agent_id.strip_prefix(proactive::PROACTIVE_PREFIX).unwrap_or(agent_id)).map(|_| ())?,
         }
         let now = now_rfc3339();
         let mut s = Session {
@@ -1544,6 +1553,12 @@ impl Engine {
         let mut run_input =
             self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
         run_input.thinking = mode;
+        // A proactive run cannot be talked into more than reading: only `deny` rules survive (an `allow` rule
+        // would lift plan mode) and nobody is there to answer a confirmation.
+        let proactive_run = session.agent_id.starts_with(proactive::PROACTIVE_PREFIX);
+        if proactive_run {
+            run_input.policy.rules.retain(|r| r.action == "deny");
+        }
         // What the assistant remembers: pinned notes and the ones that match this message.
         let memory = self.memory_prompt(&run_input.agent.id, &run_input.user_input).await;
         run_input.system_extra.extend(memory);
@@ -1554,7 +1569,8 @@ impl Engine {
         let rid = run_id.clone();
         let (from_name, from_mode) = (run_input.agent.name.clone(), run_input.policy.mode.clone());
         tokio::spawn(async move {
-            let host = Arc::new(EngineHost::new(engine.clone(), Some(session.id.clone()), None));
+            let host = EngineHost::new(engine.clone(), Some(session.id.clone()), None);
+            let host = Arc::new(if proactive_run { host.denying_approvals() } else { host });
             // What the run produced is stored whatever its outcome: when it was cancelled or failed
             // its files were still written and its commands run, and the next turn must know.
             // (`new_messages[0]` is the user message, stored above.)
@@ -2024,6 +2040,9 @@ impl Engine {
             ));
         }
         self.0.config.set(Layer::parse(layer)?, key, value)?;
+        if key == "proactive.level" {
+            self.proactive_level_set();
+        }
         if key == "workspace.root" {
             if let Some(p) = self.0.config.get_str("workspace.root") {
                 let root = aiw_core::paths::expand_home(&p);
@@ -2394,6 +2413,8 @@ mod tests_learning;
 mod tests_memory;
 #[cfg(test)]
 mod tests_optimize;
+#[cfg(test)]
+mod tests_proactive;
 #[cfg(test)]
 mod tests_roles;
 #[cfg(test)]

@@ -160,6 +160,12 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/runs/{id}/events.json", get(run_events_json))
         .route("/api/approvals", get(approvals))
         .route("/api/approvals/{id}", post(respond_approval))
+        .route("/api/proposals", get(proposals))
+        .route("/api/proposals/{id}", get(proposal))
+        .route("/api/proposals/{id}/approve", post(approve_proposal))
+        .route("/api/proposals/{id}/dismiss", post(dismiss_proposal))
+        .route("/api/proactive/status", get(proactive_status))
+        .route("/api/proactive/tick", post(proactive_tick))
         .route("/api/workflows", get(workflows))
         .route("/api/workflows/runs", get(workflow_runs))
         .route("/api/workflows/{id}", put(save_workflow).delete(delete_workflow))
@@ -615,6 +621,33 @@ async fn approve_lesson(State(s): State<AppState>, Path(id): Path<String>, body:
 }
 async fn reject_lesson(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Lesson> {
     ok(s.engine.reject_lesson(&id)?)
+}
+#[derive(Deserialize)]
+struct ProposalsQuery {
+    /// open | approved | dismissed | expired | done; absent = all.
+    status: Option<String>,
+    /// proposal | briefing; absent = both.
+    kind: Option<String>,
+}
+async fn proposals(State(s): State<AppState>, Query(q): Query<ProposalsQuery>) -> ApiResult<Vec<Proposal>> {
+    ok(s.engine.proposals(q.status.as_deref(), q.kind.as_deref())?)
+}
+async fn proposal(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Proposal> {
+    ok(s.engine.proposal(&id)?)
+}
+/// The body is optional: `{"instruction": "..."}` runs the edited instruction instead of the proposed one.
+async fn approve_proposal(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<ProposalApprove>>) -> ApiResult<Proposal> {
+    ok(s.engine.proposal_approve(&id, body.and_then(|b| b.0.instruction).as_deref()).await?)
+}
+async fn dismiss_proposal(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Proposal> {
+    ok(s.engine.proposal_dismiss(&id)?)
+}
+async fn proactive_status(State(s): State<AppState>) -> ApiResult<ProactiveStatus> {
+    ok(s.engine.proactive_status())
+}
+/// Wakes the assistant once, now (the same gates as the heartbeat apply: off, quiet hours, budget, power).
+async fn proactive_tick(State(s): State<AppState>) -> ApiResult<TickResult> {
+    ok(s.engine.proactive_tick(aiw_engine::proactive::Wake::Manual).await?)
 }
 #[derive(Deserialize)]
 struct MemoriesQuery {
@@ -1283,6 +1316,8 @@ mod tests_memory;
 mod tests_models;
 #[cfg(test)]
 mod tests_optimize;
+#[cfg(test)]
+mod tests_proactive;
 #[cfg(test)]
 mod tests_recommend;
 #[cfg(test)]

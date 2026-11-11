@@ -6,7 +6,7 @@
 //! ([`NoticeTracker::on_downloads`], downloads publish no event: they are polled).
 
 use crate::RunEventMsg;
-use aiw_core::api::{ApprovalRequest, DownloadProgress};
+use aiw_core::api::{ApprovalRequest, DownloadProgress, Proposal};
 use aiw_core::events::AgEvent;
 use std::collections::{HashMap, HashSet};
 
@@ -17,6 +17,8 @@ pub enum NoticeKind {
     RunFailed,
     Download,
     DownloadFailed,
+    /// The assistant noticed something worth proposing (a new open proposal or the morning briefing).
+    Proposal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +43,8 @@ pub struct NoticeTracker {
     sub_runs: HashSet<String>,
     /// Status of every download seen; `None` until the first poll (what was already done at start is not news).
     downloads: Option<HashMap<String, String>>,
+    /// Proposals already announced (or already there at start); `None` until the first poll.
+    proposals: Option<HashSet<String>>,
 }
 
 impl NoticeTracker {
@@ -73,6 +77,30 @@ impl NoticeTracker {
             }
             _ => None,
         }
+    }
+
+    /// Open proposals the person has not been told about. During quiet hours nothing is said and nothing is
+    /// marked as told, so the notification comes when they end. What was already open at start is not news.
+    pub fn on_proposals(&mut self, open: &[Proposal], quiet: bool) -> Vec<Notice> {
+        let Some(told) = self.proposals.as_mut() else {
+            self.proposals = Some(open.iter().map(|p| p.id.clone()).collect());
+            return vec![];
+        };
+        if quiet {
+            return vec![];
+        }
+        let mut out = vec![];
+        for p in open.iter().filter(|p| p.status == "open") {
+            if !told.insert(p.id.clone()) {
+                continue;
+            }
+            out.push(Notice {
+                kind: NoticeKind::Proposal,
+                title: if p.kind == "briefing" { "Il riepilogo di oggi".into() } else { "Ho notato una cosa".into() },
+                body: short(if p.noticed.trim().is_empty() { &p.title } else { &p.noticed }, 140),
+            });
+        }
+        out
     }
 
     pub fn on_downloads(&mut self, list: &[DownloadProgress]) -> Vec<Notice> {
@@ -159,6 +187,35 @@ mod tests {
         let long = "parola ".repeat(60);
         let s = short(&long, 40);
         assert!(s.chars().count() <= 40 && s.ends_with('…'), "{s}");
+    }
+
+    fn prop(id: &str, kind: &str) -> Proposal {
+        Proposal {
+            id: id.into(),
+            kind: kind.into(),
+            title: "Titolo".into(),
+            noticed: "Sono arrivate due fatture.".into(),
+            status: "open".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_new_proposal_is_news_once_and_quiet_hours_hold_it_back() {
+        let mut t = NoticeTracker::new();
+        // Already open at start: not announced.
+        assert!(t.on_proposals(&[prop("p0", "proposal")], false).is_empty());
+        let list = [prop("p0", "proposal"), prop("p1", "proposal"), prop("b1", "briefing")];
+        // In quiet hours: silence, and nothing is marked as told.
+        assert!(t.on_proposals(&list, true).is_empty());
+        let n = t.on_proposals(&list, false);
+        assert_eq!(n.len(), 2);
+        assert_eq!(
+            (n[0].kind, n[0].title.as_str(), n[0].body.as_str()),
+            (NoticeKind::Proposal, "Ho notato una cosa", "Sono arrivate due fatture.")
+        );
+        assert_eq!(n[1].title, "Il riepilogo di oggi");
+        assert!(t.on_proposals(&list, false).is_empty(), "said once");
     }
 
     #[test]

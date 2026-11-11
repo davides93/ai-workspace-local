@@ -1760,3 +1760,87 @@ mod tests {
         assert!(serde_json::from_value::<InferenceParams>(serde_json::json!({"thinking": "tanto"})).is_err());
     }
 }
+
+// ---------------------------------------------------------------------------------- proactive assistant
+
+/// `proposals.kind`: something to approve (`proposal`) or a read-only summary of the morning (`briefing`).
+pub const PROPOSAL_KINDS: [&str; 2] = ["proposal", "briefing"];
+/// `proposals.status`.
+pub const PROPOSAL_STATUSES: [&str; 5] = ["open", "approved", "dismissed", "expired", "done"];
+
+/// What the proactive assistant noticed and what it would do about it. It never acts by itself:
+/// approving it starts a normal run of `agent_id` with `instruction`, under the agent's usual policy.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Proposal {
+    pub id: String,
+    /// proposal | briefing
+    pub kind: String,
+    pub title: String,
+    /// What was noticed, in plain words.
+    pub noticed: String,
+    /// What the assistant would do, as a ready-to-run instruction (empty for a briefing).
+    pub instruction: String,
+    /// Where it came from: `reminder:<id>`, `workflow_failed:<run>`, `files:<folder>`, `approval:<id>`, `briefing:<date>`…
+    pub source: String,
+    /// The agent that would run the instruction.
+    pub agent_id: String,
+    /// open | approved | dismissed | expired | done
+    pub status: String,
+    pub created_at: String,
+    pub expires_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<String>,
+    /// The run (and session) an approval started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// Body of `POST /api/proposals/{id}/approve`: the instruction may be edited first.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ProposalApprove {
+    #[serde(default)]
+    pub instruction: Option<String>,
+}
+
+/// What one heartbeat did.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TickResult {
+    /// interval | briefing | reminder | manual
+    pub wake: String,
+    /// proposed | nothing | skipped
+    pub outcome: String,
+    /// Why nothing happened (skipped, or nothing worth doing), in Italian.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Ids of the proposals this tick created.
+    #[serde(default)]
+    pub proposals: Vec<String>,
+    /// Whether a model was asked (an empty context never calls one).
+    #[serde(default)]
+    pub model_called: bool,
+    pub at: String,
+}
+
+/// `GET /api/proactive/status`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProactiveStatus {
+    /// off | propose | act_readonly
+    pub level: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tick: Option<TickResult>,
+    /// Why the last tick did nothing because it could not run (quiet hours, budget, power, kill switch…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_wake: Option<String>,
+    pub budget_used_minutes: f64,
+    pub budget_minutes: u32,
+    pub open_proposals: u32,
+    /// The kill switch stopped it; it starts again when the level is set again.
+    pub stopped_by_kill_switch: bool,
+    /// Power state when the platform reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_power: Option<bool>,
+}

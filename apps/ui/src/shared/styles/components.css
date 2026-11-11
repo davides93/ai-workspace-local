@@ -81,6 +81,11 @@
   .page { padding-block: 16px 28px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 }
 
+/* The count next to a section's name in the rail and the "Altro" sheet. */
+.nav-badge { margin-left: auto; min-width: 1.25rem; padding: 0 var(--space-1); border-radius: var(--r-md); background: var(--accent); color: var(--on-accent); font-size: var(--fs-xs); line-height: 1.25rem; text-align: center; font-variant-numeric: tabular-nums; }
+.nav-item, .more-item { position: relative; }
+.more-item .nav-badge { position: absolute; top: 4px; right: 6px; margin: 0; }
+
 /* Tablet: icon-only rail (labels stay available as tooltips and accessible names) */
 @media (min-width: 701px) and (max-width: 1100px) {
   :root { --rail-w: 64px; }
@@ -90,6 +95,7 @@
   .nav-group + .nav-group { border-top: 1px solid var(--line); margin-top: var(--space-1); padding-top: var(--space-1); }
   .nav-label-spacer { display: none; }
   .nav-item { justify-content: center; padding: 10px; width: 100%; }
+  .nav-item .nav-badge { position: absolute; top: 2px; right: 4px; margin: 0; min-width: 1rem; font-size: 0.65rem; line-height: 1rem; }
   .device-chip { grid-template-columns: auto; justify-items: center; padding: 10px 0; margin-inline: 0; width: 100%; }
   .device-chip .led { grid-row: auto; }
   .rail-search { justify-content: center; margin-inline: 0; width: 100%; padding: 9px 0; }

@@ -5,6 +5,7 @@ import { Link } from "../router";
 import { navGroups, routeLabel } from "../navigation";
 import { GROUPS, ROUTES, routeHref, type RouteId } from "../routes";
 import { useUiMode } from "../useUiMode";
+import { InboxBadge } from "../../features/inbox/components/InboxBadge";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
 
@@ -28,6 +29,7 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
                 <Link key={r.id} to={routeHref(r)} className="more-item" aria-current={current === r.id ? "page" : undefined} onClick={onClose}>
                   <Icon name={r.icon} />
                   <span>{routeLabel(r, mode)}</span>
+                  {r.id === "inbox" && <InboxBadge />}
                 </Link>
               ))}
             </div>

@@ -66,6 +66,14 @@ pub fn app_schema() -> SettingsSchema {
             "learning.reflect": {"type": "string", "title": "Riflessione dell'agente", "description": "Quando l'agente propone una lezione da approvare: off = mai; on_feedback = dopo un pollice giù; on_failure = anche dopo un run fallito o fermato dal budget", "enum": ["off", "on_feedback", "on_failure"], "default": "on_feedback"},
             "learning.profile": {"type": "string", "title": "Profilo per riflessione e ottimizzazione del prompt", "description": "Profilo di inferenza che scrive le lezioni e le varianti del prompt; vuoto = quello dell'agente", "default": ""},
             "memory.enabled": {"type": "boolean", "title": "Memoria: l'assistente ricorda ciò che gli insegni", "description": "Le cose che gli chiedi di ricordare restano sul tuo dispositivo e vengono ritrovate nelle conversazioni future. Spenta, l'assistente non usa né salva ricordi", "default": true},
+            "proactive.level": {"type": "string", "title": "Assistente proattivo", "description": "Spento per ora: lo accendi tu dopo averlo provato. Con «Propone» l'assistente controlla ogni tanto cosa c'è di nuovo e ti lascia nella casella Proposte delle idee pronte; non fa mai nulla da solo, e ogni proposta parte solo se la approvi. Con «Propone e legge» può anche consultare il web, sempre in sola lettura. Un pulsante di emergenza lo ferma subito", "enum": ["off", "propose", "act_readonly"], "default": "off"},
+            "proactive.interval_minutes": {"type": "integer", "title": "Controlla ogni (minuti)", "description": "Ogni quanto l'assistente guarda cosa c'è di nuovo mentre l'app è aperta", "default": 30, "minimum": 5, "maximum": 1440},
+            "proactive.briefing_time": {"type": "string", "title": "Riepilogo del mattino alle", "description": "Ora del giorno (HH:MM) in cui prepara il riepilogo: promemoria, proposte aperte, ieri e cartelle osservate", "default": "08:00"},
+            "proactive.quiet_hours": {"type": "string", "title": "Orario di silenzio", "description": "Fascia (HH:MM-HH:MM, anche a cavallo della mezzanotte, ad esempio 22:00-07:00) in cui non controlla e non ti avvisa. Vuoto = nessuna fascia", "default": ""},
+            "proactive.daily_budget_minutes": {"type": "integer", "title": "Tempo massimo al giorno (minuti)", "description": "Quanto tempo di calcolo al giorno può usare l'assistente proattivo. Finito il tempo, aspetta domani", "default": 15, "minimum": 0, "maximum": 1440},
+            "proactive.only_on_power": {"type": "boolean", "title": "Solo con il computer collegato alla corrente", "description": "Dove il sistema dice se sei a batteria; dove non lo dice, questa scelta non ha effetto", "default": true},
+            "proactive.agent": {"type": "string", "title": "Assistente che prepara le proposte", "default": "operator"},
+            "proactive.watch_folders": {"type": "array", "title": "Cartelle da osservare", "description": "I file nuovi in queste cartelle finiscono tra le cose da guardare", "items": {"type": "string"}, "default": []},
             "voice.language": {"type": "string", "title": "Lingua della voce", "description": "Codice ISO 639-1 (it, en…) o auto per riconoscerla", "default": "auto"},
             "voice.stt_runtime": {"type": "string", "title": "Motore di trascrizione", "description": "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", "enum": ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], "default": "auto"},
             "voice.stt_model": {"type": "string", "title": "Modello Whisper", "description": "Vuoto = il più grande installato che sta in memoria", "default": ""},
@@ -99,6 +107,15 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "app.notifications",
     // What the assistant remembers about the person is theirs: a repository cannot switch it off or on.
     "memory.enabled",
+    // Whether and when the assistant works on its own is the person's choice on this computer, not a repository's.
+    "proactive.level",
+    "proactive.interval_minutes",
+    "proactive.briefing_time",
+    "proactive.quiet_hours",
+    "proactive.daily_budget_minutes",
+    "proactive.only_on_power",
+    "proactive.agent",
+    "proactive.watch_folders",
 ];
 
 pub struct LayeredConfig {

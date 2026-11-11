@@ -401,6 +401,26 @@ describe("other v0.4 methods", () => {
     await expect(api.reflectSession("ses_none")).rejects.toThrow(/non trovata/);
   });
 
+  it("keeps proposals like the engine: filtered, approved into a new session once, dismissed, a briefing only read", async () => {
+    await expect(api.proposals({ status: "boh" as never })).rejects.toThrow(/stato non valido/);
+    await expect(api.proposals({ kind: "boh" as never })).rejects.toThrow(/tipo non valido/);
+    const open = await api.proposals({ status: "open", kind: "proposal" });
+    expect(open.length).toBeGreaterThanOrEqual(2);
+    const [a, b] = open;
+    const approved = await api.approveProposal(a.id, "Fai solo l'elenco");
+    expect(approved.status).toBe("approved");
+    expect(approved.run_id && approved.session_id).toBeTruthy();
+    expect((await api.sessions()).some((s) => s.id === approved.session_id)).toBe(true);
+    await expect(api.approveProposal(a.id)).rejects.toThrow(/non è più in attesa/);
+    expect((await api.dismissProposal(b.id)).status).toBe("dismissed");
+    await expect(api.dismissProposal(b.id)).rejects.toThrow(/non è più in attesa/);
+    const briefing = (await api.proposals({ kind: "briefing" }))[0];
+    await expect(api.approveProposal(briefing.id)).rejects.toThrow(/riepilogo/);
+    await expect(api.approveProposal("prp_none")).rejects.toThrow(/non trovata/);
+    expect((await api.proactiveStatus()).level).toBe("propose");
+    expect((await api.proactiveTick()).outcome).toBe("nothing");
+  });
+
   it("keeps memories like the engine: validated, deduplicated, searched, forgotten and restored, proposals approved or dropped", async () => {
     const all = await api.memories();
     expect(all.some((m) => m.status === "forgotten")).toBe(false);
