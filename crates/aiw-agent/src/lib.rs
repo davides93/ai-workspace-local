@@ -8,6 +8,7 @@ pub mod hooks;
 pub mod internal;
 pub mod narrow;
 pub mod policy;
+pub mod roles;
 pub mod runner;
 pub mod schema;
 pub mod skills;
@@ -22,6 +23,9 @@ pub use narrow::{narrow_sandbox, narrow_tools};
 pub use policy::{Decision, Policy, PolicyRule};
 pub use runner::{to_msgs, AgentRunner, RunHost, RunInput, RunOutcome};
 pub use skills::Skill;
+
+#[cfg(test)]
+mod tests_roles;
 
 #[cfg(test)]
 pub(crate) mod tests_support {
@@ -54,6 +58,10 @@ mod tests {
         audits: Mutex<Vec<AuditEntry>>,
         /// Tests that need a backend which can fail put it here instead of the scripted one.
         replacement: Mutex<Option<Arc<dyn ChatBackend>>>,
+        /// Backends by model name (roles tests): a profile whose model is listed gets its own.
+        pub(crate) by_model: Mutex<std::collections::HashMap<String, ScriptedBackend>>,
+        /// Models whose backend cannot be started.
+        pub(crate) unavailable: Mutex<HashSet<String>>,
     }
 
     #[async_trait]
@@ -67,7 +75,13 @@ mod tests {
         fn audit(&self, e: AuditEntry) {
             self.audits.lock().unwrap().push(e);
         }
-        async fn backend(&self, _p: &InferenceProfile) -> Result<Arc<dyn ChatBackend>> {
+        async fn backend(&self, p: &InferenceProfile) -> Result<Arc<dyn ChatBackend>> {
+            if self.unavailable.lock().unwrap().contains(&p.model) {
+                return Err(aiw_core::Error::Runtime(format!("{} non parte", p.model)));
+            }
+            if let Some(b) = self.by_model.lock().unwrap().get(&p.model).cloned() {
+                return Ok(Arc::new(b));
+            }
             if let Some(b) = self.replacement.lock().unwrap().clone() {
                 return Ok(b);
             }
@@ -104,6 +118,8 @@ mod tests {
             approve,
             audits: Mutex::new(vec![]),
             replacement: Mutex::new(None),
+            by_model: Default::default(),
+            unavailable: Default::default(),
         });
         (host, tempfile::tempdir().unwrap())
     }
@@ -125,6 +141,7 @@ mod tests {
                 output_schema: None,
                 budget: None,
                 candidate_profiles: vec![],
+                roles: None,
             },
             profile: InferenceProfile {
                 id: "p".into(),
@@ -150,6 +167,7 @@ mod tests {
             shared: Default::default(),
             root_run: "run_1".into(),
             thinking: None,
+            roles: None,
         }
     }
 

@@ -645,6 +645,77 @@ pub struct AgentProfile {
     /// `inference_profile`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_profiles: Vec<String>,
+    /// Models by role inside one run (`plan`, `act`, `check`, `summarize`). Absent: the run uses
+    /// `inference_profile` for everything, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<AgentRoles>,
+}
+
+/// The four jobs a model can have inside one agent run.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelRole {
+    /// The first model call of the run and the call after a failure: the most capable model, thinking on.
+    Plan,
+    /// The calls that carry on after successful tool results: thinking off.
+    Act,
+    /// A short verification pass before the run declares it is finished (only after acting tools).
+    Check,
+    /// Context compaction: the smallest available model.
+    Summarize,
+}
+
+impl ModelRole {
+    pub const ALL: [ModelRole; 4] = [ModelRole::Plan, ModelRole::Act, ModelRole::Check, ModelRole::Summarize];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModelRole::Plan => "plan",
+            ModelRole::Act => "act",
+            ModelRole::Check => "check",
+            ModelRole::Summarize => "summarize",
+        }
+    }
+}
+
+/// The word `"auto"`: the engine decides the roles from the device class.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AutoRoles {
+    #[serde(rename = "auto")]
+    Auto,
+}
+
+/// Profile id of each role (an `auto:*` id is allowed); a role left out uses the agent's own
+/// `inference_profile`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RoleProfiles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub act: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summarize: Option<String>,
+}
+
+impl RoleProfiles {
+    pub fn get(&self, r: ModelRole) -> Option<&str> {
+        match r {
+            ModelRole::Plan => self.plan.as_deref(),
+            ModelRole::Act => self.act.as_deref(),
+            ModelRole::Check => self.check.as_deref(),
+            ModelRole::Summarize => self.summarize.as_deref(),
+        }
+    }
+}
+
+/// `roles` of an agent: the string `"auto"` or an object `{plan, act, check, summarize}`.
+/// Absent (the default) means one model for the whole run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum AgentRoles {
+    Auto(AutoRoles),
+    Custom(RoleProfiles),
 }
 
 /// What the bandit router knows about one candidate profile of an agent.

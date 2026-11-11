@@ -1,6 +1,6 @@
 import type { AgEvent, AiwImage, ApprovalRequest } from "../../../shared/api/types";
 import { applyA2ui, type A2uiMessage } from "../a2ui";
-import { FORMAT_CHECK, formatCheckText, HANDOFF, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
+import { CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, modelLabel, rolesNoteText, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
 import { resultStatus } from "./tools";
 
 type Of<K extends Item["kind"]> = Extract<Item, { kind: K }>;
@@ -117,6 +117,23 @@ function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
     }
     case SELF_CHECK:
       return [...items, { kind: "note", id: `sc-${items.length}`, text: selfCheckText((value as { failed?: string[] }).failed ?? []) }];
+    case "aiw.model": {
+      const v = value as { role?: string | null; model?: string; runtime?: string };
+      const label = modelLabel(v.role, v.model);
+      // Only when it changes within this turn: a run of calls by the same model gets one label.
+      const turnStart = items.map((x) => x.kind).lastIndexOf("user") + 1;
+      const last = items.slice(turnStart).filter((x) => x.kind === "model").pop();
+      if (last && last.kind === "model" && last.label === label) return items;
+      return [...items, { kind: "model", id: `md-${items.length}`, label, title: [v.runtime, v.model].filter(Boolean).join(" · ") }];
+    }
+    case "aiw.roles": {
+      const notes = (value as { notes?: string[] }).notes ?? [];
+      return notes.length > 0 ? [...items, { kind: "note", id: `rl-${items.length}`, text: rolesNoteText(notes) }] : items;
+    }
+    case CHECK: {
+      const v = value as { passed?: boolean; note?: string | null };
+      return [...items, { kind: "note", id: `ck-${items.length}`, text: checkText(v.passed !== false, v.note) }];
+    }
     case FORMAT_CHECK:
       return [...items, { kind: "note", id: `fc-${items.length}`, text: formatCheckText((value as { errors?: string[] }).errors ?? []) }];
     case HANDOFF: {

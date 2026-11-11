@@ -113,3 +113,25 @@ describe("image cache", () => {
     expect(imagesFor("b")("c1")).toHaveLength(1);
   });
 });
+
+describe("model roles in the conversation", () => {
+  it("labels each change of model once per turn, and shows the check and the collapse as notes", async () => {
+    const { reduce: reduceEvent } = await import("./reduce");
+    const { modelLabel } = await import("./items");
+    const ev = (name: string, value: unknown) => ({ type: "CUSTOM" as const, name, value });
+    let items: import("./items").Item[] = [{ kind: "user", id: "u", text: "ciao" }];
+    for (const e of [
+      ev("aiw.model", { role: "plan", model: "grande" }),
+      ev("aiw.model", { role: "plan", model: "grande" }),
+      ev("aiw.model", { role: "act", model: "veloce" }),
+      ev("aiw.model", { role: "act", model: "veloce" }),
+    ]) items = reduceEvent(items, e);
+    expect(items.filter((i) => i.kind === "model").map((i) => (i.kind === "model" ? i.label : ""))).toEqual(["Pianifica · grande", "Esegue · veloce"]);
+    expect(modelLabel(null, "m")).toBe("m");
+    items = reduceEvent(items, ev("aiw.check", { passed: false, note: "manca il file" }));
+    items = reduceEvent(items, ev("aiw.roles", { notes: ["Un solo modello."] }));
+    items = reduceEvent(items, ev("aiw.roles", { notes: [] }));
+    const notes = items.filter((i) => i.kind === "note").map((i) => (i.kind === "note" ? i.text : ""));
+    expect(notes).toEqual(["Verifica finale: manca il file. L'agente corregge prima di concludere.", "Un solo modello."]);
+  });
+});

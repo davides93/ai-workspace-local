@@ -21,6 +21,7 @@ pub fn agents() -> Vec<AgentProfile> {
         output_schema: None,
         budget: None,
         candidate_profiles: vec![],
+        roles: None,
     };
     vec![
         a(

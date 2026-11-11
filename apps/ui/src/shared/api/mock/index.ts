@@ -919,6 +919,13 @@ export class MockTransport implements Transport {
     ];
     const state = () => ({ todos: structuredClone(todos), runtime: "llama-server", model: "qwen3.5-35b-a3b-q4_k_m", usage: { prompt_tokens: 1840 + Math.round(Math.random() * 400), completion_tokens: 220, tokens_per_s: 108 + Math.round(Math.random() * 10), context_used: 6100, context_max: 32768 } });
     this.emit(runId, { type: "STATE_SNAPSHOT", snapshot: state() });
+    // An agent with model roles: who does what, announced like the engine does (`aiw.roles`, `aiw.model`).
+    const withRoles = !!agents.find((a) => a.id === sessions.find((x) => x.id === sessionId)?.agent_id)?.roles;
+    const label = (role: string, model: string) => ({ role, model, runtime: "llama-server" });
+    if (withRoles) {
+      this.emit(runId, { type: "CUSTOM", name: "aiw.roles", value: { mode: "auto", plan: label("plan", "qwen3.5-35b-a3b-q4_k_m"), act: label("act", "llama-3.2-3b-instruct-q4_k_m"), single: false, notes: [] } });
+      this.emit(runId, { type: "CUSTOM", name: "aiw.model", value: label("plan", "qwen3.5-35b-a3b-q4_k_m") });
+    }
 
     const r1 = nid("r");
     this.emit(runId, { type: "REASONING_START", messageId: r1 });
@@ -936,6 +943,7 @@ export class MockTransport implements Transport {
     todos[1].status = "in_progress";
     this.emit(runId, { type: "STATE_SNAPSHOT", snapshot: state() });
 
+    if (withRoles) this.emit(runId, { type: "CUSTOM", name: "aiw.model", value: label("act", "llama-3.2-3b-instruct-q4_k_m") });
     const m2 = nid("m");
     this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m2, role: "assistant" });
     await this.streamText(runId, m2, "Ho trovato 7 PDF tra il 2024 e il 2026. Creo le cartelle `2024`, `2025` e `2026` e ci sposto i file. Per questo comando serve la tua conferma.", "text");

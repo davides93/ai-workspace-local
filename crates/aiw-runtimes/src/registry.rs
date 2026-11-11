@@ -172,6 +172,25 @@ impl RuntimeRegistry {
             .ok_or_else(|| Error::NotFound(format!("runtime `{id}` non trovato")))
     }
 
+    /// Can this runtime serve only one model at a time? True for a sidecar whose launch recipe
+    /// names the model (switching restarts the process) and for in-process engines and system
+    /// models (one model loaded); false for remote endpoints and for servers that load models on
+    /// demand (Ollama-like sidecars). An unknown runtime counts as single-model: the safe side
+    /// for the model roles, which must never make a runtime swap models back and forth.
+    pub fn holds_one_model(&self, id: &str) -> bool {
+        if self.bridges.read().unwrap().contains_key(id) {
+            return true;
+        }
+        match self.manifest(id) {
+            Ok(m) => match m.kind.as_str() {
+                "remote" => false,
+                "sidecar" => m.launch.as_ref().map(launch_uses_model).unwrap_or(true),
+                _ => true,
+            },
+            Err(_) => true,
+        }
+    }
+
     pub fn manifests(&self) -> Vec<RuntimeManifest> {
         self.manifests.read().unwrap().clone()
     }

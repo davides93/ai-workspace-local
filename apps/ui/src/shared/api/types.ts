@@ -473,7 +473,18 @@ export interface AgentProfile {
   budget?: BudgetLimits;
   /** Profiles the router may choose from, one per run, when the setting `routing.bandit` is on. */
   candidate_profiles?: string[];
+  /** Models by role inside one run. Absent: one model (`inference_profile`) for everything. */
+  roles?: AgentRoles;
 }
+
+/** The four jobs a model can have inside one run (plan, act, check, summarize). */
+export type ModelRole = "plan" | "act" | "check" | "summarize";
+
+/** Profile id of each role (an `auto:*` id is allowed); a role left out uses the agent's own profile. */
+export type RoleProfiles = Partial<Record<ModelRole, string>>;
+
+/** `"auto"`: the engine decides from the device class; an object: the profile of each role. */
+export type AgentRoles = "auto" | RoleProfiles;
 
 /** What the bandit router knows about a candidate profile: the rewards (thumbs, evaluation tasks) it earned. */
 export interface RoutingCandidate {

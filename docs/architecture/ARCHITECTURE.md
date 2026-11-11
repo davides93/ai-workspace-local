@@ -254,6 +254,22 @@ sequenceDiagram
   valido finisce in `RunFinished.result.json`. Lo schema non viene passato ai runtime come `response_format`.
 - **Contesto** (P10): un budget di token per profilo; oltre la soglia i turni più vecchi vengono
   riassunti con il modello attivo o con uno dedicato.
+- **Ruoli dei modelli** (`AgentProfile.roles`, `aiw_agent::roles`): di serie un run usa un solo profilo; con `roles`
+  (`"auto"` oppure `{plan, act, check, summarize}` con id di profilo, anche `auto:*`) il ciclo sceglie il modello a ogni
+  chiamata. `plan` = la prima chiamata e quella dopo un fallimento (gli stessi punti in cui `thinking: auto` si accende;
+  ragionamento acceso, modello più capace); `act` = le chiamate che proseguono dopo risultati riusciti (ragionamento spento,
+  anche un modello più veloce); `check` = un passaggio di verifica prima di dichiarare finito il run, solo se sono girati
+  strumenti che scrivono o agiscono (rischio write/exec/computer): risponde `PASS`/`FAIL` con una frase, su `FAIL` il ciclo
+  prosegue una sola volta con la frase come nota (`aiw.check`), contando contro il budget; `summarize` = compattazione del
+  contesto. La cronologia è una sola ed è nel formato neutro interno (`Msg`: `tool_calls` con id e argomenti JSON), che ogni
+  backend traduce nel template del proprio modello. Con `"auto"` decide l'engine (`adviser::plan_auto_roles`, funzione pura):
+  classi xs/s un solo modello; m il modello dell'agente più il più piccolo modello di chat installato per `summarize`, solo se
+  stanno in memoria insieme (stessa formula `fit_need`); l/xl un modello per `plan` (consigliere `reasoning`) e uno più
+  veloce o diverso per `act`, se stanno insieme; un dispositivo accoppiato di classe superiore può prendere `plan`.
+  Due ruoli che farebbero cambiare modello a un runtime che ne regge uno solo (`Registry::holds_one_model`: sidecar il
+  cui comando nomina il modello, motori in-process) si riducono a un modello solo per quel run
+  (`collapse_single_model_conflicts`): ricaricarlo a ogni cambio sarebbe peggio. Il motivo è nell'evento `aiw.roles`
+  (all'inizio del run); `aiw.model` dice per ogni chiamata ruolo e modello. Senza `roles` nulla di questo compare.
 - **Memoria e skill** (P11): `AGENTS.md` del workspace entra nel system prompt; le skill
   (`SKILL.md` con frontmatter `name`/`description`) sono elencate solo con la descrizione e il
   modello le carica su richiesta con il tool `skill`.

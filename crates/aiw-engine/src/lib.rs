@@ -14,6 +14,7 @@ pub mod optimize;
 pub mod pairing;
 pub mod peers;
 pub mod reward;
+mod roles;
 pub mod routing;
 mod secrets;
 pub mod store;
@@ -684,12 +685,15 @@ impl Engine {
     }
     /// The adviser's answer from the models already known (no disk scan), as used at the start
     /// of every run.
-    pub(crate) fn live_recommendations(&self) -> aiw_core::api::Recommendations {
+    pub(crate) fn live_local_models(&self) -> Vec<LocalModel> {
         let mut local = self.0.models.read().unwrap().clone();
         let system = self.available_system_models();
         local.retain(|m| !system.iter().any(|s| s.id == m.id));
         local.extend(system);
-        let local = self.local_enrichment(local);
+        self.local_enrichment(local)
+    }
+    pub(crate) fn live_recommendations(&self) -> aiw_core::api::Recommendations {
+        let local = self.live_local_models();
         let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
         adviser::advise(&self.device(), &local, &aiw_models::builtin_catalog(), &avail)
     }
@@ -769,6 +773,14 @@ impl Engine {
             )));
         }
         routing::check_candidates(self, &a)?;
+        if let Some(AgentRoles::Custom(rp)) = &a.roles {
+            for role in ModelRole::ALL {
+                let Some(id) = rp.get(role) else { continue };
+                if adviser::parse_auto_profile(id).is_none() && self.0.store.get_doc::<InferenceProfile>("profile", id)?.is_none() {
+                    return Err(Error::Invalid(format!("ruoli: il profilo «{id}» del ruolo {} non esiste", role.as_str())));
+                }
+            }
+        }
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
     }
@@ -855,6 +867,7 @@ impl Engine {
                     output_schema: None,
                     budget: None,
                     candidate_profiles: vec![],
+                    roles: None,
                 }
             }
         };
@@ -1351,6 +1364,8 @@ impl Engine {
             .collect();
         let agent_budget = agent.budget.clone().unwrap_or_default();
         let thinking = self.thinking_for(&profile, None);
+        // Models by role: only for the run the person started, never for a sub-agent.
+        let roles = if depth == 0 { self.resolve_roles(&agent, &profile) } else { None };
         RunInput {
             run_id: run_id.into(),
             thread_id: thread_id.into(),
@@ -1377,6 +1392,7 @@ impl Engine {
             shared: Default::default(),
             root_run: run_id.into(),
             thinking,
+            roles,
         }
     }
 
@@ -2378,6 +2394,8 @@ mod tests_learning;
 mod tests_memory;
 #[cfg(test)]
 mod tests_optimize;
+#[cfg(test)]
+mod tests_roles;
 #[cfg(test)]
 mod tests_routing;
 #[cfg(test)]
