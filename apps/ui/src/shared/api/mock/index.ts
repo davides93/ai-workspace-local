@@ -15,6 +15,7 @@ import {
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
 import * as mem from "./memories";
+import { teacherTurn } from "./teacher";
 import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
@@ -871,8 +872,42 @@ export class MockTransport implements Transport {
     this.finish(sessionId, final);
   }
 
+  /** The Insegnante: saves, corrects and forgets memories like the real agent does with its tools, and announces each change (`aiw.memory`). */
+  private async teacherRun(runId: string, sessionId: string, input: string) {
+    await sleep(150);
+    const threadId = sessionId;
+    this.emit(runId, { type: "RUN_STARTED", threadId, runId });
+    const turn = teacherTurn(input, mem.memories);
+    let reply = turn.reply;
+    for (const step of turn.steps) {
+      if (step.tool === "memory_save") {
+        const { memory, created } = this.invalid(() => mem.build({ text: step.args.text, kind: step.args.kind, pinned: step.args.pinned, due_at: step.args.due_at }, nid("mem")));
+        if (created) mem.memories.unshift({ ...memory, session_id: sessionId });
+        await this.toolCall(runId, step.tool, step.args, created ? `Ricordato (id ${memory.id}): «${memory.text}».` : `Lo sapevo già (id ${memory.id}): «${memory.text}».`);
+        if (!created) reply = `Lo sapevo già: «${memory.text}».`;
+      } else if (step.tool === "memory_update") {
+        const m = this.memory(step.args.id);
+        mem.patch(m, { text: step.args.text });
+        await this.toolCall(runId, step.tool, step.args, `Aggiornato (id ${m.id}): «${m.text}».`);
+      } else if (step.tool === "memory_forget") {
+        const m = this.setStatus(step.args.id, ["active", "proposed"], "forgotten", "attivo");
+        await this.toolCall(runId, step.tool, step.args, `Dimenticato (id ${m.id}): «${m.text}».`);
+      } else {
+        await this.toolCall(runId, step.tool, step.args, step.summary);
+      }
+      this.emit(runId, { type: "CUSTOM", name: "aiw.memory", value: { tool: step.tool } });
+    }
+    const m = nid("m");
+    this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m, role: "assistant" });
+    await this.streamText(runId, m, reply, "text");
+    this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m });
+    this.emit(runId, { type: "RUN_FINISHED", threadId, runId });
+    this.finish(sessionId, reply);
+  }
+
   private async scriptedRun(runId: string, sessionId: string, input: string) {
     if (sessions.find((x) => x.id === sessionId)?.agent_id === "browser") return this.browserRun(runId, sessionId);
+    if (sessions.find((x) => x.id === sessionId)?.agent_id === "teacher") return this.teacherRun(runId, sessionId, input);
     await sleep(150);
     const threadId = sessionId;
     this.emit(runId, { type: "RUN_STARTED", threadId, runId });

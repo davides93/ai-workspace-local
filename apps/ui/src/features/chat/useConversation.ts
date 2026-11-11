@@ -25,7 +25,7 @@ export type HistoryState = { status: "loading" | "ready" | "error"; error?: unkn
  * `onGone` runs when the backend answers 404 for the open session (it was deleted from another client):
  * loading its history, or sending to it. The view then leaves the conversation.
  */
-export function useConversation(sessionId: string | null, opts: { onGone?: (sessionId: string) => void; /** Reasoning for the next runs of this conversation (the "Ragionamento" selector). */ thinking?: ThinkingMode } = {}) {
+export function useConversation(sessionId: string | null, opts: { onGone?: (sessionId: string) => void; /** Reasoning for the next runs of this conversation (the "Ragionamento" selector). */ thinking?: ThinkingMode; /** Sees every event of the open conversation's runs (the Insegna page refreshes what it shows). */ onEvent?: (e: AgEvent) => void } = {}) {
   const api = useApi();
   const qc = useQueryClient();
   const startRun = useStartRun();
@@ -47,11 +47,14 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
   onGone.current = opts.onGone;
   const thinking = useRef(opts.thinking);
   thinking.current = opts.thinking;
+  const onEvent = useRef(opts.onEvent);
+  onEvent.current = opts.onEvent;
 
   const handle = useCallback(
     (forSession: string, e: AgEvent) => {
       // An event of a subscription that was dropped while it was being delivered.
       if (current.current !== forSession) return;
+      onEvent.current?.(e);
       if (e.type === "RUN_STARTED") rememberRun(e.runId, forSession);
       // A member of a team sends a snapshot with only the shared state: merge, so the plan and usage stay.
       if (e.type === "STATE_SNAPSHOT") setRunState((prev) => ({ ...prev, ...e.snapshot }));

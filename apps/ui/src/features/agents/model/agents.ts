@@ -7,7 +7,7 @@ import { isAutoProfile } from "../../models/model/adviser";
 import { ALL, normalizeTools } from "./tools";
 
 /** Seeded on first run by crates/aiw-engine/src/defaults.rs `agents()`; the backend refuses to delete them (409). */
-export const BUILTIN_AGENT_IDS: readonly string[] = ["operator", "coder", "browser", "desktop", "planner"];
+export const BUILTIN_AGENT_IDS: readonly string[] = ["operator", "coder", "browser", "desktop", "planner", "teacher"];
 
 export const isBuiltinAgent = (id: string): boolean => BUILTIN_AGENT_IDS.includes(id);
 

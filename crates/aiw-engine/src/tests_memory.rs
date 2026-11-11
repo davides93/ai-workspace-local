@@ -505,3 +505,25 @@ async fn memory_enabled_defaults_to_on_and_a_repository_cannot_turn_it_off() {
     e.0.config.set_workspace_root(Some(ws.path()));
     assert!(e.memory_enabled());
 }
+
+#[tokio::test]
+async fn teacher_agent_is_seeded_and_restored_when_missing() {
+    let (e, _d, _w) = engine(vec![]).await;
+    let t = e.agents().unwrap().into_iter().find(|a| a.id == "teacher").expect("teacher seeded");
+    assert_eq!(t.inference_profile, "auto:agent");
+    assert_eq!(t.mode, "auto");
+    let known: Vec<String> = e.tools().into_iter().map(|x| x.name).collect();
+    for name in &t.tools {
+        assert!(known.contains(name), "unknown tool {name}");
+    }
+    for need in ["memory_save", "memory_search", "memory_update", "memory_forget", "render_ui", "todo"] {
+        assert!(t.tools.iter().any(|x| x == need), "{need}");
+    }
+    assert_eq!(t.tools.len(), 6);
+    // an install that predates the agent gets it back at start-up, others stay untouched
+    assert!(e.0.store.delete_doc("agent", "teacher").unwrap());
+    assert!(e.agents().unwrap().iter().all(|a| a.id != "teacher"));
+    e.seed().unwrap();
+    assert!(e.agents().unwrap().iter().any(|a| a.id == "teacher"));
+    assert!(e.agents().unwrap().iter().any(|a| a.id == "operator"));
+}

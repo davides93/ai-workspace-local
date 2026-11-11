@@ -449,6 +449,25 @@ describe("other v0.4 methods", () => {
     expect(await api.memories({ status: "all" })).toEqual([]);
   });
 
+  it("runs the Insegnante: saves memories through tool calls and announces each change", async () => {
+    const session = await api.createSession({ agent_id: "teacher" });
+    const before = (await api.memories()).length;
+    const events: { type: string; name?: string }[] = [];
+    const { run_id } = await api.startRun(session.id, "Mi chiamo Giulia e preferisco risposte brevi.");
+    await new Promise<void>((done) => {
+      const stop = api.subscribeRun(run_id, (e) => {
+        events.push(e as { type: string; name?: string });
+        if (e.type === "RUN_FINISHED") {
+          stop();
+          done();
+        }
+      });
+    });
+    expect(events.some((e) => e.type === "CUSTOM" && e.name === "aiw.memory")).toBe(true);
+    expect(events.some((e) => e.type === "TOOL_CALL_START")).toBe(true);
+    expect((await api.memories()).length).toBeGreaterThan(before);
+  });
+
   it("optimizes a prompt in the background and applies a variant only on request, like the engine does", async () => {
     await expect(api.startPromptOptimization("esempio", { agent: "fantasma" })).rejects.toThrow(/non trovato/);
     await expect(api.startPromptOptimization("nessuna", { agent: "operator" })).rejects.toThrow(/non trovata/);

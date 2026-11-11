@@ -42,3 +42,13 @@ export function withDecided(list: Lesson[] | undefined, lesson: Lesson, pendingO
   const rest = (list ?? []).filter((l) => l.id !== lesson.id);
   return pendingOnly && lesson.status !== "pending" ? rest : [lesson, ...rest];
 }
+
+/** The memory lesson waiting for an answer in this session: the one the "Vuoi che lo ricordi?" card shows (skills stay in the Panoramica). */
+export const memoryPendingFor = (lessons: Lesson[] | undefined, sessionId: string | null): Lesson | undefined =>
+  sessionId ? lessons?.find((l) => l.session_id === sessionId && l.status === "pending" && l.kind === "memory") : undefined;
+
+/** The sentence the card shows: the content of the lesson on one line, cut when it is long. */
+export function rememberText(l: Pick<Lesson, "title" | "content">): string {
+  const one = l.content.replace(/\s+/g, " ").trim() || l.title;
+  return one.length > 220 ? `${one.slice(0, 220).trimEnd()}…` : one;
+}

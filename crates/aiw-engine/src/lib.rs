@@ -305,6 +305,11 @@ impl Engine {
                 s.put_doc("agent", &a.id, &a)?;
             }
         }
+        for a in defaults::agents().into_iter().filter(|a| defaults::LATE_AGENTS.contains(&a.id.as_str())) {
+            if s.get_doc::<AgentProfile>("agent", &a.id)?.is_none() {
+                s.put_doc("agent", &a.id, &a)?;
+            }
+        }
         if s.get_doc::<InferenceProfile>("profile", "default")?.is_none() {
             // Runtime and model are chosen for this device: what is installed/registered (phones
             // have no sidecars, so the in-process engine wins there) and what fits in memory.
