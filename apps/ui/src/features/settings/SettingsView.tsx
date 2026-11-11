@@ -3,10 +3,13 @@ import { useUiMode } from "../../app/useUiMode";
 import { useTheme } from "../../shared/lib/theme";
 import { UI_MODE_LABEL, UI_MODES } from "../../shared/lib/uiMode";
 import { Button, EmptyState, Field, Icon, Input, Page, PageHeader, QueryState, Section, Segmented } from "../../shared/ui";
-import { useConfig, useSetConfig } from "./api";
+import { useSystem } from "../../shared/query/system";
+import { useBackgroundActions, useConfig, useSetConfig } from "./api";
+import { BackgroundBlock } from "./components/BackgroundBlock";
 import { LayerBar } from "./components/LayerBar";
 import { UpdatePanel } from "./components/UpdatePanel";
 import { SettingRow } from "./components/SettingRow";
+import { changesSchedule, isPhoneOs, shouldAskNotifications } from "./model/background";
 import { configTheme, DEVELOPER_ONLY, groupSettings, isTheme, LAYER_LABEL, THEME_LABEL, THEMES, winningLayer, type WritableLayer } from "./model/config";
 import "./settings.css";
 
@@ -18,9 +21,23 @@ export function SettingsView() {
   const [uiMode, setUiMode] = useUiMode();
   const [layer, setLayer] = useState<WritableLayer>("global");
   const [query, setQuery] = useState("");
+  const system = useSystem();
+  const bg = useBackgroundActions();
+  const os = system.data?.device.os;
 
   const commit = (key: string, title: string, value: unknown) => {
-    setConfig.mutate({ layer, key, value, title });
+    const before = cfg.data?.effective["proactive.level"];
+    setConfig.mutate(
+      { layer, key, value, title },
+      {
+        onSuccess: () => {
+          if (!isPhoneOs(os) || !changesSchedule(key)) return;
+          // The phone is told again what to schedule; the notification permission is asked only when the assistant is turned on.
+          if (key === "proactive.level" && shouldAskNotifications(before, value)) bg.askNotifications.mutate(undefined, { onSettled: () => bg.configure.mutate() });
+          else bg.configure.mutate();
+        },
+      },
+    );
     // The theme is applied here as well: the choice shows at once, whatever the layer says.
     if (key === "ui.theme" && isTheme(value)) setTheme(value);
   };
@@ -82,6 +99,7 @@ export function SettingsView() {
                       {entries.map((e) => <SettingRow key={e.key} view={view} entry={e} layer={layer} onCommit={commit} />)}
                     </ul>
                   </div>
+                  {section.id === "proactive" && <BackgroundBlock os={os} level={view.effective["proactive.level"] as never} />}
                 </Section>
               ))}
             </>

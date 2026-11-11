@@ -2,6 +2,7 @@
 
 pub mod a2a_client;
 pub mod adviser;
+pub mod background;
 mod dataset;
 pub mod defaults;
 pub mod eval;
@@ -2409,6 +2410,8 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 mod tests;
 #[cfg(test)]
 mod tests_auto;
+#[cfg(test)]
+mod tests_background;
 #[cfg(test)]
 mod tests_eval;
 #[cfg(test)]

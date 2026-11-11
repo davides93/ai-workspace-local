@@ -88,7 +88,7 @@ impl Engine {
 
     /// The paired device that could take the `plan` role: online, with a model on its gateway, and
     /// the `aiw-peer` runtime pointing at it. The most powerful one if there are several.
-    fn peer_planner(&self) -> Option<PeerPlanner> {
+    pub(crate) fn peer_planner(&self) -> Option<PeerPlanner> {
         let gateway = self.0.runtimes.settings("aiw-peer").ok()?.get("base_url")?.as_str()?.trim_end_matches('/').to_string();
         let rank = |t: &str| ["xs", "s", "m", "l", "xl"].iter().position(|x| *x == t).unwrap_or(0);
         self.peers()

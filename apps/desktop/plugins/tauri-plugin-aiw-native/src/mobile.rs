@@ -42,6 +42,12 @@ impl<R: Runtime> NativeLlm<R> {
         self.0.run_mobile_plugin::<serde_json::Value>(method, payload).map_err(|e| Error::Runtime(e.to_string()))
     }
 
+    /// Calls a command of the background checks (`backgroundState`, `backgroundRequestNotifications`,
+    /// `backgroundSchedule`, `backgroundCheckNow`) and returns its JSON answer. Blocks.
+    pub fn background_call(&self, method: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
+        self.0.run_mobile_plugin::<serde_json::Value>(method, payload).map_err(|e| Error::Runtime(e.to_string()))
+    }
+
     /// Speech to text with the system recognizer (iOS: SFSpeechRecognizer). The audio travels as a
     /// WAV file in the temp folder; blocks until the recognizer is done.
     pub fn transcribe(&self, wav: &[u8], language: Option<&str>) -> Result<String> {

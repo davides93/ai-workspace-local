@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -151,6 +151,17 @@ export interface Transport {
   proactiveStatus(): Promise<ProactiveStatus>;
   /** Wakes the assistant once, now (the same gates apply: off, quiet hours, budget). */
   proactiveTick(): Promise<TickResult>;
+  /** The same check under a hard time budget, as the phone's operating system wakes it (POST /api/proactive/background-tick). */
+  proactiveBackgroundTick(req?: BackgroundRequest): Promise<BackgroundSummary>;
+  /**
+   * The phone's side of the background checks (only the Tauri shell on iOS/Android, and the demo): what the system
+   * allows, asking for the notification permission, scheduling the checks from the settings, and «Controlla adesso»
+   * as a job that also finishes when the app is left.
+   */
+  backgroundStatus?(): Promise<BackgroundStatus>;
+  backgroundRequestNotifications?(): Promise<BackgroundStatus>;
+  backgroundConfigure?(): Promise<BackgroundStatus>;
+  backgroundCheckNow?(): Promise<BackgroundStatus>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
   /** `thinking` is the reasoning of this run only: it wins over the profile's. */
   startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode): Promise<{ run_id: string }>;

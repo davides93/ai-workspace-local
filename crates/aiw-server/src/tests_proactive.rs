@@ -87,3 +87,43 @@ async fn approving_starts_a_run_in_a_new_session_and_links_it() {
     assert_eq!(a["status"], "approved");
     assert!(a["run_id"].as_str().is_some() && a["session_id"].as_str().is_some(), "{a}");
 }
+
+#[tokio::test]
+async fn the_background_tick_answers_with_a_small_summary_and_honours_the_gates() {
+    let (app, e, _d, _w) = super::tests::app().await;
+    // Off: skipped, with the reason, and no body needed.
+    let (st, s) = dispatch(app.clone(), "POST", "/api/proactive/background-tick", None).await;
+    assert_eq!((st, s["outcome"].as_str(), s["reason"].as_str()), (200, Some("skipped"), Some("interval")), "{s}");
+    assert!(s["skipped_reason"].as_str().unwrap().to_lowercase().contains("spento"));
+    assert_eq!(s["new_proposals"], 0);
+
+    e.set_config("global", "proactive.level", json!("propose")).unwrap();
+    e.set_config("global", "proactive.briefing_time", json!("23:59")).unwrap();
+    e.set_config("global", "proactive.quiet_hours", json!("")).unwrap();
+    e.set_config("global", "proactive.only_on_power", json!(false)).unwrap();
+    let (st, m) = dispatch(
+        app.clone(),
+        "POST",
+        "/api/memories",
+        Some(json!({"text": "Chiamare il dentista", "kind": "reminder", "due_at": "2020-01-01T09:00:00+00:00"})),
+    )
+    .await;
+    assert_eq!(st, 200, "{m}");
+    let (st, s) =
+        dispatch(app.clone(), "POST", "/api/proactive/background-tick", Some(json!({"reason": "shortcut", "budget_s": 20}))).await;
+    assert_eq!(
+        (st, s["outcome"].as_str(), s["new_proposals"].as_u64(), s["reason"].as_str()),
+        (200, Some("proposed"), Some(1), Some("shortcut")),
+        "{s}"
+    );
+    assert_eq!(s["notification"]["title"], "Una proposta per te", "{s}");
+    assert!(s["notification"]["body"].as_str().unwrap().contains("dentista"));
+    assert_eq!(s["timed_out"], false);
+    // The same check again has nothing new to say.
+    let (_, again) = dispatch(app.clone(), "POST", "/api/proactive/background-tick", Some(json!({"reason": "interval"}))).await;
+    assert_eq!((again["outcome"].as_str(), again["new_proposals"].as_u64()), (Some("nothing"), Some(0)), "{again}");
+    assert!(again.get("notification").is_none());
+    // The ordinary tick and the status see the same state.
+    let (_, st) = dispatch(app.clone(), "GET", "/api/proactive/status", None).await;
+    assert_eq!(st["open_proposals"], 1);
+}

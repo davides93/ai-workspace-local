@@ -440,6 +440,29 @@ describe("other v0.4 methods", () => {
     await api.setConfig("global", "connectors.calendar.sources", null);
   });
 
+  it("answers the background check like the engine and keeps the phone side in step with the settings", async () => {
+    const api = new MockTransport();
+    // The demo runs on a computer: no background jobs, no notification permission.
+    expect(await api.backgroundStatus()).toMatchObject({ platform: "desktop", supported: false, notifications: "unsupported", scheduled: false });
+    api.phone = "android";
+    expect(await api.backgroundStatus()).toMatchObject({ platform: "android", supported: true, notifications: "not_determined", scheduled: false });
+    expect((await api.backgroundConfigure()).scheduled).toBe(true);
+    expect((await api.backgroundRequestNotifications()).notifications).toBe("granted");
+    expect((await api.backgroundCheckNow()).platform).toBe("android");
+
+    const quiet = await api.proactiveBackgroundTick({ reason: "interval" });
+    expect(quiet).toMatchObject({ outcome: "nothing", model_step: "not_needed", new_proposals: 0, timed_out: false });
+    expect(quiet.briefing).toBeUndefined();
+    expect((await api.proactiveBackgroundTick({ reason: "briefing" })).briefing).toMatch(/Buongiorno/);
+
+    await api.setConfig("global", "proactive.level", "off");
+    const off = await api.proactiveBackgroundTick({ reason: "shortcut" });
+    expect(off).toMatchObject({ outcome: "skipped", model_step: "skipped", reason: "shortcut" });
+    expect(off.skipped_reason).toMatch(/spento/);
+    expect((await api.backgroundConfigure()).scheduled).toBe(false);
+    await api.setConfig("global", "proactive.level", null);
+  });
+
   it("keeps memories like the engine: validated, deduplicated, searched, forgotten and restored, proposals approved or dropped", async () => {
     const all = await api.memories();
     expect(all.some((m) => m.status === "forgotten")).toBe(false);

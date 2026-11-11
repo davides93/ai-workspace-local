@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ApiError, HttpTransport } from "./http";
 import type { TransportCapabilities } from "./transport";
 import { blobToBase64 } from "../lib/base64";
-import type { AgEvent, Transcript } from "./types";
+import type { AgEvent, BackgroundStatus, Transcript } from "./types";
 
 interface IpcResponse {
   status: number;
@@ -31,6 +31,13 @@ export class TauriTransport extends HttpTransport {
     }
     return res.body as T;
   }
+
+  /** The native side of the background checks (`aiw_background` in the shell; the desktop answers "not supported"). */
+  private background = (action: "status" | "request_notifications" | "configure" | "check_now") => invoke<BackgroundStatus>("aiw_background", { action });
+  backgroundStatus = () => this.background("status");
+  backgroundRequestNotifications = () => this.background("request_notifications");
+  backgroundConfigure = () => this.background("configure");
+  backgroundCheckNow = () => this.background("check_now");
 
   async openBrowser(): Promise<boolean> {
     return invoke<boolean>("aiw_browser_show");

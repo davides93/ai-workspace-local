@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -267,6 +267,7 @@ export class HttpTransport implements Transport {
   dismissProposal = (id: string) => this.req<Proposal>("POST", `/proposals/${enc(id)}/dismiss`, {});
   proactiveStatus = () => this.req<ProactiveStatus>("GET", "/proactive/status");
   proactiveTick = () => this.req<TickResult>("POST", "/proactive/tick", {});
+  proactiveBackgroundTick = (req: BackgroundRequest = {}) => this.req<BackgroundSummary>("POST", "/proactive/background-tick", req);
   deleteAllMemories = () => this.req<{ deleted: number }>("DELETE", "/memories?confirm=true");
   evalSuites = () => this.req<EvalSuite[]>("GET", "/evals");
   saveEvalSuite = (s: EvalSuite) => this.req<EvalSuite>("PUT", `/evals/${enc(s.id)}`, s);

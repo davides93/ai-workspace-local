@@ -346,6 +346,13 @@ impl Engine {
         }
     }
 
+    /// Stops the model call or run of the tick in progress, without touching the kill switch (a time budget ran out).
+    pub(crate) fn proactive_cancel_current(&self) {
+        if let Some(t) = self.0.proactive.current.lock().unwrap().take() {
+            t.cancel();
+        }
+    }
+
     /// The person set the level: the heartbeat may run again.
     pub(crate) fn proactive_level_set(&self) {
         self.0.proactive.killed.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -549,6 +556,8 @@ impl Engine {
             reason,
             proposals: vec![],
             model_called: false,
+            model_skipped: None,
+            delegated_to: None,
             at: now.to_rfc3339(),
         }
     }
@@ -651,7 +660,7 @@ impl Engine {
 
         // The morning briefing: once a day, from the briefing time on, from data only.
         let day_key = format!("briefing:{}", now.format("%Y-%m-%d"));
-        if now.time() >= self.briefing_time() && !self.0.store.proposal_source_exists(&day_key)? {
+        if (now.time() >= self.briefing_time() || wake == Wake::Briefing) && !self.0.store.proposal_source_exists(&day_key)? {
             let (text, empty) = self.briefing_text(now, &folders, conn.lines());
             let status = if empty { "done" } else { "open" };
             let p = new_proposal("briefing", "Il riepilogo di oggi".into(), text, String::new(), day_key, status);
@@ -723,7 +732,18 @@ impl Engine {
             return Ok(result);
         }
 
-        // One question to the smallest model.
+        // One question to the smallest model: on this device, else on a paired one, else the step is skipped
+        // (everything above needed no model and is already done).
+        let (profile, delegated) = match self.proactive_filter_model().await {
+            Ok(p) => p,
+            Err(why) => {
+                result.reason = Some(if created.is_empty() { why.clone() } else { format!("Riepilogo e promemoria pronti. {why}") });
+                result.model_skipped = Some(why);
+                result.proposals = created;
+                return Ok(result);
+            }
+        };
+        result.delegated_to = delegated.clone();
         result.model_called = true;
         let pinned: Vec<String> = self
             .0
@@ -738,8 +758,19 @@ impl Engine {
             .map(|m| m.text)
             .collect();
         let open_titles: Vec<String> = self.0.store.proposal_list(Some("open"), 10)?.into_iter().map(|p| p.title).collect();
-        let profile = self.proactive_filter_profile().await?;
-        let answer = self.ask_once(&profile, filter_messages(&fresh, &pinned, &open_titles), cancel).await?;
+        let answer = match self.ask_once(&profile, filter_messages(&fresh, &pinned, &open_titles), cancel).await {
+            Ok(a) => a,
+            // A paired device that does not answer is not an error of the check: say so and go on without it.
+            Err(e) if delegated.is_some() && !matches!(e, Error::Cancelled) => {
+                let why = format!("Il dispositivo accoppiato «{}» non ha risposto ({e}).", delegated.unwrap_or_default());
+                result.model_called = false;
+                result.model_skipped = Some(why.clone());
+                result.reason = Some(why);
+                result.proposals = created;
+                return Ok(result);
+            }
+            Err(e) => return Err(e),
+        };
         let Some(n) = parse_filter(&answer, fresh.len()) else {
             result.reason = Some("Il filtro non ha trovato nulla che meriti una proposta adesso.".into());
             result.proposals = created;
@@ -755,13 +786,19 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
             item.text
         );
         let (run_agent, run_title) = (format!("{PROACTIVE_PREFIX}{agent_id}"), format!("Proposta: {}", short(&item.text, 40)));
-        let run = self.run_agent_task(&run_agent, &prompt, None, &run_title);
-        let (text, _session) = tokio::select! {
-            r = run => r?,
-            _ = cancel.cancelled() => return Err(Error::Cancelled),
+        // When the filter was answered by a paired device this one has no model to write the proposal with: the
+        // item itself becomes the proposal (the person can still edit the instruction before approving).
+        let parsed = if delegated.is_some() {
+            None
+        } else {
+            let run = self.run_agent_task(&run_agent, &prompt, None, &run_title);
+            let (text, _session) = tokio::select! {
+                r = run => r?,
+                _ = cancel.cancelled() => return Err(Error::Cancelled),
+            };
+            aiw_agent::schema::extract_json(&text)
+                .filter(|v| v.get("instruction").and_then(|i| i.as_str()).is_some_and(|i| !i.trim().is_empty()))
         };
-        let parsed = aiw_agent::schema::extract_json(&text)
-            .filter(|v| v.get("instruction").and_then(|i| i.as_str()).is_some_and(|i| !i.trim().is_empty()));
         let (title, noticed, instruction) = match parsed {
             Some(v) => (
                 v["title"].as_str().unwrap_or("Una proposta").trim().to_string(),
@@ -892,6 +929,24 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
         profile.params.max_tokens = Some(120);
         profile.params.temperature = Some(0.0);
         Ok(profile)
+    }
+
+    /// The model that answers the filter question: the smallest suitable one on this device, else the model of a paired
+    /// device that is online (named in the second value). `Err(reason)`, in Italian, when there is neither.
+    async fn proactive_filter_model(&self) -> std::result::Result<(InferenceProfile, Option<String>), String> {
+        let local = match self.proactive_filter_profile().await {
+            Ok(p) => return Ok((p, None)),
+            Err(e) => e,
+        };
+        if let Some(peer) = self.peer_planner() {
+            let mut profile = defaults::profile(format!("peer:{}", peer.name), "aiw-peer", &peer.model, 8192);
+            profile.id = format!("role:{}", peer.model);
+            profile.params.max_tokens = Some(120);
+            profile.params.temperature = Some(0.0);
+            return Ok((profile, Some(peer.name)));
+        }
+        tracing::info!("controllo proattivo senza modello: {local}");
+        Err("Su questo dispositivo non c'è un modello pronto e nessun dispositivo accoppiato risponde: salto il filtro.".into())
     }
 
     /// One short question, the whole answer as text.

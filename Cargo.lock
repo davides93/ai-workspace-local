@@ -93,6 +93,7 @@ dependencies = [
  "aiw-runtimes",
  "aiw-server",
  "aiw-tools",
+ "jni",
  "serde",
  "serde_json",
  "tauri",

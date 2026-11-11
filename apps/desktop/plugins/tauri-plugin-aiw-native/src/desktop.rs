@@ -68,6 +68,11 @@ impl<R: Runtime> NativeLlm<R> {
         crate::macos_browser::call(method, payload)
     }
 
+    /// Background checks are a phone feature (WorkManager, BGTaskScheduler): the desktop app keeps running in the tray.
+    pub fn background_call(&self, _method: &str, _payload: serde_json::Value) -> Result<serde_json::Value> {
+        Err(Error::Unsupported("i controlli in background sono solo per telefono e tablet".into()))
+    }
+
     pub fn availability(&self) -> Result<Vec<NativeRuntime>> {
         let Some(helper) = &self.helper else { return Ok(vec![]) };
         // The helper is built for macOS 26: on an older system it cannot even start.

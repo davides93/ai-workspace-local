@@ -1820,6 +1820,65 @@ pub struct TickResult {
     /// Whether a model was asked (an empty context never calls one).
     #[serde(default)]
     pub model_called: bool,
+    /// Why the model step was left out although there was something to look at (no model on this device and
+    /// no paired device answering), in Italian. The parts that need no model were done anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_skipped: Option<String>,
+    /// Name of the paired device that answered the filter question instead of a model on this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_to: Option<String>,
+    pub at: String,
+}
+
+/// `POST /api/proactive/background-tick` and the plugin command of the mobile shells: one short check with a hard
+/// time budget, woken by the operating system (WorkManager, BGTaskScheduler, a Shortcut).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundRequest {
+    /// interval | briefing | shortcut (default interval)
+    #[serde(default)]
+    pub reason: String,
+    /// Hard time budget in seconds (default 25, between 5 and 600).
+    #[serde(default)]
+    pub budget_s: Option<u32>,
+    /// The platform says whether the device is charging (`None`: unknown, the setting is ignored).
+    #[serde(default)]
+    pub on_power: Option<bool>,
+}
+
+/// A local notification ready to show.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalNotice {
+    pub title: String,
+    pub body: String,
+}
+
+/// What a background tick did, in a form small enough for a local notification or a Shortcuts answer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundSummary {
+    /// interval | briefing | shortcut
+    pub reason: String,
+    /// proposed | nothing | skipped
+    pub outcome: String,
+    /// Proposals (not briefings) this check created.
+    pub new_proposals: u32,
+    /// Text of the briefing: the one this check wrote, or, for `briefing` and `shortcut`, today's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub briefing: Option<String>,
+    /// ran | delegated | skipped | not_needed
+    pub model_step: String,
+    /// Why the model step was skipped, or the name of the device it was delegated to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_note: Option<String>,
+    /// Why the whole check did not run (quiet hours, power, budget, level off…), in Italian.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
+    /// What to show as a local notification; `None` when there is nothing worth interrupting for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification: Option<LocalNotice>,
+    /// The time budget ran out before the check ended (what was done is kept).
+    #[serde(default)]
+    pub timed_out: bool,
+    pub elapsed_ms: u64,
     pub at: String,
 }
 

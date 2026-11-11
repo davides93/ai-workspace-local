@@ -7,7 +7,7 @@ import type {
   AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo,
+  DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
@@ -712,6 +712,44 @@ export class MockTransport implements Transport {
     proactiveState.lastTick = r;
     return r;
   }
+
+  /** The demo answers as the engine does: off = skipped with the reason, else a quiet check; no model needed. */
+  async proactiveBackgroundTick(req: BackgroundRequest = {}): Promise<BackgroundSummary> {
+    const level = String(effective()["proactive.level"] ?? proactiveState.level);
+    const reason = req.reason ?? "interval";
+    const base = { reason, new_proposals: 0, timed_out: false, elapsed_ms: 12, at: now() };
+    if (level === "off") {
+      return { ...base, outcome: "skipped", model_step: "skipped", model_note: "L'assistente proattivo è spento: lo accendi dalle impostazioni.", skipped_reason: "L'assistente proattivo è spento: lo accendi dalle impostazioni." };
+    }
+    const briefing = proposals.find((p) => p.kind === "briefing");
+    return {
+      ...base, outcome: "nothing", model_step: "not_needed",
+      briefing: reason === "interval" ? undefined : briefing?.noticed ?? "Niente da segnalare per oggi.",
+    };
+  }
+
+  // ---- the phone's side of the background checks. The demo runs on a computer: `phone` switches it to a phone for tests.
+  phone: "ios" | "android" | null = null;
+  private background: { notifications: BackgroundStatus["notifications"]; scheduled: boolean } = { notifications: "not_determined", scheduled: false };
+  private backgroundNow(): BackgroundStatus {
+    if (!this.phone) return { platform: "desktop", supported: false, notifications: "unsupported", scheduled: false };
+    return {
+      platform: this.phone, supported: true, notifications: this.background.notifications, scheduled: this.background.scheduled,
+      detail: this.phone === "ios"
+        ? "iOS decide quando far partire i controlli: può farlo di rado. Per un orario preciso usa un'automazione dei Comandi rapidi."
+        : "Android decide quando far partire i controlli: di solito ogni 15-30 minuti, meno a batteria scarica.",
+    };
+  }
+  async backgroundStatus() { return this.backgroundNow(); }
+  async backgroundRequestNotifications() {
+    if (this.phone && this.background.notifications === "not_determined") this.background.notifications = "granted";
+    return this.backgroundNow();
+  }
+  async backgroundConfigure() {
+    this.background.scheduled = this.phone !== null && String(effective()["proactive.level"] ?? proactiveState.level) !== "off";
+    return this.backgroundNow();
+  }
+  async backgroundCheckNow() { return this.backgroundNow(); }
 
   async activeRun(sessionId?: string) {
     if (sessionId !== undefined && !sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);

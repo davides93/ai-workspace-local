@@ -27,6 +27,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     // Proxy override for the agent's in-app browser (policy proxy on loopback).
     implementation("androidx.webkit:webkit:1.12.1")
+    // Background checks of the proactive assistant (periodic and expedited jobs).
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // Gemini Nano via ML Kit GenAI Prompt API (AICore). Versions verified on maven.google.com;
     // both libraries are built with Kotlin 2.4, so the app project must use Kotlin Gradle plugin 2.4+.

@@ -1242,7 +1242,52 @@ export interface TickResult {
   reason?: string;
   proposals: string[];
   model_called: boolean;
+  /** Why the model step was left out (no model here and no paired device answering). */
+  model_skipped?: string;
+  /** Name of the paired device that answered the filter instead of a model on this one. */
+  delegated_to?: string;
   at: string;
+}
+
+/** `POST /api/proactive/background-tick` body: a check woken by the phone's operating system. */
+export interface BackgroundRequest {
+  reason?: "interval" | "briefing" | "shortcut";
+  /** Hard time budget in seconds (default 25). */
+  budget_s?: number;
+  on_power?: boolean;
+}
+
+export interface LocalNotice {
+  title: string;
+  body: string;
+}
+
+/** What a background check did, small enough for a local notification. */
+export interface BackgroundSummary {
+  reason: "interval" | "briefing" | "shortcut";
+  outcome: "proposed" | "nothing" | "skipped";
+  new_proposals: number;
+  briefing?: string;
+  model_step: "ran" | "delegated" | "skipped" | "not_needed";
+  /** Why the model step was skipped, or the device it went to. */
+  model_note?: string;
+  skipped_reason?: string;
+  notification?: LocalNotice;
+  timed_out: boolean;
+  elapsed_ms: number;
+  at: string;
+}
+
+/** The phone side of the background checks (WorkManager, BGTaskScheduler), as the native plugin reports it. */
+export interface BackgroundStatus {
+  platform: "android" | "ios" | "desktop";
+  /** False on the desktop: the app stays alive in the tray instead. */
+  supported: boolean;
+  notifications: "granted" | "denied" | "not_determined" | "unsupported";
+  /** A periodic check is waiting for the system to run it. */
+  scheduled: boolean;
+  /** A sentence about what the system promises (it decides when the checks run). */
+  detail?: string;
 }
 
 export interface ProactiveStatus {

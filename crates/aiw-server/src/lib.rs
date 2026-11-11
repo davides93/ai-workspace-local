@@ -166,6 +166,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/proposals/{id}/dismiss", post(dismiss_proposal))
         .route("/api/proactive/status", get(proactive_status))
         .route("/api/proactive/tick", post(proactive_tick))
+        .route("/api/proactive/background-tick", post(proactive_background_tick))
         .route("/api/workflows", get(workflows))
         .route("/api/workflows/runs", get(workflow_runs))
         .route("/api/workflows/{id}", put(save_workflow).delete(delete_workflow))
@@ -644,6 +645,11 @@ async fn dismiss_proposal(State(s): State<AppState>, Path(id): Path<String>) -> 
 }
 async fn proactive_status(State(s): State<AppState>) -> ApiResult<ProactiveStatus> {
     ok(s.engine.proactive_status())
+}
+/// The check woken by the operating system of a phone: the same tick under a hard time budget, answered with a
+/// summary small enough for a local notification. The body is optional (`reason`, `budget_s`, `on_power`).
+async fn proactive_background_tick(State(s): State<AppState>, body: Option<Json<BackgroundRequest>>) -> ApiResult<BackgroundSummary> {
+    ok(s.engine.proactive_background_tick(&body.map(|b| b.0).unwrap_or_default()).await?)
 }
 /// Wakes the assistant once, now (the same gates as the heartbeat apply: off, quiet hours, budget, power).
 async fn proactive_tick(State(s): State<AppState>) -> ApiResult<TickResult> {
