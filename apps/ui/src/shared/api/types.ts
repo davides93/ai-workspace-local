@@ -631,6 +631,61 @@ export interface Lesson {
   decided_at?: string;
 }
 
+/** What a memory is about (crates/aiw-engine/src/memory.rs `KINDS`). */
+export type MemoryKind = "about_you" | "preference" | "how_to_work" | "fact" | "reminder";
+/** active: in use. proposed: the assistant guessed it, waiting for the user. forgotten: soft-deleted, can be restored. */
+export type MemoryStatus = "active" | "proposed" | "forgotten";
+
+/** Something the assistant remembers, stored on this device only. */
+export interface Memory {
+  id: string;
+  text: string;
+  kind: MemoryKind;
+  /** `all` (every assistant) or the id of one agent. */
+  scope: string;
+  /** Pinned memories are always in the prompt ("Ricorda sempre"). */
+  pinned: boolean;
+  session_id?: string;
+  created_at: string;
+  updated_at: string;
+  last_used_at?: string;
+  /** When a reminder is due (RFC 3339). */
+  due_at?: string;
+  status: MemoryStatus;
+  has_embedding?: boolean;
+  /** Only in search results: the fused rank score, higher is better. */
+  score?: number;
+}
+
+/** Body of `POST /api/memories`: active at once. */
+export interface MemoryCreate {
+  text: string;
+  kind?: MemoryKind;
+  scope?: string;
+  pinned?: boolean;
+  due_at?: string;
+}
+
+/** Body of `PATCH /api/memories/{id}`: only the given fields change; an empty `due_at` clears the date. */
+export interface MemoryPatch {
+  text?: string;
+  kind?: MemoryKind;
+  scope?: string;
+  pinned?: boolean;
+  due_at?: string;
+}
+
+/** Filters of `GET /api/memories`; no `status` = active and proposed. */
+export interface MemoryQuery {
+  status?: MemoryStatus | "all";
+  kind?: MemoryKind;
+  /** Search text: the answer is ranked by relevance. */
+  q?: string;
+}
+
+/** Longest memory text the engine accepts (characters). */
+export const MAX_MEMORY_CHARS = 1000;
+
 /** Limits of the engine on what the user can edit before approving. */
 export const MAX_LESSON_TITLE_CHARS = 120;
 export const MAX_LESSON_CONTENT_CHARS = 6000;

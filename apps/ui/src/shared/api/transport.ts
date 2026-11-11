@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -128,6 +128,21 @@ export interface Transport {
   rejectLesson(id: string): Promise<Lesson>;
   /** Asks the agent for a lesson on this conversation now (the answer waits for the model). */
   reflectSession(sessionId: string): Promise<Lesson>;
+  /** What the assistant remembers: pinned first, then the most recently changed (a search `q` ranks by relevance). */
+  memories(query?: MemoryQuery): Promise<Memory[]>;
+  createMemory(body: MemoryCreate): Promise<Memory>;
+  updateMemory(id: string, patch: MemoryPatch): Promise<Memory>;
+  /** Soft delete: `restoreMemory` brings it back. */
+  forgetMemory(id: string): Promise<Memory>;
+  restoreMemory(id: string): Promise<Memory>;
+  /** Confirms what the assistant proposed. */
+  approveMemory(id: string): Promise<Memory>;
+  /** Discards a proposal for good. */
+  rejectMemory(id: string): Promise<Memory>;
+  /** Deletes for good. */
+  deleteMemory(id: string): Promise<void>;
+  /** Deletes every memory for good; returns how many. */
+  deleteAllMemories(): Promise<{ deleted: number }>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
   /** `thinking` is the reasoning of this run only: it wins over the profile's. */
   startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode): Promise<{ run_id: string }>;

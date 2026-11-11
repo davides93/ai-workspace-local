@@ -160,6 +160,45 @@ describe("HttpTransport", () => {
   });
 });
 
+describe("HttpTransport memories", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("calls the memory paths of the contract", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response("{}", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.memories();
+    await t.memories({ status: "proposed", kind: "preference", q: " caffè " });
+    await t.memories({ q: "   " });
+    await t.createMemory({ text: "Ho due gatti", kind: "about_you", pinned: true });
+    await t.updateMemory("mem/1", { text: "Ho tre gatti" });
+    await t.forgetMemory("mem/1");
+    await t.restoreMemory("mem/1");
+    await t.approveMemory("mem/1");
+    await t.rejectMemory("mem/1");
+    await t.deleteMemory("mem/1");
+    await t.deleteAllMemories();
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      "GET /memories",
+      "GET /memories?status=proposed&kind=preference&q=caff%C3%A8",
+      "GET /memories",
+      "POST /memories",
+      "PATCH /memories/mem%2F1",
+      "POST /memories/mem%2F1/forget",
+      "POST /memories/mem%2F1/restore",
+      "POST /memories/mem%2F1/approve",
+      "POST /memories/mem%2F1/reject",
+      "DELETE /memories/mem%2F1",
+      "DELETE /memories?confirm=true",
+    ]);
+    expect(JSON.parse(calls[3].body!)).toEqual({ text: "Ho due gatti", kind: "about_you", pinned: true });
+    expect(JSON.parse(calls[4].body!)).toEqual({ text: "Ho tre gatti" });
+  });
+});
+
 describe("HttpTransport.subscribeRun", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];

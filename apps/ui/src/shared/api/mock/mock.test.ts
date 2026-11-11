@@ -401,6 +401,54 @@ describe("other v0.4 methods", () => {
     await expect(api.reflectSession("ses_none")).rejects.toThrow(/non trovata/);
   });
 
+  it("keeps memories like the engine: validated, deduplicated, searched, forgotten and restored, proposals approved or dropped", async () => {
+    const all = await api.memories();
+    expect(all.some((m) => m.status === "forgotten")).toBe(false);
+    expect(all[0].pinned).toBe(true);
+    expect(new Set(all.map((m) => m.kind)).size).toBe(5);
+    expect(all.some((m) => m.status === "proposed")).toBe(true);
+
+    await expect(api.createMemory({ text: "  " })).rejects.toThrow(/vuoto/);
+    await expect(api.createMemory({ text: "x", kind: "boh" as never })).rejects.toThrow(/tipo di ricordo/);
+    await expect(api.createMemory({ text: "x".repeat(1001) })).rejects.toThrow(/troppo lungo/);
+    await expect(api.memories({ status: "boh" as never })).rejects.toThrow(/stato non valido/);
+    await expect(api.updateMemory("mem_none", { text: "x" })).rejects.toThrow(/non trovato/);
+
+    const a = await api.createMemory({ text: "Ho   due gatti", kind: "about_you" });
+    expect(a).toMatchObject({ text: "Ho due gatti", status: "active", scope: "all", pinned: false });
+    expect((await api.createMemory({ text: "ho DUE gatti" })).id).toBe(a.id);
+
+    const found = await api.memories({ q: "gatt" });
+    expect(found.map((m) => m.id)).toEqual([a.id]);
+    expect(found[0].score).toBeGreaterThan(0);
+    expect((await api.memories({ q: "caffe" }))[0].text).toMatch(/caffè/);
+    expect(await api.memories({ q: "zebra" })).toEqual([]);
+
+    const u = await api.updateMemory(a.id, { text: "Ho tre gatti", pinned: true });
+    expect(u).toMatchObject({ text: "Ho tre gatti", pinned: true });
+    await expect(api.updateMemory(a.id, { kind: "boh" as never })).rejects.toThrow(/tipo/);
+
+    expect((await api.forgetMemory(a.id)).status).toBe("forgotten");
+    await expect(api.forgetMemory(a.id)).rejects.toThrow(/non è attivo/);
+    expect((await api.memories()).some((m) => m.id === a.id)).toBe(false);
+    expect((await api.memories({ status: "forgotten" })).map((m) => m.id)).toContain(a.id);
+    expect((await api.restoreMemory(a.id)).status).toBe("active");
+    await expect(api.restoreMemory(a.id)).rejects.toThrow(/non è dimenticato/);
+
+    const proposed = (await api.memories({ status: "proposed" }))[0];
+    await expect(api.approveMemory(a.id)).rejects.toThrow(/in attesa/);
+    expect((await api.approveMemory(proposed.id)).status).toBe("active");
+    const guess = await api.createMemory({ text: "Qualcosa di nuovo" });
+    await api.forgetMemory(guess.id);
+    await expect(api.rejectMemory(guess.id)).rejects.toThrow(/in attesa/);
+
+    await api.deleteMemory(a.id);
+    await expect(api.deleteMemory(a.id)).rejects.toThrow(/non trovato/);
+    const { deleted } = await api.deleteAllMemories();
+    expect(deleted).toBeGreaterThan(3);
+    expect(await api.memories({ status: "all" })).toEqual([]);
+  });
+
   it("optimizes a prompt in the background and applies a variant only on request, like the engine does", async () => {
     await expect(api.startPromptOptimization("esempio", { agent: "fantasma" })).rejects.toThrow(/non trovato/);
     await expect(api.startPromptOptimization("nessuna", { agent: "operator" })).rejects.toThrow(/non trovata/);
@@ -449,7 +497,7 @@ describe("backend fixes in the demo", () => {
   it("lists the tools of the agent loop as internal, always on, and refuses to switch them (400)", async () => {
     const api = new MockTransport();
     const internal = (await api.tools()).filter((t) => t.source === "internal");
-    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "handoff", "render_ui", "skill", "team_state", "todo"]);
+    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "handoff", "memory_forget", "memory_save", "memory_search", "memory_update", "render_ui", "skill", "team_state", "todo"]);
     expect(internal.every((t) => t.enabled && t.available && t.risk === "read")).toBe(true);
     await expect(api.setToolEnabled("todo", false)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strumento interno") });
     await expect(api.setToolEnabled("nope", false)).rejects.toMatchObject({ status: 404 });

@@ -999,6 +999,72 @@ pub struct Lesson {
     pub decided_at: Option<String>,
 }
 
+/// What the assistant remembers (long-term memory). Stored only on this device.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Memory {
+    pub id: String,
+    /// One fact, one sentence.
+    pub text: String,
+    /// about_you | preference | how_to_work | fact | reminder
+    pub kind: String,
+    /// `all` (every assistant) or the id of one agent.
+    pub scope: String,
+    /// Pinned memories are always in the prompt.
+    pub pinned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<String>,
+    /// When a reminder is due (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<String>,
+    /// active | proposed (waiting for the user) | forgotten (soft delete, can be restored)
+    pub status: String,
+    /// Whether a semantic vector is stored for it (the vector itself is never sent out).
+    #[serde(default)]
+    pub has_embedding: bool,
+}
+
+/// A memory found by a search, with its fused rank score (higher is better).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryHit {
+    #[serde(flatten)]
+    pub memory: Memory,
+    pub score: f64,
+}
+
+/// Body of `POST /api/memories`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MemoryCreate {
+    pub text: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub pinned: Option<bool>,
+    #[serde(default)]
+    pub due_at: Option<String>,
+}
+
+/// Body of `PATCH /api/memories/{id}`: only the given fields change.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MemoryPatch {
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub pinned: Option<bool>,
+    /// Empty string clears the due date.
+    #[serde(default)]
+    pub due_at: Option<String>,
+}
+
 /// A candidate system prompt tried by a [`PromptOptimization`], with how the suite went with it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PromptVariant {

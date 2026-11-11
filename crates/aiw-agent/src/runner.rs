@@ -52,6 +52,16 @@ pub trait RunHost: Send + Sync {
         let _ = from;
         Ok(agent_id.to_string())
     }
+    /// Are the memory tools offered in this run? (The setting, and not an evaluation run.)
+    fn memory_enabled(&self) -> bool {
+        false
+    }
+    /// Runs one of the memory tools ([`crate::internal::MEMORY_TOOLS`]) for the run `input`; the
+    /// error is a message for the model.
+    async fn memory_tool(&self, input: &RunInput, name: &str, args: &Value) -> Result<String> {
+        let _ = (input, args);
+        Err(Error::Unsupported(format!("lo strumento {name} non è disponibile")))
+    }
 }
 
 pub struct RunInput {
@@ -137,7 +147,7 @@ pub fn to_msgs(history: &[ChatMessage]) -> Vec<Msg> {
         .collect()
 }
 
-fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
+fn internal_specs(input: &RunInput, skills: &[Skill], memory: bool) -> Vec<ToolSpec> {
     let allowed = |n: &str| input.agent.tools.iter().any(|t| t == "*" || t == n);
     let mut v = Vec::new();
     if allowed("todo") {
@@ -167,6 +177,9 @@ fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
     }
     if allowed(crate::code::TOOL) {
         v.push(crate::code::spec());
+    }
+    if memory {
+        v.extend(crate::internal::memory_specs().into_iter().filter(|s| allowed(&s.function.name)));
     }
     if allowed("skill") && !skills.is_empty() {
         let names: Vec<Value> = skills.iter().map(|s| Value::String(s.name.clone())).collect();
@@ -253,6 +266,9 @@ enum BatchKind {
     /// Consecutive `agent` calls run concurrently, up to `max_parallel_subagents`.
     Subagents,
 }
+
+/// Name of the AG-UI CUSTOM event emitted after a memory tool ran (the UI refreshes what it shows).
+pub const MEMORY_EVENT: &str = "aiw.memory";
 
 /// Name of the AG-UI CUSTOM event that carries a tool's image (screenshot) to the UI.
 pub const IMAGE_EVENT: &str = "aiw.image";
@@ -440,7 +456,7 @@ impl AgentRunner {
             })
             .map(|t| ToolSpec::function(t.name(), t.description(), t.parameters()))
             .collect();
-        specs.extend(internal_specs(input, &skills));
+        specs.extend(internal_specs(input, &skills, host.memory_enabled()));
 
         let mut state = RunState {
             runtime: Some(input.profile.runtime_id.clone()),
@@ -1162,6 +1178,34 @@ impl AgentRunner {
                         (ToolOutput::text(skills::load(s)), None)
                     }
                     None => (ToolOutput::error(format!("skill `{name}` non trovata")), None),
+                };
+            }
+            n if crate::internal::is_memory_tool(n) => {
+                if !host.memory_enabled() || !input.agent.tools.iter().any(|t| t == "*" || t == n) {
+                    audit("deny", "memoria non disponibile per questo agente".into());
+                    return (ToolOutput::error(format!("Lo strumento `{n}` non è disponibile.")), None);
+                }
+                // The plan mode is read-only: nothing is written, not even a memory.
+                if input.policy.mode == "plan" && n != crate::internal::MEMORY_SEARCH {
+                    audit("deny", format!("{n}: modalità piano"));
+                    return (ToolOutput::error("In modalità piano non posso modificare i ricordi: li posso solo cercare."), None);
+                }
+                // No approval prompt: saving is reversible (the person can forget it), the agent's
+                // guesses are only proposals, and every call goes to the activity log.
+                let detail = |what: &str| {
+                    let text = args["text"].as_str().or(args["query"].as_str()).or(args["id"].as_str()).unwrap_or_default();
+                    format!("{what}: {}", text.chars().take(120).collect::<String>())
+                };
+                return match host.memory_tool(input, n, &args).await {
+                    Ok(text) => {
+                        audit("allow", detail(n));
+                        host.emit(&input.run_id, AgEvent::Custom { name: MEMORY_EVENT.into(), value: json!({"tool": n}) });
+                        (ToolOutput::text(text), None)
+                    }
+                    Err(e) => {
+                        audit("error", detail(n));
+                        (ToolOutput::error(e.to_string()), None)
+                    }
                 };
             }
             crate::internal::TEAM_STATE => {

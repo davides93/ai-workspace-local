@@ -4,7 +4,7 @@ import { isSecretName } from "../../lib/secrets";
 import { mockRecommend } from "./recommend";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   DatasetSpec, TrainJobRequest, ThinkingMode,
@@ -14,6 +14,7 @@ import {
   remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
+import * as mem from "./memories";
 import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
@@ -606,6 +607,63 @@ export class MockTransport implements Transport {
     const l = demoLesson(s, nid("les"));
     lessons.unshift(l);
     return structuredClone(l);
+  }
+
+  // ---- long-term memory (crates/aiw-engine/src/memory.rs)
+  private memory(id: string): Memory {
+    const m = mem.memories.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `ricordo ${id} non trovato`);
+    return m;
+  }
+  /** Runs a rule of the engine that throws a plain Error with the message, as a 400. */
+  private invalid<T>(f: () => T): T {
+    try {
+      return f();
+    } catch (e) {
+      if (e instanceof ApiError) throw e;
+      throw new ApiError(400, e instanceof Error ? e.message : String(e));
+    }
+  }
+  async memories(query: MemoryQuery = {}) {
+    const status = query.status;
+    if (status && status !== "all" && !["active", "proposed", "forgotten"].includes(status)) throw new ApiError(400, `stato non valido «${status}»: usa active, proposed, forgotten o all`);
+    this.invalid(() => { const p = mem.kindProblem(query.kind); if (p) throw new Error(p); });
+    let list = mem.memories.filter((m) => (status === "all" ? true : status ? m.status === status : m.status !== "forgotten"));
+    if (query.kind) list = list.filter((m) => m.kind === query.kind);
+    return structuredClone(query.q?.trim() ? mem.rank(query.q, list) : mem.ordered(list));
+  }
+  async createMemory(body: MemoryCreate) {
+    const { memory, created } = this.invalid(() => mem.build(body, nid("mem")));
+    if (created) mem.memories.unshift(memory);
+    return structuredClone(memory);
+  }
+  async updateMemory(id: string, p: MemoryPatch) {
+    const m = this.memory(id);
+    this.invalid(() => mem.patch(m, p));
+    return structuredClone(m);
+  }
+  private setStatus(id: string, from: Memory["status"][], to: Memory["status"], what: string): Memory {
+    const m = this.memory(id);
+    if (!from.includes(m.status)) throw new ApiError(409, `il ricordo non è ${what}`);
+    Object.assign(m, { status: to, updated_at: new Date().toISOString() });
+    return m;
+  }
+  async forgetMemory(id: string) { return structuredClone(this.setStatus(id, ["active", "proposed"], "forgotten", "attivo")); }
+  async restoreMemory(id: string) { return structuredClone(this.setStatus(id, ["forgotten"], "active", "dimenticato")); }
+  async approveMemory(id: string) { return structuredClone(this.setStatus(id, ["proposed"], "active", "in attesa di conferma")); }
+  async rejectMemory(id: string) {
+    const m = this.memory(id);
+    if (m.status !== "proposed") throw new ApiError(409, "il ricordo non è in attesa di conferma");
+    mem.memories.splice(mem.memories.indexOf(m), 1);
+    return structuredClone(m);
+  }
+  async deleteMemory(id: string) {
+    mem.memories.splice(mem.memories.indexOf(this.memory(id)), 1);
+  }
+  async deleteAllMemories() {
+    const deleted = mem.memories.length;
+    mem.memories.length = 0;
+    return { deleted };
   }
 
   async activeRun(sessionId?: string) {

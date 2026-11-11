@@ -333,7 +333,7 @@ tools.push(
  * The tools of the agent loop, as `GET /api/tools` lists them after the built-in and MCP ones: `source: "internal"`,
  * always on, risk `read`, no switch (crates/aiw-agent/src/internal.rs).
  */
-export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state"] as const;
+export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state", "memory_save", "memory_search", "memory_update", "memory_forget"] as const;
 tools.push(
   ...([
     ["todo", "Pubblica e aggiorna il piano di lavoro dell'agente: elenco di passi con il loro stato."],
@@ -343,6 +343,10 @@ tools.push(
     ["code", "Esegue uno script Rhai che orchestra più strumenti in un solo passo (cicli, filtri, conteggi)."],
     ["handoff", "Passa la conversazione a un altro agente: il run termina e il nuovo agente prosegue con il tuo riassunto."],
     ["team_state", "Legge e scrive lo stato condiviso tra gli agenti di un team (solo nei run di team)."],
+    ["memory_save", "Salva un ricordo a lungo termine: subito se l'utente lo ha chiesto, come proposta da confermare se dedotto."],
+    ["memory_search", "Cerca tra i ricordi dell'utente per parole e per significato."],
+    ["memory_update", "Corregge un ricordo esistente."],
+    ["memory_forget", "Dimentica un ricordo (l'utente può ripristinarlo)."],
   ] as const).map(([name, description]): ToolInfo => ({ name, description, source: "internal", risk: "read", enabled: true, available: true, parameters: {} })),
 );
 

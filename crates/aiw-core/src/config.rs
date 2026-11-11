@@ -65,6 +65,7 @@ pub fn app_schema() -> SettingsSchema {
             "update.auto_download": {"type": "boolean", "title": "Scarica da solo gli aggiornamenti", "description": "L'installer viene scaricato e verificato (SHA-256) in anticipo; l'installazione parte solo quando la confermi", "default": false},
             "learning.reflect": {"type": "string", "title": "Riflessione dell'agente", "description": "Quando l'agente propone una lezione da approvare: off = mai; on_feedback = dopo un pollice giù; on_failure = anche dopo un run fallito o fermato dal budget", "enum": ["off", "on_feedback", "on_failure"], "default": "on_feedback"},
             "learning.profile": {"type": "string", "title": "Profilo per riflessione e ottimizzazione del prompt", "description": "Profilo di inferenza che scrive le lezioni e le varianti del prompt; vuoto = quello dell'agente", "default": ""},
+            "memory.enabled": {"type": "boolean", "title": "Memoria: l'assistente ricorda ciò che gli insegni", "description": "Le cose che gli chiedi di ricordare restano sul tuo dispositivo e vengono ritrovate nelle conversazioni future. Spenta, l'assistente non usa né salva ricordi", "default": true},
             "voice.language": {"type": "string", "title": "Lingua della voce", "description": "Codice ISO 639-1 (it, en…) o auto per riconoscerla", "default": "auto"},
             "voice.stt_runtime": {"type": "string", "title": "Motore di trascrizione", "description": "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", "enum": ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], "default": "auto"},
             "voice.stt_model": {"type": "string", "title": "Modello Whisper", "description": "Vuoto = il più grande installato che sta in memoria", "default": ""},
@@ -96,6 +97,8 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "app.close_to_tray",
     "app.start_at_login",
     "app.notifications",
+    // What the assistant remembers about the person is theirs: a repository cannot switch it off or on.
+    "memory.enabled",
 ];
 
 pub struct LayeredConfig {
@@ -368,6 +371,11 @@ mod tests {
         cfg.set_workspace_root(Some(&ws));
         assert!(cfg.get_bool("app.close_to_tray") && cfg.get_bool("app.notifications") && !cfg.get_bool("app.start_at_login"));
         assert!(cfg.set(Layer::Workspace, "app.start_at_login", json!(true)).is_err() || !cfg.get_bool("app.start_at_login"));
+        // Memory is on by default and a repository cannot change it.
+        assert!(cfg.get_bool("memory.enabled"));
+        std::fs::write(ws.join(".aiw/config.json"), r#"{"memory.enabled":false}"#).unwrap();
+        cfg.set_workspace_root(Some(&ws));
+        assert!(cfg.get_bool("memory.enabled"));
         // Making things stricter is allowed, also relative to what the user chose.
         cfg.set(Layer::Global, "sandbox.mode", json!("off")).unwrap();
         cfg.set(Layer::Workspace, "sandbox.mode", json!("read-only")).unwrap();

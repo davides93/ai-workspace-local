@@ -759,6 +759,32 @@ impl RuntimeRegistry {
         }
     }
 
+    /// A backend that can compute embeddings with `model` **without starting or restarting
+    /// anything**: swapping the chat model of a single-model sidecar for an embedding model in
+    /// the background would cut the person's conversation. So it exists only for a runtime that
+    /// is already up and serves (or can serve, when it holds many models) `model`: an in-app
+    /// bridge, a remote or external server, a running sidecar. `None` otherwise.
+    pub async fn embedding_backend(&self, id: &str, model: &str) -> Option<Arc<dyn ChatBackend>> {
+        if let Some(b) = self.bridges.read().unwrap().get(id).cloned() {
+            return Some(b);
+        }
+        let m = self.manifest(id).ok()?;
+        let settings = self.settings(id).ok()?;
+        let timeout = Duration::from_secs(settings.get("timeout_s").and_then(|v| v.as_u64()).unwrap_or(900));
+        let api_key = settings.get("api_key").and_then(|v| v.as_str()).map(String::from);
+        if m.kind == "sidecar" && self.supervisor.is_running(id).await {
+            let (ep, served) = self.supervisor.endpoint(id).await?;
+            let single_model = m.launch.as_ref().map(launch_uses_model).unwrap_or(false);
+            if single_model && served.as_deref() != Some(model) {
+                return None;
+            }
+            return Some(self.sidecar_backend(id, &m, ep, api_key, timeout).await);
+        }
+        let ep = self.external_endpoint(&m, &settings)?;
+        self.probe_models(&ep, api_key.as_deref()).await?;
+        Some(make_backend(&m, ep, api_key, timeout, None))
+    }
+
     /// The backend for a sidecar AIW started: it sends the model name the server really serves
     /// (see [`pick_served_name`]) and counts its in-flight requests.
     async fn sidecar_backend(
@@ -823,6 +849,10 @@ impl ChatBackend for Tracked {
                 d
             })
             .boxed())
+    }
+
+    async fn embed(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.inner.embed(model, texts).await
     }
 
     fn availability(&self) -> std::result::Result<(), String> {

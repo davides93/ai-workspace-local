@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -242,6 +242,22 @@ export class HttpTransport implements Transport {
   approveLesson = (id: string, edit?: { title?: string; content?: string }) => this.req<Lesson>("POST", `/lessons/${enc(id)}/approve`, edit ?? {});
   rejectLesson = (id: string) => this.req<Lesson>("POST", `/lessons/${enc(id)}/reject`, {});
   reflectSession = (sessionId: string) => this.req<Lesson>("POST", `/sessions/${enc(sessionId)}/reflect`, {});
+  memories = (query?: MemoryQuery) => {
+    const p = new URLSearchParams();
+    if (query?.status) p.set("status", query.status);
+    if (query?.kind) p.set("kind", query.kind);
+    if (query?.q?.trim()) p.set("q", query.q.trim());
+    const qs = p.toString();
+    return this.req<Memory[]>("GET", qs ? `/memories?${qs}` : "/memories");
+  };
+  createMemory = (body: MemoryCreate) => this.req<Memory>("POST", "/memories", body);
+  updateMemory = (id: string, patch: MemoryPatch) => this.req<Memory>("PATCH", `/memories/${enc(id)}`, patch);
+  forgetMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/forget`, {});
+  restoreMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/restore`, {});
+  approveMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/approve`, {});
+  rejectMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/reject`, {});
+  deleteMemory = (id: string) => this.req<void>("DELETE", `/memories/${enc(id)}`);
+  deleteAllMemories = () => this.req<{ deleted: number }>("DELETE", "/memories?confirm=true");
   evalSuites = () => this.req<EvalSuite[]>("GET", "/evals");
   saveEvalSuite = (s: EvalSuite) => this.req<EvalSuite>("PUT", `/evals/${enc(s.id)}`, s);
   deleteEvalSuite = (id: string) => this.req<void>("DELETE", `/evals/${enc(id)}`);

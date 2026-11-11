@@ -7,6 +7,7 @@ pub mod defaults;
 pub mod eval;
 mod host;
 mod learning;
+pub mod memory;
 mod models;
 pub mod notices;
 pub mod optimize;
@@ -133,6 +134,8 @@ pub(crate) struct Inner {
     pub session_allow: Mutex<HashMap<String, Arc<Mutex<HashSet<String>>>>>,
     /// Sessions a reflection is being made for (see `learning`).
     pub reflecting: Mutex<HashSet<String>>,
+    /// A background pass that computes memory embeddings is running (see `memory`).
+    pub embedding_busy: std::sync::atomic::AtomicBool,
     pub bus: broadcast::Sender<RunEventMsg>,
     pub workflow_runs: Mutex<Vec<WorkflowRun>>,
     pub scheduler: Mutex<aiw_workflow::Scheduler>,
@@ -260,6 +263,7 @@ impl Engine {
             approvals: Default::default(),
             session_allow: Default::default(),
             reflecting: Default::default(),
+            embedding_busy: Default::default(),
             bus,
             workflow_runs: Default::default(),
             scheduler: Default::default(),
@@ -673,6 +677,17 @@ impl Engine {
         let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
         adviser::advise(&self.device(), &local, &self.catalog(), &avail)
     }
+    /// The adviser's answer from the models already known (no disk scan), as used at the start
+    /// of every run.
+    pub(crate) fn live_recommendations(&self) -> aiw_core::api::Recommendations {
+        let mut local = self.0.models.read().unwrap().clone();
+        let system = self.available_system_models();
+        local.retain(|m| !system.iter().any(|s| s.id == m.id));
+        local.extend(system);
+        let local = self.local_enrichment(local);
+        let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
+        adviser::advise(&self.device(), &local, &aiw_models::builtin_catalog(), &avail)
+    }
     /// What `auto:<task>` stands for right now. Looks at the models already known (no disk scan:
     /// this runs at the start of every run) and the runtimes' current state.
     ///
@@ -682,13 +697,7 @@ impl Engine {
     /// conflict the person can fix, like a profile without a model.
     pub fn resolve_auto_profile(&self, task: aiw_core::api::AdviserTask) -> Result<InferenceProfile> {
         use aiw_core::api::AdviserTask;
-        let mut local = self.0.models.read().unwrap().clone();
-        let system = self.available_system_models();
-        local.retain(|m| !system.iter().any(|s| s.id == m.id));
-        local.extend(system);
-        let local = self.local_enrichment(local);
-        let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
-        let rec = adviser::advise(&self.device(), &local, &aiw_models::builtin_catalog(), &avail);
+        let rec = self.live_recommendations();
         if let Some(p) = adviser::auto_profile(task, &rec) {
             return Ok(p);
         }
@@ -1514,6 +1523,9 @@ impl Engine {
         let mut run_input =
             self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
         run_input.thinking = mode;
+        // What the assistant remembers: pinned notes and the ones that match this message.
+        let memory = self.memory_prompt(&run_input.agent.id, &run_input.user_input).await;
+        run_input.system_extra.extend(memory);
         if let Some(team) = &team {
             self.apply_team(&mut run_input, team);
         }
@@ -2357,6 +2369,8 @@ mod tests_hardening;
 mod tests_inference;
 #[cfg(test)]
 mod tests_learning;
+#[cfg(test)]
+mod tests_memory;
 #[cfg(test)]
 mod tests_optimize;
 #[cfg(test)]
