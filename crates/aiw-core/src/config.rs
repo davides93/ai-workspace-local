@@ -74,6 +74,10 @@ pub fn app_schema() -> SettingsSchema {
             "proactive.only_on_power": {"type": "boolean", "title": "Solo con il computer collegato alla corrente", "description": "Dove il sistema dice se sei a batteria; dove non lo dice, questa scelta non ha effetto", "default": true},
             "proactive.agent": {"type": "string", "title": "Assistente che prepara le proposte", "default": "operator"},
             "proactive.watch_folders": {"type": "array", "title": "Cartelle da osservare", "description": "I file nuovi in queste cartelle finiscono tra le cose da guardare", "items": {"type": "string"}, "default": []},
+            "connectors.calendar.enabled": {"type": "boolean", "title": "Calendario: l'assistente può leggere i tuoi eventi", "description": "Sola lettura: legge i file .ics e i calendari che scegli, e i dati restano sul dispositivo", "default": false},
+            "connectors.calendar.sources": {"type": "array", "title": "Calendari da leggere", "description": "File .ics, cartelle con file .ics o indirizzi di sottoscrizione (https:// o webcal://)", "items": {"type": "string"}, "default": []},
+            "connectors.mail.enabled": {"type": "boolean", "title": "Posta: l'assistente può leggere la posta salvata sul computer", "description": "Sola lettura: non invia, non cancella e non segna nulla; legge solo ciò che scegli, e i dati restano sul dispositivo", "default": false},
+            "connectors.mail.sources": {"type": "array", "title": "Posta da leggere", "description": "Cartelle Maildir, file .mbox o .eml", "items": {"type": "string"}, "default": []},
             "voice.language": {"type": "string", "title": "Lingua della voce", "description": "Codice ISO 639-1 (it, en…) o auto per riconoscerla", "default": "auto"},
             "voice.stt_runtime": {"type": "string", "title": "Motore di trascrizione", "description": "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", "enum": ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], "default": "auto"},
             "voice.stt_model": {"type": "string", "title": "Modello Whisper", "description": "Vuoto = il più grande installato che sta in memoria", "default": ""},
@@ -116,6 +120,11 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "proactive.only_on_power",
     "proactive.agent",
     "proactive.watch_folders",
+    // Which of the person's files the assistant may read is their choice on this computer, not a repository's.
+    "connectors.calendar.enabled",
+    "connectors.calendar.sources",
+    "connectors.mail.enabled",
+    "connectors.mail.sources",
 ];
 
 pub struct LayeredConfig {

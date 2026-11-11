@@ -178,7 +178,7 @@ fn new_files(folders: &[String], since: DateTime<Local>) -> Vec<(String, PathBuf
 
 /// One thing the filter may pick.
 #[derive(Debug, Clone, PartialEq)]
-struct Item {
+pub(crate) struct Item {
     /// Key that keeps the same thing from being proposed twice.
     source: String,
     /// One line for the filter and the proposal run.
@@ -223,6 +223,70 @@ fn proposal_schema() -> Value {
     })
 }
 
+/// What the calendar and mail connectors have for this tick (empty when they are off or have nothing).
+#[derive(Debug, Default)]
+pub(crate) struct ConnectorCtx {
+    /// Events of today that are not over yet, in time order.
+    events: Vec<aiw_tools::connectors::Event>,
+    /// Messages that arrived since the last tick, newest first.
+    mail: Vec<aiw_tools::connectors::Mail>,
+}
+
+impl ConnectorCtx {
+    /// Lines for the morning briefing: data only.
+    pub(crate) fn lines(&self) -> Vec<String> {
+        let mut out = vec![];
+        if !self.events.is_empty() {
+            let shown: Vec<String> = self.events.iter().take(3).map(aiw_tools::connectors::event_line).collect();
+            let more = self.events.len().saturating_sub(3);
+            out.push(format!(
+                "In agenda oggi: {} {}: {}{}.",
+                self.events.len(),
+                if self.events.len() == 1 { "evento" } else { "eventi" },
+                shown.join("; "),
+                if more > 0 { format!(" e altri {more}") } else { String::new() }
+            ));
+        }
+        if !self.mail.is_empty() {
+            out.push(self.mail_line());
+        }
+        out
+    }
+
+    fn mail_line(&self) -> String {
+        let top: Vec<String> = self.mail.iter().take(3).map(|m| format!("«{}» di {}", short(&m.subject, 50), short(&m.from, 30))).collect();
+        format!(
+            "Posta nuova: {} {}: {}{}.",
+            self.mail.len(),
+            if self.mail.len() == 1 { "messaggio" } else { "messaggi" },
+            top.join("; "),
+            if self.mail.len() > 3 { format!(" e altri {}", self.mail.len() - 3) } else { String::new() }
+        )
+    }
+
+    /// Things the filter may pick. The key changes only when the thing does (same events, same newest message).
+    pub(crate) fn items(&self, now: DateTime<Local>) -> Vec<Item> {
+        let mut out = vec![];
+        if !self.events.is_empty() {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            for e in &self.events {
+                h.update(format!("{}|{}\n", e.start.timestamp(), e.summary));
+            }
+            let digest: String = h.finalize().iter().take(6).map(|b| format!("{b:02x}")).collect();
+            let list: Vec<String> = self.events.iter().take(5).map(aiw_tools::connectors::event_line).collect();
+            out.push(Item {
+                source: format!("calendar:{}:{digest}", now.format("%Y-%m-%d")),
+                text: format!("In agenda oggi, ancora da fare: {}.", list.join("; ")),
+            });
+        }
+        if let Some(newest) = self.mail.first() {
+            out.push(Item { source: format!("mail:{}", newest.date.timestamp()), text: self.mail_line() });
+        }
+        out
+    }
+}
+
 // ------------------------------------------------------------------------------------ the engine
 
 impl Engine {
@@ -246,6 +310,17 @@ impl Engine {
     }
     fn save_state(&self, s: &State) {
         let _ = self.0.store.put_doc(STATE_KIND, STATE_ID, s);
+    }
+
+    /// Copies the connector settings (`connectors.*`) to the tools. Called at start and when one changes.
+    pub(crate) fn sync_connectors(&self) {
+        let list = |k: &str| -> Vec<String> { self.0.config.get(k).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default() };
+        self.0.connectors.set(aiw_tools::connectors::Config {
+            calendar_enabled: self.0.config.get_bool("connectors.calendar.enabled"),
+            calendar_sources: list("connectors.calendar.sources"),
+            mail_enabled: self.0.config.get_bool("connectors.mail.enabled"),
+            mail_sources: list("connectors.mail.sources"),
+        });
     }
 
     /// Quiet hours right now (for the desktop shell, which holds notifications back).
@@ -571,10 +646,13 @@ impl Engine {
         let folders: Vec<String> =
             self.0.config.get("proactive.watch_folders").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
 
+        // Today's events and the mail that arrived since the last tick, when the person turned the connectors on.
+        let conn = self.connector_context(now, since).await;
+
         // The morning briefing: once a day, from the briefing time on, from data only.
         let day_key = format!("briefing:{}", now.format("%Y-%m-%d"));
         if now.time() >= self.briefing_time() && !self.0.store.proposal_source_exists(&day_key)? {
-            let (text, empty) = self.briefing_text(now, &folders);
+            let (text, empty) = self.briefing_text(now, &folders, conn.lines());
             let status = if empty { "done" } else { "open" };
             let p = new_proposal("briefing", "Il riepilogo di oggi".into(), text, String::new(), day_key, status);
             self.0.store.proposal_insert(&p)?;
@@ -628,6 +706,7 @@ impl Engine {
                 });
             }
         }
+        items.extend(conn.items(now));
         let mut fresh = vec![];
         for it in items {
             if !self.0.store.proposal_source_exists(&it.source)? {
@@ -700,9 +779,28 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
         Ok(result)
     }
 
+    /// Today's remaining events and the mail since `since`, from the local connectors (none when they are off).
+    pub(crate) async fn connector_context(&self, now: DateTime<Local>, since: DateTime<Local>) -> ConnectorCtx {
+        let c = &self.0.connectors;
+        let mut ctx = ConnectorCtx::default();
+        if c.calendar_enabled() {
+            let midnight_next = Local
+                .from_local_datetime(&(now.date_naive() + ChronoDuration::days(1)).and_hms_opt(0, 0, 0).unwrap())
+                .earliest()
+                .unwrap_or(now);
+            ctx.events = c.calendar_events(now, midnight_next).await.0;
+        }
+        if c.mail_enabled() {
+            let c = c.clone();
+            // File reading: off the async threads.
+            ctx.mail = tokio::task::spawn_blocking(move || c.mail_since(since, now).0).await.unwrap_or_default();
+        }
+        ctx
+    }
+
     /// The text of the briefing and whether there was nothing to report.
-    fn briefing_text(&self, now: DateTime<Local>, folders: &[String]) -> (String, bool) {
-        let mut lines: Vec<String> = vec![];
+    fn briefing_text(&self, now: DateTime<Local>, folders: &[String], extra: Vec<String>) -> (String, bool) {
+        let mut lines: Vec<String> = extra;
         let day_start = Local.from_local_datetime(&now.date_naive().and_hms_opt(0, 0, 0).unwrap()).earliest().unwrap_or(now);
         let due = self.unproposed_due_reminders(now).len()
             + self
@@ -846,12 +944,15 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
         let mut a = self.agent(base_id)?;
         let network = self.proactive_level() == "act_readonly";
         let reg = self.tool_registry();
-        let allowed = |name: &str| a.tools.iter().any(|t| t == "*" || t == name);
+        // The connectors only read and the person switched them on in the settings: a proposal run may use them
+        // even when the agent's own list was written before they existed.
+        let allowed = |name: &str| a.tools.iter().any(|t| t == "*" || t == name) || aiw_tools::connectors::TOOL_NAMES.contains(&name);
         let mut tools: Vec<String> = reg
             .all()
             .into_iter()
             .filter(|t| {
                 reg.is_enabled(t.name())
+                    && t.available().is_ok()
                     && !t.explicit_grant()
                     && (t.risk() == Risk::Read || (network && t.risk() == Risk::Network))
                     && allowed(t.name())

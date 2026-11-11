@@ -421,6 +421,25 @@ describe("other v0.4 methods", () => {
     expect((await api.proactiveTick()).outcome).toBe("nothing");
   });
 
+  it("offers the calendar and mail tools only while their switch is on, and keeps the settings in a section of their own", async () => {
+    const api = new MockTransport();
+    const connector = async () => (await api.tools()).filter((t) => /^(calendar|mail)_/.test(t.name));
+    expect((await connector()).map((t) => [t.name, t.risk, t.available])).toEqual([
+      ["calendar_today", "read", false], ["calendar_upcoming", "read", false], ["mail_recent", "read", false], ["mail_search", "read", false],
+    ]);
+    expect((await connector())[0].unavailable_reason).toMatch(/Calendario e posta/);
+    const schema = (await api.config()).schema.properties;
+    expect(schema["connectors.calendar.enabled"].default).toBe(false);
+    expect(schema["connectors.mail.sources"].type).toBe("array");
+    await api.setConfig("global", "connectors.calendar.enabled", true);
+    await api.setConfig("global", "connectors.calendar.sources", ["~/Calendari/lavoro.ics"]);
+    const after = await connector();
+    expect(after.filter((t) => t.available).map((t) => t.name)).toEqual(["calendar_today", "calendar_upcoming"]);
+    expect((await api.config()).effective["connectors.calendar.sources"]).toEqual(["~/Calendari/lavoro.ics"]);
+    await api.setConfig("global", "connectors.calendar.enabled", null);
+    await api.setConfig("global", "connectors.calendar.sources", null);
+  });
+
   it("keeps memories like the engine: validated, deduplicated, searched, forgotten and restored, proposals approved or dropped", async () => {
     const all = await api.memories();
     expect(all.some((m) => m.status === "forgotten")).toBe(false);

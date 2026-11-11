@@ -126,6 +126,8 @@ pub(crate) struct Inner {
     pub resolver: aiw_runtimes::ModelResolver,
     pub models_dir: PathBuf,
     pub tools: Arc<ToolRegistry>,
+    /// What the settings say about the calendar and mail connectors (read by their tools).
+    pub connectors: aiw_tools::connectors::Shared,
     pub browser: Arc<BrowserManager>,
     pub native_stt: RwLock<Option<Arc<dyn voice::NativeStt>>>,
     pub mcp: tokio::sync::Mutex<HashMap<String, Arc<McpClient>>>,
@@ -201,7 +203,8 @@ impl Engine {
 
         let tools = Arc::new(ToolRegistry::default());
         let browser = Arc::new(BrowserManager::new(dirs.root.join("browser-profile")));
-        aiw_tools::register_builtins(&tools, browser.clone());
+        let connectors = aiw_tools::connectors::ConnectorSettings::new(Default::default());
+        aiw_tools::register_builtins(&tools, browser.clone(), connectors.clone());
         if let Some(d) = store.get_doc::<Vec<String>>("tool_settings", "disabled")? {
             tools.set_disabled(d);
         }
@@ -258,6 +261,7 @@ impl Engine {
             runtimes,
             models,
             tools,
+            connectors,
             browser,
             native_stt: Default::default(),
             mcp: Default::default(),
@@ -283,6 +287,7 @@ impl Engine {
         if !opts.offline {
             engine.0.runtimes.refresh().await;
         }
+        engine.sync_connectors();
         training_tool::register(&engine);
         engine.seed()?;
         engine.resume_workflows();
@@ -2042,6 +2047,9 @@ impl Engine {
         self.0.config.set(Layer::parse(layer)?, key, value)?;
         if key == "proactive.level" {
             self.proactive_level_set();
+        }
+        if key.starts_with("connectors.") {
+            self.sync_connectors();
         }
         if key == "workspace.root" {
             if let Some(p) = self.0.config.get_str("workspace.root") {

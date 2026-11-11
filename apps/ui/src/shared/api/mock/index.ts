@@ -7,10 +7,10 @@ import type {
   AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  DatasetSpec, TrainJobRequest, ThinkingMode,
+  DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo,
 } from "../types";
 import {
-  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
+  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
   remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
@@ -1217,7 +1217,14 @@ export class MockTransport implements Transport {
     return structuredClone(o);
   }
 
-  async tools() { return structuredClone(tools); }
+  async tools() {
+    const eff = effective() as Record<string, unknown>;
+    const connectors = CONNECTOR_TOOLS.map((c): ToolInfo => {
+      const on = eff[c.switch] === true;
+      return { name: c.name, description: c.description, source: "builtin", risk: "read", enabled: true, available: on, unavailable_reason: on ? undefined : "Spento: lo accendi in Impostazioni, «Calendario e posta».", parameters: {} };
+    });
+    return structuredClone([...tools, ...connectors]);
+  }
   async setToolEnabled(name: string, enabled: boolean) {
     if ((INTERNAL_TOOL_NAMES as readonly string[]).includes(name)) {
       throw new ApiError(400, `«${name}» è uno strumento interno dell'agente: non si può attivare o disattivare`);

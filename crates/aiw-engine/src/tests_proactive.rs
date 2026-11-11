@@ -398,3 +398,117 @@ fn the_proposals_table_migrates_safely_on_an_old_database() {
         assert!(s.get_doc::<Value>("x", "1").unwrap().is_some());
     }
 }
+
+// ------------------------------------------------------------------------------------ connectors
+
+/// A calendar file with one event today at `h`:00 and a Maildir with one message dated `mail_at`.
+fn connector_fixtures(dir: &std::path::Path, mail_at: DateTime<Local>) -> (String, String) {
+    let today = Local::now().date_naive().format("%Y%m%d").to_string();
+    let cal = dir.join("agenda.ics");
+    std::fs::write(
+        &cal,
+        format!("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:e1\r\nDTSTART:{today}T150000\r\nDTEND:{today}T160000\r\nSUMMARY:Dentista\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"),
+    )
+    .unwrap();
+    let md = dir.join("Posta");
+    for s in ["cur", "new", "tmp"] {
+        std::fs::create_dir_all(md.join(s)).unwrap();
+    }
+    std::fs::write(
+        md.join("new/1"),
+        format!(
+            "From: Anna Verdi <anna@example.org>\r\nSubject: Contratto da firmare\r\nDate: {}\r\n\r\nTi allego il contratto.\r\n",
+            mail_at.to_rfc2822()
+        ),
+    )
+    .unwrap();
+    (cal.display().to_string(), md.display().to_string())
+}
+
+#[tokio::test]
+async fn the_connectors_are_off_by_default_and_add_nothing_to_the_briefing() {
+    let (e, b, d, _w) = rig(vec![]).await;
+    on(&e, "propose");
+    e.set_config("global", "proactive.briefing_time", json!("08:00")).unwrap();
+    let (cal, md) = connector_fixtures(d.path(), at(7, 30));
+    // The sources are set but the switches are off: the tools are not offered and nothing is read.
+    e.set_config("global", "connectors.calendar.sources", json!([cal])).unwrap();
+    e.set_config("global", "connectors.mail.sources", json!([md])).unwrap();
+    assert!(e.tool_registry().get("calendar_today").unwrap().available().is_err());
+    let r = e.proactive_tick_at(Wake::Briefing, at(8, 1)).await.unwrap();
+    let brief = e.proposal(&r.proposals[0]).unwrap();
+    assert!(brief.noticed.contains("Niente da segnalare"), "{}", brief.noticed);
+    assert_eq!(calls(&b), 0);
+}
+
+#[tokio::test]
+async fn the_briefing_lists_todays_events_and_new_mail_from_data_only_and_once() {
+    let (e, _b, d, _w) = rig(vec![ScriptedBackend::text_turn(r#"{"act": false}"#)]).await;
+    on(&e, "propose");
+    e.set_config("global", "proactive.briefing_time", json!("08:00")).unwrap();
+    let (cal, md) = connector_fixtures(d.path(), at(7, 30));
+    e.set_config("global", "connectors.calendar.sources", json!([cal])).unwrap();
+    e.set_config("global", "connectors.mail.sources", json!([md])).unwrap();
+    e.set_config("global", "connectors.calendar.enabled", json!(true)).unwrap();
+    e.set_config("global", "connectors.mail.enabled", json!(true)).unwrap();
+    assert!(e.tool_registry().get("mail_recent").unwrap().available().is_ok());
+
+    let r = e.proactive_tick_at(Wake::Briefing, at(8, 1)).await.unwrap();
+    let brief = e.proposal(&r.proposals[0]).unwrap();
+    assert_eq!((brief.kind.as_str(), brief.status.as_str()), ("briefing", "open"), "{}", brief.noticed);
+    assert!(brief.noticed.contains("In agenda oggi: 1 evento: 15:00–16:00 · Dentista"), "{}", brief.noticed);
+    assert!(brief.noticed.contains("Posta nuova: 1 messaggio: «Contratto da firmare» di Anna Verdi"), "{}", brief.noticed);
+    // The briefing needs no model; the heartbeat context does (once): the filter was asked about the calendar and the mail.
+    assert!(r.model_called);
+}
+
+#[tokio::test]
+async fn the_heartbeat_offers_the_calendar_and_the_mail_to_the_filter_once() {
+    let (e, b, d, _w) = rig(vec![ScriptedBackend::text_turn(r#"{"act": false}"#), ScriptedBackend::text_turn(r#"{"act": false}"#)]).await;
+    on(&e, "propose");
+    let (cal, md) = connector_fixtures(d.path(), at(9, 0));
+    e.set_config("global", "connectors.calendar.sources", json!([cal])).unwrap();
+    e.set_config("global", "connectors.mail.sources", json!([md])).unwrap();
+    e.set_config("global", "connectors.calendar.enabled", json!(true)).unwrap();
+    e.set_config("global", "connectors.mail.enabled", json!(true)).unwrap();
+
+    let r = e.proactive_tick_at(Wake::Interval, at(10, 0)).await.unwrap();
+    assert!(r.model_called, "{r:?}");
+    let question = b.requests.lock().unwrap()[0].messages[1].text();
+    assert!(question.contains("In agenda oggi") && question.contains("Dentista"), "{question}");
+    assert!(question.contains("Posta nuova: 1 messaggio") && question.contains("Contratto da firmare"), "{question}");
+    assert_eq!(calls(&b), 1);
+
+    // The mail is older than the last tick now, and the filter said no to the calendar: it is not asked again
+    // about the same mail. (The calendar item is the same events, so its key is the same too once proposed;
+    // a "no" does not record the key, so only the mail drops out.)
+    let r = e.proactive_tick_at(Wake::Interval, at(10, 30)).await.unwrap();
+    let question = b.requests.lock().unwrap()[1].messages[1].text();
+    assert!(question.contains("Dentista") && !question.contains("Contratto"), "{question} / {r:?}");
+}
+
+#[tokio::test]
+async fn a_proposal_run_may_use_the_connectors_when_they_are_on() {
+    let (e, _b, _d, _w) = rig(vec![]).await;
+    on(&e, "propose");
+    let names = |a: aiw_core::api::AgentProfile| a.tools;
+    let off = names(e.proactive_agent("operator").unwrap());
+    assert!(!off.iter().any(|t| t == "calendar_today" || t == "mail_search"), "{off:?}");
+    e.set_config("global", "connectors.calendar.enabled", json!(true)).unwrap();
+    e.set_config("global", "connectors.mail.enabled", json!(true)).unwrap();
+    let on_ = names(e.proactive_agent("operator").unwrap());
+    for t in ["calendar_today", "calendar_upcoming", "mail_recent", "mail_search"] {
+        assert!(on_.iter().any(|x| x == t), "{t} in {on_:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_workspace_cannot_switch_the_connectors_on() {
+    let (e, _b, _d, _w) = rig(vec![]).await;
+    // The workspace layer is repository content: its values for these keys are ignored.
+    let _ = e.set_config("workspace", "connectors.mail.enabled", json!(true));
+    let _ = e.set_config("workspace", "connectors.calendar.sources", json!(["/x"]));
+    assert!(!e.0.config.get_bool("connectors.mail.enabled"));
+    assert!(e.0.config.get("connectors.calendar.sources").is_none_or(|v| v == json!([])));
+    assert!(e.tool_registry().get("mail_recent").unwrap().available().is_err());
+}
