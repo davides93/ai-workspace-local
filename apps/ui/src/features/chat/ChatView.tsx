@@ -25,6 +25,7 @@ import { useCreateSession, useSessions } from "./api";
 import { ChatEmpty } from "./components/ChatEmpty";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
+import { useAttachments } from "./useAttachments";
 import { ConversationLog, type ConversationLogHandle } from "./components/ConversationLog";
 import { InspectorBody } from "./components/Inspector";
 import { SessionList, type NewSessionInput } from "./components/SessionList";
@@ -138,12 +139,23 @@ export function ChatView() {
     wasRunning.current = conv.running;
   }, [conv.running, conv.items]);
 
+  const attachments = useAttachments();
+  // Files belong to the conversation they were chosen in.
+  const { clear: clearAttachments } = attachments;
+  useEffect(() => clearAttachments(), [openId, clearAttachments]);
+
   const send = () => {
     const text = input.trim();
-    if (!text || !openId || conv.running) return;
+    const files = attachments.files;
+    if ((!text && files.length === 0) || !openId || conv.running) return;
     setInput("");
+    attachments.clear();
     log.current?.scrollToBottom();
-    conv.send(text, () => setInput(text));
+    // A message that could not start gives its text and its files back.
+    void conv.send(text, () => {
+      setInput(text);
+      attachments.restore(files);
+    }, files);
   };
 
   const create = (input: NewSessionInput) =>
@@ -184,7 +196,7 @@ export function ChatView() {
     sessionId: openId, ready: !!openId && logState.status === "ready", running: conv.running, items: conv.items, pending: conv.pending,
     send: (text, onRejected) => {
       log.current?.scrollToBottom();
-      conv.send(text, onRejected);
+      void conv.send(text, onRejected);
     },
     insertText: (text) => setInput(input.trim() ? `${input.trimEnd()} ${text}` : text),
   });
@@ -236,6 +248,7 @@ export function ChatView() {
           </div>
         )}
         <Composer
+          attachments={{ items: attachments.files, onAdd: attachments.add, onRemove: attachments.remove }}
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}
           focusKey={`${openId}:${focusTick}`} voice={voice} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined}
           modelLabel={profile ? `${profile.runtime_id} · ${profile.model || "nessun modello"}` : undefined}

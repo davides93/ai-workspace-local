@@ -667,6 +667,32 @@ describe("backend fixes in the demo", () => {
     expect(api.runThinking).toEqual([{ runId: a.run_id, thinking: "deep" }, { runId: b.run_id, thinking: undefined }]);
   });
 
+  it("keeps attachments in memory and refuses what the backend refuses", async () => {
+    const api = new MockTransport();
+    const s = await api.createSession({ agent_id: "operator" });
+    const png = btoa("\x89PNG....");
+    const { run_id } = await api.startRun(s.id, "", undefined, undefined, [
+      { name: "../foto.png", mime: "image/png", data: png },
+      { name: "note.md", mime: "", data: btoa("# Ciao") },
+    ]);
+    expect(run_id).toMatch(/^run_/);
+    const [m] = await api.messages(s.id);
+    expect(m.content).toBe("");
+    expect(m.attachments).toMatchObject([{ name: "foto.png", mime: "image/png", kind: "image" }, { name: "note.md", kind: "text", size: 6 }]);
+    expect(JSON.stringify(m)).not.toContain(png);
+    expect(await api.getAttachment(s.id, m.attachments![0].id)).toEqual({ name: "foto.png", mime: "image/png", data: png });
+    expect((await api.sessions()).find((x) => x.id === s.id)?.title).toBe("foto.png");
+    await expect(api.getAttachment(s.id, "att_none")).rejects.toMatchObject({ status: 404 });
+    // limits and empty messages
+    const many = Array.from({ length: 9 }, (_, i) => ({ name: `${i}.txt`, mime: "", data: btoa("x") }));
+    await expect(api.startRun(s.id, "ciao", undefined, undefined, many)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("al massimo 8 file") });
+    const big = btoa("a".repeat(10 * 1024 * 1024 + 1));
+    await expect(api.startRun(s.id, "ciao", undefined, undefined, [{ name: "grande.txt", mime: "", data: big }])).rejects.toMatchObject({ status: 400 });
+    await expect(api.startRun(s.id, "  ")).rejects.toMatchObject({ status: 400 });
+    await api.deleteSession(s.id);
+    await expect(api.getAttachment(s.id, m.attachments![0].id)).rejects.toMatchObject({ status: 404 });
+  });
+
   it("keeps one rating per reply, like the engine", async () => {
     const api = new MockTransport();
     const msgs = await api.messages("ses_bug");

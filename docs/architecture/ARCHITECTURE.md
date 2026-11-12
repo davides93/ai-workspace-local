@@ -215,7 +215,7 @@ sequenceDiagram
   participant Policy
   participant Tool
   participant LLM as Runtime
-  UI->>Engine: POST /sessions/{id}/runs {input}
+  UI->>Engine: POST /sessions/{id}/runs {input, attachments?}
   Engine-->>UI: SSE RUN_STARTED
   loop fino a risposta finale o max_turns
     Agent->>LLM: chat(messages, tools) stream
@@ -655,7 +655,8 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET | `/api/models` · POST `/api/models/pull` · GET `/api/models/catalog` | Modelli locali, download, catalogo consigliato |
 | GET | `/api/recommend` | Consigliere: per compito (chat, agent, reasoning, vision, embeddings) il modello installato migliore e quello da scaricare |
 | GET/PUT | `/api/profiles` | Profili di inferenza |
-| GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run |
+| GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run. Il corpo del run ha `input`, `kind?`, `thinking?` e `attachments?: [{name, mime, data}]` (base64; al massimo 8 file, 10 MB ciascuno, 25 MB in tutto, errore 400 in italiano; il testo può mancare se c'è un allegato) |
+| GET | `/api/sessions/{id}/attachments/{attachment_id}` | Un allegato di un messaggio: `{name, mime, data}` (base64), 404 in JSON se manca |
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
 | GET | `/api/proposals` · `/api/proposals/{id}` · POST `…/approve` `…/dismiss` · GET `/api/proactive/status` · POST `/api/proactive/tick` | Assistente proattivo |
@@ -701,8 +702,18 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
 - `~/.aiw/` (desktop) o la sandbox dell'app (mobile): `config.json`, `aiw.db` (SQLite:
   sessioni, messaggi, eventi, run, workflow, audit, feedback, report di valutazione), `models/`,
   `runtimes/` (manifest utente), `skills/`, `checkpoints/`, `evals/` (suite di valutazione),
-  `eval-work/` (cartelle temporanee dei task).
+  `eval-work/` (cartelle temporanee dei task), `attachments/<sessione>/` (allegati della chat:
+  `<id>-<nome>` e, per un PDF con testo, `<id>.extracted.txt`; si cancella con la sessione).
 - Workspace utente: `AGENTS.md`, `.aiw/config.json`, `.aiw/skills/`, `.aiw/workflows/`.
+- **Allegati della chat** (`crates/aiw-engine/src/attachments.rs`): il messaggio salvato ha solo i
+  metadati (`ChatMessage.attachments`); i byte sono in `attachments/<sessione>/`, mai nel workspace.
+  Il motore li trasforma in ciò che vede il modello con funzioni pure (`render_attachments`,
+  `build_history`): testo e PDF in blocchi `[Allegato: …]` con tetti di 40.000 e 120.000 caratteri,
+  immagini come parti `image_url` (solo per gli ultimi 2 messaggi che ne hanno), altri file come una
+  riga con il percorso. Il testo del messaggio dell'utente per hook, memoria e titoli resta
+  `RunInput.user_input`; gli allegati vanno in `RunInput.user_extra` e il runner li unisce nel
+  messaggio. La cartella della sessione è in `read_roots` (lettura sola). Le tracce e i dataset non
+  esportano gli allegati. Altri ingressi (A2A, gateway, workflow, voce) restano solo testo.
 
 ## 10. Piattaforme: cosa gira dove
 

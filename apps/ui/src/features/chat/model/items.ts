@@ -1,4 +1,4 @@
-import type { ApprovalRequest } from "../../../shared/api/types";
+import type { ApprovalRequest, Attachment } from "../../../shared/api/types";
 import type { SurfaceState } from "../a2ui";
 
 /** `interrupted`: the run ended (stopped, crashed) before the tool answered. */
@@ -10,15 +10,23 @@ export interface ToolImage {
   data: string;
 }
 
+/**
+ * An attachment of a user message. A message just sent still holds its bytes (`data`, base64):
+ * the row shows them at once; a stored one is read from the backend when needed.
+ */
+export type UserAttachment = Attachment & { data?: string };
+
 /** One row of the conversation, built from stored messages (`history.ts`) or live AG-UI events (`reduce.ts`). */
 export type Item =
-  | { kind: "user"; id: string; text: string }
+  | { kind: "user"; id: string; text: string; attachments?: UserAttachment[] }
   | { kind: "text"; id: string; text: string; streaming: boolean }
   | { kind: "reasoning"; id: string; text: string; streaming: boolean; startedAt?: number; endedAt?: number }
   | { kind: "tool"; id: string; name: string; args: string; result?: string; status: ToolStatus; images?: ToolImage[]; startedAt?: number; endedAt?: number }
   | { kind: "approval"; req: ApprovalRequest; resolved?: boolean }
   | { kind: "subagent"; id: string; name: string; /** Run of the sub-agent, when the backend named it: its events are its trace. */ runId?: string; result?: string; interrupted?: boolean }
   | { kind: "note"; id: string; text: string }
+  /** A small warning about the attachments of the run (`aiw.attachments`): the model cannot see images. */
+  | { kind: "warning"; id: string; text: string }
   /** Which model handled the calls that follow (runs with model roles only): a small label. */
   | { kind: "model"; id: string; label: string; title: string }
   | { kind: "surface"; id: string; surface: SurfaceState }
@@ -44,6 +52,9 @@ export const SELF_CHECK = "aiw.self_check";
 
 /** Stored user messages written when a structured answer did not match the agent's schema. */
 export const FORMAT_CHECK = "aiw.format_check";
+
+/** `name` of the custom event about the attachments of a run (`warning`: the model cannot see images). */
+export const ATTACHMENTS_EVENT = "aiw.attachments";
 
 /** `name` of the stored messages written by a handoff to another agent (api.rs `HANDOFF_MESSAGE`). */
 export const HANDOFF = "aiw.handoff";

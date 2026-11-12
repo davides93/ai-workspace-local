@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -164,8 +164,15 @@ export class HttpTransport implements Transport {
     this.req<Feedback>("PUT", `/sessions/${enc(sessionId)}/messages/${enc(messageId)}/feedback`, note ? { rating, note } : { rating });
   deleteFeedback = (sessionId: string, messageId: string) =>
     this.req<void>("DELETE", `/sessions/${enc(sessionId)}/messages/${enc(messageId)}/feedback`);
-  startRun = (sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode) =>
-    this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, { input, ...(kind ? { kind } : {}), ...(thinking ? { thinking } : {}) });
+  startRun = (sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode, attachments?: AttachmentUpload[]) =>
+    this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, {
+      input,
+      ...(kind ? { kind } : {}),
+      ...(thinking ? { thinking } : {}),
+      ...(attachments?.length ? { attachments } : {}),
+    });
+  getAttachment = (sessionId: string, attachmentId: string) =>
+    this.req<AttachmentData>("GET", `/sessions/${enc(sessionId)}/attachments/${enc(attachmentId)}`);
   sessionCheckpoints = (sessionId: string) => this.req<CheckpointInfo[]>("GET", `/sessions/${enc(sessionId)}/checkpoints`);
   rewindRun = (runId: string) => this.req<RewindResult>("POST", `/runs/${enc(runId)}/rewind`);
   cancelRun = (runId: string) => this.req<void>("POST", `/runs/${enc(runId)}/cancel`);

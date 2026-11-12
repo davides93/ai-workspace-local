@@ -4,7 +4,7 @@ import type { ToolImage } from "../model/items";
 import { imageExtension } from "../model/tools";
 
 /** Screenshot of a tool call: a thumbnail that opens at full size in a dialog. */
-export function ImageThumb({ image, label }: { image: ToolImage; label: string }) {
+export function ImageThumb({ image, label, filename }: { image: ToolImage; label: string; /** Name offered by «Salva» (default: «schermata»). */ filename?: string }) {
   const [open, setOpen] = useState(false);
   const src = `data:${image.mime};base64,${image.data}`;
   return (
@@ -20,7 +20,7 @@ export function ImageThumb({ image, label }: { image: ToolImage; label: string }
           onClose={() => setOpen(false)}
           footer={
             <>
-              <a className="btn" href={src} download={`schermata.${imageExtension(image.mime)}`}><Icon name="download" size={15} /> Salva</a>
+              <a className="btn" href={src} download={filename ?? `schermata.${imageExtension(image.mime)}`}><Icon name="download" size={15} /> Salva</a>
               <Button variant="primary" onClick={() => setOpen(false)}>Chiudi</Button>
             </>
           }

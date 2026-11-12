@@ -35,7 +35,7 @@ export function historyToItems(msgs: ChatMessage[], opts: HistoryOptions = {}): 
       items.push({ kind: "note", id: m.id, text: formatCheckText(errors) });
     } else if (m.role === "user" && m.name === HANDOFF) {
       items.push({ kind: "note", id: m.id, text: handoffText(m.content) });
-    } else if (m.role === "user") items.push({ kind: "user", id: m.id, text: m.content });
+    } else if (m.role === "user") items.push({ kind: "user", id: m.id, text: m.content, ...(m.attachments?.length ? { attachments: m.attachments } : {}) });
     else if (m.role === "assistant") {
       if (m.reasoning) items.push({ kind: "reasoning", id: `${m.id}-r`, text: m.reasoning, streaming: false });
       if (m.content) items.push({ kind: "text", id: m.id, text: m.content, streaming: false });

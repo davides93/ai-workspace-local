@@ -1,8 +1,10 @@
-import { useEffect, useId, useLayoutEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent } from "react";
 import { Button, IconButton, Select } from "../../../shared/ui";
 import type { ThinkingMode } from "../../../shared/api/types";
 import { isThinkingMode, THINKING_HINT, THINKING_LABEL, THINKING_MODES } from "../../../shared/lib/thinking";
 import type { VoiceController } from "../useVoice";
+import type { PendingFile } from "../model/pending";
+import { PendingAttachments } from "./Attachments";
 import { VoiceBar } from "./VoiceBar";
 
 const MAX_HEIGHT = 200;
@@ -14,7 +16,7 @@ const finePointer = () => typeof window !== "undefined" && !!window.matchMedia?.
  * ring is drawn on the box (`:focus-within`), the textarea grows with its text, and the box takes
  * the focus back when a session opens or a run ends (on touch screens it never pops the keyboard).
  */
-export function Composer({ value, onChange, onSend, onStop, running, disabled, placeholder, modelLabel, focusKey, voice, thinking }: {
+export function Composer({ value, onChange, onSend, onStop, running, disabled, placeholder, modelLabel, focusKey, voice, thinking, attachments }: {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
@@ -31,11 +33,15 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
   voice?: VoiceController;
   /** "Ragionamento" of the conversation; only given when the model can reason. */
   thinking?: { value: ThinkingMode; onChange: (mode: ThinkingMode) => void };
+  /** Files for the message: chosen with the paperclip, dropped on the box or pasted. Without it the box takes text only. */
+  attachments?: { items: PendingFile[]; onAdd: (files: File[], opts?: { pasted?: boolean }) => void; onRemove: (key: string) => void };
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const hintId = useId();
   const wasRunning = useRef(false);
+  const picker = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -58,13 +64,53 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
   }, [running]);
 
   const converse = !!voice && voice.convo !== "off";
-  const canSend = !disabled && !running && value.trim() !== "";
+  const hasFiles = (attachments?.items.length ?? 0) > 0;
+  const canSend = !disabled && !running && (value.trim() !== "" || hasFiles);
+
+  const carriesFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const onDragOver = (e: DragEvent) => {
+    if (!attachments || disabled || !carriesFiles(e)) return;
+    e.preventDefault();
+    setDragging(true);
+  };
+  const onDrop = (e: DragEvent) => {
+    if (!attachments || !carriesFiles(e)) return;
+    e.preventDefault();
+    setDragging(false);
+    if (!disabled) attachments.onAdd(Array.from(e.dataTransfer.files));
+  };
+  // Pasted pictures (a screenshot) become attachments; pasted text goes in as usual.
+  const onPaste = (e: ClipboardEvent) => {
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (!attachments || disabled || files.length === 0) return;
+    if (!e.clipboardData.getData("text/plain")) e.preventDefault();
+    attachments.onAdd(files, { pasted: true });
+  };
   return (
-    <div className="ws-composer" ref={root}>
+    <div
+      className={`ws-composer${dragging ? " is-dragging" : ""}`} ref={root}
+      onDragOver={onDragOver} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }} onDrop={onDrop}
+    >
+      {attachments && <PendingAttachments items={attachments.items} onRemove={attachments.onRemove} />}
       {voice && voice.convo !== "off" && (
         <VoiceBar convo={voice.convo} level={voice.level} waiting={voice.waitingApproval} backend={voice.status?.backend} onStop={voice.stopConvo} />
       )}
       <div className="ws-composer-box">
+        {attachments && (
+          <>
+            <input
+              ref={picker} type="file" multiple hidden tabIndex={-1} aria-hidden="true"
+              onChange={(e) => {
+                attachments.onAdd(Array.from(e.target.files ?? []));
+                e.target.value = ""; // the same file can be chosen again
+              }}
+            />
+            <IconButton
+              icon="paperclip" className="ws-attach" aria-label="Allega un file o un'immagine"
+              title="Allega un file o un'immagine (puoi anche trascinarli qui o incollarli)" disabled={disabled} onClick={() => picker.current?.click()}
+            />
+          </>
+        )}
         <textarea
           ref={ref}
           id="composer"
@@ -75,6 +121,7 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
+          onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
             if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {

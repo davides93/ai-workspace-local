@@ -1,6 +1,6 @@
 import type { AgEvent, AiwImage, ApprovalRequest } from "../../../shared/api/types";
 import { applyA2ui, type A2uiMessage } from "../a2ui";
-import { CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, modelLabel, rolesNoteText, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
+import { ATTACHMENTS_EVENT, CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, modelLabel, rolesNoteText, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
 import { resultStatus } from "./tools";
 
 type Of<K extends Item["kind"]> = Extract<Item, { kind: K }>;
@@ -143,6 +143,10 @@ function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
     case "aiw.budget_exceeded": {
       const reason = (value as { reason?: string }).reason;
       return [...items, { kind: "note", id: `bx-${items.length}`, text: `Budget del run esaurito${reason ? `: ${reason}` : ""}. L'agente si è fermato.` }];
+    }
+    case ATTACHMENTS_EVENT: {
+      const warning = (value as { warning?: unknown } | null)?.warning;
+      return typeof warning === "string" && warning ? [...items, { kind: "warning", id: `aw-${items.length}`, text: warning }] : items;
     }
     case "aiw.format_error":
       return [...items, { kind: "note", id: `fe-${items.length}`, text: "La risposta non rispetta lo schema richiesto dall'agente: è mostrata così com'è." }];

@@ -527,3 +527,62 @@ async fn a_run_takes_an_optional_reasoning_override() {
     let (st, run) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ancora"}))).await;
     assert_eq!(st, 200, "{run}");
 }
+
+#[tokio::test]
+async fn attachments_travel_as_base64_and_come_back_unchanged() {
+    use base64::Engine as _;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let (app, e, d, _w) = app().await;
+    let (_, ses) = dispatch(app.clone(), "POST", "/api/sessions", Some(json!({"agent_id": "planner"}))).await;
+    let sid = ses["id"].as_str().unwrap().to_string();
+    let path = format!("/api/sessions/{sid}/runs");
+    let bytes: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+    // no text, one file: allowed
+    let body = json!({"input": "", "attachments": [{"name": "foto.png", "mime": "image/png", "data": b64(&bytes)}]});
+    let (st, run) = dispatch(app.clone(), "POST", &path, Some(body)).await;
+    assert_eq!(st, 200, "{run}");
+    let rid = run["run_id"].as_str().unwrap().to_string();
+    for _ in 0..200 {
+        if e.run_done(&rid) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let (_, msgs) = dispatch(app.clone(), "GET", &format!("/api/sessions/{sid}/messages"), None).await;
+    let att = msgs[0]["attachments"][0].clone();
+    assert_eq!(
+        (att["name"].as_str(), att["mime"].as_str(), att["kind"].as_str(), att["size"].as_u64()),
+        (Some("foto.png"), Some("image/png"), Some("image"), Some(11))
+    );
+    assert!(att.get("data").is_none() && att.get("path").is_none(), "metadata only: {att}");
+    let id = att["id"].as_str().unwrap();
+    let (st, got) = dispatch(app.clone(), "GET", &format!("/api/sessions/{sid}/attachments/{id}"), None).await;
+    assert_eq!(st, 200, "{got}");
+    assert_eq!(got["name"], "foto.png");
+    assert_eq!(base64::engine::general_purpose::STANDARD.decode(got["data"].as_str().unwrap()).unwrap(), bytes);
+    // unknown or hostile ids: 404 in JSON
+    for bad in ["att_000000000000", "..%2F..%2Fetc%2Fpasswd", "x"] {
+        let (st, err) = dispatch(app.clone(), "GET", &format!("/api/sessions/{sid}/attachments/{bad}"), None).await;
+        assert_eq!(st, 404, "{bad}: {err}");
+        assert!(err["error"].is_string(), "{err}");
+    }
+    let (st, _) = dispatch(app.clone(), "GET", &format!("/api/sessions/none/attachments/{id}"), None).await;
+    assert_eq!(st, 404);
+    // over the limits: 400 in JSON, nothing starts
+    let too_many: Vec<Value> = (0..9).map(|i| json!({"name": format!("{i}.txt"), "data": b64(b"x")})).collect();
+    let (st, err) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ciao", "attachments": too_many}))).await;
+    assert_eq!(st, 400, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("al massimo 8 file"));
+    let big = vec![b'a'; (10 << 20) + 1];
+    let (st, err) = dispatch(app.clone(), "POST", &path, Some(json!({"attachments": [{"name": "grande.txt", "data": b64(&big)}]}))).await;
+    assert_eq!(st, 400, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("troppo grande"));
+    // text and files both missing
+    let (st, _) = dispatch(app.clone(), "POST", &path, Some(json!({"input": ""}))).await;
+    assert_eq!(st, 400);
+    // deleting the session removes the files
+    let (st, _) = dispatch(app, "DELETE", &format!("/api/sessions/{sid}"), None).await;
+    assert_eq!(st, 200);
+    assert!(!d.path().join("attachments").join(&sid).exists());
+}

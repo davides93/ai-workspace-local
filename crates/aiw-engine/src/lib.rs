@@ -2,6 +2,7 @@
 
 pub mod a2a_client;
 pub mod adviser;
+pub mod attachments;
 pub mod background;
 mod dataset;
 pub mod defaults;
@@ -32,7 +33,7 @@ pub mod worktree;
 pub use host::EngineHost;
 pub use pairing::PairOutcome;
 
-use aiw_agent::{to_msgs, AgentRunner, HookConfig, Policy, PolicyRule, RunBudget, RunInput};
+use aiw_agent::{AgentRunner, HookConfig, Policy, PolicyRule, RunBudget, RunInput};
 use aiw_core::api::*;
 use aiw_core::config::{app_schema, Layer, LayeredConfig};
 use aiw_core::events::{AgEvent, SeqEvent, TimedEvent};
@@ -1132,7 +1133,9 @@ impl Engine {
             }
             self.0.store.delete_doc("worktree", id)?;
         }
-        self.0.store.delete_session(id)
+        self.0.store.delete_session(id)?;
+        self.remove_attachments(id);
+        Ok(())
     }
 
     // ------------------------------------------------------------------ worktrees
@@ -1357,6 +1360,11 @@ impl Engine {
         let device = self.device();
         let mut tool_ctx = ToolContext::new(run_id, ws.clone());
         tool_ctx.read_roots = vec![self.0.dirs.skills(), ws.join(".aiw")];
+        // Files the person attached in this session: read-only, like skills.
+        let attached = self.attachments_dir(thread_id);
+        if attached.is_dir() {
+            tool_ctx.read_roots.push(attached);
+        }
         tool_ctx.sandbox = SandboxMode::parse(&agent.sandbox);
         tool_ctx.require_read_before_overwrite = true;
         tool_ctx.cancel = cancel;
@@ -1398,6 +1406,7 @@ impl Engine {
             profile,
             history,
             user_input,
+            user_extra: Default::default(),
             system_extra: vec![env, self.agents_md()],
             tool_ctx,
             hooks: self.hooks(),
@@ -1458,9 +1467,24 @@ impl Engine {
         kind: Option<&str>,
         thinking: Option<ThinkingMode>,
     ) -> Result<String> {
-        if input.trim().is_empty() {
+        self.start_run_attach(session_id, input, kind, thinking, vec![]).await
+    }
+
+    /// [`Engine::start_run_opts`] with files attached to the message (`data` is base64). The text
+    /// may be empty when there is at least one file. The limits are checked here: a message over
+    /// them is refused whole.
+    pub async fn start_run_attach(
+        &self,
+        session_id: &str,
+        input: String,
+        kind: Option<&str>,
+        thinking: Option<ThinkingMode>,
+        uploads: Vec<aiw_core::api::AttachmentUpload>,
+    ) -> Result<String> {
+        if input.trim().is_empty() && uploads.is_empty() {
             return Err(Error::Invalid("messaggio vuoto".into()));
         }
+        let files = attachments::prepare(uploads)?;
         let name = match kind {
             None | Some("") => None,
             Some(aiw_agent::a2ui::ACTION_NAME) => {
@@ -1471,7 +1495,7 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
-        self.start_run_inner(session_id, input, name, 0, thinking).await
+        self.start_run_inner(session_id, input, name, 0, thinking, files).await
     }
 
     /// Most handoffs one user message can chain before the conversation stops with a note.
@@ -1486,8 +1510,9 @@ impl Engine {
         name: Option<String>,
         hops: u32,
         thinking: Option<ThinkingMode>,
+        files: Vec<attachments::Prepared>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(self.start_run_body(session_id, input, name, hops, thinking))
+        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files))
     }
 
     async fn start_run_body(
@@ -1497,6 +1522,7 @@ impl Engine {
         name: Option<String>,
         hops: u32,
         thinking: Option<ThinkingMode>,
+        files: Vec<attachments::Prepared>,
     ) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
@@ -1534,6 +1560,15 @@ impl Engine {
                 RunHandle { session_id: Some(session_id.into()), cancel: cancel.clone(), events: vec![], done: false },
             );
         }
+        // The files are written now that the run is registered (a second run on the session is
+        // refused above, and the registration keeps it out while a PDF is read).
+        let attached = match self.save_attachments(session_id, files).await {
+            Ok(a) => a,
+            Err(e) => {
+                self.0.runs.lock().unwrap().remove(&run_id);
+                return Err(e);
+            }
+        };
         self.0.store.start_run(&run_id, Some(session_id))?;
         if let Some((p, choice)) = &routed {
             self.remember_route(&run_id, &agent.id, &p.id);
@@ -1542,7 +1577,10 @@ impl Engine {
                 AgEvent::Custom { name: "aiw.route".into(), value: json!({"profile": choice.profile, "reason": choice.reason}) },
             );
         }
-        let history = to_msgs(&self.0.store.messages(session_id)?);
+        // Only a model known not to see images loses them; an unknown one gets them and the runner
+        // retries without them if the backend refuses.
+        let vision = self.vision_support(&profile).unwrap_or(true);
+        let history = self.history_with_attachments(session_id, &self.0.store.messages(session_id)?, vision);
         let user_msg = ChatMessage {
             id: new_id("msg"),
             role: "user".into(),
@@ -1551,11 +1589,15 @@ impl Engine {
             tool_calls: None,
             tool_call_id: None,
             name,
+            attachments: (!attached.is_empty()).then(|| attached.clone()),
             created_at: now_rfc3339(),
         };
         self.0.store.append_messages(session_id, std::slice::from_ref(&user_msg))?;
         if session.title == "Nuova sessione" && user_msg.name.is_none() {
-            session.title = session_title(&input);
+            session.title = match attached.first() {
+                Some(first) if input.trim().is_empty() => session_title(&first.name),
+                _ => session_title(&input),
+            };
         }
         session.updated_at = now_rfc3339();
         session.last_status = Some("running".into());
@@ -1564,6 +1606,19 @@ impl Engine {
         let mut run_input =
             self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
         run_input.thinking = mode;
+        if !attached.is_empty() {
+            let (extra, vision_blocked) = attachments::user_extra(&self.load_attachment_files(session_id, &attached, vision), vision);
+            run_input.user_extra = extra;
+            if vision_blocked {
+                self.emit(
+                    &run_id,
+                    AgEvent::Custom {
+                        name: attachments::ATTACHMENTS_EVENT.into(),
+                        value: json!({"warning": attachments::NO_VISION_WARNING}),
+                    },
+                );
+            }
+        }
         // A proactive run cannot be talked into more than reading: only `deny` rules survive (an `allow` rule
         // would lift plan mode) and nobody is there to answer a confirmation.
         let proactive_run = session.agent_id.starts_with(proactive::PROACTIVE_PREFIX);
@@ -1618,6 +1673,7 @@ impl Engine {
                 tool_calls: None,
                 tool_call_id: None,
                 name: Some(RUN_ERROR_MESSAGE.into()),
+                attachments: None,
                 created_at: now_rfc3339(),
             }));
             let _ = engine.0.store.append_messages(&session.id, &stored);
@@ -1663,6 +1719,7 @@ impl Engine {
                 tool_calls: None,
                 tool_call_id: None,
                 name: Some(HANDOFF_MESSAGE.into()),
+                attachments: None,
                 created_at: now_rfc3339(),
             };
             let _ = self.0.store.append_messages(session_id, &[msg]);
@@ -1685,7 +1742,7 @@ impl Engine {
         }
         self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
         let input = format!("[Passaggio da {from_name}] {summary}");
-        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking).await {
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![]).await {
             note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
         }
     }
@@ -2416,6 +2473,8 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_attachments;
 #[cfg(test)]
 mod tests_auto;
 #[cfg(test)]

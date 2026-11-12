@@ -882,7 +882,36 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /** Files the person attached to a `user` message (metadata only: `getAttachment` gives the bytes). */
+  attachments?: Attachment[];
   created_at: string;
+}
+
+/** What an attachment is, decided by the server (crates/aiw-core `AttachmentKind`). */
+export type AttachmentKind = "image" | "text" | "document" | "file";
+
+/** An attachment of a stored message. */
+export interface Attachment {
+  id: string;
+  name: string;
+  mime: string;
+  /** Bytes. */
+  size: number;
+  kind: AttachmentKind;
+}
+
+/** A file sent with a message: `data` is the base64 of its bytes. */
+export interface AttachmentUpload {
+  name: string;
+  mime: string;
+  data: string;
+}
+
+/** An attachment read back: `data` is base64. */
+export interface AttachmentData {
+  name: string;
+  mime: string;
+  data: string;
 }
 
 // AG-UI 1.0 event subset used by AIW (see docs/architecture/adr/0004-ag-ui-events.md)

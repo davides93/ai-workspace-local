@@ -57,7 +57,7 @@ export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function
           {state.status === "ready" && items.length === 0 && empty}
           {state.status === "ready" && items.map((it, i) => (
             <ItemView
-              key={itemKey(it, i)} it={it} onRespond={onRespond} onAction={onAction} busy={busy} respondingId={respondingId}
+              key={itemKey(it, i)} it={it} sessionId={sessionKey ?? undefined} onRespond={onRespond} onAction={onAction} busy={busy} respondingId={respondingId}
               {...(it.kind === "text" && feedback
                 ? {
                     rateable: feedback.rateable.has(it.id), rating: feedback.ratings.get(it.id), ratePending: feedback.pendingId === it.id,

@@ -4,7 +4,8 @@ import { ApprovalCard } from "../../approvals/components/ApprovalCard";
 import { A2uiSurface, type A2uiAction } from "../a2ui";
 import type { ApprovalRequest, Feedback } from "../../../shared/api/types";
 import { reasoningLabel, type Item } from "../model/items";
-import { describeRunError, errorDetail } from "../model/runNotice";
+import { attachmentsNotice, describeRunError, errorDetail } from "../model/runNotice";
+import { MessageAttachments } from "./Attachments";
 import { MessageActions } from "./MessageActions";
 import { RunNote } from "./RunNote";
 import { SubagentCard } from "./SubagentCard";
@@ -12,6 +13,8 @@ import { ToolCard } from "./ToolCard";
 
 interface Props {
   it: Item;
+  /** The open session: where the attachments of a message are read from. */
+  sessionId?: string;
   onRespond: (r: ApprovalRequest, d: "allow" | "deny", remember?: boolean) => void;
   onAction: (a: A2uiAction) => void;
   /** A run is going on: surfaces are read-only until it ends. */
@@ -34,7 +37,7 @@ const contextText = (ctx: Record<string, unknown>) => Object.entries(ctx).map(([
  * One row of the conversation. Memoized: the reducer keeps the identity of rows that did not
  * change, so while one message streams every other row is skipped.
  */
-export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, respondingId, rateable, rating, ratePending, onRate, onClear }: Props) {
+export const ItemView = memo(function ItemView({ it, sessionId, onRespond, onAction, busy, respondingId, rateable, rating, ratePending, onRate, onClear }: Props) {
   switch (it.kind) {
     case "surface":
       return <div className="ws-msg ws-assistant"><A2uiSurface surface={it.surface} onAction={onAction} disabled={busy} /></div>;
@@ -48,7 +51,12 @@ export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, 
         </div>
       );
     case "user":
-      return <div className="ws-msg ws-user"><div className="ws-bubble-user">{it.text}</div></div>;
+      return (
+        <div className="ws-msg ws-user">
+          {it.attachments && it.attachments.length > 0 && <MessageAttachments items={it.attachments} sessionId={sessionId} />}
+          {it.text && <div className="ws-bubble-user">{it.text}</div>}
+        </div>
+      );
     case "text":
       return (
         <div className="ws-msg ws-assistant">
@@ -96,6 +104,8 @@ export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, 
       return <div className="ws-msg ws-assistant"><span className="ws-modelchip" title={it.title}><Icon name="chip" size={12} /> {it.label}</span></div>;
     case "note":
       return <div className="ws-msg ws-assistant"><div className="ws-loopnote"><Icon name="refresh" size={14} /> {it.text}</div></div>;
+    case "warning":
+      return <div className="ws-msg ws-assistant"><RunNote live info={attachmentsNotice()} /></div>;
     case "error":
       return (
         <div className="ws-msg ws-assistant">

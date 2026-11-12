@@ -870,7 +870,61 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Files the person attached to a `user` message (metadata only: the bytes live in the
+    /// attachments folder of the session, see `GET /api/sessions/{id}/attachments/{attachment_id}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<Attachment>>,
     pub created_at: String,
+}
+
+/// Most attachments one message can carry.
+pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 8;
+/// Largest single attachment, in bytes.
+pub const MAX_ATTACHMENT_BYTES: usize = 10 << 20;
+/// Largest total size of the attachments of one message, in bytes.
+pub const MAX_ATTACHMENTS_TOTAL_BYTES: usize = 25 << 20;
+
+/// What an attachment is, decided by the server from the mime type, the extension and the content.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentKind {
+    /// png, jpeg, webp or gif: the model sees it when it has vision.
+    Image,
+    /// UTF-8 text (notes, tables, code…): its content is given to the model.
+    Text,
+    /// A PDF whose text could be extracted: the text is given to the model.
+    Document,
+    /// Anything else: the model only knows it is there and where it is.
+    File,
+}
+
+/// An attachment of a stored message. Never holds the bytes nor an absolute path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Attachment {
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    /// Size in bytes.
+    pub size: u64,
+    pub kind: AttachmentKind,
+}
+
+/// A file sent with a message (`POST /api/sessions/{id}/runs`): `data` is the base64 of the bytes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttachmentUpload {
+    pub name: String,
+    #[serde(default)]
+    pub mime: String,
+    pub data: String,
+}
+
+/// An attachment read back (`GET /api/sessions/{id}/attachments/{attachment_id}`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttachmentData {
+    pub name: String,
+    pub mime: String,
+    /// Base64 of the bytes.
+    pub data: String,
 }
 
 /// Longest note accepted with a rating.

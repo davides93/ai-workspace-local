@@ -1,10 +1,11 @@
 import type { Transport, TransportCapabilities } from "../transport";
 import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
+import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, guessKind, humanSize } from "../../lib/attachments";
 import { mockRecommend } from "./recommend";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary,
@@ -545,6 +546,7 @@ export class MockTransport implements Transport {
     if (i < 0) throw new ApiError(404, `sessione ${id} non trovata`);
     sessions.splice(i, 1);
     this.feedback = this.feedback.filter((f) => f.session_id !== id);
+    for (const k of [...this.attachmentFiles.keys()]) if (k.startsWith(`${id}/`)) this.attachmentFiles.delete(k);
   }
   // 404 for a session that is gone, like the backend (the UI leaves a conversation that was deleted elsewhere).
   async messages(sessionId: string) {
@@ -862,17 +864,61 @@ export class MockTransport implements Transport {
   /** Reasoning asked for each run, newest last (tests read it). */
   readonly runThinking: Array<{ runId: string; thinking?: ThinkingMode }> = [];
 
-  async startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode) {
+  /** The bytes of the attachments, kept in memory like the backend keeps them on disk (`session/id`). */
+  private attachmentFiles = new Map<string, AttachmentData>();
+
+  /** The limits of the backend, with its messages (crates/aiw-engine `attachments::prepare`). */
+  private storeAttachments(sessionId: string, uploads: AttachmentUpload[]): Attachment[] {
+    if (uploads.length > MAX_ATTACHMENTS) throw new ApiError(400, `Puoi allegare al massimo ${MAX_ATTACHMENTS} file a un messaggio.`);
+    let total = 0;
+    const sizes = uploads.map((u) => Math.floor((u.data.replace(/=+$/, "").length * 3) / 4));
+    uploads.forEach((u, i) => {
+      if (sizes[i] > MAX_ATTACHMENT_BYTES) throw new ApiError(400, `«${u.name}» è troppo grande: ogni file può pesare al massimo ${MAX_ATTACHMENT_BYTES >> 20} MB.`);
+      total += sizes[i];
+    });
+    if (total > MAX_ATTACHMENTS_TOTAL_BYTES) throw new ApiError(400, `Gli allegati pesano troppo: in totale al massimo ${MAX_ATTACHMENTS_TOTAL_BYTES >> 20} MB per messaggio.`);
+    return uploads.map((u, i) => {
+      const id = nid("att");
+      const name = u.name.split(/[\\/]/).pop()?.trim() || "allegato";
+      const mime = u.mime || "application/octet-stream";
+      this.attachmentFiles.set(`${sessionId}/${id}`, { name, mime, data: u.data });
+      return { id, name, mime, size: sizes[i], kind: guessKind(name, mime) };
+    });
+  }
+
+  async getAttachment(sessionId: string, attachmentId: string): Promise<AttachmentData> {
     if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    const f = this.attachmentFiles.get(`${sessionId}/${attachmentId}`);
+    if (!f) throw new ApiError(404, "allegato non trovato");
+    return structuredClone(f);
+  }
+
+  async startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode, attachments: AttachmentUpload[] = []) {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    if (!input.trim() && attachments.length === 0) throw new ApiError(400, "messaggio vuoto");
+    const stored = this.storeAttachments(sessionId, attachments);
     const runId = nid("run");
     this.runThinking.push({ runId, thinking });
     const msgs = sessionMessages[sessionId] ?? (sessionMessages[sessionId] = []);
-    msgs.push({ id: nid("m"), role: "user", content: input, name: kind, created_at: now() });
+    msgs.push({ id: nid("m"), role: "user", content: input, name: kind, ...(stored.length > 0 ? { attachments: stored } : {}), created_at: now() });
     const s = sessions.find((x) => x.id === sessionId);
-    if (s && s.title === "Nuova sessione" && !kind) s.title = input.slice(0, 48);
+    if (s && s.title === "Nuova sessione" && !kind) s.title = (input.trim() || stored[0]?.name || "Sessione").slice(0, 48);
     if (kind === "a2ui.action") void this.actionReply(runId, sessionId, input);
+    else if (stored.length > 0) void this.attachmentsReply(runId, sessionId, stored);
     else void this.scriptedRun(runId, sessionId, input);
     return { run_id: runId };
+  }
+
+  /** The demo does not read the files: it only shows that they arrived. */
+  private async attachmentsReply(runId: string, threadId: string, atts: Attachment[]) {
+    await sleep(150);
+    this.emit(runId, { type: "RUN_STARTED", threadId, runId });
+    const list = atts.map((a) => `**${a.name}** (${humanSize(a.size)})`).join(", ");
+    const m = nid("m");
+    this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m, role: "assistant" });
+    await this.streamText(runId, m, `Ho ricevuto ${atts.length === 1 ? "l'allegato" : `${atts.length} allegati`}: ${list}. In modalità demo non li leggo davvero: con un modello collegato li potrei guardare e riassumere.`, "text");
+    this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m });
+    this.emit(runId, { type: "RUN_FINISHED", threadId, runId });
   }
 
   private async actionReply(runId: string, threadId: string, input: string) {

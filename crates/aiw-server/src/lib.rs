@@ -138,6 +138,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/sessions/{id}/worktree", get(worktree_status).delete(worktree_discard))
         .route("/api/sessions/{id}/worktree/apply", post(worktree_apply))
         .route("/api/sessions/{id}/messages", get(messages))
+        .route("/api/sessions/{id}/attachments/{attachment_id}", get(get_attachment))
         .route("/api/sessions/{id}/messages/{mid}/feedback", put(set_feedback).delete(delete_feedback))
         .route("/api/sessions/{id}/feedback", get(session_feedback))
         .route("/api/sessions/{id}/reflect", post(reflect_session))
@@ -151,7 +152,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/memories/{id}/approve", post(approve_memory))
         .route("/api/memories/{id}/reject", post(reject_memory))
         .route("/api/sessions/{id}/active-run", get(active_run))
-        .route("/api/sessions/{id}/runs", post(start_run))
+        .route("/api/sessions/{id}/runs", post(start_run).layer(DefaultBodyLimit::max(RUN_BODY_LIMIT)))
         .route("/api/sessions/{id}/checkpoints", get(session_checkpoints))
         .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/runs/{id}/checkpoint", get(run_checkpoint))
@@ -730,15 +731,24 @@ async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiRes
 }
 #[derive(Deserialize)]
 struct RunBody {
+    #[serde(default)]
     input: String,
     /// a2ui.action when a surface sends a user action
     kind: Option<String>,
     /// Reasoning for this run only (`off` | `auto` | `deep`): wins over the profile's. Absent: the profile's.
     #[serde(default)]
     thinking: Option<aiw_core::api::ThinkingMode>,
+    /// Files attached to the message (`data` is base64). `input` may be empty when there are some.
+    #[serde(default)]
+    attachments: Vec<aiw_core::api::AttachmentUpload>,
 }
+/// Room for the largest allowed attachments (25 MB) as base64 inside JSON, plus the text.
+const RUN_BODY_LIMIT: usize = aiw_core::api::MAX_ATTACHMENTS_TOTAL_BYTES / 3 * 4 + (2 << 20);
 async fn start_run(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<RunBody>) -> ApiResult<Value> {
-    ok(json!({"run_id": s.engine.start_run_opts(&id, b.input, b.kind.as_deref(), b.thinking).await?}))
+    ok(json!({"run_id": s.engine.start_run_attach(&id, b.input, b.kind.as_deref(), b.thinking, b.attachments).await?}))
+}
+async fn get_attachment(State(s): State<AppState>, Path((id, att)): Path<(String, String)>) -> ApiResult<aiw_core::api::AttachmentData> {
+    ok(s.engine.attachment_data(&id, &att)?)
 }
 async fn cancel_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.cancel_run(&id)?;

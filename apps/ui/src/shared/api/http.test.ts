@@ -160,6 +160,27 @@ describe("HttpTransport", () => {
   });
 });
 
+describe("HttpTransport attachments", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the files with the run and reads one back", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response(JSON.stringify({ run_id: "r", name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }), { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.startRun("s 1", "ciao");
+    await t.startRun("s 1", "", undefined, "deep", [{ name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }]);
+    await t.startRun("s 1", "x", undefined, undefined, []);
+    expect(await t.getAttachment("s 1", "att/1")).toMatchObject({ name: "a.txt", data: "Y2lhbw==" });
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual(["POST /sessions/s%201/runs", "POST /sessions/s%201/runs", "POST /sessions/s%201/runs", "GET /sessions/s%201/attachments/att%2F1"]);
+    expect(JSON.parse(calls[0].body!)).toEqual({ input: "ciao" });
+    expect(JSON.parse(calls[1].body!)).toEqual({ input: "", thinking: "deep", attachments: [{ name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }] });
+    expect(JSON.parse(calls[2].body!)).toEqual({ input: "x" });
+  });
+});
+
 describe("HttpTransport memories", () => {
   afterEach(() => vi.unstubAllGlobals());
 

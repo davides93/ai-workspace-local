@@ -195,8 +195,28 @@ describe("aiw.image", () => {
   });
 });
 
+describe("aiw.attachments", () => {
+  it("becomes a small warning row", () => {
+    const items = fold([{ type: "CUSTOM", name: "aiw.attachments", value: { warning: "Questo modello non vede le immagini: scegline uno con visione in Modelli" } }]);
+    expect(items).toEqual([{ kind: "warning", id: "aw-0", text: "Questo modello non vede le immagini: scegline uno con visione in Modelli" }]);
+  });
+  it("ignores a warning without text", () => {
+    expect(fold([{ type: "CUSTOM", name: "aiw.attachments", value: {} }, { type: "CUSTOM", name: "aiw.attachments", value: null }])).toEqual([]);
+  });
+});
+
 describe("historyToItems", () => {
   const at = "2026-11-02T10:00:00Z";
+  it("keeps the attachments of a user message, and leaves the key out without any", () => {
+    const att = { id: "att_1", name: "foto.png", mime: "image/png", size: 10, kind: "image" as const };
+    const msgs: ChatMessage[] = [
+      { id: "1", role: "user", content: "", attachments: [att], created_at: at },
+      { id: "2", role: "user", content: "ciao", created_at: at },
+    ];
+    const items = historyToItems(msgs);
+    expect(items[0]).toEqual({ kind: "user", id: "1", text: "", attachments: [att] });
+    expect(items[1]).toEqual({ kind: "user", id: "2", text: "ciao" });
+  });
   it("pairs tool calls with their results", () => {
     const msgs: ChatMessage[] = [
       { id: "1", role: "user", content: "ciao", created_at: at },

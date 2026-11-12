@@ -21,7 +21,7 @@ pub use hooks::HookConfig;
 pub use internal::{internal_tools, InternalTool};
 pub use narrow::{narrow_sandbox, narrow_tools};
 pub use policy::{Decision, Policy, PolicyRule};
-pub use runner::{to_msgs, AgentRunner, RunHost, RunInput, RunOutcome};
+pub use runner::{to_msgs, user_msg, AgentRunner, RunHost, RunInput, RunOutcome, UserExtra};
 pub use skills::Skill;
 
 #[cfg(test)]
@@ -153,6 +153,7 @@ mod tests {
             },
             history: vec![],
             user_input: "Fai il lavoro".into(),
+            user_extra: Default::default(),
             system_extra: vec![],
             tool_ctx: ToolContext::new("run_1", dir.to_path_buf()),
             policy: Policy { mode: mode.into(), rules: vec![], sandbox_available: true },

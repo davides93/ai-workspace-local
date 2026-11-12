@@ -81,6 +81,10 @@ impl DataDirs {
     pub fn scripts(&self) -> PathBuf {
         self.root.join("scripts")
     }
+    /// Files attached to chat messages (`<session id>/<attachment id>-<name>`).
+    pub fn attachments(&self) -> PathBuf {
+        self.root.join("attachments")
+    }
     pub fn device_config(&self, device_name: &str) -> PathBuf {
         let safe: String = device_name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
         self.devices().join(format!("{safe}.json"))

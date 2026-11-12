@@ -65,6 +65,17 @@ pub trait RunHost: Send + Sync {
     }
 }
 
+/// What the person attached to the message of this run, ready for the model: the text of the
+/// attached files (and notes about the others) and the images as `data:` URLs. The stored message
+/// and [`RunInput::user_input`] keep only what was typed; hooks, memory and titles never see this.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UserExtra {
+    /// Appended to the typed text in the message sent to the model.
+    pub text: String,
+    /// `data:<mime>;base64,…` URLs of the attached images.
+    pub images: Vec<String>,
+}
+
 pub struct RunInput {
     pub run_id: String,
     pub thread_id: String,
@@ -72,6 +83,8 @@ pub struct RunInput {
     pub profile: InferenceProfile,
     pub history: Vec<Msg>,
     pub user_input: String,
+    /// Attachments of the user message, for the model only (empty without attachments).
+    pub user_extra: UserExtra,
     /// Extra system sections (environment, AGENTS.md…).
     pub system_extra: Vec<String>,
     pub tool_ctx: ToolContext,
@@ -126,6 +139,23 @@ fn self_check_note(failed: &[(String, String)]) -> String {
     format!(
         "[Controllo automatico] Prima di concludere: queste azioni sono fallite e non le hai ripetute:\n{list}\nCorreggi la chiamata e riprova; se non è possibile, di' chiaramente all'utente cosa non è stato fatto. Non dichiarare completate azioni fallite."
     )
+}
+
+/// A user message with optional images (`data:` URLs) next to its text.
+pub fn user_msg(text: String, images: &[String]) -> Msg {
+    if images.is_empty() {
+        return Msg::user(text);
+    }
+    let mut parts = vec![ContentPart::Text { text }];
+    parts.extend(images.iter().map(|url| ContentPart::ImageUrl { image_url: ImageUrl { url: url.clone() } }));
+    Msg { role: "user".into(), content: Some(MsgContent::Parts(parts)), ..Default::default() }
+}
+
+impl RunInput {
+    /// The typed text plus the attached files' text: what a sub-agent or a scripted team member gets as its task.
+    pub fn task_text(&self) -> String {
+        format!("{}{}", self.user_input, self.user_extra.text)
+    }
 }
 
 /// Converts stored chat messages to the OpenAI wire format.
@@ -344,6 +374,7 @@ fn seal_dangling_tool_calls(msgs: &mut Vec<ChatMessage>) {
             tool_calls: None,
             tool_call_id: Some(c.id.clone()),
             name: Some(c.name.clone()),
+            attachments: None,
             created_at: now_rfc3339(),
         })
         .collect();
@@ -516,11 +547,11 @@ impl AgentRunner {
         }
         let mut messages = vec![Msg::system(system)];
         messages.extend(input.history.iter().cloned());
-        let mut user_text = input.user_input.clone();
+        let mut user_text = input.task_text();
         for c in hook.context {
             user_text.push_str(&format!("\n\n[contesto aggiunto da un hook]\n{c}"));
         }
-        messages.push(Msg::user(user_text));
+        messages.push(user_msg(user_text, &input.user_extra.images));
         outcome.new_messages.push(ChatMessage {
             id: new_id("msg"),
             role: "user".into(),
@@ -529,6 +560,7 @@ impl AgentRunner {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            attachments: None,
             created_at: now_rfc3339(),
         });
 
@@ -658,6 +690,7 @@ impl AgentRunner {
                         tool_calls: None,
                         tool_call_id: None,
                         name: None,
+                        attachments: None,
                         created_at: now_rfc3339(),
                     });
                 }
@@ -731,6 +764,7 @@ impl AgentRunner {
                 tool_calls: (!tool_calls.is_empty()).then(|| tool_calls.clone()),
                 tool_call_id: None,
                 name: None,
+                attachments: None,
                 created_at: now_rfc3339(),
             });
             if tool_calls.is_empty() {
@@ -759,6 +793,7 @@ impl AgentRunner {
                         tool_calls: None,
                         tool_call_id: None,
                         name: Some(SELF_CHECK_NAME.into()),
+                        attachments: None,
                         created_at: now_rfc3339(),
                     });
                     unresolved.clear();
@@ -801,6 +836,7 @@ impl AgentRunner {
                                 tool_calls: None,
                                 tool_call_id: None,
                                 name: Some(FORMAT_CHECK_NAME.into()),
+                                attachments: None,
                                 created_at: now_rfc3339(),
                             });
                             continue;
@@ -897,6 +933,7 @@ impl AgentRunner {
                     tool_calls: None,
                     tool_call_id: Some(tc.id.clone()),
                     name: Some(tc.name.clone()),
+                    attachments: None,
                     created_at: now_rfc3339(),
                 });
                 for e in img_events {
@@ -927,6 +964,7 @@ impl AgentRunner {
                     tool_calls: None,
                     tool_call_id: None,
                     name: None,
+                    attachments: None,
                     created_at: now_rfc3339(),
                 });
                 outcome.final_text = note;
@@ -1014,6 +1052,7 @@ impl AgentRunner {
             tool_calls: None,
             tool_call_id: None,
             name: Some(roles::CHECK_NAME.into()),
+            attachments: None,
             created_at: now_rfc3339(),
         });
     }

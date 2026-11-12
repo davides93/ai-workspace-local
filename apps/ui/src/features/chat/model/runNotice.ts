@@ -33,6 +33,13 @@ export function describeRunError(code?: string): RunNoticeInfo {
   }
 }
 
+/** The small note under a message whose images the model cannot see. */
+export const attachmentsNotice = (): RunNoticeInfo => ({
+  tone: "warn", icon: "alert", title: "Questo modello non vede le immagini",
+  hint: "L'immagine è stata allegata ma il modello non la guarda. Scegline uno con visione in Modelli.",
+  link: { to: "/models", label: "Apri Modelli" },
+});
+
 /** The standard texts of the backend need no repeating under a title that already says it. */
 export const isStandardErrorMessage = (code: string | undefined, message: string): boolean =>
   (code === "cancelled" && /^Run annullato/i.test(message)) || message.trim() === "";

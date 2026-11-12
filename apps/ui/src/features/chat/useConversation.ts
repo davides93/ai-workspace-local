@@ -5,13 +5,14 @@ import { errorMessage, isNotFound } from "../../shared/lib/errors";
 import { rememberRun } from "../../shared/lib/runIndex";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { AgEvent, ApprovalRequest, RunState, ThinkingMode } from "../../shared/api/types";
+import type { AgEvent, ApprovalRequest, AttachmentUpload, RunState, ThinkingMode } from "../../shared/api/types";
 import { useRespondApproval } from "../approvals/api";
 import { actionText, type A2uiAction } from "./a2ui";
 import { useCancelRun, useStartRun } from "./api";
 import { historyToItems } from "./model/history";
 import { imagesFor, rememberImage } from "./model/imageCache";
 import { HANDOFF, type ApprovalItem, type Item } from "./model/items";
+import { localAttachments, toUploads, type PendingFile } from "./model/pending";
 import { parseImageEvent, reduce } from "./model/reduce";
 
 export type HistoryState = { status: "loading" | "ready" | "error"; error?: unknown; title?: string };
@@ -148,14 +149,28 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
   const latest = useRef({ sessionId, runId, startRun, cancelRun, respondApproval, attach });
   latest.current = { sessionId, runId, startRun, cancelRun, respondApproval, attach };
 
-  /** Sends a message. `onRejected` runs when the run could not start (to give the text back). */
-  const send = useCallback((text: string, onRejected?: () => void) => {
+  /**
+   * Sends a message, with the files chosen for it. `onRejected` runs when the run could not start
+   * (to give the text and the files back).
+   */
+  const send = useCallback(async (text: string, onRejected?: () => void, files: PendingFile[] = []) => {
     const { sessionId: sid, runId: rid, startRun: start, attach: join } = latest.current;
     if (!sid || rid) return;
+    let uploads: AttachmentUpload[] = [];
+    if (files.length > 0) {
+      try {
+        uploads = await toUploads(files);
+      } catch (e) {
+        onRejected?.();
+        return void toast(`Non riesco a leggere gli allegati: ${errorMessage(e)}`, "crit");
+      }
+      // The conversation changed while the files were read.
+      if (current.current !== sid) return void onRejected?.();
+    }
     const tempId = `u-${Date.now()}`;
-    setItems((prev) => [...prev, { kind: "user", id: tempId, text }]);
+    setItems((prev) => [...prev, { kind: "user", id: tempId, text, ...(files.length > 0 ? { attachments: localAttachments(files, uploads) } : {}) }]);
     start.mutate(
-      { sessionId: sid, input: text, thinking: thinking.current },
+      { sessionId: sid, input: text, thinking: thinking.current, ...(uploads.length > 0 ? { attachments: uploads } : {}) },
       {
         onSuccess: ({ run_id }) => join(run_id, sid),
         onError: (e) => {

@@ -3,7 +3,7 @@ import { useApi } from "../../shared/api/context";
 import { ignoreNotFound } from "../../shared/lib/errors";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { Feedback, Session, ThinkingMode } from "../../shared/api/types";
+import type { AttachmentUpload, Feedback, Session, ThinkingMode } from "../../shared/api/types";
 import { withoutRating, withRating } from "./model/feedback";
 
 export function useSessions() {
@@ -85,7 +85,8 @@ export function useDeleteFeedback(sessionId: string | null) {
 export function useStartRun() {
   const api = useApi();
   return useMutation({
-    mutationFn: (v: { sessionId: string; input: string; kind?: "a2ui.action"; thinking?: ThinkingMode }) => api.startRun(v.sessionId, v.input, v.kind, v.thinking),
+    mutationFn: (v: { sessionId: string; input: string; kind?: "a2ui.action"; thinking?: ThinkingMode; attachments?: AttachmentUpload[] }) =>
+      api.startRun(v.sessionId, v.input, v.kind, v.thinking, v.attachments),
     // The chat reports the failure itself (with the right wording): skip the generic toast.
     meta: { handled: true },
   });
@@ -167,5 +168,18 @@ export function useWorktreeDiscard() {
       toast(`Worktree ${v.branch} eliminato`);
       void qc.invalidateQueries({ queryKey: qk.sessions.all() });
     },
+  });
+}
+
+/** The bytes of a stored attachment (a thumbnail, a download). Kept for a while: they never change. */
+export function useAttachmentData(sessionId: string | undefined, attachmentId: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: qk.sessions.attachment(sessionId ?? "", attachmentId),
+    queryFn: () => api.getAttachment(sessionId!, attachmentId),
+    enabled: enabled && !!sessionId,
+    staleTime: Infinity,
+    gcTime: 10 * 60_000,
+    retry: false,
   });
 }

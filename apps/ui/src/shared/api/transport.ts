@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -164,7 +164,10 @@ export interface Transport {
   backgroundCheckNow?(): Promise<BackgroundStatus>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
   /** `thinking` is the reasoning of this run only: it wins over the profile's. */
-  startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode): Promise<{ run_id: string }>;
+  /** `attachments`: files sent with the message (the text may be empty when there are some). */
+  startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode, attachments?: AttachmentUpload[]): Promise<{ run_id: string }>;
+  /** An attachment of a stored message (thumbnails, downloads). 404 when it is gone. */
+  getAttachment(sessionId: string, attachmentId: string): Promise<AttachmentData>;
   cancelRun(runId: string): Promise<void>;
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void): () => void;
   activeRun(sessionId: string): Promise<string | null>;

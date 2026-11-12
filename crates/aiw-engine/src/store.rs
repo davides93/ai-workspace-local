@@ -629,6 +629,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            attachments: None,
             created_at: "1".into(),
         };
         s.append_messages("ses", &[m("1"), m("2")]).unwrap();
