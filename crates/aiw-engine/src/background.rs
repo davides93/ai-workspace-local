@@ -113,7 +113,6 @@ impl Engine {
             Err(_) => {
                 // Out of time: stop the model call or run of the tick. What it already saved (briefing, reminders)
                 // stays, and the next check does not repeat it.
-                self.proactive_cancel_current();
                 (None, true)
             }
         };

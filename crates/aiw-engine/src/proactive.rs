@@ -98,6 +98,28 @@ struct State {
     spent_s: f64,
 }
 
+/// Finalize even when the background deadline drops the tick future.
+struct TickAccounting<'a> {
+    engine: &'a Engine,
+    state: State,
+    started: std::time::Instant,
+    at: DateTime<Local>,
+    result: TickResult,
+    cancel: CancellationToken,
+}
+
+impl Drop for TickAccounting<'_> {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        *self.engine.0.proactive.current.lock().unwrap() = None;
+        self.state.spent_s += self.started.elapsed().as_secs_f64();
+        self.state.last_tick_at = Some(self.at.to_rfc3339());
+        self.state.last_skip = None;
+        self.state.last_result = Some(self.result.clone());
+        self.engine.save_state(&self.state);
+    }
+}
+
 // ------------------------------------------------------------------------------------ pure helpers
 
 fn parse_hhmm(s: &str) -> Option<NaiveTime> {
@@ -346,13 +368,6 @@ impl Engine {
         }
     }
 
-    /// Stops the model call or run of the tick in progress, without touching the kill switch (a time budget ran out).
-    pub(crate) fn proactive_cancel_current(&self) {
-        if let Some(t) = self.0.proactive.current.lock().unwrap().take() {
-            t.cancel();
-        }
-    }
-
     /// The person set the level: the heartbeat may run again.
     pub(crate) fn proactive_level_set(&self) {
         self.0.proactive.killed.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -584,18 +599,21 @@ impl Engine {
         let started = std::time::Instant::now();
         let cancel = CancellationToken::new();
         *self.0.proactive.current.lock().unwrap() = Some(cancel.clone());
-        let mut result = self.tick_work(wake, now, &state, &cancel).await.unwrap_or_else(|e| {
+        let mut accounting = TickAccounting {
+            engine: self,
+            state,
+            started,
+            at: now,
+            result: Self::result(wake, "nothing", Some("Il controllo è stato interrotto.".into()), now),
+            cancel: cancel.clone(),
+        };
+        let mut result = self.tick_work(wake, now, &accounting.state, &cancel).await.unwrap_or_else(|e| {
             let mut r = Self::result(wake, "nothing", Some(format!("Non sono riuscito a completare il controllo: {e}")), now);
             r.model_called = false;
             r
         });
         result.at = now.to_rfc3339();
-        *self.0.proactive.current.lock().unwrap() = None;
-        state.spent_s += started.elapsed().as_secs_f64();
-        state.last_tick_at = Some(now.to_rfc3339());
-        state.last_skip = None;
-        state.last_result = Some(result.clone());
-        self.save_state(&state);
+        accounting.result = result.clone();
         Ok(result)
     }
 

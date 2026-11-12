@@ -22,7 +22,6 @@ fn schedule_payload(app: &tauri::AppHandle<tauri::Wry>, engine: &aiw_engine::Eng
     let cfg = engine.config().effective;
     let level = cfg.get("proactive.level").and_then(Value::as_str).unwrap_or("off");
     let data_dir = app.path().app_data_dir().ok();
-    let briefing = engine.proposals(None, Some("briefing")).ok().and_then(|l| l.into_iter().next()).map(|p| p.noticed);
     json!({
         "enabled": level != "off",
         "intervalMinutes": cfg.get("proactive.interval_minutes").and_then(Value::as_u64).unwrap_or(30),
@@ -33,8 +32,6 @@ fn schedule_payload(app: &tauri::AppHandle<tauri::Wry>, engine: &aiw_engine::Eng
         // Where the native side opens the data when the system starts the process without the app.
         "dataDir": data_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
         "workspaceRoot": data_dir.map(|d| crate::mobile_workspace(app, &d).to_string_lossy().to_string()),
-        // The text of the daily notification (iOS shows what was scheduled; it is refreshed whenever the app runs).
-        "todayBriefing": briefing,
     })
 }
 

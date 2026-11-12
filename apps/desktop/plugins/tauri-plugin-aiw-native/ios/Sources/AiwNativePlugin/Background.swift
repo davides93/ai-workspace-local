@@ -11,8 +11,8 @@ import AppIntents
 // Background checks of the proactive assistant on iOS. No server and no push: the system decides when it lets the
 // app run (BGAppRefreshTask for short checks, BGProcessingTask for longer ones, usually at night on the charger;
 // both are only a request and iOS may run them rarely or never), plus
-//   - a local notification scheduled every day at `proactive.briefing_time`, whose text is refreshed whenever the
-//     app runs, so the morning one says something true even if iOS never woke the app;
+//   - a local notification scheduled every day at `proactive.briefing_time`, with a generic invitation to open the app;
+//     actual briefing text is delivered only by a fresh engine check;
 //   - two App Intents, «Controlla adesso» and «Riepilogo di oggi», that the person can put in a timed Shortcuts
 //     automation (the only way to get a check at a precise time on iOS).
 // Each check is one call into the Rust library (`aiw_background_tick`, hard budget of 25 s): the decisions are in the
@@ -35,7 +35,6 @@ struct BackgroundConfig: Codable {
     var notifications: Bool?
     var dataDir: String?
     var workspaceRoot: String?
-    var todayBriefing: String?
 
     var isOn: Bool { enabled ?? false }
     var every: Int { max(15, intervalMinutes ?? 30) }
@@ -90,13 +89,9 @@ enum AiwBackground {
         return parsed ?? ["error": "risposta non valida"]
     }
 
-    /// Shows the engine's notification (if it asked for one) and refreshes the text of tomorrow's daily one.
+    /// Shows a fresh engine notification and keeps the generic daily reminder scheduled.
     static func deliver(_ summary: [String: Any]) {
-        var cfg = load()
-        if let briefing = summary["briefing"] as? String, !briefing.isEmpty {
-            cfg.todayBriefing = briefing
-            save(cfg)
-        }
+        let cfg = load()
         if cfg.isOn { scheduleDailyNotice(cfg) }
         guard cfg.wantsNotifications, let n = summary["notification"] as? [String: Any],
               let title = n["title"] as? String, let body = n["body"] as? String else { return }
@@ -108,15 +103,15 @@ enum AiwBackground {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "dev.aiworkspace.local.proactive.now", content: content, trigger: nil))
     }
 
-    /// Daily local notification at `proactive.briefing_time`. Scheduled again (same identifier replaces it) every time
-    /// the app runs, with the newest briefing text.
+    /// Daily reminder at `proactive.briefing_time`. A repeating notification cannot guarantee
+    /// fresh briefing data, so its text must never include a cached summary.
     static func scheduleDailyNotice(_ cfg: BackgroundConfig) {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [dailyNoticeId])
         guard cfg.isOn, cfg.wantsNotifications else { return }
         let content = UNMutableNotificationContent()
         content.title = "Il riepilogo di oggi"
-        content.body = (cfg.todayBriefing?.isEmpty == false) ? String(cfg.todayBriefing!.prefix(160)) : "Apri AI Workspace per vedere cosa c'è di nuovo."
+        content.body = "Apri AI Workspace per vedere il riepilogo aggiornato."
         content.sound = .default
         content.userInfo = ["route": "#/inbox"]
         var when = DateComponents()

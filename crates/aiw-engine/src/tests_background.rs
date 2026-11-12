@@ -236,12 +236,20 @@ async fn the_time_budget_stops_the_check_and_keeps_what_was_done() {
     due_reminder(&e, "Pagare la bolletta");
     std::fs::write(inbox.join("nuovo.txt"), "x").unwrap();
     let started = std::time::Instant::now();
-    let s = e.background_tick_within(&req("interval"), Local::now() + D::seconds(5), Duration::from_millis(300)).await.unwrap();
+    let s = e.background_tick_within(&req("interval"), Local::now() + D::seconds(5), Duration::from_millis(3100)).await.unwrap();
     assert!(started.elapsed() < Duration::from_secs(5), "the budget is hard");
     assert!(s.timed_out, "{s:?}");
     assert_eq!(s.model_step, "skipped");
     assert_eq!(s.new_proposals, 1, "the reminder written before the model step is kept: {s:?}");
     assert!(s.notification.is_some());
+    let status = e.proactive_status();
+    assert!(status.budget_used_minutes > 0.0, "a timed-out tick must consume the daily budget");
+    assert!(status.last_tick.unwrap().reason.unwrap().contains("interrotto"));
+    assert!(e.0.proactive.current.lock().unwrap().is_none());
+    // A deadline must release the tick lock, allowing the next check to run.
+    without_model(&e);
+    let next = e.proactive_background_tick_at(&req("interval"), Local::now() + D::seconds(10)).await.unwrap();
+    assert_ne!(next.outcome, "skipped");
 }
 
 #[tokio::test]

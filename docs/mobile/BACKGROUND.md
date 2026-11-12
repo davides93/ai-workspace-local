@@ -46,11 +46,26 @@ e dal Risparmio energia; se non apri l'app per giorni può non partire mai. Non 
 i soli compiti in background. L'unico modo è un Comando con automazione «Ora del giorno» che esegue «Riepilogo di
 oggi»: l'app lo spiega in tre passi nelle Impostazioni, «Assistente proattivo», «In background».
 
-La notifica del mattino compare comunque all'ora giusta, ma il suo testo è quello preparato all'ultimo avvio in
-background o in primo piano: se iOS non ha fatto girare nulla, dice di aprire l'app.
+La notifica locale ricorrente del mattino invita sempre ad aprire l'app per il riepilogo aggiornato: non
+ripete riepiloghi salvati nei giorni precedenti. Il testo del riepilogo viene notificato solo da un controllo fresco.
 
 ## Cosa non è stato provato
 
-Il codice Kotlin (`Background.kt`), Swift (`Background.swift`) e della shell Tauri (`apps/desktop/src-tauri/src/background.rs`)
-non è stato compilato né eseguito su un telefono: lo verificano la CI e una prova a mano su un dispositivo vero. Il
-motore (`aiw-engine`, `aiw-server`) e l'interfaccia sono invece coperti da test.
+Il 12 novembre 2026 sono riuscite le build locali Android arm64 debug (APK) e iOS arm64 debug
+(archivio senza firma), includendo Kotlin, Swift e shell Rust. Restano da provare esecuzione su telefono,
+sospensione/riavvio, permessi, notifiche e Comandi Rapidi. La CI ordinaria non compila ancora i target mobili.
+
+Comandi di verifica dalla cartella `apps/desktop`:
+
+```sh
+npx tauri android init --ci
+# Applicare Kotlin 2.4.0 ai progetti generati come nel passo Build AAB di .github/workflows/store.yml.
+npx tauri android build --debug --target aarch64 --apk --ci
+npx tauri ios init --ci
+npx tauri ios build --debug --target aarch64 --no-sign --archive-only --ci
+```
+
+Su Xcode 27.2 il wrapper Tauri non ha rilevato l'SDK del simulatore, pur elencato da Xcode:
+la verifica completa è stata fatta sul target dispositivo, senza installazione né pubblicazione.
+`cargo test -p aiw-engine`: 272 test passati, incluso il timeout che deve consumare budget e rilasciare il lock.
+`cargo clippy -p aiw-engine --all-targets`: passato, con avvisi preesistenti nelle dipendenze interne.
