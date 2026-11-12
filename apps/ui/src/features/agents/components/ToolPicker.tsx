@@ -4,7 +4,7 @@ import { RISK_META } from "../../../shared/lib/policyModes";
 import type { PolicyMode, SandboxMode, ToolRisk } from "../../../shared/api/types";
 import {
   blockedTools, groupState, groupTools, isAllTools, isSelected, orphanTools, setAllTools, setGroup, summarizeTools, toggleTool,
-  TRAINING_TOOL, type PickerTool, type ToolGroup,
+  TRAINING_TOOL, EVAL_TOOL, isExplicitTool, type PickerTool, type ToolGroup,
 } from "../model/tools";
 
 const RISKS: ToolRisk[] = ["read", "network", "write", "exec", "computer"];
@@ -80,8 +80,9 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
 }) {
   const [query, setQuery] = useState("");
   const all = isAllTools(value);
-  const ordinaryTools = catalog.filter((tool) => tool.name !== TRAINING_TOOL);
+  const ordinaryTools = catalog.filter((tool) => !isExplicitTool(tool.name));
   const training = catalog.find((tool) => tool.name === TRAINING_TOOL);
+  const pageScripts = catalog.find((tool) => tool.name === EVAL_TOOL);
   const groups = groupTools(ordinaryTools, query);
   const summary = summarizeTools(value, catalog);
   const orphans = all ? [] : orphanTools(value, catalog);
@@ -91,7 +92,7 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
     <div className="tool-picker">
       <div className="tool-top">
         <div className="tool-all">
-          <Toggle id="tools-all" label="Tutti i tool" checked={all} onChange={(on) => onChange([...setAllTools(value.filter((name) => name !== TRAINING_TOOL), on, ordinaryTools), ...value.filter((name) => name === TRAINING_TOOL)])} />
+          <Toggle id="tools-all" label="Tutti i tool" checked={all} onChange={(on) => onChange([...setAllTools(value.filter((name) => !isExplicitTool(name)), on, ordinaryTools), ...value.filter(isExplicitTool)])} />
           <label htmlFor="tools-all"><b>Tutti i tool</b> <span className="muted text-sm">(<code>*</code>) anche quelli aggiunti in futuro, MCP compresi</span></label>
         </div>
         <div className="tool-summary" role="status">
@@ -109,6 +110,14 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
           <Toggle label="Consenti addestramento" checked={value.includes(TRAINING_TOOL)}
             onChange={(on) => onChange(on ? [...value, TRAINING_TOOL] : value.filter((name) => name !== TRAINING_TOOL))} />
           <span>Consenti addestramento <span className="muted text-sm">Dataset approvati, job e valutazione.</span></span>
+        </label>
+      )}
+
+      {pageScripts && (
+        <label className="row">
+          <Toggle label="Consenti codice nella pagina" checked={value.includes(EVAL_TOOL)}
+            onChange={(on) => onChange(on ? [...value, EVAL_TOOL] : value.filter((name) => name !== EVAL_TOOL))} />
+          <span>Consenti codice nella pagina <span className="muted text-sm">Il browser esegue JavaScript scritto dall'agente, con la sessione e i cookie della pagina.</span></span>
         </label>
       )}
 

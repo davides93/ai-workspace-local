@@ -131,16 +131,21 @@ export function groupTools(catalog: readonly PickerTool[], query = ""): ToolGrou
 }
 
 export const TRAINING_TOOL = "training_harness";
+/** Runs code in the web page the agent has open. */
+export const EVAL_TOOL = "browser_eval";
+/** Tools a `*` does not include: an agent has to list them by name (the backend's `explicit_grant`). */
+export const EXPLICIT_TOOLS: readonly string[] = [TRAINING_TOOL, EVAL_TOOL];
+export const isExplicitTool = (name: string): boolean => EXPLICIT_TOOLS.includes(name);
 
-/** A wildcard subsumes ordinary tools; training always needs an explicit grant. */
+/** A wildcard subsumes ordinary tools; training and page scripts always need an explicit grant. */
 export function normalizeTools(tools: readonly string[]): string[] {
-  if (tools.includes(ALL)) return tools.includes(TRAINING_TOOL) ? [ALL, TRAINING_TOOL] : [ALL];
+  if (tools.includes(ALL)) return [ALL, ...EXPLICIT_TOOLS.filter((t) => tools.includes(t))];
   return [...new Set(tools.map((t) => t.trim()).filter(Boolean))];
 }
 
 export const isAllTools = (tools: readonly string[]): boolean => tools.includes(ALL);
 
-export const isSelected = (tools: readonly string[], name: string): boolean => tools.includes(name) || (name !== TRAINING_TOOL && tools.includes(ALL));
+export const isSelected = (tools: readonly string[], name: string): boolean => tools.includes(name) || (!isExplicitTool(name) && tools.includes(ALL));
 
 /** Turns `"*"` into the explicit list of every tool of the catalogue (internal ones included). */
 export function expandAll(catalog: readonly PickerTool[]): string[] {

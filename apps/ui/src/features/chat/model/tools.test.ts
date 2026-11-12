@@ -16,6 +16,9 @@ describe("toolCategory", () => {
   });
   it("groups browser, computer-use and MCP tools by prefix", () => {
     expect(toolCategory("browser_navigate")).toMatchObject({ id: "browser", icon: "globe" });
+    for (const n of ["browser_tabs", "browser_tab_new", "browser_select", "browser_hover", "browser_upload", "browser_downloads", "browser_eval", "browser_console"]) {
+      expect(toolCategory(n)).toMatchObject({ id: "browser", icon: "globe" });
+    }
     expect(toolCategory("computer_screenshot")).toMatchObject({ id: "computer", icon: "mouse" });
     expect(toolCategory("mcp__github__list_issues")).toMatchObject({ id: "mcp", icon: "link" });
   });

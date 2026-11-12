@@ -50,7 +50,7 @@ pub fn agents() -> Vec<AgentProfile> {
             "Navigatore",
             "Ricerca e azioni nel browser controllato (CDP).",
             "Usi il browser per trovare informazioni e completare moduli. Prima di inviare dati personali, pagamenti o moduli definitivi chiedi conferma. Cita le pagine da cui prendi le informazioni.",
-            &["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_screenshot", "web_fetch", "web_search", "todo"],
+            &["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_screenshot", "browser_tabs", "browser_tab_new", "browser_tab_select", "browser_select", "browser_hover", "browser_downloads", "browser_console", "web_fetch", "web_search", "todo"],
             "ask",
             "read-only",
             40,
@@ -263,6 +263,42 @@ pub fn workflows() -> Vec<WorkflowDef> {
 mod tests {
     use super::*;
     use aiw_core::api::{Accelerator, CpuInfo};
+
+    #[test]
+    fn the_browser_agent_gets_the_safe_new_tools_and_no_agent_the_risky_ones() {
+        let all = agents();
+        let browser = all.iter().find(|a| a.id == "browser").unwrap();
+        for t in [
+            "browser_tabs",
+            "browser_tab_new",
+            "browser_tab_select",
+            "browser_select",
+            "browser_hover",
+            "browser_wait",
+            "browser_downloads",
+            "browser_console",
+        ] {
+            assert!(browser.tools.iter().any(|n| n == t), "{t}");
+        }
+        // Running code in the page, handing files to a site and closing tabs are for the person to grant.
+        for a in &all {
+            for t in ["browser_eval", "browser_upload", "browser_tab_close"] {
+                assert!(!a.tools.iter().any(|n| n == t), "{} lists {t}", a.id);
+            }
+        }
+        // Every browser tool an agent lists exists.
+        let known: Vec<String> = aiw_tools::browser::tools(std::sync::Arc::new(aiw_tools::browser::BrowserManager::new(
+            std::env::temp_dir().join("aiw-defaults-test"),
+        )))
+        .iter()
+        .map(|t| t.name().to_string())
+        .collect();
+        for a in &all {
+            for t in a.tools.iter().filter(|t| t.starts_with("browser_")) {
+                assert!(known.contains(t), "{} lists the unknown tool {t}", a.id);
+            }
+        }
+    }
 
     const GB: u64 = 1024 * 1024 * 1024;
 

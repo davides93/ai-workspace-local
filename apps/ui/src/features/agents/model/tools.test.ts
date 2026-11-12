@@ -3,7 +3,7 @@ import { agents, tools as mockTools } from "../../../shared/api/mock/fixtures";
 import type { ToolInfo } from "../../../shared/api/types";
 import {
   ALL, INTERNAL_NAMES, INTERNAL_TOOLS, blockedTools, buildCatalog, categoryLabel, categoryOf, expandAll, groupState, groupTools, isAllTools, isSelected,
-  normalizeTools, orphanTools, setAllTools, setGroup, summarizeTools, toggleTool,
+  isExplicitTool, normalizeTools, orphanTools, setAllTools, setGroup, summarizeTools, toggleTool,
 } from "./tools";
 
 const tool = (name: string, over: Partial<ToolInfo> = {}): ToolInfo => ({
@@ -96,6 +96,27 @@ describe("selection", () => {
     expect(isSelected(["read_file"], "write_file")).toBe(false);
     expect(normalizeTools(["*", "read_file"])).toEqual(["*"]);
     expect(normalizeTools(["a", "a", " b ", ""])).toEqual(["a", "b"]);
+  });
+
+  it("keeps page scripts out of a wildcard: browser_eval needs an explicit grant, like training", () => {
+    expect(isExplicitTool("browser_eval")).toBe(true);
+    expect(isExplicitTool("browser_click")).toBe(false);
+    expect(isSelected(["*"], "browser_eval")).toBe(false);
+    expect(isSelected(["*", "browser_eval"], "browser_eval")).toBe(true);
+    expect(isSelected(["*"], "browser_tabs")).toBe(true);
+    expect(normalizeTools(["*", "browser_eval", "read_file", "training_harness"])).toEqual(["*", "training_harness", "browser_eval"]);
+    expect(normalizeTools(["browser_eval", "browser_eval"])).toEqual(["browser_eval"]);
+  });
+
+  it("knows every browser tool of the demo catalogue and groups them under Browser", () => {
+    const browser = mockTools.filter((t) => t.name.startsWith("browser_"));
+    expect(browser.map((t) => t.name)).toEqual(expect.arrayContaining([
+      "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_tabs", "browser_tab_new", "browser_tab_select", "browser_tab_close",
+      "browser_select", "browser_hover", "browser_upload", "browser_downloads", "browser_eval", "browser_console",
+    ]));
+    expect(browser.every((t) => categoryOf(t) === "browser")).toBe(true);
+    expect(browser.find((t) => t.name === "browser_eval")?.risk).toBe("exec");
+    expect(browser.find((t) => t.name === "browser_tabs")?.risk).toBe("read");
   });
 
   it("turning * off keeps every tool, the internal ones included", () => {
