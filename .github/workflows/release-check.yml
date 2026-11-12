@@ -1,0 +1,100 @@
+name: Release check (arm64)
+
+# Prova a compilare, senza impacchettare né firmare, i target arm64 dei flussi di release sui runner
+# arm nativi (daemon `aiw` e shell Tauri), così un target nuovo non viene provato per la prima volta
+# su un tag. Parte solo se una pull request tocca il flusso di release, gli script di CI o i manifest
+# Cargo/Tauri; a mano da "Run workflow". Non prova CUDA (installare il toolkit e compilare ggml-cuda
+# costa troppo per una pull request: lo si prova a mano con release.yml, targets = cuda).
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/workflows/release-check.yml
+      - scripts/ci/**
+      - Cargo.toml
+      - Cargo.lock
+      - "crates/*/Cargo.toml"
+      - apps/desktop/src-tauri/Cargo.toml
+      - "apps/desktop/src-tauri/tauri*.conf.json"
+      - "apps/desktop/plugins/*/Cargo.toml"
+  workflow_dispatch:
+
+concurrency:
+  group: release-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  select:
+    name: Selezione dei target (self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci/select-targets.sh --self-test
+
+  check:
+    name: cargo check ${{ matrix.name }}
+    # The arm runners are new for this repository: if a leg fails for a reason of the runner image,
+    # fix the workflow here before a tag finds out. It is not a required check unless the owner makes it one.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux arm64, os: ubuntu-22.04-arm }
+          - { name: Windows arm64, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Rust e libclang (Windows arm64)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/setup-windows-arm64.ps1 -Step rust
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-check
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake pkg-config libclang-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - name: MSVC arm64 (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: CMake e Ninja (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/setup-windows-arm64.ps1 -Step tools
+      # The daemon with the embedded llama.cpp: `cargo check` still runs the build script, i.e. the
+      # CMake build of llama.cpp, which is the part that differs between platforms.
+      - name: Daemon (aiw-cli, llama-embedded)
+        if: runner.os == 'Linux'
+        run: cargo check -p aiw-cli --features llama-embedded
+      - name: Daemon (aiw-cli, llama-embedded)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: C:\t
+        run: cargo check -p aiw-cli --features llama-embedded
+      # tauri::generate_context! embeds the built UI at compile time.
+      - run: npm ci --prefix apps/ui
+      - run: npm run build --prefix apps/ui
+      - name: Tauri shell (aiw-desktop)
+        if: runner.os == 'Linux'
+        run: cargo check -p aiw-desktop
+      - name: Tauri shell (aiw-desktop)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: C:\t
+        run: cargo check -p aiw-desktop

@@ -1,14 +1,26 @@
-name: Release (DMG macOS, installer Windows)
+name: Release (DMG macOS, installer Windows; arm64 e CUDA opzionali)
 
-# Fuori store: solo il DMG macOS (senza sandbox, con tutte le funzioni) e l'installer Windows (.exe).
+# Fuori store: il DMG macOS (senza sandbox, con tutte le funzioni) e l'installer Windows (.exe).
 # iOS, Android e la versione Mac App Store (sandbox, `--features mas`) escono dal flusso degli store:
 # vedi .github/workflows/store.yml e docs/store/README.md.
 # Heavy, multi-platform builds run on demand or for version tags only.
+#
+# Che cosa si costruisce lo decide scripts/ci/select-targets.sh (provabile in locale con --self-test):
+#   - `default` (nessun input e nessuna variabile): solo Windows x64 e macOS universale, come sempre;
+#   - input `targets` di "Run workflow", oppure la variabile del repository AIW_RELEASE_TARGETS per i
+#     tag: un elenco separato da virgole di target (windows-x64, macos, linux-arm64, windows-arm64,
+#     daemon-linux-arm64, daemon-windows-arm64, cuda-linux, cuda-windows) o di gruppi (default, arm64,
+#     cuda, extras, all). I target nuovi (arm64, CUDA) non fermano mai la release se falliscono.
+# Procedura completa: docs/release/RELEASE.md.
 on:
   workflow_dispatch:
     inputs:
       tag:
         description: "Tag da pubblicare (es. v0.5.0-beta.2); vuoto = solo build, nessuna release"
+        required: false
+        default: ""
+      targets:
+        description: "Target da costruire, separati da virgole (es. linux-arm64,cuda); vuoto = default (+ variabile AIW_RELEASE_TARGETS). Gruppi: default, arm64, cuda, extras, all"
         required: false
         default: ""
   push:
@@ -22,24 +34,65 @@ permissions:
   contents: read
 
 jobs:
+  # Which targets to build: see scripts/ci/select-targets.sh. The matrices of the jobs below come from here.
+  select:
+    name: Target da costruire
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.sel.outputs.desktop }}
+      daemon: ${{ steps.sel.outputs.daemon }}
+      cuda: ${{ steps.sel.outputs.cuda }}
+      core: ${{ steps.sel.outputs.core }}
+      selected: ${{ steps.sel.outputs.selected }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: sel
+        env:
+          INPUT_TARGETS: ${{ inputs.targets }}
+          VAR_TARGETS: ${{ vars.AIW_RELEASE_TARGETS }}
+        run: bash scripts/ci/select-targets.sh
+
   desktop:
     name: Desktop ${{ matrix.name }}
+    needs: select
+    if: needs.select.outputs.desktop != '[]'
+    # The arm64 legs are new and never ran on a tag: they never block the release (`optional`).
+    continue-on-error: ${{ matrix.optional }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: Windows x64, os: windows-latest, args: "--features computer-use --bundles nsis", targets: "" }
-          - { name: macOS universale, os: macos-15, args: "--features computer-use --target universal-apple-darwin --bundles dmg", targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
+        include: ${{ fromJSON(needs.select.outputs.desktop) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # Windows arm64: rustup and an arm64-native libclang (bindgen) before the toolchain action.
+      - name: Rust e libclang (Windows arm64)
+        if: matrix.arm && runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/setup-windows-arm64.ps1 -Step rust
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@v2
+      # xcap (computer-use) needs newer PipeWire headers than Ubuntu 22.04 ships: Linux builds without it.
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake pkg-config libclang-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      # llama.cpp's CMake build on Windows arm64: arm64 MSVC environment and Ninja (as the Vulkan
+      # job of the old daemon builds needed it: the Visual Studio generator failed in nested projects).
+      - name: MSVC arm64 (Windows arm64)
+        if: matrix.arm && runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: CMake e Ninja (Windows arm64)
+        if: matrix.arm && runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/setup-windows-arm64.ps1 -Step tools
       # Apple Foundation Models (macOS 26+): the Swift helper of the native plugin needs the macOS 26
       # SDK, i.e. Xcode 26. It is used for the helper only (build.rs): compiling llama.cpp with
       # Xcode 26 leaves `___isPlatformVersionAtLeast` undefined at link time, so the rest of the
@@ -212,16 +265,33 @@ jobs:
             Write-Output "$($f.Name): $($sig.Status) - $($sig.SignerCertificate.Subject)"
             if ($sig.Status -ne 'Valid') { throw "firma non valida: $($f.Name)" }
           }
+      # RPM versions cannot contain '-' ("0.5.0-beta.8" is rejected by the bundler): the prerelease is
+      # spelled the RPM way (0.5.0~beta.8, sorts before 0.5.0) through a config override used by this
+      # build only; the app and the other bundles keep the real version. If the Tauri CLI refuses a
+      # non-semver override the release still ships the .deb and the AppImage.
+      - name: Build RPM (Linux)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        working-directory: apps/desktop
+        run: |
+          rpm_version=$(node -p "require('./src-tauri/tauri.conf.json').version.replace('-', '~')")
+          npx tauri build --bundles rpm --config "{\"version\":\"$rpm_version\"}"
       - uses: actions/upload-artifact@v4
         with:
           name: aiw-desktop-${{ matrix.os }}
           path: |
             target/**/release/bundle/**/*-setup.exe
             target/**/release/bundle/**/*.dmg
+            target/**/release/bundle/**/*.deb
+            target/**/release/bundle/**/*.rpm
+            target/**/release/bundle/**/*.AppImage
           if-no-files-found: error
 
   core-tests:
     name: Core tests ${{ matrix.os }}
+    needs: select
+    # Part of the default release: skipped when a manual run selects only other targets.
+    if: needs.select.outputs.core == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -233,14 +303,178 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --no-fail-fast
 
+  # Daemon/CLI `aiw` for arm64 (embedded llama.cpp, CPU only: no GPU backend is built for arm64).
+  # Optional: native arm runners, never run on a tag before; a failure here never blocks the release.
+  daemon-arm64:
+    name: aiw daemon ${{ matrix.name }}
+    needs: select
+    if: needs.select.outputs.daemon != '[]'
+    continue-on-error: true
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.daemon) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust e libclang (Windows arm64)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/setup-windows-arm64.ps1 -Step rust
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: daemon-arm64
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake pkg-config libclang-dev
+      - name: MSVC arm64 (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: CMake e Ninja (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/setup-windows-arm64.ps1 -Step tools
+      # Windows: a short target dir (llama.cpp's nested CMake projects exceed MAX_PATH under
+      # D:\a\<repo>\<repo>\target\...) and pwsh, not bash (Git's bash puts its own usr/bin/link.exe
+      # in front of MSVC's linker).
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: C:\t
+          CMAKE_GENERATOR: Ninja
+        run: cargo build --release -p aiw-cli --features llama-embedded
+      - name: Build
+        if: runner.os != 'Windows'
+        run: cargo build --release -p aiw-cli --features llama-embedded
+      # Distinct file names per platform, so the artifacts can be merged without collisions.
+      - name: Name the binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          src=target/release/aiw
+          if [ "$RUNNER_OS" = "Windows" ]; then src=/c/t/release/aiw.exe; fi
+          cp "$src" "dist/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aiw-daemon-${{ matrix.os }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  # CUDA 12 builds of the daemon (embedded llama.cpp with `llama-cuda`), Windows x64 and Linux x64.
+  # Like the Vulkan job of the old daemon builds: optional and non-blocking (`continue-on-error`), a
+  # CUDA toolchain hiccup never fails the release. The toolkit is installed with only nvcc, the
+  # runtime and cuBLAS (network installer), and NO NVIDIA file is shipped:
+  #   - Linux links cudart and cuBLAS statically (llama-cpp-sys-2): the binary needs only the NVIDIA
+  #     driver (libcuda.so.1);
+  #   - Windows links them dynamically: it needs the driver and the CUDA 12 runtime DLLs
+  #     (cudart64_12.dll, cublas64_12.dll, cublasLt64_12.dll) that the person installs with the
+  #     CUDA Toolkit 12.x. See docs/release/RELEASE.md.
+  cuda:
+    name: aiw daemon (CUDA 12) ${{ matrix.name }}
+    needs: select
+    if: needs.select.outputs.cuda != '[]'
+    continue-on-error: true
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.cuda) }}
+    runs-on: ${{ matrix.os }}
+    env:
+      CUDA_VERSION: "12.8.1"
+      # Real code for Turing, Ampere and Ada, PTX for Pascal and Hopper/Blackwell (JIT at first use).
+      # Forwarded to CMake by llama-cpp-sys-2 (every CMAKE_* variable of the environment is).
+      CMAKE_CUDA_ARCHITECTURES: "61-virtual;75-real;80-real;86-real;89-real;90-virtual"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cuda12
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake pkg-config libclang-dev
+      # Same sub-packages as llama.cpp's own CI uses on Windows. On Linux the names get the cuda-
+      # prefix and the version suffix from the action; `driver-dev` brings the libcuda.so stub the
+      # linker needs on a machine without a GPU.
+      - name: CUDA toolkit (Linux)
+        if: runner.os == 'Linux'
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: ${{ env.CUDA_VERSION }}
+          method: network
+          sub-packages: '["nvcc", "cudart-dev", "cccl", "driver-dev"]'
+          non-cuda-sub-packages: '["libcublas-dev"]'
+          log-file-suffix: ${{ matrix.id }}.txt
+      - name: CUDA toolkit (Windows)
+        if: runner.os == 'Windows'
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: ${{ env.CUDA_VERSION }}
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
+          log-file-suffix: ${{ matrix.id }}.txt
+      - name: MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: C:\t
+          CMAKE_GENERATOR: Ninja
+        run: |
+          nvcc --version
+          cargo build --release -p aiw-cli --features llama-cuda
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          nvcc --version
+          # `-lcuda` resolves to the stub of the toolkit; at run time the driver's libcuda.so.1 is used.
+          export RUSTFLAGS="-L native=${CUDA_PATH}/lib64/stubs"
+          cargo build --release -p aiw-cli --features llama-cuda
+      # No NVIDIA library may be a runtime dependency on Linux (cudart and cuBLAS are linked in).
+      - name: Check the dynamic dependencies
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            dumpbin //dependents C:/t/release/aiw.exe | grep -iE "cuda|cublas|nvcuda" || true
+          else
+            ldd target/release/aiw | tee /dev/stderr | grep -iE "libcuda|libcudart|libcublas" || true
+            if ldd target/release/aiw | grep -iE "libcudart|libcublas"; then
+              echo "::error::il binario dipende da cudart/cuBLAS condivise: servirebbe distribuirle"
+              exit 1
+            fi
+          fi
+      - name: Name the binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          src=target/release/aiw
+          if [ "$RUNNER_OS" = "Windows" ]; then src=/c/t/release/aiw.exe; fi
+          cp "$src" "dist/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aiw-daemon-${{ matrix.os }}-cuda12
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
   # Creates the GitHub (pre)release from the artifacts of the build jobs (the macOS DMG and the
-  # Windows installer, nothing else). Tags only.
+  # Windows installer, plus the optional arm64 and CUDA files when they were built). Tags only.
+  # The optional jobs are continue-on-error, so their files are included when present.
   publish:
     name: Publish release
     # A pushed tag, or a manual run with a tag name: the release action then creates the tag on
     # the commit that was built (useful where pushing tags is not possible).
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v'))
-    needs: [desktop]
+    # `desktop` must not have failed (it is skipped when only other targets were selected); the
+    # optional jobs cannot fail the release.
+    if: ${{ !cancelled() && needs.select.result == 'success' && needs.desktop.result != 'failure' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v'))) }}
+    needs: [select, desktop, daemon-arm64, cuda]
     env:
       RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.tag }}
     runs-on: ubuntu-latest
@@ -258,10 +492,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
+          tag="${RELEASE_TAG}"
+          ver="${tag#v}"
           # Bundles keep the bundler names (spaces become underscores: GitHub rewrites them anyway).
+          # The daemon binaries are named aiw-<version>-<os>-<arch>[-cuda12][.exe]: the `aiw-` prefix is
+          # what the in-app updater uses to skip them when it looks for an installer.
           while IFS= read -r f; do
             b="$(basename "$f")"
-            cp "$f" "release/${b// /_}"
+            case "$b" in
+              aiw-linux-*|aiw-windows-*|aiw-macos-*) cp "$f" "release/aiw-${ver}-${b#aiw-}" ;;
+              *) cp "$f" "release/${b// /_}" ;;
+            esac
           done < <(find artifacts -type f | sort)
           ls -l release
           test -n "$(ls -A release)"

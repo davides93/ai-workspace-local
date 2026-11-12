@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Segnalare una vulnerabilità (in privato)
+    url: https://github.com/davides93/ai-workspace-local/security/advisories/new
+    about: Non aprire una issue pubblica per una vulnerabilità. Usa la segnalazione privata di GitHub (vedi SECURITY.md).
