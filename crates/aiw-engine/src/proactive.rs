@@ -345,6 +345,16 @@ impl Engine {
         });
     }
 
+    /// Copies the search settings (`search.*`) to the tool. Called at start and when one changes.
+    pub(crate) fn sync_search(&self) {
+        let text = |k: &str| self.0.config.get_str(k).unwrap_or_default();
+        self.0.search.set(aiw_tools::search::Config {
+            provider: text("search.provider"),
+            searxng_url: text("search.searxng_url"),
+            brave_api_key: text("search.brave_api_key"),
+        });
+    }
+
     /// Quiet hours right now (for the desktop shell, which holds notifications back).
     pub fn proactive_quiet_now(&self) -> bool {
         self.in_quiet_hours_now(Local::now())

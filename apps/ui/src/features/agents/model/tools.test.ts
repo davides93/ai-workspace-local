@@ -25,6 +25,7 @@ describe("categories", () => {
     expect(categoryOf(tool("grep"))).toBe("file");
     expect(categoryOf(tool("shell"))).toBe("shell");
     expect(categoryOf(tool("web_fetch"))).toBe("web");
+    expect(categoryOf(tool("web_search"))).toBe("web");
     expect(categoryOf(tool("browser_click"))).toBe("browser");
     expect(categoryOf(tool("computer_key"))).toBe("computer");
     expect(categoryOf(tool("todo"))).toBe("internal");

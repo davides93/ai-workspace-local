@@ -7,6 +7,7 @@ pub mod computer;
 pub mod connectors;
 pub mod fs;
 pub mod mcp;
+pub mod search;
 pub mod shell;
 pub mod web;
 pub mod webview;
@@ -328,12 +329,19 @@ impl ToolRegistry {
 }
 
 /// Registers every built-in tool available in this build.
-pub fn register_builtins(reg: &ToolRegistry, browser: Arc<browser::BrowserManager>, connectors: connectors::Shared) {
+pub fn register_builtins(
+    reg: &ToolRegistry,
+    browser: Arc<browser::BrowserManager>,
+    connectors: connectors::Shared,
+    search: search::Shared,
+) {
     for t in fs::tools() {
         reg.register(t);
     }
     reg.register(Arc::new(shell::ShellTool));
     reg.register(Arc::new(web::WebFetchTool));
+    // Web search; listed only while the settings do not switch it off.
+    reg.register(Arc::new(search::WebSearchTool::new(search)));
     for t in browser::tools(browser) {
         reg.register(t);
     }

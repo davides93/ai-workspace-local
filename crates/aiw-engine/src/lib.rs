@@ -129,6 +129,8 @@ pub(crate) struct Inner {
     pub tools: Arc<ToolRegistry>,
     /// What the settings say about the calendar and mail connectors (read by their tools).
     pub connectors: aiw_tools::connectors::Shared,
+    /// What the settings say about the web search (read by `web_search`).
+    pub search: aiw_tools::search::Shared,
     pub browser: Arc<BrowserManager>,
     pub native_stt: RwLock<Option<Arc<dyn voice::NativeStt>>>,
     pub mcp: tokio::sync::Mutex<HashMap<String, Arc<McpClient>>>,
@@ -205,7 +207,8 @@ impl Engine {
         let tools = Arc::new(ToolRegistry::default());
         let browser = Arc::new(BrowserManager::new(dirs.root.join("browser-profile")));
         let connectors = aiw_tools::connectors::ConnectorSettings::new(Default::default());
-        aiw_tools::register_builtins(&tools, browser.clone(), connectors.clone());
+        let search = aiw_tools::search::SearchSettings::new(Default::default());
+        aiw_tools::register_builtins(&tools, browser.clone(), connectors.clone(), search.clone());
         if let Some(d) = store.get_doc::<Vec<String>>("tool_settings", "disabled")? {
             tools.set_disabled(d);
         }
@@ -263,6 +266,7 @@ impl Engine {
             models,
             tools,
             connectors,
+            search,
             browser,
             native_stt: Default::default(),
             mcp: Default::default(),
@@ -289,6 +293,7 @@ impl Engine {
             engine.0.runtimes.refresh().await;
         }
         engine.sync_connectors();
+        engine.sync_search();
         training_tool::register(&engine);
         engine.seed()?;
         engine.resume_workflows();
@@ -2052,6 +2057,9 @@ impl Engine {
         if key.starts_with("connectors.") {
             self.sync_connectors();
         }
+        if key.starts_with("search.") {
+            self.sync_search();
+        }
         if key == "workspace.root" {
             if let Some(p) = self.0.config.get_str("workspace.root") {
                 let root = aiw_core::paths::expand_home(&p);
@@ -2430,6 +2438,8 @@ mod tests_proactive;
 mod tests_roles;
 #[cfg(test)]
 mod tests_routing;
+#[cfg(test)]
+mod tests_search;
 #[cfg(test)]
 mod tests_thinking;
 #[cfg(test)]

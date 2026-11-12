@@ -2,7 +2,7 @@ import type {
   AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, Fit, HookConfig, InferenceProfile, LocalModel, McpServer,
   PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, RemoteAgent, TeamDef, ToolInfo, WorkflowDef, WorkflowRun,
 } from "../types";
-import { RUN_ERROR_MESSAGE } from "../types";
+import { RUN_ERROR_MESSAGE, SECRET_MASK } from "../types";
 
 // Demo data for the interactive mockup. Everything here is sample content, clearly labelled
 // in the UI as "demo"; the real values come from the Rust core (crates/aiw-*).
@@ -200,12 +200,12 @@ export const profiles: InferenceProfile[] = [
 ];
 
 export const agents: AgentProfile[] = [
-  { id: "operator", name: "Operatore", description: "Task operativi su file, cartelle, documenti e app.", inference_profile: "balanced", system_prompt: "Sei un operatore preciso. Pianifica, chiedi conferma prima delle azioni distruttive e riporta cosa hai fatto.", tools: ["read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "shell", "web_fetch", "todo", "agent"], mode: "ask", sandbox: "workspace-write", max_turns: 30 },
+  { id: "operator", name: "Operatore", description: "Task operativi su file, cartelle, documenti e app.", inference_profile: "balanced", system_prompt: "Sei un operatore preciso. Pianifica, chiedi conferma prima delle azioni distruttive e riporta cosa hai fatto.", tools: ["read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "shell", "web_fetch", "web_search", "todo", "agent"], mode: "ask", sandbox: "workspace-write", max_turns: 30 },
   { id: "coder", name: "Coder", description: "Coding agent sul workspace corrente.", inference_profile: "balanced", system_prompt: "Sei un ingegnere software. Leggi prima di modificare e verifica con i test.", tools: ["*"], mode: "auto-edit", sandbox: "workspace-write", max_turns: 60 },
-  { id: "browser", name: "Navigatore", description: "Ricerca e azioni nel browser via CDP.", inference_profile: "fast-local", system_prompt: "Usi il browser per raccogliere informazioni e completare form.", tools: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot", "web_fetch", "todo"], mode: "ask", sandbox: "read-only", max_turns: 40 },
+  { id: "browser", name: "Navigatore", description: "Ricerca e azioni nel browser via CDP.", inference_profile: "fast-local", system_prompt: "Usi il browser per raccogliere informazioni e completare form.", tools: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot", "web_fetch", "web_search", "todo"], mode: "ask", sandbox: "read-only", max_turns: 40 },
   { id: "desktop", name: "Pilota desktop", description: "Computer-use: vede lo schermo e usa mouse e tastiera.", inference_profile: "vision-cu", system_prompt: "Controlli il desktop tramite screenshot e azioni. Chiedi conferma prima di inviare, pagare o cancellare.", tools: ["computer_screenshot", "computer_click", "computer_type", "computer_key", "computer_scroll", "todo"], mode: "ask", sandbox: "read-only", max_turns: 50 },
   { id: "teacher", name: "Insegnante", description: "Impara da ciò che gli racconti: salva, corregge e dimentica i ricordi.", inference_profile: "fast-local", system_prompt: "Sei l'Insegnante: aiuti l'utente a insegnare all'assistente ciò che deve ricordare.", tools: ["memory_save", "memory_search", "memory_update", "memory_forget", "render_ui", "todo"], mode: "auto", sandbox: "read-only", max_turns: 12 },
-  { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "todo"], mode: "plan", sandbox: "read-only", max_turns: 20 },
+  { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "web_search", "todo"], mode: "plan", sandbox: "read-only", max_turns: 20 },
 ];
 
 /** Teams of the demo: a supervisor with two members, and a chain. */
@@ -322,7 +322,7 @@ export const sessionMessages: Record<string, ChatMessage[]> = {
 export const tools: ToolInfo[] = [
   ["read_file", "Legge un file di testo nel workspace", "read"], ["list_dir", "Elenca una cartella", "read"], ["glob", "Trova file per pattern", "read"], ["grep", "Cerca testo con regex", "read"],
   ["write_file", "Crea o sovrascrive un file", "write"], ["edit_file", "Sostituzione esatta in un file", "write"], ["shell", "Esegue un comando nella sandbox", "exec"],
-  ["web_fetch", "Scarica una pagina e la converte in testo", "network"], ["browser_navigate", "Apre un URL nel browser controllato", "network"], ["browser_snapshot", "Snapshot testuale della pagina", "read"],
+  ["web_fetch", "Scarica una pagina e la converte in testo", "network"], ["web_search", "Cerca sul web e restituisce titolo, indirizzo e anteprima dei risultati", "network"], ["browser_navigate", "Apre un URL nel browser controllato", "network"], ["browser_snapshot", "Snapshot testuale della pagina", "read"],
   ["browser_click", "Clic su un elemento", "computer"], ["browser_type", "Scrive in un campo", "computer"], ["browser_screenshot", "Screenshot della pagina", "read"],
   ["computer_screenshot", "Screenshot del desktop", "computer"], ["computer_click", "Clic alle coordinate", "computer"], ["computer_type", "Digita testo", "computer"], ["computer_key", "Combinazione di tasti", "computer"], ["computer_scroll", "Scroll", "computer"],
 ].map(([name, description, risk]) => ({ name, description, risk: risk as ToolInfo["risk"], source: "builtin" as const, enabled: true, available: true, parameters: {} }));
@@ -452,6 +452,9 @@ export const configSchema: SettingsSchema = {
     "connectors.calendar.sources": { type: "array", title: "Calendari da leggere", description: "File .ics, cartelle con file .ics o indirizzi di sottoscrizione (https:// o webcal://)", items: { type: "string" }, default: [] },
     "connectors.mail.enabled": { type: "boolean", title: "Posta: l'assistente può leggere la posta salvata sul computer", description: "Sola lettura: non invia, non cancella e non segna nulla; legge solo ciò che scegli, e i dati restano sul dispositivo", default: false },
     "connectors.mail.sources": { type: "array", title: "Posta da leggere", description: "Cartelle Maildir, file .mbox o .eml", items: { type: "string" }, default: [] },
+    "search.provider": { type: "string", title: "Motore della ricerca web", description: "Con «Automatico» usa SearXNG se hai indicato un indirizzo, altrimenti Brave se hai inserito una chiave, altrimenti DuckDuckGo. Il testo cercato viene inviato al motore scelto. «Spenta» toglie lo strumento di ricerca agli agenti", enum: ["auto", "off", "searxng", "brave", "duckduckgo"], default: "auto" },
+    "search.searxng_url": { type: "string", title: "Indirizzo di SearXNG", description: "Istanza di SearXNG, anche su questo computer o sulla rete di casa (per esempio http://localhost:8080). Deve consentire il formato json", default: "", placeholder: "http://localhost:8080" },
+    "search.brave_api_key": { type: "string", title: "Chiave di Brave Search", description: "Chiave dell'API di Brave Search; resta su questo dispositivo e non viene mai mostrata per intero", default: "", secret: true },
     "voice.language": { type: "string", title: "Lingua della voce", description: "Codice ISO 639-1 (it, en…) o auto per riconoscerla", default: "auto" },
     "voice.stt_runtime": { type: "string", title: "Motore di trascrizione", description: "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", enum: ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], default: "auto" },
     "voice.stt_model": { type: "string", title: "Modello Whisper", description: "Vuoto = il più grande installato che sta in memoria", default: "" },
@@ -464,6 +467,15 @@ export const configLayers: ConfigView["layers"] = [
   { name: "device", path: "~/.aiw/devices/Studio-PC.json", values: { "context.compact_at": 0.85 } },
   { name: "workspace", path: "Workspace/.aiw/config.json", values: { "policy.mode": "auto-edit" } },
 ];
+
+/** Replaces the value of every non-empty secret setting with the mask, as the API does. */
+export function maskConfigSecrets(values: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...values };
+  for (const [key, field] of Object.entries(configSchema.properties)) {
+    if (field.secret && typeof out[key] === "string" && out[key] !== "") out[key] = SECRET_MASK;
+  }
+  return out;
+}
 
 export function effective(): Record<string, unknown> {
   const out: Record<string, unknown> = {};

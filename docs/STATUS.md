@@ -70,7 +70,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | File: read, write, edit, list, glob, grep, move | ✅ | **v0.4** confinamento anche rispetto ai symlink; radici di lettura che sono symlink ignorate; `read_file` limitato a 16 MB, `grep` controlla la dimensione prima di leggere |
 | Shell in sandbox: bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) | 🟡 | rete della shell aperta di default; `~/.aiw` leggibile |
 | `web_fetch` anti-SSRF | ✅ **v0.4** | redirect rivalidati a ogni salto, DNS fissato, IPv6 e range speciali bloccati; lettura limitata a 5 MB |
-| Ricerca web | ❌ | nessun provider (SearXNG, Brave…) |
+| Ricerca web | 🟡 | strumento `web_search` (`aiw-tools/src/search.rs`) con `search.provider` = `auto` \| `duckduckgo` \| `searxng` \| `brave` \| `off`; chiave di Brave mascherata dall'API e solo a livello di macchina, indirizzo di SearXNG validato; sezione «Ricerca web» nelle Impostazioni; l'assistente proattivo la usa solo a `act_readonly`. **Mai provata contro i provider veri da questo ambiente**: i test usano un server locale con risposte scritte a mano nella forma attesa. Il parser di DuckDuckGo dipende dall'HTML della pagina `html.duckduckgo.com` e può smettere di funzionare se cambia; DuckDuckGo può chiedere una verifica anti-bot (l'errore lo dice). Gli agenti predefiniti già salvati non ricevono `web_search` da soli (solo le nuove installazioni) |
 | Browser via CDP: navigate, snapshot, click, type, screenshot | 🟡 | mancano scroll, attese, tab, eval, download, albero di accessibilità; **v0.4** screenshot visibili nella chat |
 | Computer-use: screenshot, mouse, tastiera | 🟡 | 5 azioni, solo build desktop Windows e macOS; **v0.4** screenshot visibili nella chat |
 | Client MCP: stdio e streamable HTTP, `tools/list` e `tools/call` | 🟡 | mancano resources, prompts, sampling, elicitation, OAuth, list_changed e riconnessione; **v0.4** env e header dalla UI, validazione prima del salvataggio, segreti (header ed env) mascherati nelle risposte e conservati se la maschera viene rimandata |
@@ -201,8 +201,9 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 **P2 · Layer agentici**
 8. Knowledge base locale (documenti → embeddings → ricerca) come tool degli agenti, poi memoria a
    lungo termine.
-9. Ricerca web (SearXNG locale o provider con chiave) e browser più ricco (scroll, attese, tab,
-   download, albero di accessibilità, intercettazione CDP delle richieste per la policy di rete).
+9. Browser più ricco (scroll, attese, tab, download, albero di accessibilità, intercettazione CDP
+   delle richieste per la policy di rete). La ricerca web (`web_search`: SearXNG, Brave, DuckDuckGo)
+   c'è, ma va provata contro i provider veri.
 10. Client MCP completo: resources, prompts, sampling, OAuth, riconnessione.
 11. Rewind dei checkpoint, workflow durevoli (ripresa, foreach, retry, timeout), approvazioni con
     timeout e notifiche desktop.

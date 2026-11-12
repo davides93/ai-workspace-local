@@ -59,7 +59,7 @@ export function toolCategory(t: ToolInfo): string {
   if (isComputerTool(t)) return "computer";
   if (FILE_TOOLS.has(t.name)) return "files";
   if (t.name === "shell") return "shell";
-  if (t.name === "web_fetch") return "web";
+  if (t.name === "web_fetch" || t.name === "web_search") return "web";
   return "other";
 }
 

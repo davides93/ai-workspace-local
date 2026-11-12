@@ -1,7 +1,7 @@
 //! Layered configuration (architecture §7): `defaults → global → device → workspace`.
 //! Each layer is a flat JSON object of dotted keys stored in its own file; later layers win.
 
-use crate::api::{ConfigLayerView, ConfigView};
+use crate::api::{ConfigLayerView, ConfigView, SECRET_MASK};
 use crate::schema::SettingsSchema;
 use crate::{Error, Result};
 use serde_json::{json, Map, Value};
@@ -78,6 +78,9 @@ pub fn app_schema() -> SettingsSchema {
             "connectors.calendar.sources": {"type": "array", "title": "Calendari da leggere", "description": "File .ics, cartelle con file .ics o indirizzi di sottoscrizione (https:// o webcal://)", "items": {"type": "string"}, "default": []},
             "connectors.mail.enabled": {"type": "boolean", "title": "Posta: l'assistente può leggere la posta salvata sul computer", "description": "Sola lettura: non invia, non cancella e non segna nulla; legge solo ciò che scegli, e i dati restano sul dispositivo", "default": false},
             "connectors.mail.sources": {"type": "array", "title": "Posta da leggere", "description": "Cartelle Maildir, file .mbox o .eml", "items": {"type": "string"}, "default": []},
+            "search.provider": {"type": "string", "title": "Motore della ricerca web", "description": "Con «Automatico» usa SearXNG se hai indicato un indirizzo, altrimenti Brave se hai inserito una chiave, altrimenti DuckDuckGo. Il testo cercato viene inviato al motore scelto. «Spenta» toglie lo strumento di ricerca agli agenti", "enum": ["auto", "off", "searxng", "brave", "duckduckgo"], "default": "auto"},
+            "search.searxng_url": {"type": "string", "title": "Indirizzo di SearXNG", "description": "Istanza di SearXNG, anche su questo computer o sulla rete di casa (per esempio http://localhost:8080). Deve consentire il formato json", "default": "", "placeholder": "http://localhost:8080"},
+            "search.brave_api_key": {"type": "string", "title": "Chiave di Brave Search", "description": "Chiave dell'API di Brave Search; resta su questo dispositivo e non viene mai mostrata per intero", "default": "", "secret": true},
             "voice.language": {"type": "string", "title": "Lingua della voce", "description": "Codice ISO 639-1 (it, en…) o auto per riconoscerla", "default": "auto"},
             "voice.stt_runtime": {"type": "string", "title": "Motore di trascrizione", "description": "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", "enum": ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], "default": "auto"},
             "voice.stt_model": {"type": "string", "title": "Modello Whisper", "description": "Vuoto = il più grande installato che sta in memoria", "default": ""},
@@ -125,7 +128,26 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "connectors.calendar.sources",
     "connectors.mail.enabled",
     "connectors.mail.sources",
+    // Where the person's searches go, and the key they pay for, are theirs: a repository cannot redirect them
+    // to its own server or supply a key.
+    "search.provider",
+    "search.searxng_url",
+    "search.brave_api_key",
 ];
+
+/// The address of the SearXNG instance: empty (not set) or an http(s) URL.
+fn check_searxng_url(v: &Value) -> Result<()> {
+    let Some(text) = v.as_str().map(str::trim).filter(|t| !t.is_empty()) else { return Ok(()) };
+    let lower = text.to_ascii_lowercase();
+    let rest = lower.strip_prefix("http://").or_else(|| lower.strip_prefix("https://"));
+    if rest.is_some_and(|r| !r.is_empty() && !r.starts_with('/') && !r.contains(char::is_whitespace)) {
+        Ok(())
+    } else {
+        Err(Error::Invalid(
+            "`search.searxng_url` deve essere un indirizzo che inizia con http:// o https:// (per esempio http://localhost:8080)".into(),
+        ))
+    }
+}
 
 pub struct LayeredConfig {
     schema: SettingsSchema,
@@ -276,6 +298,13 @@ impl LayeredConfig {
     pub fn set(&self, layer: Layer, key: &str, value: Value) -> Result<()> {
         if let Some(f) = self.schema.properties.get(key) {
             f.validate(key, &value).map_err(Error::Invalid)?;
+            // The mask the API showed comes back unchanged: keep what is stored.
+            if f.secret && value.as_str() == Some(SECRET_MASK) {
+                return Ok(());
+            }
+        }
+        if key == "search.searxng_url" {
+            check_searxng_url(&value)?;
         }
         let (lock, path) = match layer {
             Layer::Global => (&self.global, Some(self.global_path.clone())),
@@ -292,6 +321,18 @@ impl LayeredConfig {
         write_layer(&path, &m)
     }
 
+    /// `values` with every non-empty secret setting replaced by [`SECRET_MASK`] (the API never shows one).
+    fn masked(&self, mut values: Map<String, Value>) -> Map<String, Value> {
+        for k in self.schema.properties.iter().filter(|(_, f)| f.secret).map(|(k, _)| k) {
+            if let Some(v) = values.get_mut(k) {
+                if v.as_str().is_some_and(|s| !s.is_empty()) {
+                    *v = Value::String(SECRET_MASK.into());
+                }
+            }
+        }
+        values
+    }
+
     pub fn view(&self) -> ConfigView {
         let defaults = self.schema.defaults();
         ConfigView {
@@ -300,20 +341,20 @@ impl LayeredConfig {
                 ConfigLayerView {
                     name: "global".into(),
                     path: Some(self.global_path.display().to_string()),
-                    values: self.global.read().unwrap().clone(),
+                    values: self.masked(self.global.read().unwrap().clone()),
                 },
                 ConfigLayerView {
                     name: "device".into(),
                     path: Some(self.device_path.display().to_string()),
-                    values: self.device.read().unwrap().clone(),
+                    values: self.masked(self.device.read().unwrap().clone()),
                 },
                 ConfigLayerView {
                     name: "workspace".into(),
                     path: self.workspace_path.read().unwrap().as_ref().map(|p| p.display().to_string()),
-                    values: self.workspace.read().unwrap().clone(),
+                    values: self.masked(self.workspace.read().unwrap().clone()),
                 },
             ],
-            effective: self.effective(),
+            effective: self.masked(self.effective()),
             schema: self.schema.clone(),
             ignored_workspace_keys: self.ignored_workspace_keys(),
         }
@@ -408,5 +449,47 @@ mod tests {
         assert_eq!(cfg.get_str("sandbox.mode").as_deref(), Some("read-only"));
         cfg.set(Layer::Workspace, "sandbox.mode", json!("off")).unwrap();
         assert_eq!(cfg.get_str("sandbox.mode").as_deref(), Some("off"), "equal to the user's own choice");
+    }
+
+    #[test]
+    fn search_settings_are_machine_level_and_the_key_is_never_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(ws.join(".aiw")).unwrap();
+        std::fs::write(
+            ws.join(".aiw/config.json"),
+            r#"{"search.provider":"searxng","search.searxng_url":"http://evil.example","search.brave_api_key":"dal-repository"}"#,
+        )
+        .unwrap();
+        let cfg = LayeredConfig::load(app_schema(), dir.path().join("config.json"), dir.path().join("dev.json"), None);
+        cfg.set_workspace_root(Some(&ws));
+        assert_eq!(cfg.get_str("search.provider").as_deref(), Some("auto"));
+        assert_eq!(cfg.get_str("search.searxng_url"), None);
+        assert_eq!(cfg.get_str("search.brave_api_key"), None);
+        let mut ignored = cfg.ignored_workspace_keys();
+        ignored.sort();
+        assert_eq!(ignored, ["search.brave_api_key", "search.provider", "search.searxng_url"]);
+
+        // Values are validated.
+        assert!(cfg.set(Layer::Global, "search.provider", json!("google")).is_err());
+        for bad in ["localhost:8080", "ftp://host", "http://", "http:///x", "http://a b"] {
+            assert!(cfg.set(Layer::Global, "search.searxng_url", json!(bad)).is_err(), "{bad}");
+        }
+        cfg.set(Layer::Global, "search.searxng_url", json!("http://localhost:8080")).unwrap();
+        cfg.set(Layer::Global, "search.searxng_url", json!("")).unwrap();
+
+        // The key is stored, but the view shows the mask; sending the mask back keeps the key.
+        cfg.set(Layer::Global, "search.brave_api_key", json!("chiave-vera")).unwrap();
+        assert_eq!(cfg.get_str("search.brave_api_key").as_deref(), Some("chiave-vera"));
+        let view = serde_json::to_string(&cfg.view()).unwrap();
+        assert!(!view.contains("chiave-vera") && !view.contains("dal-repository"), "{view}");
+        assert_eq!(cfg.view().effective["search.brave_api_key"], json!(SECRET_MASK));
+        assert_eq!(cfg.view().layers[1].values["search.brave_api_key"], json!(SECRET_MASK));
+        cfg.set(Layer::Global, "search.brave_api_key", json!(SECRET_MASK)).unwrap();
+        assert_eq!(cfg.get_str("search.brave_api_key").as_deref(), Some("chiave-vera"));
+        // An empty key shows as empty (there is nothing to hide) and clears the stored one.
+        cfg.set(Layer::Global, "search.brave_api_key", json!("")).unwrap();
+        assert_eq!(cfg.get_str("search.brave_api_key"), None);
+        assert_eq!(cfg.view().effective["search.brave_api_key"], json!(""));
     }
 }

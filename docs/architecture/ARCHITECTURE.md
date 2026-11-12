@@ -43,7 +43,7 @@ flowchart TB
     SH["shell (sandbox)"]
     BR["browser (CDP)"]
     CU["computer-use"]
-    WEB["web_fetch"]
+    WEB["web_fetch · web_search"]
     MCPC["client MCP"]
   end
   subgraph Infer["L3 · Inferenza unificata"]
@@ -322,7 +322,7 @@ proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs
 | Elemento | Default | Personalizzabile |
 |---|---|---|
 | Modalità | `ask` (chiede conferma per gli effetti collaterali) | `plan` (solo lettura), `auto-edit` (modifica file senza chiedere, comandi su conferma), `auto` (tutto entro la sandbox), `yolo` (tutto, sconsigliato) |
-| Regole | allow: read, list, search, web_fetch su host pubblici · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow |
+| Regole | allow: read, list, search, web_fetch su host pubblici, web_search · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow |
 | Sandbox OS (P07) | `workspace-write`: Linux bwrap, macOS sandbox-exec, Windows token a integrità Low + job object + desktop dedicato (`aiw-winsandbox`) | `read-only`, `workspace-write`, `off` |
 | Rete dei tool | Consentita solo per i tool web e browser | Allowlist di domini |
 | Audit (P22) | Ogni decisione di policy ed esecuzione viene registrata con l'ID del run | Esportabile in JSONL |
@@ -633,6 +633,7 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | `read_file`, `write_file`, `edit_file` (sostituzione esatta), `list_dir`, `glob`, `grep` | tutte | Confinati alle radici del workspace |
 | `shell` | desktop | Timeout, cwd nel workspace, sandbox OS, output troncato |
 | `web_fetch` | tutte | HTML → testo, limiti di dimensione |
+| `web_search` | tutte | Rischio `network`, soggetto della policy = la `query`. Motore scelto dalla persona (`search.provider`: `auto`, `duckduckgo`, `searxng`, `brave`, `off`; indirizzo di SearXNG e chiave di Brave nelle impostazioni, a livello di macchina, chiave mascherata dall'API), mai dal modello. `auto`: SearXNG se c'è l'indirizzo, poi Brave se c'è la chiave, poi DuckDuckGo (pagina HTML, parser tollerante). Con `off` `Tool::available` dà un errore e lo strumento non è offerto. Il motore copia le impostazioni nel `SearchSettings` condiviso a ogni modifica; 20 s, risposta fino a 2 MB, risultati 1–10 (predefinito 5) |
 | `browser_*` (navigate, snapshot, click, type, screenshot) | desktop (Chrome/Edge/Chromium via CDP) | Snapshot testuale con riferimenti numerati per i modelli solo testo; screenshot per i VLM |
 | `computer_*` (screenshot, click, type, key, scroll) | desktop (feature `computer-use`) · Android via AccessibilityService (plugin) | Modalità *vision* oppure *accessibility* |
 | `todo`, `agent` (subagente), `skill` | tutte | — |

@@ -92,6 +92,22 @@ async fn rest_run_and_gateway_roundtrip() {
 }
 
 #[tokio::test]
+async fn the_search_key_never_comes_back_from_the_config_route() {
+    let (app, _e, _d, _w) = app().await;
+    let put = |key: &str, value: Value| json!({"layer": "global", "key": key, "value": value});
+    let (st, out) = dispatch(app.clone(), "PUT", "/api/config", Some(put("search.brave_api_key", json!("chiave-segreta")))).await;
+    assert_eq!(st, 200, "{out}");
+    assert!(!out.to_string().contains("chiave-segreta"), "{out}");
+    assert_eq!(out["effective"]["search.brave_api_key"], aiw_core::api::SECRET_MASK);
+    let (_, got) = dispatch(app.clone(), "GET", "/api/config", None).await;
+    assert!(!got.to_string().contains("chiave-segreta"), "{got}");
+    let (st, _) = dispatch(app.clone(), "PUT", "/api/config", Some(put("search.searxng_url", json!("gopher://x")))).await;
+    assert_eq!(st, 400);
+    let (st, _) = dispatch(app, "PUT", "/api/config", Some(put("search.provider", json!("bing")))).await;
+    assert_eq!(st, 400);
+}
+
+#[tokio::test]
 async fn lan_requests_need_the_token() {
     let (app, e, _d, _w) = app().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

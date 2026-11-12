@@ -10,7 +10,7 @@ import type {
   DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary,
 } from "../types";
 import {
-  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
+  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, maskConfigSecrets, mcp, models, nid, now, policyRules, profiles,
   remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
@@ -1261,7 +1261,10 @@ export class MockTransport implements Transport {
       const on = eff[c.switch] === true;
       return { name: c.name, description: c.description, source: "builtin", risk: "read", enabled: true, available: on, unavailable_reason: on ? undefined : "Spento: lo accendi in Impostazioni, «Calendario e posta».", parameters: {} };
     });
-    return structuredClone([...tools, ...connectors]);
+    // The search tool is listed always and available unless the provider setting is `off`.
+    const searchOn = eff["search.provider"] !== "off";
+    const all = tools.map((t): ToolInfo => (t.name === "web_search" ? { ...t, available: searchOn, unavailable_reason: searchOn ? undefined : "La ricerca web è spenta: la accendi in Impostazioni, «Ricerca web»." } : t));
+    return structuredClone([...all, ...connectors]);
   }
   async setToolEnabled(name: string, enabled: boolean) {
     if ((INTERNAL_TOOL_NAMES as readonly string[]).includes(name)) {
@@ -1349,9 +1352,15 @@ export class MockTransport implements Transport {
     return { text, language: "it", backend: "whisper.cpp server · ggml-large-v3-turbo-q5_0", duration_ms: Math.round(Math.max(0, wav.size - 44) / 32), elapsed_ms: 640 };
   }
 
-  async config() { return { layers: structuredClone(configLayers), effective: effective(), schema: configSchema }; }
+  async config() {
+    // Secrets never leave as they are: the API shows the mask.
+    const layers = structuredClone(configLayers).map((l) => ({ ...l, values: maskConfigSecrets(l.values ?? {}) }));
+    return { layers, effective: maskConfigSecrets(effective()), schema: configSchema };
+  }
   async setConfig(layer: "global" | "device" | "workspace", key: string, value: unknown) {
     const l = configLayers.find((x) => x.name === layer)!;
+    // The mask coming back means "keep what is stored".
+    if (configSchema.properties[key]?.secret && value === SECRET_MASK) return this.config();
     // `null` removes the key from the layer, as the real config does.
     if (value === null) delete l.values[key];
     else l.values[key] = value;

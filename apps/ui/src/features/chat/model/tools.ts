@@ -30,7 +30,7 @@ const BY_NAME: Record<string, ToolCategoryId> = {
   write_file: "edit", edit_file: "edit", move_file: "edit",
   glob: "search", grep: "search",
   shell: "shell", code: "shell",
-  web_fetch: "web",
+  web_fetch: "web", web_search: "web",
   agent: "agent", skill: "agent",
   todo: "plan",
   render_ui: "ui",

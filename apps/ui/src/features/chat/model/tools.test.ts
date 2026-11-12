@@ -10,6 +10,7 @@ describe("toolCategory", () => {
     expect(toolCategory("grep").id).toBe("search");
     expect(toolCategory("shell")).toMatchObject({ id: "shell", icon: "terminal" });
     expect(toolCategory("web_fetch").id).toBe("web");
+    expect(toolCategory("web_search")).toMatchObject({ id: "web", icon: "cloud" });
     expect(toolCategory("todo").id).toBe("plan");
     expect(toolCategory("render_ui").id).toBe("ui");
   });

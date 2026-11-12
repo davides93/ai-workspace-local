@@ -19,6 +19,7 @@ describe("toolCategory", () => {
     expect(toolCategory(tool("move_file"))).toBe("files");
     expect(toolCategory(tool("shell"))).toBe("shell");
     expect(toolCategory(tool("web_fetch"))).toBe("web");
+    expect(toolCategory(tool("web_search"))).toBe("web");
     expect(toolCategory(tool("browser_snapshot"))).toBe("browser");
     expect(toolCategory(tool("computer_key"))).toBe("computer");
     expect(toolCategory(tool("mystery"))).toBe("other");

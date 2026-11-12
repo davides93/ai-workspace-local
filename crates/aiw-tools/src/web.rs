@@ -317,7 +317,7 @@ impl Tool for WebFetchTool {
 const MAX_BODY_BYTES: usize = 5 << 20;
 
 /// Reads at most `cap` bytes of the body; the flag says whether the rest was dropped.
-async fn read_capped(mut res: reqwest::Response, cap: usize) -> Result<(String, bool)> {
+pub(crate) async fn read_capped(mut res: reqwest::Response, cap: usize) -> Result<(String, bool)> {
     let mut buf: Vec<u8> = Vec::new();
     let mut cut = false;
     while let Some(chunk) = res.chunk().await.map_err(|e| Error::Runtime(e.to_string()))? {

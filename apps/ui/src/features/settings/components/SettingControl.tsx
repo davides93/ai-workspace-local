@@ -16,14 +16,15 @@ function useDraft(shown: string) {
 
 const text = (v: unknown) => (v === undefined || v === null ? "" : String(v));
 
-function TextSetting({ id, value, onCommit }: { id: string; value: unknown; onCommit: (v: unknown) => void }) {
+function TextSetting({ id, field, value, onCommit }: { id: string; field: FieldSchema; value: unknown; onCommit: (v: unknown) => void }) {
   const shown = text(value);
   const [draft, setDraft] = useDraft(shown);
   const dirty = draft !== shown;
   return (
     <>
       <Input
-        id={id} mono value={draft} autoComplete="off" spellCheck={false} onChange={(e) => setDraft(e.target.value)}
+        id={id} mono value={draft} autoComplete={field.secret ? "new-password" : "off"} spellCheck={false} placeholder={field.placeholder}
+        type={field.secret ? "password" : "text"} onChange={(e) => setDraft(e.target.value)}
         onBlur={() => dirty && onCommit(draft)}
         onKeyDown={(e) => {
           if (e.key === "Enter") e.currentTarget.blur();
@@ -97,5 +98,5 @@ export function SettingControl({ id, field, value, onCommit, optionLabel = Strin
       />
     );
   }
-  return <TextSetting id={id} value={value} onCommit={onCommit} />;
+  return <TextSetting id={id} field={field} value={value} onCommit={onCommit} />;
 }

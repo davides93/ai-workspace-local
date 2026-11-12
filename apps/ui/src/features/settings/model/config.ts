@@ -73,6 +73,7 @@ export const SECTIONS: SettingsSection[] = [
   { id: "learning", title: "Apprendimento", description: "Lezioni che gli agenti propongono dopo una conversazione e ottimizzazione del prompt: niente cambia senza la tua approvazione.", prefixes: ["learning"] },
   { id: "proactive", title: "Assistente proattivo", description: "Spento finché non lo accendi. Controlla ogni tanto cosa c'è di nuovo e ti lascia delle proposte nella sezione Proposte: non fa mai nulla da solo.", prefixes: ["proactive"] },
   { id: "connectors", title: "Calendario e posta", description: "Sola lettura, e i dati restano su questo dispositivo: non scrive, non invia, non cancella.", prefixes: ["connectors"] },
+  { id: "search", title: "Ricerca web", description: "Il testo cercato viene inviato al motore scelto. SearXNG può girare su questo computer, così le ricerche non escono dalla tua rete.", prefixes: ["search"] },
   { id: "voice", title: "Voce", description: "Dettatura e conversazione a voce: lingua, motore di trascrizione e voce che legge le risposte.", prefixes: ["voice"] },
   { id: "update", title: "Canale e aggiornamenti", description: "Quale canale seguire (produzione, beta, alpha) e se cercare e scaricare gli aggiornamenti da soli.", prefixes: ["update"] },
   { id: "telemetry", title: "Telemetria", description: "Esportazione di tracce e metriche.", prefixes: ["telemetry"] },
@@ -159,6 +160,7 @@ const OPTION_LABEL: Record<string, Record<string, string>> = {
   "ui.theme": { system: "Sistema", light: "Chiaro", dark: "Scuro" },
   "proactive.level": { off: "Spento", propose: "Propone", act_readonly: "Propone e legge (anche il web, sola lettura)" },
   "ui.language": { it: "Italiano", en: "English" },
+  "search.provider": { auto: "Automatico", duckduckgo: "DuckDuckGo", searxng: "SearXNG", brave: "Brave Search", off: "Spenta" },
   "policy.mode": {
     plan: "plan · solo lettura",
     ask: "ask · chiede per modifiche e comandi",

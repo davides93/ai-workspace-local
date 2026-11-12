@@ -440,6 +440,30 @@ describe("other v0.4 methods", () => {
     await api.setConfig("global", "connectors.calendar.sources", null);
   });
 
+  it("offers web_search, hides it when the provider is off and never returns the Brave key", async () => {
+    const api = new MockTransport();
+    const search = async () => (await api.tools()).find((t) => t.name === "web_search")!;
+    expect(await search()).toMatchObject({ risk: "network", available: true });
+    const schema = (await api.config()).schema.properties;
+    expect(schema["search.provider"].enum).toEqual(["auto", "off", "searxng", "brave", "duckduckgo"]);
+    expect(schema["search.provider"].default).toBe("auto");
+    expect(schema["search.brave_api_key"].secret).toBe(true);
+    await api.setConfig("global", "search.provider", "off");
+    expect(await search()).toMatchObject({ available: false });
+    expect((await search()).unavailable_reason).toMatch(/Ricerca web/);
+    await api.setConfig("global", "search.provider", null);
+    expect((await search()).available).toBe(true);
+
+    const view = await api.setConfig("global", "search.brave_api_key", "chiave-segreta");
+    expect(JSON.stringify(view)).not.toContain("chiave-segreta");
+    expect(view.effective["search.brave_api_key"]).toBe(SECRET_MASK);
+    // Sending the mask back keeps the stored key.
+    await api.setConfig("global", "search.brave_api_key", SECRET_MASK);
+    expect((await api.config()).effective["search.brave_api_key"]).toBe(SECRET_MASK);
+    await api.setConfig("global", "search.brave_api_key", null);
+    expect((await api.config()).effective["search.brave_api_key"]).toBe("");
+  });
+
   it("answers the background check like the engine and keeps the phone side in step with the settings", async () => {
     const api = new MockTransport();
     // The demo runs on a computer: no background jobs, no notification permission.

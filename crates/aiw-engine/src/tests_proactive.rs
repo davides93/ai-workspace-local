@@ -369,6 +369,17 @@ async fn the_proposal_agent_is_never_more_permissive_than_reading() {
 }
 
 #[tokio::test]
+async fn the_proposal_agent_may_search_the_web_only_at_act_readonly_and_while_search_is_on() {
+    let (e, _b, _d, _w) = rig(vec![]).await;
+    on(&e, "propose");
+    assert!(!e.proactive_agent("operator").unwrap().tools.iter().any(|t| t == "web_search"), "no network at `propose`");
+    on(&e, "act_readonly");
+    assert!(e.proactive_agent("operator").unwrap().tools.iter().any(|t| t == "web_search"));
+    e.set_config("global", "search.provider", json!("off")).unwrap();
+    assert!(!e.proactive_agent("operator").unwrap().tools.iter().any(|t| t == "web_search"), "switched off in the settings");
+}
+
+#[tokio::test]
 async fn the_status_reports_the_budget_the_last_tick_and_the_next_wake() {
     let (e, _b, _d, _w) = rig(vec![]).await;
     on(&e, "propose");

@@ -30,7 +30,7 @@ crates/
   aiw-hw         probe hardware: CPU, RAM, CUDA/ROCm/Metal/Vulkan/DirectML, NPU → classe del device
   aiw-runtimes   33 manifest di runtime, rilevamento, adapter OpenAI/Ollama/nativo, supervisor dei sidecar, client di trascrizione (whisper.cpp e API OpenAI)
   aiw-models     model hub multi-provider (Hugging Face, ModelScope, registry Ollama, URL diretto), parser GGUF, compatibilità per device (anche i modelli Whisper), download con ripresa
-  aiw-tools      file, ricerca, shell (bwrap/sandbox-exec), web_fetch anti-SSRF, browser CDP, computer-use, client MCP
+  aiw-tools      file, ricerca, shell (bwrap/sandbox-exec), web_fetch anti-SSRF, web_search, browser CDP, computer-use, client MCP
   aiw-agent      loop agentico: streaming, tool paralleli, policy, hook, skill, subagenti, compattazione
   aiw-workflow   workflow YAML/JSON: tool/agent/llm/approval/condition, trigger cron/intervallo/file
   aiw-engine     facciata unica: SQLite, sessioni, run, approvazioni, audit, kill switch, gateway, voice mode
@@ -143,7 +143,7 @@ Dettagli, limiti noti e prossimi passi in [docs/STATUS.md](docs/STATUS.md).
 | Modelli | Model hub: Hugging Face, ModelScope, registry Ollama, URL diretto; download con ripresa e sha256 |
 | Voce | Trascrizione con whisper.cpp o con server OpenAI-compatibili (LocalAI, Nexa, dispositivo accoppiato); dettatura e conversazione a voce nella chat con le voci locali del sistema |
 | Policy e sandbox | Cinque modalità, regole, audit, kill switch; bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) |
-| Tool | File, shell, `web_fetch` anti-SSRF, browser CDP, computer-use, client MCP; nessuna ricerca web |
+| Tool | File, shell, `web_fetch` anti-SSRF, `web_search` (SearXNG, Brave, DuckDuckGo), browser CDP, computer-use, client MCP |
 | Agenti e workflow | Loop con subagenti, hook, skill; workflow con trigger manuale, cron, intervallo, file, webhook |
 | API | REST + SSE, gateway OpenAI e Anthropic, server MCP, A2A; token, CORS ristretto, controllo di Origin/Host |
 | UI | React unica per desktop, mobile e web; 629 test Vitest e smoke test Playwright (29 rotte, 2 larghezze, 2 temi) |
