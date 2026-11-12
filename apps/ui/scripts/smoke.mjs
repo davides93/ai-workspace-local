@@ -118,7 +118,7 @@ async function visit(page, routePath, size, theme, problems, errors) {
       docOverflow: document.documentElement.scrollWidth - window.innerWidth,
       pageOverflow: over(page),
       crashed: !!document.body.innerText.includes("Questa pagina non si è caricata"),
-      empty: !document.querySelector(".page, .ws, .th, .chat, .boot"),
+      empty: !document.querySelector(".page, .ws, .th, .kb, .chat, .boot"),
     };
   });
   const tag = `${routePath} · ${size.name} · ${theme}`;
