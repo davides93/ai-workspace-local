@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import "./shared/styles/fonts.css";
 import "./shared/styles/tokens.css";
 import "./shared/styles/oled.css";
 import "./shared/styles/base.css";
