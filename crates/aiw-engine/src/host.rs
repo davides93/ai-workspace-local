@@ -26,6 +26,8 @@ pub struct EngineHost {
     workflow_session: Mutex<Option<String>>,
     /// Nobody can answer: every confirmation the run asks for is refused (evaluation runs).
     deny_approvals: bool,
+    /// How long a confirmation waits for an answer, instead of `approvals.timeout_s` (runs started from a channel).
+    approval_timeout: Option<Duration>,
 }
 
 impl EngineHost {
@@ -38,6 +40,7 @@ impl EngineHost {
             first_update: Mutex::new(None),
             workflow_session: Mutex::new(None),
             deny_approvals: false,
+            approval_timeout: None,
         }
     }
     /// `first` receives the first state of the run (a resumed run has no one waiting for it).
@@ -50,7 +53,13 @@ impl EngineHost {
             first_update: Mutex::new(first),
             workflow_session: Mutex::new(None),
             deny_approvals: false,
+            approval_timeout: None,
         }
+    }
+    /// Confirmations expire after `t` (sub-agents inherit this).
+    pub fn with_approval_timeout(mut self, t: Duration) -> Self {
+        self.approval_timeout = Some(t);
+        self
     }
     /// Refuses every confirmation instead of waiting for a person (sub-agents inherit this).
     pub fn denying_approvals(mut self) -> Self {
@@ -104,11 +113,20 @@ impl RunHost for EngineHost {
         if self.deny_approvals {
             return false;
         }
-        self.engine.wait_approval(req, self.session_id.clone()).await
+        match self.approval_timeout {
+            Some(t) => self.engine.wait_approval_outcome(req, self.session_id.clone(), Some(t)).await == ApprovalOutcome::Allowed,
+            None => self.engine.wait_approval(req, self.session_id.clone()).await,
+        }
     }
 
     async fn approve_outcome(&self, req: ApprovalRequest) -> ApprovalOutcome {
-        self.engine.wait_approval_outcome(req, self.session_id.clone(), self.engine.approval_timeout()).await
+        // The runner asks through this one: a run nobody can answer (proactive, read-only channel) refuses here too.
+        if self.deny_approvals {
+            return ApprovalOutcome::Denied;
+        }
+        self.engine
+            .wait_approval_outcome(req, self.session_id.clone(), self.approval_timeout.or_else(|| self.engine.approval_timeout()))
+            .await
     }
 
     fn audit(&self, entry: AuditEntry) {
@@ -179,6 +197,7 @@ impl RunHost for EngineHost {
         }
         let mut host = EngineHost::new(self.engine.clone(), self.session_id.clone(), Some(parent.run_id.clone()));
         host.deny_approvals = self.deny_approvals;
+        host.approval_timeout = self.approval_timeout;
         let host = Arc::new(host);
         let out = AgentRunner::run(input, host).await?;
         Ok(if out.final_text.is_empty() { "(nessuna risposta)".into() } else { out.final_text })

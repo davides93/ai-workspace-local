@@ -804,6 +804,9 @@ pub struct Session {
     /// Set when the session works in its own git worktree instead of the shared workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeInfo>,
+    /// Set when the conversation comes from a channel: `telegram` | `slack` | `email`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 /// A session isolated in a git worktree on branch `aiw/<id>`: parallel tasks never touch the
@@ -2204,4 +2207,160 @@ pub struct ProactiveStatus {
     /// Power state when the platform reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_power: Option<bool>,
+}
+
+// ---------------------------------------------------------------- channels (Telegram, Slack, email)
+
+/// Kinds of channel.
+pub const CHANNEL_KINDS: [&str; 3] = ["telegram", "slack", "email"];
+
+/// A way to talk to the assistant from outside the app. Stored with its secrets; the API shows
+/// [`SECRET_MASK`] in their place (and receiving the mask back on save means "keep what is stored").
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Channel {
+    pub id: String,
+    /// telegram | slack | email
+    pub kind: String,
+    pub name: String,
+    /// Off by default: nothing connects until the person turns a channel on.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The agent that answers.
+    #[serde(default)]
+    pub agent_id: String,
+    /// `read_only` (default: the assistant can answer and read, never write or run commands) or
+    /// `ask` (normal policy; every confirmation is asked in the app and in the channel).
+    #[serde(default)]
+    pub mode: String,
+    /// Who may talk: Telegram user or chat ids, Slack user ids, email addresses. Anyone else is ignored.
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    /// The morning briefing is also sent here.
+    #[serde(default)]
+    pub briefing: bool,
+    /// `bot_token`, `app_token`, `imap_password`, `smtp_password` (by kind).
+    #[serde(default)]
+    pub secrets: std::collections::BTreeMap<String, String>,
+    /// Settings that are not secret (email servers, folder, limits…).
+    #[serde(default)]
+    pub settings: serde_json::Map<String, serde_json::Value>,
+}
+
+/// `state`: `off` | `connecting` | `connected` | `error` | `unavailable`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChannelStatus {
+    pub state: String,
+    /// The reason, in plain words (an error, why it is unavailable, what it is doing).
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// Messages from people who are not on the list: dropped and counted, never answered or shown to a model.
+    #[serde(default)]
+    pub ignored: u64,
+    /// Messages handed to the assistant.
+    #[serde(default)]
+    pub handled: u64,
+    #[serde(default)]
+    pub conversations: u32,
+}
+
+/// What the API returns for a channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChannelInfo {
+    #[serde(flatten)]
+    pub channel: Channel,
+    pub status: ChannelStatus,
+    /// The agent's own mode is `auto` or `yolo` and the channel is in `ask` mode: it runs as `ask`.
+    #[serde(default)]
+    pub downgraded: bool,
+}
+
+/// Body of `POST /api/channels`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChannelCreate {
+    pub kind: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    #[serde(default)]
+    pub secrets: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub settings: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Body of `PATCH /api/channels/{id}`: only what is present changes. A secret sent as [`SECRET_MASK`] is kept,
+/// sent empty it is removed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChannelPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub allowed: Option<Vec<String>>,
+    #[serde(default)]
+    pub briefing: Option<bool>,
+    #[serde(default)]
+    pub secrets: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    pub settings: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// `POST /api/channels/{id}/test`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChannelTestResult {
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// `POST /api/channels/{id}/pair`: the one-time code to send to the Telegram bot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChannelPairing {
+    pub code: String,
+    pub expires_at: String,
+    /// The message to send to the bot, e.g. `/start 123456`.
+    pub command: String,
+}
+
+/// An IMAP account of the mail connector, as the API shows it. The password is a secret: it is shown as
+/// [`SECRET_MASK`] when one is stored.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MailAccount {
+    #[serde(default)]
+    pub id: String,
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    /// Folders to read (empty = INBOX).
+    #[serde(default)]
+    pub folders: Vec<String>,
+}
+
+/// `POST /api/connectors/mail/test`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MailAccountTest {
+    pub ok: bool,
+    pub detail: String,
+    /// Messages of the last seven days, per folder.
+    #[serde(default)]
+    pub folders: Vec<MailFolderCount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MailFolderCount {
+    pub name: String,
+    pub recent: u32,
 }

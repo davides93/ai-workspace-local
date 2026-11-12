@@ -80,6 +80,9 @@ pub fn app_schema() -> SettingsSchema {
             "connectors.calendar.sources": {"type": "array", "title": "Calendari da leggere", "description": "File .ics, cartelle con file .ics o indirizzi di sottoscrizione (https:// o webcal://)", "items": {"type": "string"}, "default": []},
             "connectors.mail.enabled": {"type": "boolean", "title": "Posta: l'assistente può leggere la posta salvata sul computer", "description": "Sola lettura: non invia, non cancella e non segna nulla; legge solo ciò che scegli, e i dati restano sul dispositivo", "default": false},
             "connectors.mail.sources": {"type": "array", "title": "Posta da leggere", "description": "Cartelle Maildir, file .mbox o .eml", "items": {"type": "string"}, "default": []},
+            "connectors.mail.imap": {"type": "array", "title": "Account di posta (IMAP)", "description": "Account letti in sola lettura, sempre con connessione cifrata: i messaggi non vengono mai segnati come letti. Le password non stanno qui: si inseriscono nell'editor degli account e restano nell'archivio dei segreti. Con Gmail e Microsoft serve una password per le app (l'accesso con OAuth non è supportato)", "items": {"type": "object"}, "default": []},
+            "connectors.mail.imap_days": {"type": "integer", "title": "Posta IMAP: quanti giorni indietro", "description": "Quanto indietro legge la posta dei server IMAP", "default": 14, "minimum": 1, "maximum": 60},
+            "connectors.mail.imap_max_messages": {"type": "integer", "title": "Posta IMAP: messaggi per cartella", "description": "Al massimo quanti messaggi (i più recenti) legge da ogni cartella", "default": 100, "minimum": 10, "maximum": 500},
             "search.provider": {"type": "string", "title": "Motore della ricerca web", "description": "Con «Automatico» usa SearXNG se hai indicato un indirizzo, altrimenti Brave se hai inserito una chiave, altrimenti DuckDuckGo. Il testo cercato viene inviato al motore scelto. «Spenta» toglie lo strumento di ricerca agli agenti", "enum": ["auto", "off", "searxng", "brave", "duckduckgo"], "default": "auto"},
             "search.searxng_url": {"type": "string", "title": "Indirizzo di SearXNG", "description": "Istanza di SearXNG, anche su questo computer o sulla rete di casa (per esempio http://localhost:8080). Deve consentire il formato json", "default": "", "placeholder": "http://localhost:8080"},
             "search.brave_api_key": {"type": "string", "title": "Chiave di Brave Search", "description": "Chiave dell'API di Brave Search; resta su questo dispositivo e non viene mai mostrata per intero", "default": "", "secret": true},
@@ -130,6 +133,9 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "connectors.calendar.sources",
     "connectors.mail.enabled",
     "connectors.mail.sources",
+    "connectors.mail.imap",
+    "connectors.mail.imap_days",
+    "connectors.mail.imap_max_messages",
     // Where the person's searches go, and the key they pay for, are theirs: a repository cannot redirect them
     // to its own server or supply a key.
     "search.provider",

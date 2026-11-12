@@ -348,3 +348,33 @@ describe("HttpTransport.subscribeRun", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 });
+
+describe("HttpTransport channels and mail accounts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("calls the paths of the contract", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response("{}", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.channels();
+    await t.createChannel({ kind: "telegram", name: "Casa", secrets: { bot_token: "1:x" } });
+    await t.updateChannel("c/1", { enabled: true });
+    await t.testChannel("c/1");
+    await t.pairChannel("c/1");
+    await t.channelStatus("c/1");
+    await t.deleteChannel("c/1");
+    await t.mailAccounts();
+    const account = { id: "casa", host: "imap.example.com", port: 993, username: "mario", password: "pw", folders: ["INBOX"] };
+    await t.setMailAccounts([account]);
+    await t.testMailAccount(account);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      "GET /channels", "POST /channels", "PATCH /channels/c%2F1", "POST /channels/c%2F1/test", "POST /channels/c%2F1/pair",
+      "GET /channels/c%2F1/status", "DELETE /channels/c%2F1", "GET /connectors/mail/accounts", "PUT /connectors/mail/accounts", "POST /connectors/mail/test",
+    ]);
+    expect(JSON.parse(calls[1].body!)).toEqual({ kind: "telegram", name: "Casa", secrets: { bot_token: "1:x" } });
+    expect(JSON.parse(calls[8].body!)).toEqual([account]);
+  });
+});

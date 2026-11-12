@@ -8,7 +8,7 @@ import type {
   AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody,
+  ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, maskConfigSecrets, mcp, models, nid, now, policyRules, profiles,
@@ -17,6 +17,7 @@ import {
 import { demoLesson, lessonProblem, lessons } from "./lessons";
 import * as mem from "./memories";
 import * as kb from "./kb";
+import * as chan from "./channels";
 import { proactiveState, PROPOSAL_KINDS, PROPOSAL_STATUSES, proposals } from "./proposals";
 import { teacherTurn } from "./teacher";
 import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
@@ -631,6 +632,20 @@ export class MockTransport implements Transport {
       throw new ApiError(400, e instanceof Error ? e.message : String(e));
     }
   }
+  async channels() { return chan.listChannels(); }
+  async createChannel(body: ChannelCreate) { return chan.createChannel(body); }
+  async updateChannel(id: string, patch: ChannelPatch) { return chan.updateChannel(id, patch); }
+  async deleteChannel(id: string) { chan.deleteChannel(id); }
+  async testChannel(id: string) { return chan.testChannel(id); }
+  async pairChannel(id: string) { return chan.pairChannel(id); }
+  async channelStatus(id: string) { return chan.channelStatus(id); }
+  async mailAccounts() { return chan.listMaskedMailAccounts(); }
+  async setMailAccounts(list: MailAccount[]) { return chan.setMailAccounts(list); }
+  async testMailAccount(a: MailAccount) {
+    if (a.password === SECRET_MASK && !chan.listMailAccounts().some((x) => x.id === a.id && x.password)) return chan.testMailAccount({ ...a, password: "" });
+    return chan.testMailAccount(a.password === SECRET_MASK ? { ...a, password: "demo" } : a);
+  }
+
   async kbCollections() { return kb.listCollections(); }
   async createKbCollection(body: KbCollectionCreate) { return kb.createCollection(body); }
   async updateKbCollection(id: string, patch: KbCollectionPatch) { return kb.updateCollection(id, patch); }

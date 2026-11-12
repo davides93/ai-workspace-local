@@ -107,10 +107,26 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<LessonsCmd>,
     },
+    /// Canali per parlare con l'assistente da Telegram, Slack o email
+    Channels {
+        #[command(subcommand)]
+        cmd: Option<ChannelsCmd>,
+    },
     /// Documenti locali che gli assistenti possono cercare (base di conoscenza)
     Kb {
         #[command(subcommand)]
         cmd: Option<KbCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ChannelsCmd {
+    /// Elenca i canali con modalità, lista dei mittenti e conteggi (predefinito)
+    List,
+    /// Mostra i conteggi e il motivo dello stato di ogni canale (o di uno solo)
+    Status {
+        /// Nome o id del canale
+        channel: Option<String>,
     },
 }
 
@@ -577,6 +593,7 @@ async fn main() -> Result<()> {
             }
         },
         Cmd::Lessons { cmd } => lessons_cmd(&engine, cmd.unwrap_or(LessonsCmd::List { status: "pending".into() }))?,
+        Cmd::Channels { cmd } => channels_cmd(&engine, cmd.unwrap_or(ChannelsCmd::List))?,
         Cmd::Kb { cmd } => kb_cmd(&engine, cmd.unwrap_or(KbCmd::List)).await?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Rewind { run_id, dry_run } => {
@@ -835,6 +852,51 @@ fn lessons_cmd(engine: &Engine, cmd: LessonsCmd) -> Result<()> {
         LessonsCmd::Reject { id } => {
             let l = engine.reject_lesson(&id)?;
             println!("Lezione «{}» scartata.", l.title);
+        }
+    }
+    Ok(())
+}
+
+fn channels_cmd(engine: &Engine, cmd: ChannelsCmd) -> Result<()> {
+    let list = engine.channels()?;
+    if list.is_empty() {
+        println!("Nessun canale. Li configuri dall'app (Canali) o con l'API /api/channels; la guida è in docs/channels.md.");
+        return Ok(());
+    }
+    let mode = |m: &str| if m == "ask" { "chiede conferma" } else { "sola lettura" };
+    match cmd {
+        ChannelsCmd::List => {
+            for c in &list {
+                let ch = &c.channel;
+                println!(
+                    "{:<26} {:<9} {:<18} {:<8} {:>2} mittenti  {}",
+                    ch.id,
+                    ch.kind,
+                    mode(&ch.mode),
+                    if ch.enabled { "acceso" } else { "spento" },
+                    ch.allowed.len(),
+                    ch.name
+                );
+            }
+        }
+        ChannelsCmd::Status { channel } => {
+            let wanted = channel.map(|c| c.to_lowercase());
+            let shown: Vec<_> = list
+                .iter()
+                .filter(|c| wanted.as_ref().is_none_or(|w| c.channel.id.to_lowercase() == *w || c.channel.name.to_lowercase() == *w))
+                .collect();
+            if shown.is_empty() {
+                anyhow::bail!("canale non trovato");
+            }
+            for c in shown {
+                let (ch, st) = (&c.channel, &c.status);
+                println!("{} ({}, {})", ch.name, ch.kind, ch.id);
+                println!("  stato: {}", if ch.enabled { "acceso nelle impostazioni" } else { "spento" });
+                println!("  messaggi ignorati da sconosciuti: {}", st.ignored);
+                println!("  messaggi passati all'assistente: {}", st.handled);
+                println!("  conversazioni: {}", st.conversations);
+            }
+            println!("\nI canali si collegano solo mentre l'app o `aiw serve` è in esecuzione: lo stato dal vivo (connesso o errore) lo vedi nell'app.");
         }
     }
     Ok(())

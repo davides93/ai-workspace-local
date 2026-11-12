@@ -1,0 +1,17 @@
+/* Canali: carte dei canali e guida all'aggiunta. Tokens only. Class prefix `chn-`. */
+.chn, .chn-add { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); min-width: 0; }
+.chn-head { display: flex; align-items: center; gap: var(--space-3); }
+.chn-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.chn-title h2 { font-size: var(--fs-md); overflow-wrap: anywhere; }
+.chn-steps summary { cursor: pointer; color: var(--accent-ink); }
+.chn-steps ol, .chn-list { margin: var(--space-2) 0 0; padding-left: 1.3em; color: var(--fg-muted); display: flex; flex-direction: column; gap: var(--space-1, 4px); overflow-wrap: anywhere; }
+.chn-form { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.chn-label { font-weight: 600; font-size: var(--fs-sm); }
+.chn-switch { display: flex; align-items: center; gap: var(--space-2); }
+.chn-warn { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-2) var(--space-3); border-radius: var(--r-sm); background: var(--warn-soft); }
+.chn-error { margin: 0; color: var(--crit); overflow-wrap: anywhere; }
+.chn-ok { margin: 0; color: var(--ok); overflow-wrap: anywhere; }
+.chn-code { display: flex; flex-direction: column; gap: var(--space-1, 4px); padding: var(--space-3); border-radius: var(--r-md); background: var(--accent-soft); }
+.chn-code code { font-size: var(--fs-lg); overflow-wrap: anywhere; }
+.chn-accounts { display: flex; flex-direction: column; gap: var(--space-3); }
+.chn-account { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }

@@ -177,6 +177,13 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/proposals/{id}", get(proposal))
         .route("/api/proposals/{id}/approve", post(approve_proposal))
         .route("/api/proposals/{id}/dismiss", post(dismiss_proposal))
+        .route("/api/channels", get(channels).post(create_channel))
+        .route("/api/channels/{id}", patch(patch_channel).delete(delete_channel))
+        .route("/api/channels/{id}/test", post(test_channel))
+        .route("/api/channels/{id}/pair", post(pair_channel))
+        .route("/api/channels/{id}/status", get(channel_status))
+        .route("/api/connectors/mail/accounts", get(mail_accounts).put(put_mail_accounts))
+        .route("/api/connectors/mail/test", post(test_mail_account))
         .route("/api/proactive/status", get(proactive_status))
         .route("/api/proactive/tick", post(proactive_tick))
         .route("/api/proactive/background-tick", post(proactive_background_tick))
@@ -679,6 +686,38 @@ async fn approve_proposal(State(s): State<AppState>, Path(id): Path<String>, bod
 }
 async fn dismiss_proposal(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Proposal> {
     ok(s.engine.proposal_dismiss(&id)?)
+}
+// ---- channels (Telegram, Slack, email) and the IMAP accounts of the mail connector
+async fn channels(State(s): State<AppState>) -> ApiResult<Vec<ChannelInfo>> {
+    ok(s.engine.channels()?)
+}
+async fn create_channel(State(s): State<AppState>, Json(body): Json<ChannelCreate>) -> ApiResult<ChannelInfo> {
+    ok(s.engine.channel_create(body)?)
+}
+async fn patch_channel(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<ChannelPatch>) -> ApiResult<ChannelInfo> {
+    ok(s.engine.channel_patch(&id, body)?)
+}
+async fn delete_channel(State(s): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    s.engine.channel_delete(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn test_channel(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<ChannelTestResult> {
+    ok(s.engine.channel_test(&id).await?)
+}
+async fn pair_channel(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<ChannelPairing> {
+    ok(s.engine.channel_pair_start(&id)?)
+}
+async fn channel_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<ChannelStatus> {
+    ok(s.engine.channel_status(&id)?)
+}
+async fn mail_accounts(State(s): State<AppState>) -> ApiResult<Vec<MailAccount>> {
+    ok(s.engine.mail_accounts())
+}
+async fn put_mail_accounts(State(s): State<AppState>, Json(body): Json<Vec<MailAccount>>) -> ApiResult<Vec<MailAccount>> {
+    ok(s.engine.set_mail_accounts(body)?)
+}
+async fn test_mail_account(State(s): State<AppState>, Json(body): Json<MailAccount>) -> ApiResult<MailAccountTest> {
+    ok(s.engine.mail_account_test(body).await)
 }
 async fn proactive_status(State(s): State<AppState>) -> ApiResult<ProactiveStatus> {
     ok(s.engine.proactive_status())
@@ -1428,6 +1467,8 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_channels;
 #[cfg(test)]
 mod tests_errors;
 #[cfg(test)]

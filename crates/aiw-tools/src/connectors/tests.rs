@@ -67,7 +67,7 @@ async fn without_sources_the_tools_say_what_to_do() {
     let c = tool(&shared, "calendar_today").call(json!({}), &ctx()).await.unwrap().content;
     assert!(c.contains("Nessun calendario scelto"));
     let m = tool(&shared, "mail_recent").call(json!({}), &ctx()).await.unwrap().content;
-    assert!(m.contains("Nessuna cartella di posta"));
+    assert!(m.contains("Nessuna posta scelta"));
     // A disabled tool refuses to run even if called directly.
     shared.set(Config::default());
     assert!(tool(&shared, "mail_recent").call(json!({}), &ctx()).await.is_err());

@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -276,6 +276,16 @@ export class HttpTransport implements Transport {
   kbSearch = (body: KbSearchBody) => this.req<KbSearchResult>("POST", "/kb/search", body);
   kbStatus = () => this.req<KbStatus>("GET", "/kb/status");
   cancelKbJob = (jobId: string) => this.req<void>("POST", `/kb/jobs/${enc(jobId)}/cancel`, {});
+  channels = () => this.req<ChannelInfo[]>("GET", "/channels");
+  createChannel = (body: ChannelCreate) => this.req<ChannelInfo>("POST", "/channels", body);
+  updateChannel = (id: string, patch: ChannelPatch) => this.req<ChannelInfo>("PATCH", `/channels/${enc(id)}`, patch);
+  deleteChannel = (id: string) => this.req<void>("DELETE", `/channels/${enc(id)}`);
+  testChannel = (id: string) => this.req<ChannelTestResult>("POST", `/channels/${enc(id)}/test`, {});
+  pairChannel = (id: string) => this.req<ChannelPairing>("POST", `/channels/${enc(id)}/pair`, {});
+  channelStatus = (id: string) => this.req<ChannelStatus>("GET", `/channels/${enc(id)}/status`);
+  mailAccounts = () => this.req<MailAccount[]>("GET", "/connectors/mail/accounts");
+  setMailAccounts = (accounts: MailAccount[]) => this.req<MailAccount[]>("PUT", "/connectors/mail/accounts", accounts);
+  testMailAccount = (account: MailAccount) => this.req<MailAccountTest>("POST", "/connectors/mail/test", account);
   proposals = (query?: ProposalQuery) => {
     const qs = new URLSearchParams();
     if (query?.status) qs.set("status", query.status);

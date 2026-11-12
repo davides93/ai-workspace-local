@@ -20,6 +20,7 @@ conferme umane.
 | Model hub multi-provider: contratto API e provider | [docs/architecture/model-hub.md](docs/architecture/model-hub.md) |
 | Design system e flussi | [docs/design/DESIGN.md](docs/design/DESIGN.md) |
 | Architettura della UI: struttura, router, data layer, design system | [docs/design/UI-ARCHITECTURE.md](docs/design/UI-ARCHITECTURE.md) |
+| Parlare con l'assistente da Telegram, Slack e email: guida all'attivazione e alla sicurezza | [docs/channels.md](docs/channels.md) |
 | Mockup interattivo (file unico, si apre offline) | [docs/design/mockup/index.html](docs/design/mockup/index.html) |
 
 ## Struttura
@@ -143,6 +144,7 @@ Dettagli, limiti noti e prossimi passi in [docs/STATUS.md](docs/STATUS.md).
 | Modelli | Model hub: Hugging Face, ModelScope, registry Ollama, URL diretto; download con ripresa e sha256 |
 | Allegati | Immagini e file nella chat (graffetta, trascinamento, incolla): testo e PDF con testo letti dal modello, immagini ai modelli con visione |
 | Documenti | Raccolte di file locali (testo, Markdown, codice, PDF con testo) che l'assistente cerca per parole chiave e, con un modello di embedding avviato, per significato; pagina «Documenti», `aiw kb` e gateway `/v1/embeddings` |
+| Canali e posta | Parla con l'assistente da Telegram, Slack o email (spenti di serie, solo mittenti in elenco, di serie in sola lettura); posta IMAP in sola lettura per il riepilogo e gli strumenti; pagina «Canali», `aiw channels`, guida in [docs/channels.md](docs/channels.md). Mai provato contro i servizi veri |
 | Voce | Trascrizione con whisper.cpp o con server OpenAI-compatibili (LocalAI, Nexa, dispositivo accoppiato); dettatura e conversazione a voce nella chat con le voci locali del sistema |
 | Policy e sandbox | Cinque modalità, regole, audit, kill switch; bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) |
 | Tool | File, shell, `web_fetch` anti-SSRF, `web_search` (SearXNG, Brave, DuckDuckGo), browser CDP, computer-use, client MCP |

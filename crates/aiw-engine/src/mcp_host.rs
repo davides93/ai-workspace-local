@@ -73,7 +73,12 @@ impl EngineRunMcp {
 
     /// Is a person looking at this run? Proactive runs, and runs with no session of their own, have nobody.
     fn interactive(&self) -> bool {
-        self.engine.0.store.session(&self.thread_id).map(|s| !s.agent_id.starts_with(crate::proactive::PROACTIVE_PREFIX)).unwrap_or(false)
+        self.engine
+            .0
+            .store
+            .session(&self.thread_id)
+            .map(|s| !s.agent_id.starts_with(crate::proactive::PROACTIVE_PREFIX) && !s.agent_id.starts_with(crate::channels::AGENT_PREFIX))
+            .unwrap_or(false)
     }
 
     fn audit(&self, server: &str, decision: &str, detail: String) {

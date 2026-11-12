@@ -565,6 +565,8 @@ export interface Session {
   last_status?: RunStatus;
   /** Present when the session works in its own git worktree (branch `aiw/<id>`). */
   worktree?: WorktreeInfo;
+  /** Present when the conversation comes from a channel: `telegram` | `slack` | `email`. */
+  channel?: ChannelKind;
 }
 
 export interface WorktreeInfo {
@@ -1491,4 +1493,90 @@ export interface ProactiveStatus {
   open_proposals: number;
   stopped_by_kill_switch: boolean;
   on_power?: boolean;
+}
+
+
+// ---- Channels (Telegram, Slack, email) and the IMAP accounts of the mail connector
+
+export type ChannelKind = "telegram" | "slack" | "email";
+export type ChannelMode = "read_only" | "ask";
+export type ChannelState = "off" | "connecting" | "connected" | "error" | "unavailable";
+
+export interface ChannelStatus {
+  state: ChannelState;
+  detail: string;
+  since?: string;
+  /** Messages from people who are not on the list: dropped, counted, never answered. */
+  ignored: number;
+  handled: number;
+  conversations: number;
+}
+
+/** A channel as the API shows it: secrets are always `SECRET_MASK` (or empty when not set). */
+export interface Channel {
+  id: string;
+  kind: ChannelKind;
+  name: string;
+  enabled: boolean;
+  agent_id: string;
+  mode: ChannelMode;
+  allowed: string[];
+  briefing: boolean;
+  secrets: Record<string, string>;
+  settings: Record<string, unknown>;
+}
+
+export interface ChannelInfo extends Channel {
+  status: ChannelStatus;
+  /** The agent runs in auto/yolo and the channel is in `ask` mode: it runs as `ask`. */
+  downgraded: boolean;
+}
+
+export interface ChannelCreate {
+  kind: ChannelKind;
+  name?: string;
+  agent_id?: string;
+  mode?: ChannelMode;
+  allowed?: string[];
+  secrets?: Record<string, string>;
+  settings?: Record<string, unknown>;
+}
+
+export interface ChannelPatch {
+  name?: string;
+  enabled?: boolean;
+  agent_id?: string;
+  mode?: ChannelMode;
+  allowed?: string[];
+  briefing?: boolean;
+  secrets?: Record<string, string>;
+  settings?: Record<string, unknown>;
+}
+
+export interface ChannelTestResult {
+  ok: boolean;
+  detail: string;
+}
+
+export interface ChannelPairing {
+  code: string;
+  expires_at: string;
+  /** The message to send to the bot, e.g. `/start 123456`. */
+  command: string;
+}
+
+/** An IMAP account of the mail connector. The password is `SECRET_MASK` when one is stored. */
+export interface MailAccount {
+  id: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  folders: string[];
+}
+
+export interface MailAccountTest {
+  ok: boolean;
+  detail: string;
+  folders: { name: string; recent: number }[];
 }

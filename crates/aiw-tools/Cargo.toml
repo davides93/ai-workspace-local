@@ -9,6 +9,8 @@ rust-version.workspace = true
 default = []
 # Desktop screen capture + synthetic input (xcap + enigo). Needs X11/Wayland libs on Linux.
 computer-use = ["dep:xcap", "dep:enigo", "dep:image"]
+# In-process fake IMAP and SMTP servers (self-signed TLS) for the tests of this crate and of the engine.
+testing = ["dep:rcgen"]
 
 [dependencies]
 aiw-core.workspace = true
@@ -26,16 +28,24 @@ tokio.workspace = true
 uuid.workspace = true
 tokio-tungstenite.workspace = true
 tokio-util.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
+rustls-native-certs.workspace = true
 tracing.workspace = true
 which.workspace = true
 chrono.workspace = true
 xcap = { version = "0.9", optional = true }
 enigo = { version = "0.6", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+# Self-signed certificates for the fake servers (ring only, like the rest).
+rcgen = { version = "0.13", optional = true, default-features = false, features = ["ring", "pem"] }
 
 [target.'cfg(windows)'.dependencies]
 aiw-winsandbox.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# Turns the `testing` feature on for this crate's own tests.
+aiw-tools = { path = ".", features = ["testing"] }
 axum.workspace = true

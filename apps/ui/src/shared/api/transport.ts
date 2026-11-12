@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -162,6 +162,19 @@ export interface Transport {
   kbStatus(): Promise<KbStatus>;
   cancelKbJob(jobId: string): Promise<void>;
   /** What the proactive assistant noticed, newest first (`status`/`kind` narrow it). */
+  /** Channels to talk to the assistant from outside (Telegram, Slack, email). Secrets come back masked. */
+  channels(): Promise<ChannelInfo[]>;
+  createChannel(body: ChannelCreate): Promise<ChannelInfo>;
+  updateChannel(id: string, patch: ChannelPatch): Promise<ChannelInfo>;
+  deleteChannel(id: string): Promise<void>;
+  testChannel(id: string): Promise<ChannelTestResult>;
+  /** A one-time code (valid ten minutes) to send to the Telegram bot. */
+  pairChannel(id: string): Promise<ChannelPairing>;
+  channelStatus(id: string): Promise<ChannelStatus>;
+  /** IMAP accounts of the mail connector (read-only). */
+  mailAccounts(): Promise<MailAccount[]>;
+  setMailAccounts(accounts: MailAccount[]): Promise<MailAccount[]>;
+  testMailAccount(account: MailAccount): Promise<MailAccountTest>;
   proposals(query?: ProposalQuery): Promise<Proposal[]>;
   /** Approving starts a normal run in a new session; `instruction` replaces the proposed one. */
   approveProposal(id: string, instruction?: string): Promise<Proposal>;

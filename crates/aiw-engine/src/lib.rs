@@ -4,12 +4,14 @@ pub mod a2a_client;
 pub mod adviser;
 pub mod attachments;
 pub mod background;
+pub mod channels;
 mod dataset;
 pub mod defaults;
 pub mod eval;
 mod host;
 pub mod kb;
 mod learning;
+mod mail_accounts;
 mod mcp_host;
 mod mcp_oauth;
 pub mod memory;
@@ -159,6 +161,8 @@ pub(crate) struct Inner {
     pub scheduler: Mutex<aiw_workflow::Scheduler>,
     /// The proactive assistant's heartbeat (see `proactive`).
     pub proactive: proactive::ProactiveRuntime,
+    /// Telegram, Slack and email channels (see `channels`).
+    pub channels: channels::Runtime,
     pub token: String,
     pub pairing: Mutex<(String, Instant)>,
     /// Failed-attempt limiter of the pairing endpoint.
@@ -295,6 +299,7 @@ impl Engine {
             workflow_runs: Default::default(),
             scheduler: Default::default(),
             proactive: Default::default(),
+            channels: Default::default(),
             token,
             pairing: Mutex::new((random_digits(6), Instant::now())),
             pair_guard: Default::default(),
@@ -309,11 +314,17 @@ impl Engine {
         engine.sync_connectors();
         engine.sync_search();
         training_tool::register(&engine);
+        engine.register_channel_tool();
         engine.seed()?;
         engine.resume_workflows();
         if !opts.offline {
             engine.start_background();
             engine.start_update_checks();
+            // Channels connect only in a process that stays up (the daemon; the app shell asks for it): a one-shot
+            // command of the CLI must not start a second connection next to the one of the running app.
+            if opts.mode == "daemon" {
+                engine.channels_start();
+            }
         }
         Ok(engine)
     }
@@ -583,18 +594,20 @@ impl Engine {
             token.cancel();
         }
         self.proactive_killed();
+        let channels_stopped = self.channels_killed();
         let sidecars = self.0.runtimes.stop_all().await;
         let browser = self.0.browser.close().await;
         let detail = format!(
-            "{} run, {} conferme, {} addestramenti, {} sidecar fermati{}",
+            "{} run, {} conferme, {} addestramenti, {} canali, {} sidecar fermati{}",
             runs.len(),
             n_appr,
             training.len(),
+            channels_stopped,
             sidecars,
             if browser { ", browser chiuso" } else { "" }
         );
         self.audit_system("kill", &detail);
-        json!({"runs": runs.len(), "approvals": n_appr, "training": training.len(), "sidecars": sidecars, "browser": browser})
+        json!({"runs": runs.len(), "approvals": n_appr, "training": training.len(), "channels": channels_stopped, "sidecars": sidecars, "browser": browser})
     }
 
     // ------------------------------------------------------------------ runtimes
@@ -869,6 +882,9 @@ impl Engine {
         if let Some(base) = agent_id.strip_prefix(proactive::PROACTIVE_PREFIX) {
             return Ok((self.proactive_agent(base)?, None));
         }
+        if let Some((kind, base)) = channels::agent_kind(agent_id) {
+            return Ok((self.channel_agent(kind, base)?, None));
+        }
         let Some(team_id) = agent_id.strip_prefix(TEAM_PREFIX) else { return Ok((self.agent(agent_id)?, None)) };
         let team = self.team(team_id)?;
         let locals: Vec<AgentProfile> = team
@@ -1087,14 +1103,17 @@ impl Engine {
     // ------------------------------------------------------------------ sessions & runs
     pub fn sessions(&self) -> Result<Vec<Session>> {
         let mut list = self.0.store.sessions()?;
+        let channels = self.channel_session_kinds();
         for s in &mut list {
             s.worktree = self.worktree_info(&s.id);
+            s.channel = channels.get(&s.id).cloned();
         }
         Ok(list)
     }
     pub fn session(&self, id: &str) -> Result<Session> {
         let mut s = self.0.store.session(id)?;
         s.worktree = self.worktree_info(id);
+        s.channel = self.channel_session_kinds().remove(id);
         Ok(s)
     }
     pub fn create_session(&self, agent_id: &str, title: Option<String>) -> Result<Session> {
@@ -1104,7 +1123,12 @@ impl Engine {
     pub fn create_session_with(&self, agent_id: &str, title: Option<String>, isolation: Option<&str>) -> Result<Session> {
         match agent_id.strip_prefix(TEAM_PREFIX) {
             Some(team_id) => self.team(team_id).map(|_| ())?,
-            None => self.agent(agent_id.strip_prefix(proactive::PROACTIVE_PREFIX).unwrap_or(agent_id)).map(|_| ())?,
+            None => {
+                let base = channels::agent_kind(agent_id)
+                    .map(|(_, b)| b)
+                    .unwrap_or_else(|| agent_id.strip_prefix(proactive::PROACTIVE_PREFIX).unwrap_or(agent_id));
+                self.agent(base).map(|_| ())?
+            }
         }
         let now = now_rfc3339();
         let mut s = Session {
@@ -1115,6 +1139,7 @@ impl Engine {
             updated_at: now,
             last_status: None,
             worktree: None,
+            channel: None,
         };
         match isolation.unwrap_or("none") {
             "none" | "" => {}
@@ -1650,8 +1675,16 @@ impl Engine {
         // A proactive run cannot be talked into more than reading: only `deny` rules survive (an `allow` rule
         // would lift plan mode) and nobody is there to answer a confirmation.
         let proactive_run = session.agent_id.starts_with(proactive::PROACTIVE_PREFIX);
-        if proactive_run {
+        // A run started by a message from outside is read-only in the same way (nobody is asked), unless the
+        // channel is in `ask` mode: then the normal rules apply but never freer than «ask», and every
+        // confirmation is asked in the app and in the channel, where it expires.
+        let channel_kind = channels::agent_kind(&session.agent_id).map(|(k, _)| k);
+        let read_only_run = proactive_run || channel_kind == Some(channels::RunKind::ReadOnly);
+        if read_only_run {
             run_input.policy.rules.retain(|r| r.action == "deny");
+        }
+        if channel_kind == Some(channels::RunKind::Ask) && host::mode_rank(&run_input.policy.mode) > host::mode_rank("ask") {
+            run_input.policy.mode = "ask".into();
         }
         // What the assistant remembers: pinned notes and the ones that match this message.
         let memory = self.memory_prompt(&run_input.agent.id, &run_input.user_input).await;
@@ -1666,7 +1699,12 @@ impl Engine {
         let (from_name, from_mode) = (run_input.agent.name.clone(), run_input.policy.mode.clone());
         tokio::spawn(async move {
             let host = EngineHost::new(engine.clone(), Some(session.id.clone()), None);
-            let host = Arc::new(if proactive_run { host.denying_approvals() } else { host });
+            let host = if read_only_run { host.denying_approvals() } else { host };
+            let host = Arc::new(if channel_kind == Some(channels::RunKind::Ask) {
+                host.with_approval_timeout(channels::APPROVAL_WAIT)
+            } else {
+                host
+            });
             // What the run produced is stored whatever its outcome: when it was cancelled or failed
             // its files were still written and its commands run, and the next turn must know.
             // (`new_messages[0]` is the user message, stored above.)
@@ -2139,6 +2177,11 @@ impl Engine {
                 "la versione Mac App Store (sandbox) lavora nella cartella dell'app: per sceglierne un'altra usa la versione DMG".into(),
             ));
         }
+        if key == "connectors.mail.imap" {
+            return Err(Error::Invalid(
+                "gli account di posta (con le password) si modificano dall'editor «Account di posta (IMAP)», non da qui".into(),
+            ));
+        }
         self.0.config.set(Layer::parse(layer)?, key, value)?;
         if key == "proactive.level" {
             self.proactive_level_set();
@@ -2511,6 +2554,8 @@ mod tests_attachments;
 mod tests_auto;
 #[cfg(test)]
 mod tests_background;
+#[cfg(test)]
+mod tests_channels;
 #[cfg(test)]
 mod tests_eval;
 #[cfg(test)]

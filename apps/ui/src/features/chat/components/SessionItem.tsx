@@ -7,6 +7,8 @@ import { RUN_STATUS_LABEL } from "../model/labels";
 import { MAX_TITLE, validateTitle } from "../model/sessions";
 import { useRenameSession } from "../api";
 
+const CHANNEL_NAME = { telegram: "Telegram", slack: "Slack", email: "Email" } as const;
+
 const ledTone = (s: Session): LedTone => (s.last_status === "failed" ? "crit" : s.last_status === "running" ? "run" : s.last_status === "cancelled" ? "warn" : s.last_status ? "ok" : "off");
 
 /** Inline rename: Enter saves, Esc (or leaving the field) cancels. */
@@ -88,6 +90,7 @@ export function SessionItem({ session, agentName, active, renaming, reflecting, 
               <span className="ws-session-agent">{agentName}</span>
               <span aria-hidden="true">·</span>
               <time dateTime={session.updated_at}>{relTime(session.updated_at)}</time>
+              {session.channel && <span className="pill neutral" title={`Conversazione che arriva da ${CHANNEL_NAME[session.channel]}`}>{CHANNEL_NAME[session.channel]}</span>}
               {session.worktree && <span title={`Worktree ${session.worktree.branch}`} className="inline-flex"><Icon name="branch" size={12} /><span className="sr-only">Worktree isolato</span></span>}
             </span>
           </button>

@@ -46,7 +46,12 @@ semver.workspace = true
 reqwest.workspace = true
 dirs.workspace = true
 base64.workspace = true
+tokio-tungstenite.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
 pdf-extract = "0.12"
 
 [dev-dependencies]
 tempfile = "3"
+aiw-tools = { workspace = true, features = ["testing"] }
+axum.workspace = true

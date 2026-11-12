@@ -9,7 +9,7 @@ import type { IconName } from "../shared/ui";
  */
 
 export type RouteId =
-  | "home" | "chat" | "inbox" | "agents" | "teach" | "documents" | "teams" | "workflows" | "evals" | "training" | "capabilities" | "integrations"
+  | "home" | "chat" | "inbox" | "agents" | "teach" | "documents" | "channels" | "teams" | "workflows" | "evals" | "training" | "capabilities" | "integrations"
   | "models" | "runtimes" | "devices" | "security" | "activity" | "settings";
 
 export type GroupId = "overview" | "work" | "capabilities" | "inference" | "control";
@@ -50,6 +50,7 @@ export const ROUTES: AppRoute[] = [
   { id: "agents", path: "/agents/:agentId?", label: "Agenti", simpleLabel: "Assistenti", icon: "agent", group: "work", simple: true, keywords: ["agenti", "assistenti", "profili", "prompt"], View: view(() => import("../features/agents/AgentsView"), "AgentsView") },
   { id: "teach", path: "/teach", label: "Insegna", icon: "bulb", group: "work", simpleTab: 2, simple: true, keywords: ["insegna", "memoria", "ricorda", "ricordi", "cosa sai di me", "preferenze", "impara"], View: view(() => import("../features/teach/TeachView"), "TeachView") },
   { id: "documents", path: "/documents", label: "Documenti", icon: "file", group: "work", simple: true, keywords: ["documenti", "file", "pdf", "raccolte", "conoscenza", "rag", "cerca nei file", "base di conoscenza"], View: view(() => import("../features/documents/DocumentsView"), "DocumentsView") },
+  { id: "channels", path: "/channels", label: "Canali", simpleLabel: "Telegram e posta", icon: "send", group: "work", simple: true, keywords: ["canali", "telegram", "slack", "email", "posta", "bot", "messaggi", "scrivi all'assistente", "da fuori"], View: view(() => import("../features/channels/ChannelsView"), "ChannelsView") },
   { id: "teams", path: "/teams/:teamId?", label: "Team", icon: "team", group: "work", keywords: ["squadra", "supervisore", "multi-agente", "parallelo", "catena"], View: view(() => import("../features/teams/TeamsView"), "TeamsView") },
   { id: "workflows", path: "/workflows/:workflowId?", label: "Workflow", icon: "flow", group: "work", keywords: ["automazioni", "trigger", "webhook"], View: view(() => import("../features/workflows/WorkflowsView"), "WorkflowsView") },
   { id: "evals", path: "/evals/:tab?", label: "Valutazioni", icon: "check", group: "work", keywords: ["valutazione", "eval", "test", "benchmark", "grader", "confronto", "qualità"], View: view(() => import("../features/evals/EvalsView"), "EvalsView") },
