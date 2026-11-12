@@ -2,7 +2,7 @@
 # (CMake + bindgen). Used by .github/workflows/release.yml and release-check.yml.
 #
 #   setup-windows-arm64.ps1 -Step rust    before dtolnay/rust-toolchain: rustup and a native libclang
-#   setup-windows-arm64.ps1 -Step tools   after ilammy/msvc-dev-cmd (arch: arm64): CMake and Ninja
+#   setup-windows-arm64.ps1 -Step tools   after ilammy/msvc-dev-cmd (arch: arm64): CMake, Ninja and clang-cl as C/C++ compiler
 #
 # Nothing here has been run on a real windows-11-arm runner yet: every step checks first what the
 # image already has and only installs what is missing, so it is a no-op where the image is complete.
@@ -77,4 +77,22 @@ if ($Step -eq 'tools') {
   & ninja --version
   # llama.cpp's nested CMake projects want Ninja (see the Vulkan notes in docs/release/RELEASE.md).
   if ($env:GITHUB_ENV) { Add-Content -Path $env:GITHUB_ENV -Value 'CMAKE_GENERATOR=Ninja' }
+
+  # ggml refuses MSVC's cl.exe on ARM ("MSVC on ARM requires GGML_NATIVE=ON, use clang"): compile the
+  # C/C++ of the build scripts with the arm64 clang-cl that ships next to libclang. The linker and
+  # the Windows SDK stay the MSVC ones set up by msvc-dev-cmd.
+  $clangCl = $null
+  if ($env:LIBCLANG_PATH) { $clangCl = Join-Path $env:LIBCLANG_PATH 'clang-cl.exe' }
+  if (-not ($clangCl -and (Test-Path $clangCl))) {
+    $found = Get-Command clang-cl -ErrorAction SilentlyContinue
+    if (-not $found) { throw 'clang-cl.exe not found: llama.cpp cannot be built for Windows arm64 without it' }
+    $clangCl = $found.Source
+  }
+  if ((Get-PEMachine $clangCl) -ne 0xAA64) { Write-Host "warning: $clangCl is not an arm64 binary (it will run emulated)" }
+  $clangCl = $clangCl -replace '\\', '/'
+  Write-Host "C/C++ compiler: $clangCl"
+  if ($env:GITHUB_ENV) {
+    Add-Content -Path $env:GITHUB_ENV -Value "CC=$clangCl"
+    Add-Content -Path $env:GITHUB_ENV -Value "CXX=$clangCl"
+  }
 }
