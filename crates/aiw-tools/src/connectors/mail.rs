@@ -528,8 +528,9 @@ mod tests {
         let inbox = dir.path().join("INBOX");
         std::fs::write(inbox.join("new/1.msg"), "From: A <a@b.it>\nSubject: Nuova\nDate: Tue, 5 Mar 2030 10:00:00 +0000\n\nTesto\n")
             .unwrap();
-        std::fs::write(inbox.join("cur/2.msg:2,S"), "From: B <b@b.it>\nSubject: Letta\nDate: Tue, 5 Mar 2030 09:00:00 +0000\n\nTesto\n")
-            .unwrap();
+        // A colon is not allowed in a Windows file name: Maildir there separates the flags with ';'.
+        let read = if cfg!(windows) { "cur/2.msg;2,S" } else { "cur/2.msg:2,S" };
+        std::fs::write(inbox.join(read), "From: B <b@b.it>\nSubject: Letta\nDate: Tue, 5 Mar 2030 09:00:00 +0000\n\nTesto\n").unwrap();
         std::fs::write(inbox.join("tmp/3.msg"), "From: C\nSubject: Parziale\n\nx").unwrap();
         // Pointing at the parent finds the Maildir inside it.
         for spec in [&inbox, &dir.path().to_path_buf()] {

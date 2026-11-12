@@ -90,7 +90,9 @@ async fn mail_recent_and_search_on_a_maildir_and_an_eml() {
         eml("Anna <anna@example.org>", "Fattura di marzo", now - Duration::hours(2), "Ti mando la fattura da pagare entro venerdì."),
     )
     .unwrap();
-    std::fs::write(inbox.join("cur/b:2,S"), eml("Bruno <b@example.org>", "Cena", now - Duration::hours(30), "Sabato alle otto?")).unwrap();
+    // A colon is not allowed in a Windows file name: Maildir there separates the flags with ';'.
+    let read = if cfg!(windows) { "cur/b;2,S" } else { "cur/b:2,S" };
+    std::fs::write(inbox.join(read), eml("Bruno <b@example.org>", "Cena", now - Duration::hours(30), "Sabato alle otto?")).unwrap();
     let single = dir.path().join("ciao.eml");
     std::fs::write(&single, eml("Carla <c@example.org>", "Ciao", now - Duration::minutes(10), "Come stai?")).unwrap();
     let shared = ConnectorSettings::new(Config {
