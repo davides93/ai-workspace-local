@@ -169,7 +169,12 @@ async fn limits_are_those_of_chat_attachments_and_errors_are_in_italian() {
     assert!(e2["error"].as_str().unwrap().contains("troppo grande"), "{e2}");
     assert_eq!(dispatch(app.clone(), "POST", &uri, Some(json!({}))).await.0, 400);
     assert_eq!(dispatch(app.clone(), "POST", &uri, Some(json!({"files": [file("a.txt", b"x")], "path": "/tmp"}))).await.0, 400);
-    assert_eq!(dispatch(app.clone(), "POST", &uri, Some(json!({"path": std::env::temp_dir().join("aiw-non-esiste-proprio").to_string_lossy()}))).await.0, 404);
+    assert_eq!(
+        dispatch(app.clone(), "POST", &uri, Some(json!({"path": std::env::temp_dir().join("aiw-non-esiste-proprio").to_string_lossy()})))
+            .await
+            .0,
+        404
+    );
     assert_eq!(dispatch(app.clone(), "POST", &uri, Some(json!({"path": "relativo"}))).await.0, 400);
     // The body limit of this route is the one of the chat attachments: a request that carries
     // well over 25 MB of files is refused with 413 before it is read.

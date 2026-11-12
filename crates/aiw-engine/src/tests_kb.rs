@@ -329,7 +329,10 @@ async fn a_folder_is_walked_a_changed_file_replaces_its_document_and_skips_are_r
     assert!(e.kb_search_scoped("gatto", None, 5, &[], Embedder::Off).await.unwrap().hits.is_empty(), "the old text is gone");
 
     // A path that is not there or is not absolute is a clear error.
-    let err = e.kb_add(&c.id, KbAddBody { files: None, path: Some(root.join("non-esiste-proprio").to_string_lossy().into_owned()) }, true).await.unwrap_err();
+    let err = e
+        .kb_add(&c.id, KbAddBody { files: None, path: Some(root.join("non-esiste-proprio").to_string_lossy().into_owned()) }, true)
+        .await
+        .unwrap_err();
     assert!(matches!(&err, Error::NotFound(m) if m.contains("non esiste")), "{err}");
     assert!(matches!(e.kb_add(&c.id, KbAddBody { files: None, path: Some("relativo/x".into()) }, true).await, Err(Error::Invalid(_))));
     // A caller that must not read this computer's files is refused.
