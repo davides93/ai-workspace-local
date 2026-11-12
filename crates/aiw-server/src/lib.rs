@@ -8,7 +8,10 @@ mod gateway;
 mod kb_api;
 mod mcp_server;
 pub mod mesh;
+mod scopes;
 mod security;
+mod tls;
+mod tokens_api;
 
 use aiw_core::api::*;
 use aiw_core::Error;
@@ -60,34 +63,174 @@ pub struct AppState {
     pub engine: Engine,
 }
 
-/// Is this request coming from this machine (or from the in-process Tauri dispatcher)?
-fn is_local(req: &Request) -> bool {
-    match req.extensions().get::<ConnectInfo<SocketAddr>>() {
-        Some(ConnectInfo(addr)) => addr.ip().to_canonical().is_loopback(),
-        None => true,
-    }
+/// What the authentication middleware decided about a request, for the handlers that need to know.
+#[derive(Clone, Debug)]
+pub(crate) struct AuthContext {
+    /// The token the request carried (`None`: this computer without a token).
+    pub token: Option<aiw_engine::tokens::TokenAuth>,
+    /// May this caller do everything (the owner on this computer or over TLS, or this computer without a token)?
+    pub full: bool,
 }
 
-/// Authentication and CSRF/DNS-rebinding defence (see [`security`]). A request with the API token
-/// always passes; one without it passes only when it comes from this machine and is not a web
-/// page acting on its own (loopback `Host`, allowed `Origin`), or when it is a pairing attempt.
-async fn auth(State(st): State<AppState>, req: Request, next: Next) -> Response {
+/// Is this request coming from this machine (or from the in-process Tauri dispatcher) with full
+/// rights? A token that is not `full` (a paired device's, even over loopback) is not "local": the
+/// routes that make the engine read this computer's files refuse it.
+fn is_local(req: &Request) -> bool {
+    let on_machine = match req.extensions().get::<ConnectInfo<SocketAddr>>() {
+        Some(ConnectInfo(addr)) => addr.ip().to_canonical().is_loopback(),
+        None => true,
+    };
+    on_machine && req.extensions().get::<AuthContext>().is_none_or(|c| c.full)
+}
+
+fn client_ip(req: &Request) -> Option<String> {
+    req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_canonical().to_string())
+}
+
+fn rejection(status: StatusCode, msg: &str) -> Response {
+    (status, Json(json!({ "error": msg }))).into_response()
+}
+
+/// Authentication, authorisation by scope, and CSRF/DNS-rebinding defence (see [`security`] and
+/// [`scopes`]).
+///
+/// * A request that carries a valid token passes the origin rules (a forged request cannot carry
+///   one) and is then held to the token's scopes: the owner token is `full` from this computer or
+///   over TLS, and a paired device's token is `device`.
+/// * A token that was revoked or has expired is refused with 401, wherever the request comes from.
+///   A token that is not one of ours counts as no token (and costs the client address a strike).
+/// * A request without a valid token passes only when it comes from this machine and is not a web
+///   page acting on its own (loopback `Host`, allowed `Origin`), or when it is a pairing attempt.
+async fn auth(State(st): State<AppState>, mut req: Request, next: Next) -> Response {
+    use aiw_engine::tokens::{Scope, TokenCheck, TokenKind};
+    use scopes::Required;
     let path = req.uri().path().to_string();
-    if !security::is_guarded(&path) || security::has_valid_token(&req, st.engine.token()) {
+    if !security::is_guarded(&path) {
         return next.run(req).await;
     }
-    let refusal = match security::peer(&req) {
-        security::Peer::InProcess => None,
-        security::Peer::Loopback => security::check_loopback(&req, &st),
-        // Pairing is how a LAN device gets its token; a web page must still not be able to try codes.
-        security::Peer::Remote if path == "/api/pair" => security::check_origin(&req, &st),
-        security::Peer::Remote => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "serve il token di pairing per l'accesso dalla rete"}))).into_response()
+    let peer = security::peer(&req);
+    let ip = client_ip(&req);
+    let presented = security::presented_tokens(&req);
+
+    // Bad tokens from the network are rate limited per client address (this computer is exempt: whoever
+    // runs code here can read the token file anyway).
+    if !presented.is_empty() && peer == security::Peer::Remote {
+        if let Some(wait) = ip.as_deref().and_then(|ip| st.engine.token_lockout(ip)) {
+            let secs = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+            let mut res = rejection(
+                StatusCode::TOO_MANY_REQUESTS,
+                &format!("troppi token non validi da questo indirizzo: riprova tra {}", human_wait(secs)),
+            );
+            res.headers_mut().insert(axum::http::header::RETRY_AFTER, secs.into());
+            return res;
+        }
+    }
+
+    let mut valid = None;
+    let mut dead: Option<(String, String, bool)> = None;
+    for t in &presented {
+        match st.engine.authenticate_token(t, ip.as_deref()) {
+            TokenCheck::Valid(a) => {
+                valid = Some(a);
+                break;
+            }
+            TokenCheck::Revoked { id, name } => dead = Some((id, name, false)),
+            TokenCheck::Expired { id, name } => dead = Some((id, name, true)),
+            TokenCheck::Unknown => {}
+        }
+    }
+    if valid.is_none() {
+        if let Some((id, name, expired)) = dead {
+            st.engine.audit_token_rejected(
+                &id,
+                &name,
+                if expired { "usato dopo la scadenza" } else { "usato dopo la revoca" },
+                ip.as_deref(),
+            );
+            return rejection(
+                StatusCode::UNAUTHORIZED,
+                if expired {
+                    "il token è scaduto: ne serve uno nuovo"
+                } else {
+                    "il token è stato revocato: accoppia di nuovo il dispositivo o crea un nuovo token"
+                },
+            );
+        }
+        if !presented.is_empty() && peer == security::Peer::Remote {
+            if let Some(ip) = ip.as_deref() {
+                st.engine.token_failure(ip);
+            }
+        }
+    }
+
+    // Who is calling and with which scopes.
+    let tls = security::is_tls(&req);
+    let on_machine = peer != security::Peer::Remote;
+    let (ctx, legacy_owner) = match valid {
+        Some(a) => {
+            // The owner token is the token of this computer. A request from elsewhere that carries it over
+            // plain HTTP is what a device paired before per-device tokens looks like (and what anyone who
+            // sniffed the LAN could send): it gets a paired device's rights, not the owner's.
+            let owner_remote_plain = a.kind == TokenKind::Owner && !on_machine && !tls;
+            let full = a.scopes.contains(&Scope::Full) && !owner_remote_plain;
+            let mut a = a;
+            if owner_remote_plain {
+                a.scopes = vec![Scope::Device];
+            }
+            (AuthContext { token: Some(a), full }, owner_remote_plain)
+        }
+        None => {
+            let refusal = match peer {
+                security::Peer::InProcess => None,
+                security::Peer::Loopback => security::check_loopback(&req, &st),
+                // Pairing is how a LAN device gets its token; a web page must still not be able to try codes.
+                security::Peer::Remote if path == "/api/pair" => security::check_origin(&req, &st),
+                security::Peer::Remote => {
+                    return rejection(StatusCode::UNAUTHORIZED, "serve il token di pairing per l'accesso dalla rete");
+                }
+            };
+            if let Some(refusal) = refusal {
+                return refusal;
+            }
+            (AuthContext { token: None, full: peer != security::Peer::Remote }, false)
         }
     };
-    match refusal {
-        None => next.run(req).await,
-        Some(refusal) => refusal,
+
+    // The route's minimum scope: no entry in the table means `full` only.
+    let needed = scopes::required_scope(req.method().as_str(), &path).unwrap_or(Required::Scope(Scope::Full));
+    let allowed = match needed {
+        Required::Public => true,
+        Required::AnyToken => ctx.token.is_some(),
+        Required::Scope(s) => match &ctx.token {
+            None => ctx.full,
+            Some(a) => (s == Scope::Full && ctx.full) || (s != Scope::Full && a.scopes.iter().any(|h| h.covers(s))),
+        },
+    };
+    if !allowed {
+        let msg = match (&ctx.token, needed) {
+            (None, Required::AnyToken) => "nessun token da lasciare: questa richiesta non ne usa uno",
+            (Some(_), _) if legacy_owner => {
+                "il token di questo computer, usato da un altro dispositivo senza TLS, ha solo i permessi di un dispositivo accoppiato: per questa funzione apri AI Workspace su questo computer, oppure attiva TLS (server.tls) o accoppia di nuovo il dispositivo"
+            }
+            (Some(a), Required::Scope(Scope::Gateway | Scope::A2a | Scope::Mcp)) if a.kind == TokenKind::Gateway => {
+                "questo token di app non ha il permesso per questo servizio: crealo con l'ambito giusto in Sicurezza → Accessi"
+            }
+            _ => "questo token non ha il permesso per questa funzione: serve l'accesso completo di questo computer",
+        };
+        return rejection(StatusCode::FORBIDDEN, msg);
+    }
+
+    // The streams a token opens end when the token is revoked (or expires).
+    let bound = ctx.token.clone().filter(|a| a.kind != TokenKind::Owner);
+    let revocations = bound.as_ref().map(|_| st.engine.token_revocations());
+    req.extensions_mut().insert(ctx);
+    let mut res = next.run(req).await;
+    if legacy_owner {
+        res.headers_mut().insert("x-aiw-notice", axum::http::HeaderValue::from_static("owner-token-over-lan"));
+    }
+    match (bound, revocations) {
+        (Some(a), Some(rx)) => tokens_api::end_with_token(res, st.engine.clone(), a, rx),
+        _ => res,
     }
 }
 
@@ -98,6 +241,13 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/system", get(system))
         .route("/api/kill", post(kill))
         .route("/api/pair", post(pair))
+        .route("/api/auth/token", delete(tokens_api::revoke_self))
+        .route("/api/tokens", get(tokens_api::list).post(tokens_api::create))
+        .route("/api/tokens/{id}", delete(tokens_api::revoke))
+        .route("/api/tokens/{id}/rotate", post(tokens_api::rotate))
+        .route("/api/tls", get(tokens_api::tls_status))
+        .route("/api/tls/ca.pem", get(tokens_api::tls_ca))
+        .route("/api/tls/ca", get(tokens_api::tls_ca_json))
         .route("/api/update", get(update_status))
         .route("/api/update/check", post(update_check))
         .route("/api/update/download", post(update_download))
@@ -285,8 +435,15 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
 /// Referer.
 async fn hardening_headers(req: Request, next: middleware::Next) -> Response {
     use axum::http::{header, HeaderValue};
+    let tls = security::is_tls(&req);
     let mut res = next.run(req).await;
     let h = res.headers_mut();
+    // Only over TLS: a browser that has seen it will not talk to this address in the clear again (and,
+    // as the header is ignored on a connection with a certificate error, a self-signed certificate that the
+    // browser does not trust cannot lock anybody out).
+    if tls {
+        h.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000"));
+    }
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     h.entry(header::CONTENT_SECURITY_POLICY).or_insert(HeaderValue::from_static("frame-ancestors 'none'"));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
@@ -321,6 +478,11 @@ async fn kill(State(s): State<AppState>) -> ApiResult<Value> {
 #[derive(Deserialize)]
 struct PairBody {
     code: String,
+    /// The pairing device's own id and name (its token is bound to the id and listed under the name).
+    #[serde(default)]
+    device_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 /// Address of the TCP peer; `None` for the in-process dispatcher.
 struct ClientIp(Option<String>);
@@ -339,10 +501,12 @@ struct IsLocal(bool);
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for IsLocal {
     type Rejection = Infallible;
     async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
-        Ok(IsLocal(match parts.extensions.get::<ConnectInfo<SocketAddr>>() {
+        let on_machine = match parts.extensions.get::<ConnectInfo<SocketAddr>>() {
             Some(ConnectInfo(addr)) => addr.ip().to_canonical().is_loopback(),
             None => true,
-        }))
+        };
+        // A token that is not `full` (a paired device's) is not local even over loopback.
+        Ok(IsLocal(on_machine && parts.extensions.get::<AuthContext>().is_none_or(|c| c.full)))
     }
 }
 
@@ -358,13 +522,15 @@ fn human_wait(secs: u64) -> String {
 }
 
 async fn pair(State(s): State<AppState>, ClientIp(client): ClientIp, Json(b): Json<PairBody>) -> Response {
-    match s.engine.pair_attempt(&b.code, client.as_deref()) {
-        PairOutcome::Paired(token) => Json(json!({"token": token})).into_response(),
-        PairOutcome::Invalid => {
+    match s.engine.pair_attempt_as(&b.code, client.as_deref(), b.device_id.as_deref(), b.name.as_deref()) {
+        (PairOutcome::Paired(token), device_id) => {
+            Json(json!({"token": token, "device_id": device_id, "tls_fingerprint": s.engine.tls_fingerprint()})).into_response()
+        }
+        (PairOutcome::Invalid, _) => {
             tokio::time::sleep(PAIR_FAIL_DELAY).await;
             ApiError(Error::Denied("codice di pairing non valido".into())).into_response()
         }
-        PairOutcome::Locked { retry_after } => {
+        (PairOutcome::Locked { retry_after }, _) => {
             let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
             let body = json!({
                 "error": format!("troppi tentativi di pairing falliti: riprova tra {}", human_wait(secs)),
@@ -968,6 +1134,15 @@ fn server_port(s: &AppState) -> u16 {
     }
 }
 
+/// `https` when the listener of this process speaks TLS.
+fn scheme(s: &AppState) -> &'static str {
+    if s.engine.tls_active() {
+        "https"
+    } else {
+        "http"
+    }
+}
+
 fn lan_enabled(s: &AppState) -> bool {
     match LISTENER.get() {
         Some(&(_, lan)) => lan,
@@ -976,7 +1151,7 @@ fn lan_enabled(s: &AppState) -> bool {
 }
 
 async fn mesh_state(State(s): State<AppState>) -> ApiResult<Value> {
-    let address = mesh::lan_ip().filter(|_| lan_enabled(&s)).map(|ip| format!("http://{ip}:{}", server_port(&s)));
+    let address = mesh::lan_ip().filter(|_| lan_enabled(&s)).map(|ip| format!("{}://{ip}:{}", scheme(&s), server_port(&s)));
     ok(json!({
         "discovery": mesh::discovery_running(),
         "address": address,
@@ -989,9 +1164,12 @@ async fn mesh_state(State(s): State<AppState>) -> ApiResult<Value> {
 struct MeshPair {
     address: String,
     code: String,
+    /// SHA-256 of the other device's certificate (required for an `https://` address).
+    #[serde(default)]
+    fingerprint: Option<String>,
 }
 async fn mesh_pair(State(s): State<AppState>, Json(b): Json<MeshPair>) -> ApiResult<PeerDevice> {
-    ok(s.engine.pair_with_peer(&b.address, &b.code).await?)
+    ok(s.engine.pair_with_peer(&b.address, &b.code, b.fingerprint.as_deref()).await?)
 }
 async fn mesh_remove_peer(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.remove_peer(&id).await?;
@@ -1007,8 +1185,12 @@ async fn pairing_qr(State(s): State<AppState>, req: Request) -> ApiResult<Value>
         return Err(ApiError(Error::Invalid("attiva l'accesso dalla LAN (server.lan) per accoppiare altri dispositivi".into())));
     }
     let ip = mesh::lan_ip().ok_or_else(|| ApiError(Error::Unsupported("nessuna interfaccia di rete locale".into())))?;
-    let (url, svg) =
-        mesh::pairing_qr(&format!("http://{ip}:{}", server_port(&s)), &s.engine.pairing_code()).map_err(|e| ApiError(Error::Runtime(e)))?;
+    let (url, svg) = mesh::pairing_qr(
+        &format!("{}://{ip}:{}", scheme(&s), server_port(&s)),
+        &s.engine.pairing_code(),
+        s.engine.tls_fingerprint().as_deref(),
+    )
+    .map_err(|e| ApiError(Error::Runtime(e)))?;
     ok(json!({"url": url, "svg": svg}))
 }
 
@@ -1522,19 +1704,56 @@ pub async fn dispatch(app: Router, method: &str, path: &str, body: Option<Value>
     }
 }
 
-/// Binds and serves until the process stops. LAN exposure follows `server.lan`.
+/// Binds and serves until the process stops. LAN exposure follows `server.lan`; when the listener is
+/// reachable beyond this computer, `server.tls` decides whether it speaks TLS (see [`tls`]). A TLS
+/// setting that cannot be honoured (missing or wrong files) stops the start: the listener never
+/// falls back to plain HTTP by itself.
 pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>) -> std::io::Result<()> {
     let host = if lan { "0.0.0.0" } else { "127.0.0.1" };
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     let port = listener.local_addr()?.port();
+    let material = if lan {
+        match engine.tls_material() {
+            Ok(m) => m,
+            Err(e) => {
+                engine.tls_listener_failed(lan, port, e.to_string());
+                return Err(std::io::Error::other(format!("TLS non disponibile: {e}")));
+            }
+        }
+    } else {
+        if engine.tls_mode() != aiw_engine::tls::TlsMode::Off {
+            tracing::info!("server.tls ha effetto solo con l'accesso dalla LAN (server.lan): il server resta su 127.0.0.1 in HTTP");
+        }
+        None
+    };
+    let tls_config = match &material {
+        Some(m) => match aiw_engine::tls::server_config(m) {
+            Ok(c) => Some(std::sync::Arc::new(c)),
+            Err(e) => {
+                engine.tls_listener_failed(lan, port, e.to_string());
+                return Err(std::io::Error::other(format!("TLS non disponibile: {e}")));
+            }
+        },
+        None => None,
+    };
     let _ = LISTENER.set((port, lan));
+    engine.tls_listener_started(lan, port, material.as_ref());
     engine.set_local_url(format!("http://127.0.0.1:{port}"));
-    tracing::info!("AI Workspace Local in ascolto su http://{host}:{port} (LAN: {lan})");
+    let scheme = if tls_config.is_some() { "https" } else { "http" };
+    tracing::info!("AI Workspace Local in ascolto su {scheme}://{host}:{port} (LAN: {lan}, TLS: {})", tls_config.is_some());
+    if lan && tls_config.is_none() {
+        tracing::warn!(
+            "l'API è raggiungibile dalla rete in HTTP in chiaro: il token e i dati viaggiano senza cifratura. Attiva server.tls"
+        );
+    }
     if lan {
-        mesh::start(&engine, port);
+        mesh::start(&engine, port, tls_config.is_some());
     }
     let app = router(engine, ui_dir);
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await
+    match tls_config {
+        Some(cfg) => tls::serve(listener, app, cfg).await,
+        None => axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await,
+    }
 }
 
 #[cfg(test)]
@@ -1565,6 +1784,10 @@ mod tests_recommend;
 mod tests_remote;
 #[cfg(test)]
 mod tests_security;
+#[cfg(test)]
+mod tests_tls;
+#[cfg(test)]
+mod tests_tokens;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]

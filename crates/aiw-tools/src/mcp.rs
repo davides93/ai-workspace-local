@@ -303,13 +303,16 @@ impl Conn {
                     headers.insert(name, value);
                 }
                 let url = cfg.url.clone().filter(|u| !u.is_empty()).ok_or_else(|| Fail::Fatal("server MCP HTTP senza url".into()))?;
-                let http = reqwest::Client::builder()
+                let mut builder = reqwest::Client::builder()
                     .connect_timeout(Duration::from_secs(5))
                     // The token of the person goes to this address and nowhere else.
                     .redirect(reqwest::redirect::Policy::none())
-                    .default_headers(headers)
-                    .build()
-                    .map_err(|e| Fail::Fatal(e.to_string()))?;
+                    .default_headers(headers);
+                // A paired device served over TLS is verified against the certificate pinned at pairing.
+                if let Some(cfg) = aiw_core::tlspin::client_config_for(&url) {
+                    builder = builder.use_preconfigured_tls(cfg);
+                }
+                let http = builder.build().map_err(|e| Fail::Fatal(e.to_string()))?;
                 Kind::Http { url, http, session: Mutex::new(None) }
             }
             other => return Err(Fail::Fatal(format!("trasporto MCP sconosciuto: {other}"))),

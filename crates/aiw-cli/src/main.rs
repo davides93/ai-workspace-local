@@ -112,11 +112,40 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<ChannelsCmd>,
     },
+    /// Token di accesso all'API: per app di terzi e per i dispositivi accoppiati
+    Tokens {
+        #[command(subcommand)]
+        cmd: Option<TokensCmd>,
+    },
     /// Documenti locali che gli assistenti possono cercare (base di conoscenza)
     Kb {
         #[command(subcommand)]
         cmd: Option<KbCmd>,
     },
+}
+
+#[derive(Subcommand)]
+enum TokensCmd {
+    /// Elenca i token con ultimo uso, scadenza e stato (predefinito)
+    List,
+    /// Crea un token; il valore si vede una volta sola
+    Create {
+        /// Nome (per esempio l'app che lo userà)
+        name: String,
+        /// gateway (app di terzi, solo /v1) o device (dispositivo accoppiato)
+        #[arg(long, default_value = "gateway")]
+        kind: String,
+        /// Giorni di validità (di serie non scade)
+        #[arg(long)]
+        expires_in_days: Option<u32>,
+        /// Ambiti in più per un token gateway: a2a, mcp
+        #[arg(long)]
+        scope: Vec<String>,
+    },
+    /// Revoca un token: smette di funzionare subito
+    Revoke { id: String },
+    /// Sostituisce un token con uno nuovo (il vecchio smette di funzionare subito)
+    Rotate { id: String },
 }
 
 #[derive(Subcommand)]
@@ -499,6 +528,17 @@ async fn main() -> Result<()> {
             );
             if lan {
                 eprintln!("Accesso LAN attivo: codice di pairing {}", engine.pairing_code());
+                match engine.tls_material() {
+                    Ok(Some(m)) => eprintln!(
+                        "TLS attivo ({}): impronta {} — il pairing la porta con sé; per un browser su un altro dispositivo installa il certificato da Sicurezza → Rete.",
+                        engine.tls_mode().as_str(),
+                        aiw_core::tlspin::display_fingerprint(&m.fingerprint)
+                    ),
+                    Ok(None) => eprintln!(
+                        "ATTENZIONE: l'API è raggiungibile dalla rete in HTTP in chiaro (token e dati senza cifratura). Attiva la cifratura con server.tls = self_signed."
+                    ),
+                    Err(e) => eprintln!("ATTENZIONE: TLS non disponibile ({e}): il servizio non parte finché non lo correggi."),
+                }
             }
             if ui.is_none() {
                 eprintln!("UI web non trovata: compila apps/ui (npm run build) o passa --ui <cartella>");
@@ -595,6 +635,7 @@ async fn main() -> Result<()> {
         },
         Cmd::Lessons { cmd } => lessons_cmd(&engine, cmd.unwrap_or(LessonsCmd::List { status: "pending".into() }))?,
         Cmd::Channels { cmd } => channels_cmd(&engine, cmd.unwrap_or(ChannelsCmd::List))?,
+        Cmd::Tokens { cmd } => tokens_cmd(&engine, cmd.unwrap_or(TokensCmd::List))?,
         Cmd::Kb { cmd } => kb_cmd(&engine, cmd.unwrap_or(KbCmd::List)).await?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Rewind { run_id, dry_run } => {
@@ -853,6 +894,41 @@ fn lessons_cmd(engine: &Engine, cmd: LessonsCmd) -> Result<()> {
         LessonsCmd::Reject { id } => {
             let l = engine.reject_lesson(&id)?;
             println!("Lezione «{}» scartata.", l.title);
+        }
+    }
+    Ok(())
+}
+
+fn tokens_cmd(engine: &Engine, cmd: TokensCmd) -> Result<()> {
+    match cmd {
+        TokensCmd::List => {
+            for t in engine.api_tokens() {
+                let state = if t.revoked_at.is_some() { "revocato" } else { "attivo" };
+                println!(
+                    "{:<22} {:<8} {:<9} {:<16} ultimo uso: {}{}  {}",
+                    t.id,
+                    t.kind,
+                    state,
+                    t.prefix,
+                    t.last_used_at.as_deref().unwrap_or("mai"),
+                    t.expires_at.as_deref().map(|e| format!("  scade: {e}")).unwrap_or_default(),
+                    t.name
+                );
+            }
+        }
+        TokensCmd::Create { name, kind, expires_in_days, scope } => {
+            let t = engine.create_api_token(&name, &kind, None, expires_in_days, Some(&scope))?;
+            println!("{}", t.token);
+            eprintln!("Token «{}» creato ({}). Copialo ora: non verrà mostrato di nuovo.", t.info.name, t.info.id);
+        }
+        TokensCmd::Revoke { id } => {
+            engine.revoke_api_token(&id)?;
+            println!("Token {id} revocato: da ora le nuove richieste con quel token sono rifiutate. I flussi già aperti si chiudono solo revocando dall'app o dall'API del servizio, oppure al suo riavvio.");
+        }
+        TokensCmd::Rotate { id } => {
+            let t = engine.rotate_api_token(&id)?;
+            println!("{}", t.token);
+            eprintln!("Il token {id} è stato sostituito da {}: copia il nuovo valore ora, non verrà mostrato di nuovo.", t.info.id);
         }
     }
     Ok(())

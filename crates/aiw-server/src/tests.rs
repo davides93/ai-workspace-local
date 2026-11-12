@@ -321,8 +321,8 @@ async fn pairs_with_another_device_over_http() {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app_b.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
 
-    assert!(a.pair_with_peer(&addr.to_string(), "000000").await.is_err(), "wrong code is refused");
-    let peer = a.pair_with_peer(&format!("http://{addr}/"), &b.pairing_code()).await.unwrap();
+    assert!(a.pair_with_peer(&addr.to_string(), "000000", None).await.is_err(), "wrong code is refused");
+    let peer = a.pair_with_peer(&format!("http://{addr}/"), &b.pairing_code(), None).await.unwrap();
     assert_eq!(peer.name, "Telefono di prova");
     assert_eq!(peer.address, format!("http://{addr}"));
     assert!(a.peers().iter().any(|p| p.id == peer.id));

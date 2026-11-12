@@ -1,5 +1,6 @@
 import { useSystem } from "../../shared/query/system";
 import { Page, PageHeader, QueryState, PageSkeleton } from "../../shared/ui";
+import { AccessPanel } from "../security/components/AccessPanel";
 import { HardwarePanel } from "./components/HardwarePanel";
 import { MeshSection } from "./components/MeshSection";
 import { TierPanel } from "./components/TierPanel";
@@ -19,6 +20,7 @@ export function DevicesView() {
               <TierPanel tier={info.device.tier} />
             </div>
             <MeshSection />
+            <AccessPanel />
           </>
         )}
       </QueryState>

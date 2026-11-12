@@ -293,11 +293,12 @@ struct A2aClient {
 impl A2aClient {
     fn new(remote: &RemoteAgent, timeout: Duration) -> Result<Self> {
         let base = http_url(&remote.url)?;
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(Error::other)?;
+        let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(30)).redirect(reqwest::redirect::Policy::none());
+        // A paired device served over TLS is verified against the certificate pinned at pairing.
+        if let Some(cfg) = aiw_core::tlspin::client_config_for(base.as_str()) {
+            builder = builder.use_preconfigured_tls(cfg);
+        }
+        let http = builder.build().map_err(Error::other)?;
         Ok(Self { http, card: card_url(&base), base, token: remote.token.clone(), skill: remote.skill.clone(), timeout })
     }
     fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {

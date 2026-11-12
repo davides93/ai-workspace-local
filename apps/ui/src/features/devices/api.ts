@@ -27,7 +27,7 @@ export function usePairPeer() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { address: string; code: string }) => api.pairPeer(v.address, v.code),
+    mutationFn: (v: { address: string; code: string; fingerprint?: string }) => api.pairPeer(v.address, v.code, v.fingerprint),
     onSuccess: (p) => {
       toast(`Accoppiato con ${p.name}: i suoi modelli e agenti sono disponibili qui`);
       void qc.invalidateQueries({ queryKey: qk.mesh() });

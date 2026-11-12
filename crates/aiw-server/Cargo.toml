@@ -27,6 +27,11 @@ chrono.workspace = true
 mdns-sd = "0.21"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 reqwest.workspace = true
+# TLS listener (rustls with ring: no OpenSSL). All of these are already in the tree through axum and reqwest.
+rustls.workspace = true
+tokio-rustls.workspace = true
+hyper = { version = "1", features = ["server"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service", "http1", "http2"] }
 
 [dev-dependencies]
 aiw-tools.workspace = true

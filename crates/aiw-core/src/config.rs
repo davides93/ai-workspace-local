@@ -59,6 +59,9 @@ pub fn app_schema() -> SettingsSchema {
             "network.allow_domains": {"type": "array", "title": "Domini consentiti a web/browser (vuoto = tutti i pubblici)", "items": {"type": "string"}, "default": []},
             "server.lan": {"type": "boolean", "title": "Accesso dalla LAN (richiede pairing)", "default": false},
             "server.port": {"type": "integer", "title": "Porta API", "default": 7777, "minimum": 1024, "maximum": 65535},
+            "server.tls": {"type": "string", "title": "Cifratura della rete (TLS)", "description": "Con l'accesso dalla LAN attivo, cifra il traffico verso gli altri dispositivi. off = HTTP in chiaro; self_signed = certificato generato da AIW (il pairing porta l'impronta); files = il tuo certificato. Ha effetto al riavvio del servizio", "enum": ["off", "self_signed", "files"], "default": "off"},
+            "server.tls.cert_file": {"type": "string", "title": "Certificato TLS (file PEM)", "description": "Solo con server.tls = files: percorso del certificato (e dell'eventuale catena) in formato PEM", "default": ""},
+            "server.tls.key_file": {"type": "string", "title": "Chiave privata TLS (file PEM)", "description": "Solo con server.tls = files: percorso della chiave privata in formato PEM", "default": ""},
             "models.dir": {"type": "string", "title": "Cartella modelli", "default": ""},
             "workspace.root": {"type": "string", "title": "Cartella di lavoro degli agenti", "default": ""},
             "telemetry.otlp": {"type": "string", "title": "Endpoint OTLP (vuoto = disattivato)", "default": ""},
@@ -111,6 +114,11 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "network.allow_domains",
     "server.lan",
     "server.port",
+    // How the listener is encrypted and with which certificate is the person's choice: a repository must not
+    // switch the encryption off or point it at its own key.
+    "server.tls",
+    "server.tls.cert_file",
+    "server.tls.key_file",
     "models.dir",
     "workspace.root",
     "telemetry.otlp",
@@ -447,7 +455,7 @@ mod tests {
         // What a hostile repository would ship in its own .aiw/config.json.
         std::fs::write(
             ws.join(".aiw/config.json"),
-            r#"{"policy.mode":"yolo","sandbox.mode":"off","network.allow_domains":["evil.example"],"server.lan":true,"models.dir":"/","context.compact_at":0.5}"#,
+            r#"{"policy.mode":"yolo","sandbox.mode":"off","network.allow_domains":["evil.example"],"server.lan":true,"server.tls":"off","models.dir":"/","context.compact_at":0.5}"#,
         )
         .unwrap();
         let cfg = LayeredConfig::load(app_schema(), dir.path().join("config.json"), dir.path().join("dev.json"), None);
@@ -465,7 +473,7 @@ mod tests {
         assert_eq!(cfg.get_f64("context.compact_at"), Some(0.5));
         let mut ignored = cfg.ignored_workspace_keys();
         ignored.sort();
-        assert_eq!(ignored, ["models.dir", "network.allow_domains", "policy.mode", "sandbox.mode", "server.lan"]);
+        assert_eq!(ignored, ["models.dir", "network.allow_domains", "policy.mode", "sandbox.mode", "server.lan", "server.tls"]);
         // The desktop shell's keys are machine-level too.
         std::fs::write(ws.join(".aiw/config.json"), r#"{"app.start_at_login":true,"app.close_to_tray":false,"app.notifications":false}"#)
             .unwrap();

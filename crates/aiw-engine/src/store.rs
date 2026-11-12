@@ -23,7 +23,9 @@ mod memory;
 pub use memory::MemoryFilter;
 mod kb;
 mod proposals;
+mod tokens;
 pub use kb::{KbChunkRow, KbFilter};
+pub use tokens::TokenRow;
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -80,6 +82,7 @@ impl Store {
         .map_err(db)?;
         let fts = memory::migrate(&conn)?;
         proposals::migrate(&conn)?;
+        tokens::migrate(&conn)?;
         let kb_fts = kb::migrate(&conn)?;
         Ok(Self { conn: Mutex::new(conn), fts, kb_fts })
     }

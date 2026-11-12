@@ -172,7 +172,7 @@ async fn a_paired_device_is_a_remote_agent_and_a_team_member() {
     let (server, _d1, _w1) = device("Server", vec![ScriptedBackend::text_turn("Dal dispositivo")]).await;
     let url = serve(&server).await;
     let (client, _d2, _w2) = device("Client", vec![ScriptedBackend::text_turn("Parte locale")]).await;
-    let peer = client.pair_with_peer(&url, &server.pairing_code()).await.unwrap();
+    let peer = client.pair_with_peer(&url, &server.pairing_code(), None).await.unwrap();
 
     let id = format!("peer-{}", peer.id);
     let listed = client.remote_agents();

@@ -75,7 +75,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Computer-use: screenshot, mouse, tastiera | 🟡 | 5 azioni, solo build desktop Windows e macOS; **v0.4** screenshot visibili nella chat |
 | Client MCP: stdio e streamable HTTP, strumenti, risorse, prompt, campionamento, domande del server, OAuth, `list_changed`, riconnessione | 🟡 | Provato **solo con server e server di autorizzazione finti in locale** (script Python su stdio, axum su HTTP): mai con server MCP di terzi né con provider OAuth veri, e il ritorno OAuth su indirizzo locale non è stato verificato nell'app Tauri né sul telefono. Mancano: trasporto HTTP+SSE della revisione 2024-11-05, sottoscrizioni alle risorse, ripresa dei flussi SSE, OAuth con endpoint su un'altra origine dell'issuer (rifiutato di proposito) e senza metadati della risorsa (server 2025-03-26), campionamento con immagini o strumenti, `roots` (risposta sempre vuota), una prova di salute periodica dei server HTTP; i server stdio girano ancora fuori dalla sandbox. Le richieste del server (campionamento, domande) sono attribuite al run con una chiamata in corso sul server (se ce ne sono più di uno, all'ultimo). **v0.4** env e header dalla UI, validazione prima del salvataggio, segreti (header ed env) mascherati nelle risposte e conservati se la maschera viene rimandata |
 | Gateway OpenAI `/v1/chat/completions`, `/v1/models` e `/v1/embeddings`, gateway Anthropic `/v1/messages` | ✅ | `/v1/embeddings` usa un runtime di embedding già in esecuzione (503 in italiano altrimenti) ed è provato solo con un servizio finto; manca `/v1/responses` |
-| API locale: token, CORS, Origin/Host | ✅ **v0.4** | allowlist delle origini, protezione da DNS rebinding e CSRF; pairing con limite globale ai tentativi; header anti-framing (`X-Frame-Options`, CSP `frame-ancestors`, `nosniff`, `Referrer-Policy`); token legato all'origine che l'ha rilasciato (`?server=` non lo riceve) |
+| API locale: token, CORS, Origin/Host | ✅ **v0.4** · 🟡 **token e TLS** | allowlist delle origini, protezione da DNS rebinding e CSRF; pairing con limite globale ai tentativi; header anti-framing; token legato all'origine che l'ha rilasciato. **Token per dispositivo e per app** con ambiti (`full`, `device`, `gateway`, `a2a`, `mcp`), revoca immediata (chiude gli SSE aperti), rotazione, scadenza, registro delle attività e limite ai token errati per indirizzo; `aiw tokens`, Sicurezza → Accessi. **TLS per la LAN** (`server.tls`: `self_signed` o `files`, rustls) con impronta nel pairing e fissaggio del certificato nei client Rust; Sicurezza → Rete. Provato con test su un listener TLS vero e con handshake in memoria; **mai provato su due computer reali né da un telefono**. Un browser su un altro dispositivo non può fissare il certificato: serve installare l'autorità (avviso altrimenti). Il token `owner` usato da un'altra macchina senza TLS vale solo come dispositivo |
 | Errori e rotte sconosciute dell'API | ✅ **v0.4** | 404 e 405 in JSON sotto `/api`, `/v1`, `/mcp`, `/a2a`, `/hooks`, `/.well-known`; rifiuti degli extractor come 400 JSON; errori solo in italiano, senza prefissi inglesi; `GET /api/tools` elenca anche i tool interni (todo, agent, skill, render_ui, code), non attivabili |
 | Configurazione a strati del workspace | ✅ **v0.4** | lo strato nel repository può solo restringere `policy.mode` e `sandbox.mode`; non può impostare rete, server, percorsi, telemetria |
 | Workflow del workspace (`<workspace>/.aiw/workflows`) | ✅ **v0.4** | importati disattivati; restano attivi solo se il file non cambia dopo l'abilitazione |
@@ -171,7 +171,18 @@ Non costruiti: Windows arm64, Linux arm64, Android x86_64/armv7.
 
 - La rete della shell è aperta di default e `~/.aiw` è leggibile dentro la sandbox.
 - I server MCP stdio girano fuori dalla sandbox.
-- Esiste un solo token API condiviso, senza revoca.
+- Token e TLS: il token `owner` di questo computer sta in chiaro nel file `token` (permessi 0600, serve alla
+  CLI e alla shell desktop); il database ne tiene solo l'hash e non si cambia dall'API (cancella il file e riavvia).
+  I dispositivi che si erano accoppiati prima dei token per dispositivo hanno in mano il token `owner`: il server non ha mai
+  registrato chi sono, quindi non si possono migrare uno per uno; senza TLS funzionano con i soli permessi di un dispositivo e
+  vanno accoppiati di nuovo per avere un token loro (revocabile). Con TLS un token `owner` remoto è `full`: finché non si
+  ruota il file `token`, quei dispositivi restano onnipotenti.
+- TLS: un browser su un altro dispositivo mostra un avviso finché non si installa l'autorità locale (non c'è fissaggio nel
+  browser). Sul telefono la shell Tauri parla con il computer accoppiato dal motore Rust (reqwest/rustls: il fissaggio vale),
+  ma aprire l'interfaccia del computer nel browser del telefono (QR) è come ogni altro browser; il codice Kotlin/Swift non fa
+  richieste HTTP verso il computer. Niente di mobile è stato compilato qui. I pin dei server MCP, agenti remoti A2A inseriti a mano
+  e provider esterni non esistono: usano le radici di sistema (un certificato autofirmato non funziona).
+- I flussi IPC della shell Tauri non hanno token (sono il proprietario): la chiusura alla revoca vale per SSE/HTTP.
 - Gli endpoint dei provider (HF, ModelScope, Ollama) non sono mai stati raggiunti dall'ambiente di
   sviluppo: i test usano server locali finti.
 - Le build GPU (CUDA, Vulkan) e i percorsi nativi Apple e Android non sono stati eseguiti su
@@ -219,7 +230,7 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 **P3 · Sicurezza e distribuzione**
 13. Rete della shell chiusa di default, `~/.aiw` fuori dalla sandbox, server MCP stdio in sandbox e
     con conferma, protezione SSRF anche dietro proxy, regole di policy sulla shell che non si aggirano con comandi concatenati.
-14. Token per dispositivo con revoca (oggi un solo token condiviso) e TLS per la LAN.
+14. Token per dispositivo con revoca e TLS per la LAN: **fatti** (vedi riga «API locale» e §2.9). Restano: prova su due computer e telefoni reali, installazione guidata dell'autorità nei browser, fissaggio per i server MCP e gli agenti A2A inseriti a mano, token `owner` ruotabile senza riavvio, migrazione dei dispositivi già accoppiati (oggi si accoppiano di nuovo).
 15. Firma e notarizzazione delle release (il flusso c'è, mancano i segreti e una prima prova: `docs/release/FIRMA.md`), pubblicazione su GitHub Releases, target arm64.
 16. Font inclusi nell'app invece di Google Fonts, i18n it/en.
 

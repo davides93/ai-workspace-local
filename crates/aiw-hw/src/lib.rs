@@ -116,6 +116,37 @@ fn base_info() -> BaseInfo {
 }
 
 /// `windows | macos | linux | android | ios`
+/// The addresses of this computer's network interfaces (loopback and link-local excluded): the
+/// names a certificate for the LAN must be valid for. The address that reaches the outside world
+/// comes first when it can be told.
+pub fn local_ips() -> Vec<std::net::IpAddr> {
+    let mut out: Vec<std::net::IpAddr> = Vec::new();
+    #[cfg(not(target_os = "ios"))]
+    {
+        let nets = sysinfo::Networks::new_with_refreshed_list();
+        for data in nets.values() {
+            out.extend(data.ip_networks().iter().map(|n| n.addr));
+        }
+    }
+    // The interface that routes to the outside (nothing is sent), also the only source on iOS.
+    if let Some(ip) = std::net::UdpSocket::bind("0.0.0.0:0")
+        .ok()
+        .and_then(|s| s.connect("192.0.2.1:9").ok().map(|_| s))
+        .and_then(|s| s.local_addr().ok())
+        .map(|a| a.ip())
+    {
+        out.insert(0, ip);
+    }
+    let usable = |ip: &std::net::IpAddr| match ip {
+        std::net::IpAddr::V4(v) => !v.is_loopback() && !v.is_link_local() && !v.is_unspecified() && !v.is_multicast(),
+        // fe80::/10 is link-local: not reachable by name from another host.
+        std::net::IpAddr::V6(v) => !v.is_loopback() && !v.is_unspecified() && !v.is_multicast() && (v.segments()[0] & 0xffc0) != 0xfe80,
+    };
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|ip| usable(ip) && seen.insert(*ip));
+    out
+}
+
 pub fn normalized_os() -> String {
     match std::env::consts::OS {
         "macos" => "macos",

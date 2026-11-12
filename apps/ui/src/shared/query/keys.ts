@@ -112,6 +112,9 @@ export const qk = {
   mesh: () => ["mesh"] as const,
   pairingQr: (address: string | null, code: string | undefined) => ["mesh", "qr", address, code ?? ""] as const,
 
+  tokens: () => ["tokens"] as const,
+  tls: () => ["tls"] as const,
+
   voice: () => ["voice"] as const,
 
   config: () => ["config"] as const,

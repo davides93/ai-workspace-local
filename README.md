@@ -98,8 +98,41 @@ Mobile: `npm run android:init` / `npm run ios:init` in `apps/desktop`, poi `andr
 
 ### Gateway e protocolli
 
-`http://127.0.0.1:7777` espone i modelli locali e gli agenti a qualsiasi client. Dalla LAN serve il
-token ottenuto con il codice di pairing a 6 cifre.
+`http://127.0.0.1:7777` espone i modelli locali e gli agenti a qualsiasi client. Dalla LAN serve un
+token: ogni dispositivo ne riceve uno suo con il codice di pairing a 6 cifre, e per un'altra app si crea
+un token a parte (vedi sotto).
+
+#### Un token per un'altra app
+
+Una app di terzi (un editor, uno script, un SDK OpenAI o Anthropic) non deve usare il token di questo
+computer: ne ottiene uno suo, che apre solo `/v1/*`, si può far scadere e si revoca da solo.
+
+```bash
+./target/release/aiw tokens create "Il mio editor" --expires-in-days 90   # il valore si vede una volta sola
+export OPENAI_BASE_URL=http://127.0.0.1:7777/v1
+export OPENAI_API_KEY=aiw_…                                               # il token appena creato
+./target/release/aiw tokens list
+./target/release/aiw tokens revoke tok_…      # smette di funzionare subito
+./target/release/aiw tokens rotate tok_…      # ne mette uno nuovo al suo posto
+```
+
+Lo stesso si fa dall'app in Sicurezza → Accessi (modalità Sviluppatore: «Nuovo token per un'app»); lì i
+dispositivi accoppiati hanno «Scollega». Con `--scope mcp` e `--scope a2a` il token apre anche `/mcp` e `/a2a`.
+
+#### Cifrare la rete (TLS)
+
+Con `--lan` il traffico è HTTP in chiaro: chi è sulla stessa rete può leggere codice di pairing, token e
+conversazioni. Per cifrarlo imposta `server.tls` (Impostazioni, o Sicurezza → Rete) e riavvia `aiw serve`:
+
+- `self_signed`: AIW crea un'autorità locale e un certificato per il nome del computer, `localhost` e
+  gli indirizzi di rete (si rinnova da solo se gli indirizzi cambiano). L'impronta SHA-256 dell'autorità è nel
+  QR di pairing: un altro AIW la «fissa» e da allora si fida solo di quel certificato.
+- `files`: il tuo certificato (`server.tls.cert_file`, `server.tls.key_file`, file PEM).
+
+Un **browser** su un altro dispositivo non può fissare un certificato: mostrerà un avviso finché non
+installi l'autorità (`GET /api/tls/ca.pem`, o «Scarica il certificato» in Sicurezza → Rete) e confronti
+l'impronta. Con TLS attivo il listener rifiuta l'HTTP in chiaro dalla rete (da questo computer resta
+accessibile `http://127.0.0.1:<porta>`).
 
 | Endpoint | Per cosa |
 |---|---|

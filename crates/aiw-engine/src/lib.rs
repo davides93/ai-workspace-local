@@ -27,6 +27,8 @@ pub mod router;
 pub mod routing;
 mod secrets;
 pub mod store;
+pub mod tls;
+pub mod tokens;
 pub mod traces;
 pub mod train;
 pub mod train_jobs;
@@ -170,6 +172,10 @@ pub(crate) struct Inner {
     /// Telegram, Slack and email channels (see `channels`).
     pub channels: channels::Runtime,
     pub token: String,
+    /// Per-device and per-app tokens: limiter, throttles and revocation notices (see `tokens`).
+    pub(crate) tokens: tokens::TokenRuntime,
+    /// The listener of this process: LAN exposure and TLS (see `tls`).
+    pub(crate) net: tls::NetState,
     pub pairing: Mutex<(String, Instant)>,
     /// Failed-attempt limiter of the pairing endpoint.
     pub pair_guard: Mutex<pairing::PairGuard>,
@@ -256,7 +262,7 @@ impl Engine {
             match std::fs::read_to_string(&p) {
                 Ok(t) if t.trim().len() >= 24 => t.trim().to_string(),
                 _ => {
-                    let t = uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string()[..8];
+                    let t = tokens::generate_token();
                     std::fs::write(&p, &t)?;
                     #[cfg(unix)]
                     {
@@ -309,6 +315,8 @@ impl Engine {
             proactive: Default::default(),
             channels: Default::default(),
             token,
+            tokens: Default::default(),
+            net: Default::default(),
             pairing: Mutex::new((random_digits(6), Instant::now())),
             pair_guard: Default::default(),
             updater: update::Updater::new(opts.update_api_base.clone(), &updater_os, &updater_arch, updates_dir),
@@ -319,6 +327,10 @@ impl Engine {
         if !opts.offline {
             engine.0.runtimes.refresh().await;
         }
+        // The single token that always existed becomes the `owner` token (idempotent).
+        engine.sync_owner_token()?;
+        // Paired devices served over TLS are verified against the fingerprint saved at pairing.
+        engine.register_peer_pins();
         engine.sync_connectors();
         engine.sync_search();
         training_tool::register(&engine);
@@ -514,8 +526,8 @@ impl Engine {
         }
         p.0.clone()
     }
-    /// Exchanges a pairing code for the API token (LAN devices). `None` when the code is wrong or
-    /// pairing is locked; use [`Engine::pair_attempt`] to tell the two apart.
+    /// Exchanges a pairing code for the API token of a new device (LAN devices). `None` when the
+    /// code is wrong or pairing is locked; use [`Engine::pair_attempt`] to tell the two apart.
     pub fn pair(&self, code: &str) -> Option<String> {
         match self.pair_attempt(code, None) {
             PairOutcome::Paired(token) => Some(token),
@@ -525,18 +537,38 @@ impl Engine {
 
     /// One pairing attempt from `client` (its address, when known). Failures are rate limited
     /// across all clients and per client: after too many the code is rotated and every attempt,
-    /// even with the right code, is refused with a retry hint (see [`pairing`]).
+    /// even with the right code, is refused with a retry hint (see [`pairing`]). A right code
+    /// issues the device its own token (see [`tokens`]), never the owner token.
     pub fn pair_attempt(&self, code: &str, client: Option<&str>) -> PairOutcome {
+        self.pair_attempt_as(code, client, None, None).0
+    }
+
+    /// Like [`Engine::pair_attempt`], for a device that says who it is (`device_id`, `name`); also
+    /// returns the id the token is bound to.
+    pub fn pair_attempt_as(
+        &self,
+        code: &str,
+        client: Option<&str>,
+        device_id: Option<&str>,
+        name: Option<&str>,
+    ) -> (PairOutcome, Option<String>) {
         let now = Instant::now();
         if let Some(retry_after) = self.0.pair_guard.lock().unwrap().check(client, now) {
-            return PairOutcome::Locked { retry_after };
+            return (PairOutcome::Locked { retry_after }, None);
         }
         let given = code.replace(' ', "");
         if pairing::constant_time_eq(&given, &self.pairing_code()) {
+            let issued = match self.issue_device_token(device_id, name) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("pairing: token non emesso: {e}");
+                    return (PairOutcome::Invalid, None);
+                }
+            };
             self.0.pair_guard.lock().unwrap().record_success(client);
             *self.0.pairing.lock().unwrap() = (random_digits(6), Instant::now());
-            self.audit_system("pair", "nuovo dispositivo accoppiato");
-            PairOutcome::Paired(self.0.token.clone())
+            self.audit_system("pair", &format!("nuovo dispositivo accoppiato: «{}» ({})", issued.info.name, issued.info.id));
+            (PairOutcome::Paired(issued.token), issued.info.device_id)
         } else {
             let tripped = self.0.pair_guard.lock().unwrap().record_failure(client, now);
             if tripped {
@@ -547,7 +579,7 @@ impl Engine {
                     &format!("{} tentativi di pairing falliti: codice rinnovato, nuovi tentativi sospesi", pairing::MAX_FAILURES),
                 );
             }
-            PairOutcome::Invalid
+            (PairOutcome::Invalid, None)
         }
     }
 
@@ -2619,6 +2651,8 @@ mod tests_routing;
 mod tests_search;
 #[cfg(test)]
 mod tests_thinking;
+#[cfg(test)]
+mod tests_tls;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]

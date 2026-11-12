@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -41,6 +41,25 @@ export function authBody(token: string | null | undefined, endpoint?: string): {
 }
 
 /** REST + SSE carrier for `aiw serve` (same routes the Tauri shell dispatches in-process). */
+/** Who this browser says it is when it pairs: a stable id (kept in storage) and a readable name, so the host lists and can revoke it. */
+export function browserIdentity(): { device_id?: string; name: string } {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const os = /iPhone|iPad/.test(ua) ? "iPhone/iPad" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "Dispositivo";
+  const browser = /Firefox/.test(ua) ? "Firefox" : /Edg/.test(ua) ? "Edge" : /Chrome/.test(ua) ? "Chrome" : /Safari/.test(ua) ? "Safari" : "browser";
+  const name = `${os} · ${browser}`;
+  const storage = safeStorage();
+  try {
+    let id = storage?.getItem("aiw.deviceId") ?? "";
+    if (!id) {
+      id = `web-${crypto.randomUUID().slice(0, 12)}`;
+      storage?.setItem("aiw.deviceId", id);
+    }
+    return { device_id: id, name };
+  } catch {
+    return { name };
+  }
+}
+
 export class HttpTransport implements Transport {
   readonly kind: "http" | "tauri" = "http";
   readonly capabilities: TransportCapabilities = { demo: false, native: false, pairing: true };
@@ -129,9 +148,15 @@ export class HttpTransport implements Transport {
   renameSession = (id: string, title: string) => this.req<Session>("PATCH", `/sessions/${enc(id)}`, { title });
   deleteSession = (id: string) => this.req<void>("DELETE", `/sessions/${enc(id)}`);
   mesh = () => this.req<MeshState>("GET", "/mesh");
-  pairPeer = (address: string, code: string) => this.req<PeerDevice>("POST", "/mesh/pair", { address, code });
+  pairPeer = (address: string, code: string, fingerprint?: string) => this.req<PeerDevice>("POST", "/mesh/pair", { address, code, fingerprint });
   removePeer = (id: string) => this.req<void>("DELETE", `/mesh/peers/${enc(id)}`);
   pairingQr = () => this.req<{ url: string; svg: string }>("GET", "/pairing/qr");
+  apiTokens = () => this.req<ApiTokenInfo[]>("GET", "/tokens");
+  createApiToken = (r: ApiTokenCreate) => this.req<ApiTokenCreated>("POST", "/tokens", r);
+  revokeApiToken = (id: string) => this.req<void>("DELETE", `/tokens/${enc(id)}`);
+  rotateApiToken = (id: string) => this.req<ApiTokenCreated>("POST", `/tokens/${enc(id)}/rotate`, {});
+  tlsStatus = () => this.req<TlsStatus>("GET", "/tls");
+  tlsCa = () => this.req<{ pem: string }>("GET", "/tls/ca");
 
   voice = () => this.req<VoiceStatus>("GET", "/voice");
 
@@ -355,7 +380,7 @@ export class HttpTransport implements Transport {
 
   /** Exchanges the 6-digit pairing code shown on the host device for the API token. */
   async pair(code: string): Promise<void> {
-    const r = await this.req<{ token: string }>("POST", "/pair", { code });
+    const r = await this.req<{ token: string }>("POST", "/pair", { code, ...browserIdentity() });
     this.token = r.token;
     storeToken(safeStorage(), this.origin ?? serverOrigin(this.base, location.href), r.token);
   }

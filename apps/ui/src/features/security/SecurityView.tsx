@@ -1,12 +1,14 @@
 import { navigate, useParams } from "../../app/router";
 import { Page, PageHeader, Section, TabPanel, Tabs } from "../../shared/ui";
+import { AccessPanel } from "./components/AccessPanel";
 import { HooksEditor } from "./components/HooksEditor";
+import { NetworkPanel } from "./components/NetworkPanel";
 import { PolicyEditor } from "./components/PolicyEditor";
 import { SandboxPanel } from "./components/SandboxPanel";
 import "./security.css";
 
-type Tab = "policy" | "hooks" | "sandbox";
-const TABS: Tab[] = ["policy", "hooks", "sandbox"];
+type Tab = "policy" | "hooks" | "sandbox" | "access" | "network";
+const TABS: Tab[] = ["policy", "hooks", "sandbox", "access", "network"];
 
 export function SecurityView() {
   const raw = useParams().tab;
@@ -15,11 +17,11 @@ export function SecurityView() {
     <Page>
       <PageHeader
         eyebrow="Controllo" title="Sicurezza"
-        subtitle="Cosa può fare un agente senza chiedere: regole sui tool, hook di controllo e contenimento dei comandi."
+        subtitle="Cosa può fare un agente senza chiedere: regole sui tool, hook di controllo, contenimento dei comandi, accessi dei dispositivi e cifratura della rete."
       />
       <Tabs
         idPrefix="sec" label="Sicurezza" value={tab} onChange={(t) => navigate(t === "policy" ? "/security" : `/security/${t}`)}
-        tabs={[{ id: "policy", label: "Policy" }, { id: "hooks", label: "Hook" }, { id: "sandbox", label: "Sandbox" }]}
+        tabs={[{ id: "policy", label: "Policy" }, { id: "hooks", label: "Hook" }, { id: "sandbox", label: "Sandbox" }, { id: "access", label: "Accessi" }, { id: "network", label: "Rete" }]}
       />
       <TabPanel idPrefix="sec" id={tab}>
         {tab === "policy" && (
@@ -33,6 +35,16 @@ export function SecurityView() {
           </Section>
         )}
         {tab === "sandbox" && <SandboxPanel />}
+        {tab === "access" && (
+          <Section title="Accessi" hint="Chi può usare questo computer dalla rete: ogni dispositivo ha il suo token e si può scollegare da solo.">
+            <AccessPanel />
+          </Section>
+        )}
+        {tab === "network" && (
+          <Section title="Rete" hint="Come questo computer è raggiungibile e se il traffico è cifrato.">
+            <NetworkPanel />
+          </Section>
+        )}
       </TabPanel>
     </Page>
   );

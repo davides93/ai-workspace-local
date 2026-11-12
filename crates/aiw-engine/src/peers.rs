@@ -33,13 +33,53 @@ fn http_error(what: &str, e: reqwest::Error) -> Error {
     Error::Runtime(format!("{what}: {e}"))
 }
 
+/// Client for the paired device at `base`: an `https://` address is verified against the pinned
+/// certificate and nothing else (never the system roots, never "accept any certificate").
+fn peer_client(base: &str, pin: Option<&str>, timeout: Duration) -> Result<reqwest::Client> {
+    let mut b = reqwest::Client::builder().timeout(timeout);
+    if base.starts_with("https://") {
+        let pin = pin.ok_or_else(|| Error::Invalid("serve l'impronta del certificato del dispositivo".into()))?;
+        let cfg = aiw_core::tlspin::pinned_client_config(pin).map_err(Error::Invalid)?;
+        b = b.use_preconfigured_tls(cfg);
+    }
+    b.build().map_err(Error::other)
+}
+
 impl Engine {
-    /// Pairs with the device at `address` using the 6-digit code it shows.
-    pub async fn pair_with_peer(&self, address: &str, code: &str) -> Result<PeerDevice> {
+    /// Pins the certificates of the paired devices that are served over TLS (at start).
+    pub(crate) fn register_peer_pins(&self) {
+        for p in self.peers() {
+            let pin = self.0.store.get_doc::<Value>("peer_token", &p.id).ok().flatten().and_then(|v| v["pin"].as_str().map(String::from));
+            if let Some(pin) = pin {
+                aiw_core::tlspin::register(&p.address, &pin);
+            }
+        }
+    }
+
+    /// Pairs with the device at `address` using the 6-digit code it shows. For an `https://` address
+    /// `fingerprint` (SHA-256 of its certificate, from its QR code or from its Security page) is
+    /// required: the connection is checked against it, and so are all the later ones.
+    pub async fn pair_with_peer(&self, address: &str, code: &str, fingerprint: Option<&str>) -> Result<PeerDevice> {
         let base = normalize_address(address)?;
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build().map_err(Error::other)?;
-        let r =
-            http.post(format!("{base}/api/pair")).json(&json!({ "code": code.trim() })).send().await.map_err(|e| http_error(&base, e))?;
+        let pin = match fingerprint.map(str::trim).filter(|f| !f.is_empty()) {
+            Some(f) => Some(aiw_core::tlspin::normalize_fingerprint(f).ok_or_else(|| {
+                Error::Invalid("impronta del certificato non valida (servono 64 cifre esadecimali, anche con i due punti)".into())
+            })?),
+            None => None,
+        };
+        if base.starts_with("https://") && pin.is_none() {
+            return Err(Error::Invalid(
+                "il dispositivo usa HTTPS: serve l'impronta del suo certificato (la trovi in Sicurezza → Rete su quel dispositivo, o nel suo QR di pairing)".into(),
+            ));
+        }
+        let http = peer_client(&base, pin.as_deref(), Duration::from_secs(20))?;
+        let me = self.device();
+        let r = http
+            .post(format!("{base}/api/pair"))
+            .json(&json!({ "code": code.trim(), "device_id": me.id, "name": me.name }))
+            .send()
+            .await
+            .map_err(|e| http_error(&base, e))?;
         if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             // The other device is rate limiting pairing attempts: its message says when to retry.
             let why = r.json::<Value>().await.ok().and_then(|v| v["error"].as_str().map(String::from));
@@ -95,7 +135,11 @@ impl Engine {
             }),
         };
         self.0.store.put_doc("peer", &id, &peer)?;
-        self.0.store.put_doc("peer_token", &id, &json!({ "token": token }))?;
+        self.0.store.put_doc("peer_token", &id, &json!({ "token": token, "pin": pin }))?;
+        match &pin {
+            Some(pin) => aiw_core::tlspin::register(&base, pin),
+            None => aiw_core::tlspin::unregister(&base),
+        }
 
         // (1) Its models through its OpenAI-compatible gateway.
         let mut settings = Map::new();
@@ -126,6 +170,15 @@ impl Engine {
         Ok(peer)
     }
 
+    /// Best effort: asks the other device to revoke the token it issued to us.
+    async fn release_peer_token(&self, address: &str, token: &str, pin: Option<&str>) {
+        if token.is_empty() {
+            return;
+        }
+        let Ok(http) = peer_client(address, pin, Duration::from_secs(5)) else { return };
+        let _ = http.delete(format!("{address}/api/auth/token")).bearer_auth(token).send().await;
+    }
+
     pub fn peers(&self) -> Vec<PeerDevice> {
         self.0.store.list_docs("peer").unwrap_or_default()
     }
@@ -134,8 +187,14 @@ impl Engine {
     /// `aiw-peer` runtime settings.
     pub async fn remove_peer(&self, id: &str) -> Result<()> {
         let peer: PeerDevice = self.0.store.get_doc("peer", id)?.ok_or_else(|| Error::NotFound(format!("dispositivo {id} non trovato")))?;
+        let held: Option<Value> = self.0.store.get_doc("peer_token", id)?;
         self.0.store.delete_doc("peer", id)?;
         self.0.store.delete_doc("peer_token", id)?;
+        // Tell the other device that it can drop the token it gave us (it may also revoke it itself at any time).
+        if let Some(v) = held {
+            self.release_peer_token(&peer.address, v["token"].as_str().unwrap_or_default(), v["pin"].as_str()).await;
+        }
+        aiw_core::tlspin::unregister(&peer.address);
         let _ = self.remove_mcp_server(&format!("peer-{id}")).await;
         let current = self.0.runtimes.settings("aiw-peer").unwrap_or_default();
         if current.get("base_url").and_then(|v| v.as_str()) == Some(&format!("{}/v1", peer.address)) {

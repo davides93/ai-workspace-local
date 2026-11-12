@@ -32,7 +32,11 @@ export const groupCode = (code: string) => {
 export interface PairInput {
   address: string;
   code: string;
+  /** SHA-256 of the other device's certificate: required for an `https://` address. */
+  fingerprint?: string;
 }
+
+export const isHttps = (address: string) => address.trim().toLowerCase().startsWith("https://");
 
 export type PairErrors = Partial<Record<keyof PairInput, string>>;
 
@@ -40,5 +44,8 @@ export function validatePair(input: PairInput): PairErrors {
   const e: PairErrors = {};
   if (!input.address.trim()) e.address = "Indica l'indirizzo del dispositivo (host:porta)";
   if (digitsOf(input.code).length !== 6) e.code = "Il codice è di 6 cifre";
+  if (isHttps(input.address) && !/^[0-9a-f]{2}([: -]?[0-9a-f]{2}){31}$/i.test((input.fingerprint ?? "").trim())) {
+    e.fingerprint = "Serve l'impronta del certificato (64 cifre esadecimali), che trovi in Sicurezza → Rete sull'altro dispositivo";
+  }
   return e;
 }

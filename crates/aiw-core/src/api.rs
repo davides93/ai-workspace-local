@@ -2480,3 +2480,83 @@ pub struct MailFolderCount {
     pub name: String,
     pub recent: u32,
 }
+
+// ---------------------------------------------------------------- API tokens and TLS
+
+/// An access token as the API lists it: never the secret, only what identifies and dates it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApiTokenInfo {
+    pub id: String,
+    pub name: String,
+    /// `owner` (this computer's own UI and CLI) | `device` (a paired phone or computer) | `gateway` (an app of the person).
+    pub kind: String,
+    /// The paired device the token belongs to (`kind: device`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// First characters of the token, to recognise it in the list.
+    pub prefix: String,
+    /// `full`, `device`, `gateway`, `a2a`, `mcp`.
+    pub scopes: Vec<String>,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_ip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<String>,
+}
+
+/// A token right after it was created or rotated: the only time the secret is shown.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApiTokenCreated {
+    #[serde(flatten)]
+    pub info: ApiTokenInfo,
+    pub token: String,
+}
+
+/// `POST /api/tokens`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApiTokenCreate {
+    pub name: String,
+    /// `gateway` (default) or `device`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Days until the token stops working; absent = it does not expire.
+    #[serde(default)]
+    pub expires_in_days: Option<u32>,
+    /// Extra scopes for a `gateway` token: `a2a`, `mcp`.
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
+}
+
+/// `GET /api/tls`: how this device is served.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TlsStatus {
+    /// What `server.tls` asks for: `off` | `self_signed` | `files`.
+    pub mode: String,
+    /// The listener of this process answers over TLS.
+    pub active: bool,
+    /// The listener is reachable beyond this computer (`server.lan`).
+    pub lan: bool,
+    pub port: u16,
+    /// SHA-256 of the certificate a paired device pins, as `AB:CD:…`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    /// What the fingerprint is the fingerprint of: `ca` | `certificate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint_of: Option<String>,
+    /// Names and addresses the certificate is valid for.
+    #[serde(default)]
+    pub names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// A problem to show the person (missing files, certificate that does not load…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The CA certificate can be downloaded (`GET /api/tls/ca.pem`).
+    pub ca_available: bool,
+    /// Plain HTTP beyond this computer: the warning of the Security page.
+    pub warning: bool,
+}

@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -272,10 +272,19 @@ export interface Transport {
   setHooks(hooks: HookConfig[]): Promise<{ hooks: HookConfig[] }>;
 
   mesh(): Promise<MeshState>;
-  pairPeer(address: string, code: string): Promise<PeerDevice>;
+  /** `fingerprint`: SHA-256 of the other device's certificate, required for an https:// address. */
+  pairPeer(address: string, code: string, fingerprint?: string): Promise<PeerDevice>;
   removePeer(id: string): Promise<void>;
   /** Link that pairs a phone in one step (its camera opens the web UI) and its QR as SVG. */
   pairingQr(): Promise<{ url: string; svg: string }>;
+  /** Access tokens (owner only on the server). */
+  apiTokens(): Promise<ApiTokenInfo[]>;
+  createApiToken(req: ApiTokenCreate): Promise<ApiTokenCreated>;
+  revokeApiToken(id: string): Promise<void>;
+  rotateApiToken(id: string): Promise<ApiTokenCreated>;
+  tlsStatus(): Promise<TlsStatus>;
+  /** The authority certificate (self-signed TLS), to install in a browser on another device. */
+  tlsCa(): Promise<{ pem: string }>;
 
   /** Voice mode: the speech-to-text backend that would be used, and the voice settings. */
   voice(): Promise<VoiceStatus>;

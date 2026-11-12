@@ -728,10 +728,49 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | POST | `/api/kb/collections/{id}/reindex` · `/api/kb/jobs/{id}/cancel` · DELETE `/api/kb/documents/{id}` | Reindicizzazione, interruzione, eliminazione |
 | GET/POST | `/api/kb/status` · `/api/kb/search` | Lavori e modello di embedding; ricerca `{query, collection?, max_results?}` → `{hits, semantic}` |
 | POST | `/api/kill` | Kill switch |
+| GET/POST | `/api/tokens` · DELETE `/api/tokens/{id}` · POST `/api/tokens/{id}/rotate` · DELETE `/api/auth/token` | Token di accesso (solo `full`); il token che si lascia da solo |
+| GET | `/api/tls` · `/api/tls/ca` · `/api/tls/ca.pem` | Stato TLS e certificato dell'autorità (solo `full`) |
 | — | `/v1/models`, `/v1/chat/completions`, `/v1/embeddings` | Gateway OpenAI-compatibile verso i runtime locali (gli embedding usano un runtime di embedding già avviato, 503 in JSON altrimenti) |
 
-Autenticazione: in loopback (e nel canale in-process della shell Tauri) non serve; per l'accesso
-dalla LAN serve un **token di pairing** (QR mostrato nell'app) inviato come `Authorization: Bearer`.
+Autenticazione: in loopback senza token (e nel canale in-process della shell Tauri) si ha l'accesso
+completo di questo computer, con le regole sotto. Da altre macchine serve un **token** inviato come
+`Authorization: Bearer`, `x-api-key` o `?token=`. I token (`aiw-engine/src/tokens.rs`, tabella SQLite
+`api_tokens`) sono `aiw_` + 256 bit casuali; nel database ci sono solo un hash SHA-256 con sale, i primi
+caratteri e le date (il segreto si vede una volta, alla creazione). Tipi: `owner` (il file `token`
+nella cartella dei dati: app e CLI di questo computer; migrato dal vecchio token unico), `device` (uno per
+dispositivo accoppiato, legato all'id del dispositivo), `gateway` (app di terzi). Si revocano all'istante
+(le connessioni SSE aperte con quel token si chiudono), si ruotano, scadono, e i token non validi sono limitati
+per indirizzo (10 ogni 10 minuti, poi 5 minuti di attesa); creazioni, revoche, rotazioni e usi di token
+revocati o scaduti vanno nel registro delle attività (gli usi rifiutati al massimo una volta al minuto per token).
+
+**Ambiti** (`aiw-server/src/scopes.rs`, una sola tabella percorso → ambito minimo; un percorso senza voce
+richiede `full`, e un test legge le rotte registrate in `lib.rs` e fallisce se una non ha voce):
+
+| Ambito | Chi | Cosa apre |
+|---|---|---|
+| `full` | token `owner` da questo computer o su TLS; richieste da questo computer senza token | tutto, comprese impostazioni di macchina (`PUT /api/config`), segreti e chiavi dei provider, modifica di server MCP, hook, policy, agenti, profili, canali e posta, runtime e download, addestramento, importazioni da percorso, `/api/tokens`, `/api/tls` |
+| `device` | un dispositivo accoppiato | chat, sessioni, approvazioni, ricordi, base di conoscenza, voce, elenchi (modelli, agenti, impostazioni in sola lettura), più `gateway`, `a2a` e `mcp` |
+| `gateway` | un'app di terzi | solo `/v1/*` |
+| `a2a`, `mcp` | un token `gateway` creato con quell'ambito, o `device` | solo `/a2a`, solo `/mcp` |
+
+Il token `owner` presentato da un'altra macchina **senza TLS** ha solo l'ambito `device` (è anche quello che
+ha in mano un dispositivo accoppiato prima dei token per dispositivo, e quello che vedrebbe chi ascolta la
+rete); su TLS è `full`. Un token che non è `full` non è «locale» nemmeno da loopback (niente codice di
+pairing, niente importazioni da percorso). Un token revocato o scaduto riceve `401` ovunque. Il pairing
+(`POST /api/pair {code, device_id?, name?}`) restituisce il token del nuovo dispositivo e, su TLS, l'impronta
+del certificato; scollegare un dispositivo (o `DELETE /api/auth/token` fatto dal dispositivo stesso)
+lo revoca. Ogni direzione tra due dispositivi è un pairing e un token distinti, revocabili da chi li ha emessi.
+
+**TLS** (`server.tls` = `off` | `self_signed` | `files`; `aiw-engine/src/tls.rs`, `aiw-server/src/tls.rs`): rustls
+(ring) con un acceptor a mano; con `self_signed` un'autorità locale (10 anni) firma un certificato foglia
+(397 giorni, rinnovato prima di 30 giorni dalla scadenza o se cambiano gli indirizzi) con SAN nome host,
+`localhost`, loopback e indirizzi di rete; chiavi in `<dati>/tls/` con permessi `0600`. Il pairing porta
+l'impronta SHA-256 dell'autorità (con `files`, del certificato): i client Rust (peer, runtime `aiw-peer`, client MCP e
+A2A verso un dispositivo accoppiato, `aiw-core/src/tlspin.rs`) verificano solo quella, mai le radici di
+sistema. Con TLS il listener non risponde all'HTTP in chiaro dalla rete (resta, da loopback, per i client di
+questo computer); le richieste cifrate hanno `Origin` `https://…` ammessa solo se è la pagina servita da noi,
+e ricevono HSTS. Non si usano cookie.
+
 Una pagina web non deve poter pilotare l'API locale (CSRF, DNS rebinding), quindi senza token:
 - da loopback l'header `Host` deve essere `localhost`, `127.0.0.1` o `[::1]` (qualsiasi porta), altrimenti `403`;
 - un `Origin` fuori dalla allowlist (`tauri://localhost`, `http(s)://tauri.localhost`,

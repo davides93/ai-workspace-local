@@ -56,6 +56,48 @@ export interface DiscoveredDevice {
   last_seen: string;
 }
 
+/** An access token as the API lists it (never the secret). */
+export interface ApiTokenInfo {
+  id: string;
+  name: string;
+  /** owner: this computer's own app and CLI; device: a paired phone or computer; gateway: an app of the person. */
+  kind: "owner" | "device" | "gateway";
+  device_id?: string;
+  /** First characters of the token, with an ellipsis. */
+  prefix: string;
+  scopes: string[];
+  created_at: string;
+  last_used_at?: string;
+  last_used_ip?: string;
+  expires_at?: string;
+  revoked_at?: string;
+}
+/** A token right after creation or rotation: the only time the secret is shown. */
+export interface ApiTokenCreated extends ApiTokenInfo {
+  token: string;
+}
+export interface ApiTokenCreate {
+  name: string;
+  kind?: "gateway" | "device";
+  expires_in_days?: number;
+  scopes?: string[];
+}
+export interface TlsStatus {
+  mode: "off" | "self_signed" | "files";
+  active: boolean;
+  lan: boolean;
+  port: number;
+  /** SHA-256 as AB:CD:… */
+  fingerprint?: string;
+  fingerprint_of?: "ca" | "certificate";
+  names: string[];
+  expires_at?: string;
+  error?: string;
+  ca_available: boolean;
+  /** Plain HTTP beyond this computer. */
+  warning: boolean;
+}
+
 export interface MeshState {
   /** mDNS discovery running (the LAN server is on). */
   discovery: boolean;

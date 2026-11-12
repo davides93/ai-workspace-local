@@ -8,7 +8,7 @@ import { mockSpeak, mockTtsStatus } from "./voice";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
-  MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
+  ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody,
 } from "../types";
@@ -1450,9 +1450,12 @@ export class MockTransport implements Transport {
       peers: structuredClone(system.peers),
     };
   }
-  async pairPeer(address: string, code: string) {
+  async pairPeer(address: string, code: string, fingerprint?: string) {
     await sleep(500);
     if (!/^\d{6}$/.test(code)) throw new Error("Il codice è di 6 cifre");
+    if (address.startsWith("https://") && !/^[0-9a-f]{2}([: -]?[0-9a-f]{2}){31}$/i.test((fingerprint ?? "").trim())) {
+      throw new Error("Il dispositivo usa HTTPS: serve l'impronta del suo certificato");
+    }
     const peer = { id: nid("dev"), name: address.includes(".31") ? "Mini PC del soggiorno" : "Nuovo dispositivo", os: "linux" as const, address, status: "online" as const, shared_runtimes: ["llama-server"] };
     system.peers.push(peer);
     return peer;
@@ -1463,6 +1466,57 @@ export class MockTransport implements Transport {
   }
   async pairingQr(): Promise<{ url: string; svg: string }> {
     throw new Error("Il QR richiede il backend: avvia aiw serve --lan");
+  }
+
+  private tokenRows: ApiTokenInfo[] = [
+    { id: "tok_owner", name: "Questo computer (app e riga di comando)", kind: "owner", prefix: "aiw_k3Jd9xQ…", scopes: ["full"], created_at: "2026-05-02T09:00:00Z", last_used_at: now() },
+    { id: "tok_tel", name: "Telefono di Anna", kind: "device", device_id: "tel-anna", prefix: "aiw_Zp81LmT…", scopes: ["device"], created_at: "2026-06-01T18:20:00Z", last_used_at: "2026-06-10T08:12:00Z", last_used_ip: "192.168.1.52" },
+  ];
+  private tlsMode: TlsStatus["mode"] = "off";
+  async apiTokens(): Promise<ApiTokenInfo[]> {
+    return structuredClone(this.tokenRows);
+  }
+  private mintToken(name: string, kind: "gateway" | "device", days: number | undefined, scopes: string[], deviceId?: string): ApiTokenCreated {
+    const secret = `aiw_${Array.from({ length: 43 }, () => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"[Math.floor(Math.random() * 64)]).join("")}`;
+    const info: ApiTokenInfo = {
+      id: nid("tok"), name, kind, device_id: deviceId, prefix: `${secret.slice(0, 12)}…`, scopes, created_at: now(),
+      expires_at: days ? new Date(Date.now() + days * 86_400_000).toISOString() : undefined,
+    };
+    this.tokenRows.unshift(info);
+    return { ...info, token: secret };
+  }
+  async createApiToken(req: ApiTokenCreate): Promise<ApiTokenCreated> {
+    if (!req.name.trim()) throw new Error("Dai un nome al token (per esempio l'app che lo userà)");
+    const kind = req.kind ?? "gateway";
+    const created = this.mintToken(req.name.trim(), kind, req.expires_in_days, kind === "device" ? ["device"] : ["gateway", ...(req.scopes ?? [])]);
+    audit.unshift({ id: nid("a"), ts: now(), actor: "system", action: "token_create", detail: `creato il token «${created.name}» (${kind})` });
+    return created;
+  }
+  async revokeApiToken(id: string) {
+    const t = this.tokenRows.find((x) => x.id === id);
+    if (!t) throw new ApiError(404, `token ${id} non trovato`);
+    if (t.kind === "owner") throw new ApiError(403, "il token di questo computer non si revoca dall'API");
+    t.revoked_at ??= now();
+    audit.unshift({ id: nid("a"), ts: now(), actor: "system", action: "token_revoke", detail: `revocato il token «${t.name}»` });
+  }
+  async rotateApiToken(id: string): Promise<ApiTokenCreated> {
+    const t = this.tokenRows.find((x) => x.id === id);
+    if (!t) throw new ApiError(404, `token ${id} non trovato`);
+    if (t.kind === "owner") throw new ApiError(403, "il token di questo computer non si ruota dall'API");
+    if (t.revoked_at) throw new ApiError(409, "il token è già stato revocato: creane uno nuovo");
+    t.revoked_at = now();
+    return this.mintToken(t.name, t.kind as "gateway" | "device", undefined, t.scopes, t.device_id);
+  }
+  async tlsStatus(): Promise<TlsStatus> {
+    const on = this.tlsMode !== "off";
+    return {
+      mode: this.tlsMode, active: on, lan: true, port: 7777, names: on ? ["studio-pc", "localhost", "192.168.1.10"] : [],
+      fingerprint: on ? "3A:9F:C2:11:7B:E4:05:6D:88:AA:10:F3:42:9C:7E:21:B0:5D:E9:34:6A:C7:18:FF:0D:92:41:B6:73:2E:AD:60" : undefined,
+      fingerprint_of: on ? "ca" : undefined, expires_at: on ? "2027-06-20T00:00:00Z" : undefined, ca_available: this.tlsMode === "self_signed", warning: !on,
+    };
+  }
+  async tlsCa(): Promise<{ pem: string }> {
+    return { pem: "-----BEGIN CERTIFICATE-----\n(demo)\n-----END CERTIFICATE-----\n" };
   }
 
   async voice(): Promise<VoiceStatus> {
