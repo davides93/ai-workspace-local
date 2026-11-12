@@ -380,15 +380,11 @@ impl A2aClient {
         loop {
             let chunk = tokio::select! {
                 _ = cancel.cancelled() => {
-                    if let Some(id) = task["id"].as_str() {
-                        let _ = self.rpc(ep, "CancelTask", json!({"id": id})).await;
-                    }
+                    self.cancel_streamed(ep, &mut res, &mut parser, &mut task, &mut text_len, progress).await;
                     return Err(Error::Cancelled);
                 }
                 _ = tokio::time::sleep_until(deadline.into()) => {
-                    if let Some(id) = task["id"].as_str() {
-                        let _ = self.rpc(ep, "CancelTask", json!({"id": id})).await;
-                    }
+                    self.cancel_streamed(ep, &mut res, &mut parser, &mut task, &mut text_len, progress).await;
                     return Err(self.err("tempo scaduto", format!("nessuna risposta entro {} secondi", self.timeout.as_secs())));
                 }
                 c = res.chunk() => c,
@@ -405,6 +401,36 @@ impl A2aClient {
         }
         // Closed without an end: no task at all means the remote does not really stream.
         Ok(task.is_object().then_some(task))
+    }
+
+    /// Cancels the remote task of a stream that is being abandoned. The task id arrives with the first event of
+    /// the stream: when the caller gives up before that event was read, it is awaited for a few seconds, or the
+    /// remote run would be left running with nobody to stop it.
+    async fn cancel_streamed(
+        &self,
+        ep: &reqwest::Url,
+        res: &mut reqwest::Response,
+        parser: &mut aiw_tools::mcp::SseParser,
+        task: &mut Value,
+        text_len: &mut usize,
+        progress: &(dyn Fn(String) + Sync),
+    ) {
+        if task["id"].as_str().is_none() {
+            let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                while let Ok(Some(chunk)) = res.chunk().await {
+                    for msg in parser.push(&chunk) {
+                        apply_stream_event(task, &msg["result"], text_len, progress);
+                    }
+                    if task["id"].as_str().is_some() {
+                        break;
+                    }
+                }
+            })
+            .await;
+        }
+        if let Some(id) = task["id"].as_str() {
+            let _ = self.rpc(ep, "CancelTask", json!({"id": id})).await;
+        }
     }
 
     async fn run(&self, text: &str, cancel: &CancellationToken, progress: &(dyn Fn(String) + Sync)) -> Result<String> {
