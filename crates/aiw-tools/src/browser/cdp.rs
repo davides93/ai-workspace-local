@@ -601,7 +601,11 @@ impl Cdp {
 }
 
 fn describe_download(d: &Download) -> String {
-    let shown = |p: &Path| p.strip_prefix(&d.ctx.workspace_root).unwrap_or(p).display().to_string();
+    // Inside the workspace the path is shown relative and with `/` on every OS (the file tools accept it).
+    let shown = |p: &Path| match p.strip_prefix(&d.ctx.workspace_root) {
+        Ok(rel) => rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"),
+        Err(_) => p.display().to_string(),
+    };
     match (&d.state, &d.path) {
         (DlState::Done, Some(p)) => format!("Scaricato «{}» ({}) in {}", d.name, human_size(d.bytes), shown(p)),
         (DlState::Done, None) => format!("Scaricato «{}»", d.name),
