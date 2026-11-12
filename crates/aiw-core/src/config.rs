@@ -33,6 +33,39 @@ impl Layer {
     }
 }
 
+/// Secret locations hidden from sandboxed commands unless the person removes them
+/// (`sandbox.deny_read`). `~` is the home folder.
+pub const DEFAULT_DENY_READ: &[&str] = &[
+    "~/.ssh",
+    "~/.gnupg",
+    "~/.aws",
+    "~/.azure",
+    "~/.config/gcloud",
+    "~/.config/gh",
+    "~/.kube",
+    "~/.docker/config.json",
+    "~/.netrc",
+    "~/.npmrc",
+    "~/.pypirc",
+    "~/.git-credentials",
+    // Browser profiles (cookies, saved passwords).
+    "~/.mozilla",
+    "~/.config/google-chrome",
+    "~/.config/chromium",
+    "~/.config/BraveSoftware",
+    "~/.config/microsoft-edge",
+    "~/snap/firefox/common/.mozilla",
+    "~/snap/chromium/common/chromium",
+    "~/Library/Application Support/Google/Chrome",
+    "~/Library/Application Support/Firefox",
+    "~/Library/Application Support/BraveSoftware",
+    "~/Library/Application Support/Microsoft Edge",
+    "~/Library/Safari",
+    // Keychains of the operating system.
+    "~/Library/Keychains",
+    "~/.local/share/keyrings",
+];
+
 /// Application-level settings exposed in the UI "Impostazioni" page.
 pub fn app_schema() -> SettingsSchema {
     serde_json::from_value(json!({
@@ -48,6 +81,10 @@ pub fn app_schema() -> SettingsSchema {
             "approvals.timeout_s": {"type": "integer", "title": "Tempo massimo per rispondere a una richiesta di approvazione (secondi)", "description": "0 = nessun limite. Allo scadere la richiesta dell'agente viene rifiutata", "default": 0, "minimum": 0, "maximum": 86400},
             "policy.mode": {"type": "string", "title": "Modalità di approvazione (default)", "enum": ["plan", "ask", "auto-edit", "auto", "yolo"], "default": "ask"},
             "sandbox.mode": {"type": "string", "title": "Sandbox (default)", "enum": ["read-only", "workspace-write", "off"], "default": "workspace-write"},
+            "sandbox.shell_network": {"type": "string", "title": "Rete della shell", "description": "off = i comandi della shell non hanno rete (per installare pacchetti o scaricare file serve «on»); on = rete aperta. Vale per Linux e macOS: su Windows la sandbox non può chiudere la rete. Un repository può solo chiuderla, mai aprirla", "enum": ["off", "on"], "default": "off"},
+            "sandbox.shell_network_notice": {"type": "boolean", "title": "Avviso sulla rete della shell da mostrare", "description": "Messo a true dalla migrazione per le installazioni esistenti (la rete è rimasta accesa); l'interfaccia lo mostra una volta e lo spegne", "default": false},
+            "sandbox.deny_read": {"type": "array", "title": "Cartelle e file nascosti ai comandi", "description": "Percorsi (~ è la tua cartella personale) che i comandi della shell e i server MCP isolati non possono né leggere né scrivere, e che i tool di file rifiutano. Le cartelle dati di AIW sono nascoste sempre. Togli una voce se un flusso di lavoro la richiede (per esempio ~/.ssh per git via ssh). Su Windows non ha effetto", "items": {"type": "string"}, "default": DEFAULT_DENY_READ},
+            "sandbox.env_allow": {"type": "array", "title": "Variabili d'ambiente che i comandi possono ereditare", "description": "I comandi della shell non ereditano le variabili che sembrano segreti (*_TOKEN, *_KEY, *_SECRET, *PASSWORD*, AIW_*, credenziali cloud). Qui elenchi i nomi (o un prefisso che finisce con *) da lasciare passare", "items": {"type": "string"}, "default": []},
             "context.compact_at": {"type": "number", "title": "Compatta il contesto al", "default": 0.8, "minimum": 0.3, "maximum": 0.95, "step": 0.05},
             "agents.max_parallel_subagents": {"type": "integer", "title": "Subagenti in parallelo", "default": 3, "minimum": 1, "maximum": 8},
             "agents.budget.max_tokens": {"type": "integer", "title": "Budget di token per run (0 = nessun limite)", "description": "Somma di prompt e risposta di tutte le chiamate al modello, subagenti compresi; vale se l'agente non ha un suo limite", "default": 0, "minimum": 0},
@@ -105,8 +142,12 @@ pub fn app_schema() -> SettingsSchema {
 
 /// Security keys that the workspace layer (repository content) may only make stricter. The
 /// list is ordered from the strictest value to the loosest.
-const WORKSPACE_TIGHTEN_ONLY: &[(&str, &[&str])] =
-    &[("policy.mode", &["plan", "ask", "auto-edit", "auto", "yolo"]), ("sandbox.mode", &["read-only", "workspace-write", "off"])];
+const WORKSPACE_TIGHTEN_ONLY: &[(&str, &[&str])] = &[
+    ("policy.mode", &["plan", "ask", "auto-edit", "auto", "yolo"]),
+    ("sandbox.mode", &["read-only", "workspace-write", "off"]),
+    // A repository may close the network of the shell, never open it.
+    ("sandbox.shell_network", &["off", "on"]),
+];
 
 /// Machine-level keys the workspace layer cannot set: network reach, the listener, where models
 /// and the working folder live, and where telemetry goes.
@@ -123,6 +164,11 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "workspace.root",
     "telemetry.otlp",
     "approvals.timeout_s",
+    // What stays hidden from commands and which variables they inherit is the person's choice: a
+    // repository must not empty the list of secret locations or let the secrets through.
+    "sandbox.deny_read",
+    "sandbox.env_allow",
+    "sandbox.shell_network_notice",
     "update.channel",
     "update.auto_check",
     "update.auto_download",
@@ -186,6 +232,48 @@ fn check_server_url(v: &Value, key: &str) -> Result<()> {
             "`{key}` deve essere un indirizzo che inizia con http:// o https:// (per esempio http://localhost:8880)"
         )))
     }
+}
+
+/// What [`migrate_shell_network`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellNetworkMigration {
+    /// Already handled on an earlier start.
+    Done,
+    /// A new installation: `sandbox.shell_network` keeps its default (`off`).
+    NewInstall,
+    /// An existing installation: `sandbox.shell_network = "on"` was written (the old behaviour) and
+    /// the notice flag was set.
+    KeptOpen,
+}
+
+/// The shell used to have the network open; the default is now closed. Installations that already
+/// have data keep the old behaviour, written explicitly into the global configuration file the
+/// first time they start with this version, with a notice for the interface; new installations
+/// get the new default. `marker` records that this ran, so that a new installation that is
+/// started a second time is not mistaken for an old one.
+pub fn migrate_shell_network(config_file: &Path, existing_install: bool, marker: &Path) -> Result<ShellNetworkMigration> {
+    if marker.exists() {
+        return Ok(ShellNetworkMigration::Done);
+    }
+    let result = if existing_install {
+        let mut layer = read_layer(config_file);
+        if !layer.contains_key("sandbox.shell_network") {
+            layer.insert("sandbox.shell_network".into(), Value::String("on".into()));
+            layer.insert("sandbox.shell_network_notice".into(), Value::Bool(true));
+            write_layer(config_file, &layer)?;
+        }
+        ShellNetworkMigration::KeptOpen
+    } else {
+        ShellNetworkMigration::NewInstall
+    };
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(
+        marker,
+        if existing_install { "shell_network: kept on for an existing installation\n" } else { "shell_network: new installation (off)\n" },
+    )?;
+    Ok(result)
 }
 
 pub struct LayeredConfig {
@@ -533,5 +621,69 @@ mod tests {
         cfg.set(Layer::Global, "search.brave_api_key", json!("")).unwrap();
         assert_eq!(cfg.get_str("search.brave_api_key"), None);
         assert_eq!(cfg.view().effective["search.brave_api_key"], json!(""));
+    }
+
+    #[test]
+    fn shell_network_migration_keeps_the_old_behaviour_only_for_existing_installs() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        let marker = dir.path().join(".shell-network-migrated");
+        // An existing installation with a config of its own: `on` is written, the rest is kept.
+        std::fs::write(&cfg, r#"{"ui.theme":"dark"}"#).unwrap();
+        assert_eq!(migrate_shell_network(&cfg, true, &marker).unwrap(), ShellNetworkMigration::KeptOpen);
+        let c = LayeredConfig::load(app_schema(), cfg.clone(), dir.path().join("dev.json"), None);
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("on"));
+        assert_eq!(c.get_str("ui.theme").as_deref(), Some("dark"));
+        assert!(c.get_bool("sandbox.shell_network_notice"));
+        // It runs once: later starts leave a choice of the person alone.
+        c.set(Layer::Global, "sandbox.shell_network", json!("off")).unwrap();
+        c.set(Layer::Global, "sandbox.shell_network_notice", json!(false)).unwrap();
+        assert_eq!(migrate_shell_network(&cfg, true, &marker).unwrap(), ShellNetworkMigration::Done);
+        let c = LayeredConfig::load(app_schema(), cfg, dir.path().join("dev.json"), None);
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn shell_network_migration_without_a_config_file_still_writes_the_old_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        assert_eq!(migrate_shell_network(&cfg, true, &dir.path().join("m")).unwrap(), ShellNetworkMigration::KeptOpen);
+        let c = LayeredConfig::load(app_schema(), cfg, dir.path().join("dev.json"), None);
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("on"));
+    }
+
+    #[test]
+    fn a_new_install_gets_the_closed_default_and_stays_closed_on_the_next_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        let marker = dir.path().join("m");
+        assert_eq!(migrate_shell_network(&cfg, false, &marker).unwrap(), ShellNetworkMigration::NewInstall);
+        assert!(!cfg.exists());
+        // The second start finds a database and would look like an existing installation.
+        assert_eq!(migrate_shell_network(&cfg, true, &marker).unwrap(), ShellNetworkMigration::Done);
+        let c = LayeredConfig::load(app_schema(), cfg, dir.path().join("dev.json"), None);
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("off"));
+        assert!(!c.get_bool("sandbox.shell_network_notice"));
+    }
+
+    #[test]
+    fn a_repository_cannot_open_the_network_or_empty_the_deny_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(ws.join(".aiw")).unwrap();
+        std::fs::write(
+            ws.join(".aiw/config.json"),
+            r#"{"sandbox.shell_network":"on","sandbox.deny_read":[],"sandbox.env_allow":["GITHUB_TOKEN"]}"#,
+        )
+        .unwrap();
+        let c = LayeredConfig::load(app_schema(), dir.path().join("g.json"), dir.path().join("d.json"), Some(ws.join(".aiw/config.json")));
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("off"));
+        assert!(c.get("sandbox.deny_read").unwrap().as_array().unwrap().iter().any(|v| v == "~/.ssh"));
+        assert_eq!(c.get("sandbox.env_allow"), Some(json!([])));
+        // Closing it is allowed.
+        c.set(Layer::Global, "sandbox.shell_network", json!("on")).unwrap();
+        std::fs::write(ws.join(".aiw/config.json"), r#"{"sandbox.shell_network":"off"}"#).unwrap();
+        c.set_workspace_root(Some(&ws));
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("off"));
     }
 }

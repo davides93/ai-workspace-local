@@ -4,6 +4,7 @@ description = "Agent tools: files, search, sandboxed shell, web fetch, CDP brows
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [features]
 default = []

@@ -2,7 +2,7 @@
 // what the tool is about to do, say whether it is allowed, needs a confirmation or is denied.
 // Keep it in step with the Rust file: the test panel of the Security page relies on it.
 
-import type { PolicyAction, PolicyMode, PolicyRule, ToolRisk } from "../../../shared/api/types";
+import type { CommandAnalysis, PolicyAction, PolicyMode, PolicyRule, ToolRisk } from "../../../shared/api/types";
 import { globMatches } from "./glob";
 
 export type DecisionKind = "allow" | "ask" | "deny";
@@ -41,22 +41,56 @@ export interface EvaluateInput {
   sessionAllowed?: boolean;
   /** The OS can contain shell commands on this machine (matters for `auto`). */
   sandboxAvailable?: boolean;
+  /**
+   * How the backend reads a shell command line (`POST /api/policy/analyze`): the simple commands it is made of.
+   * Without it a shell command is judged as the single command it is written as.
+   */
+  analysis?: CommandAnalysis | null;
 }
 
-/** `Policy::evaluate`: deny rules beat allow rules, which beat ask rules; then the mode decides. */
+/** Message of an `ask` that comes from a command line the allow rules only cover in part. */
+export const PARTIAL_COVER = "comando composto o non analizzabile: ogni parte deve essere consentita da una regola";
+
+const SHELL_TOOL = "shell";
+
+/**
+ * `Policy::evaluate`: deny rules beat allow rules, which beat ask rules; then the mode decides.
+ *
+ * For the shell tool the command line is split into its simple commands: a deny or ask rule applies when it matches the
+ * raw text or ANY simple command; an allow rule with a pattern applies only when the parse is confident and EVERY simple
+ * command is allowed by some allow rule (a rule without a pattern allows the tool as a whole).
+ */
 export function evaluate(input: EvaluateInput): Decision {
   const { mode, rules, tool, risk, subject, sessionAllowed = false, sandboxAvailable = true } = input;
-  for (const action of ["deny", "allow", "ask"] as const) {
-    const index = rules.findIndex((r) => r.action === action && ruleMatches(r, tool, subject));
-    if (index < 0) continue;
-    const rule = rules[index];
-    if (action === "deny") return { kind: "deny", reason: `regola: ${ruleLabel(rule)}`, by: "rule", ruleIndex: index };
-    if (action === "allow") return { kind: "allow", reason: `regola: ${ruleLabel(rule)}`, by: "rule", ruleIndex: index };
-    return { kind: "ask", reason: "regola di conferma", by: "rule", ruleIndex: index };
+  const split: CommandAnalysis | null =
+    tool === SHELL_TOOL && typeof subject === "string" ? (input.analysis ?? { commands: [subject.trim()].filter(Boolean), also: [], confident: true }) : null;
+  const toolMatches = (r: PolicyRule) => globMatches(r.tool, tool);
+  const hasPattern = (r: PolicyRule) => r.pattern !== undefined && r.pattern !== null;
+  const hits = (r: PolicyRule): boolean =>
+    ruleMatches(r, tool, subject) || (split !== null && hasPattern(r) && toolMatches(r) && [...split.commands, ...split.also].some((c) => ruleMatches(r, tool, c)));
+
+  const denied = rules.findIndex((r) => r.action === "deny" && hits(r));
+  if (denied >= 0) return { kind: "deny", reason: `regola: ${ruleLabel(rules[denied])}`, by: "rule", ruleIndex: denied };
+
+  let allowed = -1;
+  if (split === null) {
+    allowed = rules.findIndex((r) => r.action === "allow" && ruleMatches(r, tool, subject));
+  } else {
+    allowed = rules.findIndex((r) => r.action === "allow" && toolMatches(r) && !hasPattern(r));
+    if (allowed < 0 && split.confident && split.commands.length > 0) {
+      const covering = split.commands.map((c) => rules.findIndex((r) => r.action === "allow" && toolMatches(r) && hasPattern(r) && ruleMatches(r, tool, c)));
+      if (covering.every((i) => i >= 0)) allowed = covering[0];
+    }
   }
+  if (allowed >= 0) return { kind: "allow", reason: `regola: ${ruleLabel(rules[allowed])}`, by: "rule", ruleIndex: allowed };
+
+  const asked = rules.findIndex((r) => r.action === "ask" && hits(r));
+  if (asked >= 0) return { kind: "ask", reason: "regola di conferma", by: "rule", ruleIndex: asked };
   if (sessionAllowed) return { kind: "allow", reason: "già consentito per questa sessione", by: "session" };
   const allow = (reason: string): Decision => ({ kind: "allow", reason, by: "mode" });
-  const ask = (reason: string): Decision => ({ kind: "ask", reason, by: "mode" });
+  const partial =
+    split !== null && rules.some((r) => r.action === "allow" && toolMatches(r) && hasPattern(r)) && (!split.confident || split.commands.length !== 1);
+  const ask = (reason: string): Decision => ({ kind: "ask", reason: partial ? PARTIAL_COVER : reason, by: "mode" });
   switch (mode) {
     case "yolo":
       return allow("modalità senza freni: nessuna conferma");
@@ -98,14 +132,15 @@ export interface ProbeResult {
 }
 
 /** Runs the draft rules against a probe; null while no tool is named. */
-export function runProbe(rules: readonly PolicyRule[], probe: Probe): ProbeResult | null {
+export function runProbe(rules: readonly PolicyRule[], probe: Probe, analysis?: CommandAnalysis | null): ProbeResult | null {
   const tool = probe.tool.trim();
   if (!tool) return null;
   const subject = probe.subject.trim() === "" ? null : probe.subject;
   // Rules still being written (no tool yet) take no part in the test.
   const live = rules.map((r) => (r.tool.trim() ? r : { ...r, tool: "\u0000" }));
-  const decision = evaluate({ mode: probe.mode, rules: live, tool, risk: probe.risk, subject, sessionAllowed: probe.sessionAllowed, sandboxAvailable: probe.sandboxAvailable });
-  const matches = live.flatMap((r, i) => (ruleMatches(r, tool, subject) ? [i] : []));
+  const decision = evaluate({ mode: probe.mode, rules: live, tool, risk: probe.risk, subject, sessionAllowed: probe.sessionAllowed, sandboxAvailable: probe.sandboxAvailable, analysis });
+  const parts = tool === SHELL_TOOL && analysis ? [...analysis.commands, ...analysis.also] : [];
+  const matches = live.flatMap((r, i) => (ruleMatches(r, tool, subject) || (r.pattern && parts.some((c) => ruleMatches(r, tool, c))) ? [i] : []));
   return { decision, matches };
 }
 

@@ -2,6 +2,7 @@ import type { Transport, TransportCapabilities } from "../transport";
 import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
 import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, guessKind, humanSize } from "../../lib/attachments";
+import { analyzeCommand } from "./analyze";
 import { mockRecommend } from "./recommend";
 import { mockRoute } from "./route";
 import { mockSpeak, mockTtsStatus } from "./voice";
@@ -74,10 +75,16 @@ function restoreSecrets(sent: Record<string, unknown> | undefined, stored: Recor
 }
 
 /** `validate_mcp` of the engine, with its messages. */
-function validateMcp(s: { name: string; transport: string; command?: string; url?: string }): void {
+function validateMcp(s: { name: string; transport: string; command?: string; url?: string; sandbox?: string }): void {
   if (!s.name.trim()) throw new ApiError(400, "serve un nome");
   if (s.transport === "stdio") {
     if (!s.command?.trim()) throw new ApiError(400, "un server MCP stdio richiede il comando da avviare");
+    if (s.sandbox !== undefined && !["off", "read-only", "workspace-write"].includes(s.sandbox)) {
+      throw new ApiError(400, `isolamento \`${s.sandbox}\` non valido: usa off, read-only o workspace-write`);
+    }
+    if (s.sandbox && s.sandbox !== "off" && !system.mcp_sandbox) {
+      throw new ApiError(501, "su questo sistema i server MCP non si possono isolare (su Windows non è disponibile, su Linux serve bubblewrap): scegli «Nessuno»");
+    }
   } else if (s.transport === "http") {
     const url = s.url?.trim();
     if (!url) throw new ApiError(400, "un server MCP http richiede l'indirizzo (url)");
@@ -90,6 +97,27 @@ function validateMcp(s: { name: string; transport: string; command?: string; url
   } else {
     throw new ApiError(400, `trasporto MCP \`${s.transport}\` non valido: usa stdio o http`);
   }
+}
+
+/** What the person confirmed for each stdio server: the hash of command, arguments and variable names (the engine's `approval_hash`). */
+const approvedMcp = new Map<string, string>();
+const mcpHash = (m: Pick<McpServer, "transport" | "command" | "args" | "env">) =>
+  JSON.stringify([m.transport, (m.command ?? "").trim(), m.args ?? [], Object.keys(m.env ?? {}).sort()]);
+for (const m of mcp) if (m.transport === "stdio") approvedMcp.set(m.id, mcpHash(m));
+
+const mcpCommandLine = (m: McpServer) => [m.command ?? "", ...(m.args ?? [])].map((w) => (w === "" || /\s/.test(w) ? `"${w}"` : w)).join(" ");
+
+/** A server as the API shows it: secrets masked, and the confirmation the person still owes for a stdio command. */
+function mcpView(m: McpServer): McpServer {
+  const out: McpServer = { ...structuredClone(m), env: maskSecrets(m.env), headers: maskSecrets(m.headers) };
+  if (m.transport === "stdio" && m.enabled && approvedMcp.get(m.id) !== mcpHash(m)) {
+    const line = mcpCommandLine(m);
+    return {
+      ...out, status: "approval_required", approval_required: true, approval_hash: mcpHash(m), command_line: line,
+      error: `Questo server esegue il comando \`${line}\` su questo computer: confermalo per avviarlo`,
+    };
+  }
+  return out;
 }
 
 /** What the demo "hears", one sentence per request. */
@@ -1359,7 +1387,19 @@ export class MockTransport implements Transport {
     t.enabled = enabled;
   }
   async mcpServers() {
-    return structuredClone(mcp).map((m) => ({ ...m, env: maskSecrets(m.env), headers: maskSecrets(m.headers) }));
+    return mcp.map(mcpView);
+  }
+  async approveMcpServer(id: string, hash: string) {
+    const m = mcp.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `server MCP ${id} non trovato`);
+    if (m.transport !== "stdio") throw new ApiError(400, "solo i server MCP stdio eseguono un comando da confermare");
+    if (mcpHash(m) !== hash) throw new ApiError(409, "il comando del server è cambiato: controllalo e conferma di nuovo");
+    approvedMcp.set(m.id, hash);
+    if (m.enabled) {
+      m.status = "connected";
+      m.error = undefined;
+    }
+    return mcpView(m);
   }
   async saveMcpServer(s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }) {
     validateMcp(s);
@@ -1370,10 +1410,15 @@ export class MockTransport implements Transport {
     const srv = {
       id: prev?.id ?? nid("mcp"), status: prev?.status ?? "disconnected", tools: prev?.tools ?? [], error: prev?.error, enabled: true, ...s, name: s.name.trim().replace(/ /g, "_"),
       env: restoreSecrets(s.env, prev?.env), headers: restoreSecrets(s.headers, prev?.headers),
+      sandbox: s.transport === "stdio" ? (s.sandbox ?? prev?.sandbox ?? "off") : "off", sandbox_network: s.sandbox_network ?? prev?.sandbox_network ?? true,
     } as McpServer;
+    // The client cannot approve anything: only `approveMcpServer` does.
+    delete srv.approval_required;
+    delete srv.approval_hash;
+    delete srv.command_line;
     if (i >= 0) mcp[i] = srv;
     else mcp.push(srv);
-    return { ...structuredClone(srv), env: maskSecrets(srv.env), headers: maskSecrets(srv.headers) };
+    return mcpView(srv);
   }
   async reconnectMcpServer(id: string) {
     const m = mcp.find((x) => x.id === id);
@@ -1383,7 +1428,7 @@ export class MockTransport implements Transport {
       m.status = "connected";
       m.error = undefined;
     }
-    return { ...structuredClone(m), env: maskSecrets(m.env), headers: maskSecrets(m.headers) };
+    return mcpView(m);
   }
   async mcpOAuthStart(id: string) {
     const m = mcp.find((x) => x.id === id);
@@ -1426,6 +1471,7 @@ export class MockTransport implements Transport {
     mcp.splice(i, 1);
   }
 
+  async analyzeCommand(command: string) { return analyzeCommand(command); }
   async policy() { return { rules: structuredClone(policyRules) }; }
   async setPolicy(rules: PolicyRule[]) {
     policyRules.splice(0, policyRules.length, ...structuredClone(rules));

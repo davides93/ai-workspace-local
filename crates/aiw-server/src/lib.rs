@@ -284,6 +284,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/teams", get(teams))
         .route("/api/teams/{id}", get(get_team).put(save_team).delete(delete_team))
         .route("/api/policy", get(get_policy).put(put_policy))
+        .route("/api/policy/analyze", post(analyze_policy_command))
         .route("/api/hooks", get(get_hooks).put(put_hooks))
         .route("/api/sessions", get(sessions).post(create_session))
         .route("/api/sessions/{id}", get(get_session).patch(patch_session).delete(delete_session))
@@ -360,6 +361,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/mcp/servers", get(mcp_servers).post(save_mcp))
         .route("/api/mcp/servers/{id}", delete(remove_mcp))
         .route("/api/mcp/servers/{id}/reconnect", post(reconnect_mcp))
+        .route("/api/mcp/servers/{id}/approve", post(approve_mcp))
         .route("/api/mcp/servers/{id}/oauth/start", post(mcp_oauth_start))
         .route("/api/mcp/servers/{id}/oauth", delete(mcp_oauth_signout))
         // The browser comes back here from the authorization server: no token (see `security::is_guarded`).
@@ -758,6 +760,9 @@ async fn get_policy(State(s): State<AppState>) -> ApiResult<Value> {
 async fn put_policy(State(s): State<AppState>, Json(v): Json<aiw_engine::PolicyDoc>) -> ApiResult<Value> {
     s.engine.set_policy_rules(v.rules)?;
     get_policy(State(s)).await
+}
+async fn analyze_policy_command(State(s): State<AppState>, Json(b): Json<PolicyAnalyzeRequest>) -> ApiResult<CommandAnalysis> {
+    ok(s.engine.analyze_command(&b.command))
 }
 async fn get_hooks(State(s): State<AppState>) -> ApiResult<Value> {
     ok(json!({"hooks": s.engine.hooks()}))
@@ -1589,6 +1594,9 @@ async fn save_mcp(State(s): State<AppState>, Json(c): Json<McpServerConfig>) -> 
 async fn remove_mcp(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.remove_mcp_server(&id).await?;
     ok(json!({}))
+}
+async fn approve_mcp(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<McpApproveRequest>) -> ApiResult<McpServerInfo> {
+    ok(s.engine.approve_mcp_server(&id, &b.hash).await?)
 }
 async fn reconnect_mcp(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<McpServerInfo> {
     ok(s.engine.reconnect_mcp_server(&id).await?)

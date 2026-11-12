@@ -1,4 +1,4 @@
-import type { McpServer } from "../../../shared/api/types";
+import type { McpSandbox, McpServer } from "../../../shared/api/types";
 import { duplicateKeys, recordToRows, rowsToRecord, strayMasks, type KvRow } from "../../../shared/lib/kvRows";
 import { isSecretName, SECRET_MASK } from "../../../shared/lib/secrets";
 import { joinShellWords, splitShellWords } from "../../../shared/lib/tokens";
@@ -21,13 +21,30 @@ export interface McpDraft {
   sampling?: boolean;
   /** Client id registered by hand (http servers without dynamic registration). */
   oauthClientId: string;
+  /** Isolation of a stdio server (ignored for http). */
+  sandbox: McpSandbox;
+  /** Network for an isolated stdio server. */
+  sandboxNetwork: boolean;
 }
 
 export type McpPayload = Partial<McpServer> & { name: string; transport: McpTransportKind };
 
-export function emptyDraft(): McpDraft {
-  return { name: "", transport: "stdio", command: "", args: [], env: [], url: "", headers: [], enabled: true, oauthClientId: "" };
+/**
+ * A new server is isolated (workspace-write, network on) when this system can do it; otherwise it stays `off`
+ * and the form says why.
+ */
+export function emptyDraft(isolationAvailable = true): McpDraft {
+  return {
+    name: "", transport: "stdio", command: "", args: [], env: [], url: "", headers: [], enabled: true, oauthClientId: "",
+    sandbox: isolationAvailable ? "workspace-write" : "off", sandboxNetwork: true,
+  };
 }
+
+export const MCP_SANDBOX_LABEL: Record<McpSandbox, string> = {
+  "off": "Nessun isolamento",
+  "read-only": "Sola lettura",
+  "workspace-write": "Scrittura nel workspace",
+};
 
 export function draftFromServer(s: McpServer): McpDraft {
   return {
@@ -43,6 +60,8 @@ export function draftFromServer(s: McpServer): McpDraft {
     enabled: s.enabled,
     sampling: s.sampling,
     oauthClientId: s.oauth_client_id ?? "",
+    sandbox: s.sandbox ?? "off",
+    sandboxNetwork: s.sandbox_network ?? true,
   };
 }
 
@@ -57,7 +76,7 @@ export function draftToPayload(d: McpDraft): McpPayload {
   const base = { ...(d.id ? { id: d.id } : {}), name: normalizeName(d.name), enabled: d.enabled, ...(d.sampling !== undefined ? { sampling: d.sampling } : {}) };
   if (d.transport === "stdio") {
     const env = rowsToRecord(d.env);
-    return { ...base, transport: "stdio", command: d.command.trim(), args: d.args, ...(Object.keys(env).length ? { env } : {}) };
+    return { ...base, transport: "stdio", command: d.command.trim(), args: d.args, sandbox: d.sandbox, sandbox_network: d.sandboxNetwork, ...(Object.keys(env).length ? { env } : {}) };
   }
   const headers = rowsToRecord(d.headers);
   const clientId = d.oauthClientId.trim();

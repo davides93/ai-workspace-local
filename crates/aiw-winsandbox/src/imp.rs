@@ -390,10 +390,12 @@ fn new_job() -> io::Result<Owned> {
     }
 }
 
-/// Environment of this process with `overrides` applied, as a sorted UTF-16 block.
-fn env_block(overrides: &[(String, String)]) -> Vec<u16> {
+/// Environment of this process without the variables in `remove` (compared without regard to case)
+/// and with `overrides` applied, as a sorted UTF-16 block.
+fn env_block(overrides: &[(String, String)], remove: &[String]) -> Vec<u16> {
     let mut vars: Vec<(String, String)> =
         std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect();
+    vars.retain(|(k, _)| !remove.iter().any(|r| r.eq_ignore_ascii_case(k)));
     for (k, v) in overrides {
         vars.retain(|(x, _)| !x.eq_ignore_ascii_case(k));
         vars.push((k.clone(), v.clone()));
@@ -426,6 +428,22 @@ pub fn run(
     run_with(command_line, cwd, workspace, access, extra_env, timeout, cancel, max_output, Hardening::default())
 }
 
+/// [`run`] without the environment variables named in `remove_env` (secrets of the caller's environment).
+#[allow(clippy::too_many_arguments)]
+pub fn run_clean(
+    command_line: &str,
+    cwd: &Path,
+    workspace: &Path,
+    access: Access,
+    extra_env: &[(String, String)],
+    remove_env: &[String],
+    timeout: Duration,
+    cancel: &AtomicBool,
+    max_output: usize,
+) -> io::Result<Outcome> {
+    run_inner(command_line, cwd, workspace, access, extra_env, remove_env, timeout, cancel, max_output, Hardening::default())
+}
+
 /// The individual protections, all on by default (switchable only for diagnostics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hardening {
@@ -451,6 +469,22 @@ pub fn run_with(
     workspace: &Path,
     access: Access,
     extra_env: &[(String, String)],
+    timeout: Duration,
+    cancel: &AtomicBool,
+    max_output: usize,
+    hardening: Hardening,
+) -> io::Result<Outcome> {
+    run_inner(command_line, cwd, workspace, access, extra_env, &[], timeout, cancel, max_output, hardening)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_inner(
+    command_line: &str,
+    cwd: &Path,
+    workspace: &Path,
+    access: Access,
+    extra_env: &[(String, String)],
+    remove_env: &[String],
     timeout: Duration,
     cancel: &AtomicBool,
     max_output: usize,
@@ -526,7 +560,7 @@ pub fn run_with(
         si.lpAttributeList = attrs;
 
         let mut cmd = wide(command_line);
-        let block = env_block(&env);
+        let block = env_block(&env, remove_env);
         let cwd_w = wide(cwd);
         let mut pi: PROCESS_INFORMATION = zeroed();
         check(

@@ -110,6 +110,8 @@ fn cfg(url: &str) -> McpServerConfig {
         enabled: true,
         sampling: false,
         oauth_client_id: None,
+        sandbox: "off".into(),
+        sandbox_network: true,
     }
 }
 

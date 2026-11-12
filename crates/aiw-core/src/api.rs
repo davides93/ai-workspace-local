@@ -199,6 +199,13 @@ pub struct SystemInfo {
     /// Mac App Store build (App Sandbox): see `EngineOptions::sandboxed`.
     #[serde(default)]
     pub sandboxed: bool,
+    /// Sandbox that contains shell commands on this machine (`bwrap`, `sandbox-exec`,
+    /// `windows-low-integrity`), or none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_sandbox: Option<String>,
+    /// MCP stdio servers can be isolated on this machine (not on Windows).
+    #[serde(default)]
+    pub mcp_sandbox: bool,
     pub uptime_s: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_code: Option<String>,
@@ -1925,10 +1932,22 @@ pub struct McpServerConfig {
     /// Client id registered by hand with the authorization server (when it has no dynamic registration).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_client_id: Option<String>,
+    /// Isolation of a `stdio` server: `off` (it runs with the rights of the person, as before),
+    /// `read-only` or `workspace-write` (see `aiw_tools::sandbox`). Servers stored before this field
+    /// existed are `off`; the interface proposes `workspace-write` for new ones.
+    #[serde(default = "sandbox_off")]
+    pub sandbox: String,
+    /// An isolated `stdio` server may use the network (most of them need it).
+    #[serde(default = "yes")]
+    pub sandbox_network: bool,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn sandbox_off() -> String {
+    "off".into()
 }
 
 /// What a connected MCP server offers.
@@ -1956,6 +1975,41 @@ pub struct McpServerInfo {
     /// OAuth tokens are stored for this server (their values are never returned).
     #[serde(default)]
     pub signed_in: bool,
+    /// A `stdio` server whose command the person has not confirmed yet (or that changed since): it
+    /// does not run until they do (`POST /api/mcp/servers/{id}/approve`).
+    #[serde(default)]
+    pub approval_required: bool,
+    /// Hash to send back to approve exactly what the person was shown (set with `approval_required`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_hash: Option<String>,
+    /// The command line to confirm, as the person reads it (set with `approval_required`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_line: Option<String>,
+}
+
+/// Body of `POST /api/policy/analyze`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyAnalyzeRequest {
+    pub command: String,
+}
+
+/// How the policy reads a shell command line: the simple commands it is made of (see
+/// `aiw_agent::shellparse`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommandAnalysis {
+    /// Commands that run: an `allow` rule applies only if every one of them is allowed.
+    pub commands: Vec<String>,
+    /// Other forms (wrappers, raw text) that only `deny` and `ask` rules look at.
+    pub also: Vec<String>,
+    /// False when part of the line could not be parsed with confidence: no `allow` rule applies.
+    pub confident: bool,
+}
+
+/// Body of `POST /api/mcp/servers/{id}/approve`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpApproveRequest {
+    /// The `approval_hash` of the server as the person saw it: it must still be the current one.
+    pub hash: String,
 }
 
 /// A prompt a connected MCP server offers (`prompts/list`).
@@ -2153,6 +2207,8 @@ mod tests {
                 enabled: true,
                 sampling: false,
                 oauth_client_id: None,
+                sandbox: "off".into(),
+                sandbox_network: true,
             },
             status: "connected".into(),
             tools: vec!["read".into()],
@@ -2160,6 +2216,9 @@ mod tests {
             capabilities: McpCapabilities::default(),
             attempt: None,
             signed_in: false,
+            approval_required: false,
+            approval_hash: None,
+            command_line: None,
         };
         let v = serde_json::to_value(info).unwrap();
         assert_eq!(v["name"], "fs");

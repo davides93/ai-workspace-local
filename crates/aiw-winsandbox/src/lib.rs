@@ -16,7 +16,11 @@
 //!   user's clipboard, global atoms or windows.
 //!
 //! Network access is not restricted by this mechanism (Low integrity processes can still open
-//! sockets): the caller reports that to the user.
+//! sockets; closing it needs an AppContainer or firewall rules, which this crate does not set up),
+//! and **reading** is not restricted either: Low integrity only stops writes, so a command can read
+//! the files the user can read, the app's data folder and credentials included. The caller reports
+//! both limits to the user. [`run_clean`] drops named variables from the environment the command
+//! inherits (the secrets of the caller's environment).
 //!
 //! On non-Windows targets the crate is empty.
 

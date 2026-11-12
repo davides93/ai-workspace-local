@@ -11,6 +11,7 @@ pub mod policy;
 pub mod roles;
 pub mod runner;
 pub mod schema;
+pub mod shellparse;
 pub mod skills;
 pub mod team;
 pub mod think;

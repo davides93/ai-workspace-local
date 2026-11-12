@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
@@ -13,6 +13,18 @@ export function useToolList() {
 export function usePolicy() {
   const api = useApi();
   return useQuery({ queryKey: qk.policy(), queryFn: () => api.policy() });
+}
+
+/** How the backend splits a shell command line into simple commands (for the rule tester); disabled for an empty line. */
+export function useAnalyzeCommand(command: string) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["policy-analyze", command] as const,
+    queryFn: () => api.analyzeCommand(command),
+    enabled: command.trim() !== "",
+    placeholderData: keepPreviousData,
+    staleTime: Infinity,
+  });
 }
 
 export function useSetPolicy() {

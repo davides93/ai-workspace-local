@@ -4,6 +4,7 @@ description = "Windows sandbox for agent commands: Low integrity token, job obje
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

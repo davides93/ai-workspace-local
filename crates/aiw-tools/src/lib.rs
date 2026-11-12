@@ -8,6 +8,7 @@ pub mod connectors;
 pub mod fs;
 pub mod mcp;
 pub mod mcp_oauth;
+pub mod sandbox;
 pub mod search;
 pub mod shell;
 pub mod web;
@@ -59,6 +60,18 @@ impl SandboxMode {
     }
 }
 
+/// What the shell sandbox adds to the mode: network, hidden locations and the environment.
+#[derive(Debug, Clone, Default)]
+pub struct ShellSandbox {
+    /// The shell may use the network (`sandbox.shell_network`). Off by default.
+    pub network: bool,
+    /// Absolute paths hidden from sandboxed commands and refused by the file tools: the data folder
+    /// of the app and `sandbox.deny_read`.
+    pub hidden: Vec<PathBuf>,
+    /// Environment variables kept although their name looks like a secret (`sandbox.env_allow`).
+    pub env_allow: Vec<String>,
+}
+
 /// Execution context handed to tools.
 #[derive(Clone)]
 pub struct ToolContext {
@@ -67,6 +80,8 @@ pub struct ToolContext {
     /// Extra folders readable by tools (skills, attachments…).
     pub read_roots: Vec<PathBuf>,
     pub sandbox: SandboxMode,
+    /// Network, hidden locations and environment of sandboxed commands.
+    pub shell: ShellSandbox,
     pub cancel: CancellationToken,
     /// Where original files are copied before being modified (rewind).
     pub checkpoint_dir: Option<PathBuf>,
@@ -92,6 +107,7 @@ impl ToolContext {
             workspace_root,
             read_roots: vec![],
             sandbox: SandboxMode::WorkspaceWrite,
+            shell: ShellSandbox::default(),
             cancel: CancellationToken::new(),
             checkpoint_dir: None,
             allow_domains: vec![],
@@ -140,6 +156,12 @@ impl ToolContext {
             .ok_or_else(|| Error::Denied(format!("{} passa da un collegamento simbolico che non si può risolvere", norm.display())))?;
         let canon_root = std::fs::canonicalize(&self.workspace_root).unwrap_or_else(|_| root.clone());
         let readable = !write && self.read_roots.iter().filter_map(|r| trusted_read_root(r)).any(|r| canon.starts_with(r));
+        if self.is_hidden(&canon, &canon_root) {
+            return Err(Error::Denied(format!(
+                "{} è nascosto agli agenti: contiene i dati dell'app o delle credenziali (si cambia in Sicurezza → Sandbox)",
+                norm.display()
+            )));
+        }
         if !canon.starts_with(&canon_root) && !readable {
             return Err(Error::Denied(format!(
                 "{} punta fuori dal workspace tramite un collegamento simbolico ({})",
@@ -148,6 +170,33 @@ impl ToolContext {
             )));
         }
         Ok(norm)
+    }
+
+    /// True when `canon` (a canonical path) is in a location hidden from the agent: the data folder of
+    /// the app or an entry of `sandbox.deny_read`. Two exceptions: the workspace itself when it lives
+    /// inside a hidden folder (an isolated session in `~/.aiw/worktrees`), and the read roots that are
+    /// strictly inside one (skills, the attachments of the session).
+    pub fn is_hidden(&self, canon: &Path, canon_root: &Path) -> bool {
+        if self.sandbox == SandboxMode::Off || self.shell.hidden.is_empty() {
+            return false;
+        }
+        let roots: Vec<PathBuf> = self.read_roots.iter().filter_map(|r| trusted_read_root(r)).collect();
+        for h in &self.shell.hidden {
+            let canon_h = std::fs::canonicalize(h).ok();
+            for h in std::iter::once(h).chain(canon_h.as_ref()) {
+                if !canon.starts_with(h) {
+                    continue;
+                }
+                if canon_root.starts_with(h) && canon.starts_with(canon_root) {
+                    continue;
+                }
+                if roots.iter().any(|r| r.starts_with(h) && r != h && canon.starts_with(r)) {
+                    continue;
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// Notes that the run created `path`: a rewind deletes it. Call it after the file exists.

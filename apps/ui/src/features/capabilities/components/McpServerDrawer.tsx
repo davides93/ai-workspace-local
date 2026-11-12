@@ -3,8 +3,10 @@ import type { McpServer } from "../../../shared/api/types";
 import { splitShellWords } from "../../../shared/lib/tokens";
 import { SECRET_MASK } from "../../../shared/lib/secrets";
 import { Button, Drawer, Field, Icon, Input, KeyValueEditor, TagInput, Toggle } from "../../../shared/ui";
+import { useSystem } from "../../../shared/query/system";
+import type { McpSandbox } from "../../../shared/api/types";
 import {
-  draftFromServer, draftToPayload, emptyDraft, isSecretKey, normalizeName, splitCommandLine, validateDraft,
+  MCP_SANDBOX_LABEL, draftFromServer, draftToPayload, emptyDraft, isSecretKey, normalizeName, splitCommandLine, validateDraft,
   type McpDraft, type McpPayload, type McpTransportKind,
 } from "../model/mcpForm";
 
@@ -35,7 +37,9 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
   onSave: (payload: McpPayload) => void;
   onClose: () => void;
 }) {
-  const [draft, setDraft] = useState<McpDraft>(() => (server ? draftFromServer(server) : emptyDraft()));
+  const system = useSystem();
+  const isolationAvailable = system.data?.mcp_sandbox ?? false;
+  const [draft, setDraft] = useState<McpDraft>(() => (server ? draftFromServer(server) : emptyDraft(isolationAvailable)));
   const [submitted, setSubmitted] = useState(false);
   const errors = validateDraft(draft, others);
   const shown = submitted ? errors : {};
@@ -84,8 +88,31 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
           <>
             <p className="cap-note cap-note-warn text-sm">
               <Icon name="alert" size={15} />
-              <span>Un server stdio è un processo avviato con i tuoi permessi, <b>fuori dalla sandbox</b> degli agenti: avvia solo comandi di cui ti fidi.</span>
+              <span>Un server stdio è un processo avviato sul tuo computer: avvia solo comandi di cui ti fidi. Alla prima partenza di un comando nuovo o modificato ti chiediamo conferma.</span>
             </p>
+            <div className="field">
+              <span className="field-label" id="mcp-sandbox-label">Isolamento</span>
+              <div className="seg" role="group" aria-labelledby="mcp-sandbox-label">
+                {(["workspace-write", "read-only", "off"] as McpSandbox[]).map((m) => (
+                  <button key={m} type="button" aria-pressed={draft.sandbox === m} disabled={m !== "off" && !isolationAvailable && draft.sandbox !== m}
+                    onClick={() => patch({ sandbox: m })}>{MCP_SANDBOX_LABEL[m]}</button>
+                ))}
+              </div>
+              <span className="hint">
+                {isolationAvailable
+                  ? "Isolato, il server non vede la cartella dei dati dell'app né le cartelle delle credenziali, e non eredita le variabili d'ambiente dell'app (riceve solo quelle che scrivi qui sotto). «Nessun isolamento» lo lascia girare con i tuoi permessi."
+                  : "Su questo sistema (Windows) l'isolamento dei server MCP non è disponibile: il server gira con i tuoi permessi."}
+              </span>
+            </div>
+            {draft.sandbox !== "off" && (
+              <div className="row row-between nowrap">
+                <div className="field">
+                  <span className="field-label" id="mcp-sandbox-net-label">Consenti la rete al server</span>
+                  <span className="hint">Molti server ne hanno bisogno per parlare con un servizio. Spegnila per uno che lavora solo su file locali.</span>
+                </div>
+                <Toggle id="mcp-sandbox-net" checked={draft.sandboxNetwork} onChange={(sandboxNetwork) => patch({ sandboxNetwork })} label="Consenti la rete al server" />
+              </div>
+            )}
             <Field label="Comando" htmlFor="mcp-command" error={shown.command} hint={split ? undefined : "Il programma da avviare, senza argomenti."}>
               <Input id="mcp-command" mono value={draft.command} placeholder="npx" aria-invalid={!!shown.command} autoComplete="off" spellCheck={false} onChange={(e) => patch({ command: e.target.value })} />
             </Field>

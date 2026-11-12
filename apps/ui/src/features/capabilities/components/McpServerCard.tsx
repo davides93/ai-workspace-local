@@ -1,12 +1,12 @@
 import { useState } from "react";
 import type { McpServer, ToolInfo } from "../../../shared/api/types";
 import { Button, Chip, Chips, Icon, IconButton, Pill, StatusPill, Toggle } from "../../../shared/ui";
-import { serverTarget } from "../model/mcpForm";
+import { MCP_SANDBOX_LABEL, serverTarget } from "../model/mcpForm";
 import { serverTools } from "../model/tools";
 import { ToolRow } from "./ToolRow";
 
 /** One MCP server: state and error, what it runs, its tools (expandable), switch, edit and remove. */
-export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onEdit, onRemove, onReconnect, onSignIn, onSignOut, busy }: {
+export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onEdit, onRemove, onReconnect, onSignIn, onSignOut, onApprove, onIsolate, isolationAvailable, busy }: {
   server: McpServer;
   /** The whole tool registry: the server only reports names. */
   tools: ToolInfo[];
@@ -19,6 +19,12 @@ export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onE
   /** «Accedi» (OAuth) and «Esci». */
   onSignIn: () => void;
   onSignOut: () => void;
+  /** «Consenti ed esegui» for a command that was never approved on this computer. */
+  onApprove: () => void;
+  /** «Isola»: switch a server that runs unisolated to workspace-write. */
+  onIsolate: () => void;
+  /** Can this system isolate a stdio server at all? (Not on Windows.) */
+  isolationAvailable: boolean;
   busy?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -36,6 +42,12 @@ export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onE
           <div className="row">
             <b className="cap-mcp-title">{server.name}</b>
             <Pill>{server.transport === "http" ? "HTTP" : "stdio"}</Pill>
+            {server.transport === "stdio" && (server.sandbox ?? "off") === "off" && (
+              <Pill tone="warn" title="Il server gira con i tuoi permessi, senza isolamento">non isolato</Pill>
+            )}
+            {server.transport === "stdio" && server.sandbox && server.sandbox !== "off" && (
+              <Pill tone="ok" title={`Isolato: ${MCP_SANDBOX_LABEL[server.sandbox]}${server.sandbox_network === false ? ", senza rete" : ""}`}>isolato</Pill>
+            )}
           </div>
           <div className="mono faint ellipsis text-xs" title={serverTarget(server)}>{serverTarget(server) || "—"}</div>
         </div>
@@ -46,6 +58,26 @@ export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onE
         <IconButton aria-label={`Rimuovi ${server.name}`} icon="trash" size={16} onClick={onRemove} />
       </div>
 
+      {server.enabled && server.approval_required && (
+        <div className="cap-note cap-note-warn text-sm" role="group" aria-label={`Approvazione di ${server.name}`}>
+          <Icon name="alert" size={15} />
+          <span className="grow">
+            Questo server esegue il comando <code>{server.command_line ?? serverTarget(server)}</code> su questo computer. Non parte finché non lo consenti.
+          </span>
+          <Button size="sm" variant="primary" disabled={busy} onClick={onApprove}>Consenti ed esegui</Button>
+        </div>
+      )}
+      {server.transport === "stdio" && (server.sandbox ?? "off") === "off" && (
+        <div className="row text-sm muted" role="group" aria-label={`Isolamento di ${server.name}`}>
+          <span className="grow">
+            {isolationAvailable
+              ? "Gira senza isolamento, con l'ambiente e i permessi dell'app."
+              : "Gira senza isolamento. Su questo sistema l'isolamento dei server MCP non è disponibile."}
+          </span>
+          <Button size="sm" disabled={busy || !isolationAvailable} onClick={onIsolate}
+            title={isolationAvailable ? "Passa a «Scrittura nel workspace», con rete" : "Non disponibile su questo sistema"}>Isola</Button>
+        </div>
+      )}
       {server.enabled && server.error && (
         <p className="cap-mcp-error"><Icon name="alert" size={14} /> <span>{server.error}</span></p>
       )}

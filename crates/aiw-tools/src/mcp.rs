@@ -140,8 +140,12 @@ pub trait RunMcp: Send + Sync {
     async fn elicit(&self, server: &str, message: &str, schema: &Value) -> Elicited;
 }
 
+pub mod launch;
+
 #[derive(Debug, Clone)]
 pub struct McpOptions {
+    /// Isolation of a `stdio` server; `None` = it runs with the rights of the person, as before.
+    pub sandbox: Option<launch::StdioSandbox>,
     pub request_timeout: Duration,
     pub call_timeout: Duration,
     pub backoff_base: Duration,
@@ -152,6 +156,7 @@ pub struct McpOptions {
 impl Default for McpOptions {
     fn default() -> Self {
         Self {
+            sandbox: None,
             request_timeout: Duration::from_secs(30),
             call_timeout: Duration::from_secs(300),
             backoff_base: Duration::from_secs(1),
@@ -338,15 +343,27 @@ impl Conn {
             return Err(Fail::Fatal("su iOS i server MCP devono essere HTTP".into()));
         }
         let cmd = cfg.command.clone().filter(|c| !c.is_empty()).ok_or_else(|| Fail::Fatal("server MCP stdio senza comando".into()))?;
-        let mut command = tokio::process::Command::new(&cmd);
+        if let Some(sb) = &client.opts.sandbox {
+            // The private home must exist before the sandbox command line is built: only existing folders are bound.
+            std::fs::create_dir_all(&sb.home).map_err(|e| Fail::Fatal(format!("cartella privata del server MCP: {e}")))?;
+        }
+        let parent_env: Vec<(String, String)> = std::env::vars().collect();
+        let plan = launch::plan_stdio(cfg, &cmd, client.opts.sandbox.as_ref(), &launch::native_wrap, &parent_env).map_err(Fail::Fatal)?;
+        let mut command = tokio::process::Command::new(&plan.program);
         command
-            .args(cfg.args.clone().unwrap_or_default())
+            .args(&plan.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
-        for (k, v) in cfg.env.clone().unwrap_or_default() {
-            command.env(k, v.as_str().map(String::from).unwrap_or_else(|| v.to_string()));
+        if plan.clear_env {
+            command.env_clear();
+        }
+        if let Some(cwd) = &plan.cwd {
+            command.current_dir(cwd);
+        }
+        for (k, v) in &plan.env {
+            command.env(k, v);
         }
         let mut child = command.spawn().map_err(|e| Fail::Fatal(format!("avvio server MCP `{cmd}`: {e}")))?;
         let mut stdin = child.stdin.take().ok_or_else(|| Fail::Fatal("stdin non disponibile".into()))?;

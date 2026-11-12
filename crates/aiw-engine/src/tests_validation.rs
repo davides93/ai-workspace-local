@@ -164,6 +164,8 @@ fn http_server(url: &str) -> McpServerConfig {
         enabled: false,
         sampling: false,
         oauth_client_id: None,
+        sandbox: "off".into(),
+        sandbox_network: true,
     }
 }
 

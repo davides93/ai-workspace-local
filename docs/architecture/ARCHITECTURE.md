@@ -359,9 +359,31 @@ proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs
 | Modalità | `ask` (chiede conferma per gli effetti collaterali) | `plan` (solo lettura), `auto-edit` (modifica file senza chiedere, comandi su conferma), `auto` (tutto entro la sandbox), `yolo` (tutto, sconsigliato) |
 | Regole | allow: read, list, search, web_fetch su host pubblici, web_search · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow |
 | Sandbox OS (P07) | `workspace-write`: Linux bwrap, macOS sandbox-exec, Windows token a integrità Low + job object + desktop dedicato (`aiw-winsandbox`) | `read-only`, `workspace-write`, `off` |
+| Rete della shell | **Chiusa** (`sandbox.shell_network` = `off`; Linux `--unshare-net`, macOS `(deny network*)`). Le installazioni esistenti sono state migrate a `on`. **Windows: non chiudibile** | `on`/`off` a livello di macchina; un workspace può solo restringere |
+| Cartelle nascoste ai comandi | La cartella dei dati di AIW e `sandbox.deny_read` (`.ssh`, `.gnupg`, `.aws`, gcloud, `.kube`, docker, `.netrc`, `.npmrc`, `.pypirc`, profili dei browser, portachiavi); skill e allegati di sessione restano leggibili. I tool di file rispettano lo stesso elenco. **Windows: non nascondibili** | `sandbox.deny_read` (solo macchina) |
+| Ambiente dei comandi | Variabili che sembrano segreti (`*_TOKEN`, `*_KEY`, `*_SECRET`, `*PASSWORD*`, `AIW_*`, credenziali cloud) tolte anche con sandbox `off` | `sandbox.env_allow` |
 | Rete dei tool | Consentita solo per i tool web e browser | Allowlist di domini |
 | Audit (P22) | Ogni decisione di policy ed esecuzione viene registrata con l'ID del run | Esportabile in JSONL |
 | Kill switch | `POST /kill` e scorciatoia globale: ferma run, sidecar avviati per i run e browser | — |
+
+**Come è fatta la sandbox della shell** (`aiw-tools/src/sandbox.rs`, costruttori di argomenti puri e testati per sistema):
+Linux `bwrap --die-with-parent --new-session --unshare-pid --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp`, con `--unshare-net` a rete spenta,
+la cartella di lavoro in scrittura, un `--tmpfs` sulle cartelle nascoste (e `/dev/null` sui file) e il riattacco in sola lettura delle
+sottocartelle che servono (skill, allegati). `--unshare-pid` serve perché altrimenti `/proc/<pid del demone>/root` aggira il nascondiglio.
+Una scrittura in una cartella nascosta finisce in un tmpfs privato e non arriva mai a quella vera. macOS usa un profilo Seatbelt (`(deny file-write*)`,
+`(deny network*)`, rifiuto di lettura sui percorsi nascosti, eccezioni dopo i rifiuti perché vince l'ultima regola); mai eseguito su un Mac.
+Windows usa `aiw-winsandbox` (integrità bassa + job object): limita le scritture e toglie le variabili segrete, ma non chiude la rete né nasconde letture.
+
+**Regole di policy sulla shell** (`aiw-agent/src/shellparse.rs`, `policy.rs`): la riga viene divisa in comandi semplici da un lexer prudente
+(`;`, `&&`, `||`, `|`, `&`, a capo, sottoshell, gruppi, `$(…)`, apici inversi, `<(…)`, reindirizzamenti, heredoc; wrapper `env`, `sh -c` a un livello,
+`xargs`, `find -exec`, `sudo`; variante PowerShell). «Consenti» con un pattern vale solo se l'analisi è sicura e **ogni** comando semplice è consentito;
+«Nega» e «Chiedi» valgono se il testo grezzo o **uno qualsiasi** dei comandi corrisponde. Ciò che non si capisce con certezza non è mai consentito da una regola, ma resta soggetto a «Nega».
+Il soggetto della policy per il tool shell è solo `command` (un argomento in più non può più spostare la corrispondenza).
+
+**Server MCP stdio** (`aiw-tools/src/mcp/launch.rs`, `aiw-engine/src/mcp_host.rs`): con `sandbox` ≠ `off` il server parte dallo stesso lanciatore della shell, con
+ambiente ripulito (solo una base sicura più le variabili configurate, `HOME` in una cartella privata sotto `<dati>/mcp-home/<id>`). Prima di avviare un
+comando nuovo o cambiato serve l'approvazione del proprietario (token `owner`): si salva l'hash sha256 di (trasporto, comando, argomenti, **nomi** delle variabili);
+una definizione che arriva da un workspace o da un'importazione non è mai approvata da sola. Senza lanciatore (Windows) un server con isolamento richiesto non parte.
 
 ### 5.3 Workflow (task operativi)
 

@@ -196,6 +196,16 @@ In Dispositivi compaiono gli altri AI Workspace trovati via mDNS e il QR: il tel
 apre l'interfaccia già accoppiata. Un dispositivo accoppiato presta i suoi modelli (runtime
 `aiw-peer`), i suoi strumenti e agenti (server MCP) e la sua trascrizione.
 
+## Sicurezza
+
+AIW gira sul tuo computer e ascolta solo su `127.0.0.1` finché non attivi l'accesso dalla LAN. I comandi della shell girano in una sandbox
+dove la rete è **chiusa di default** (Sicurezza → Sandbox per accenderla), la cartella dei dati di AIW e le cartelle di credenziali
+(`~/.ssh`, `~/.aws`, …) sono nascoste e le variabili d'ambiente che sembrano segreti non arrivano ai comandi. Il compromesso: `git` via SSH non
+trova la tua chiave; per consentirlo togli `~/.ssh` da «Cartelle nascoste» (o usa HTTPS con un token). Su **Windows** la rete dei comandi non si
+può chiudere e le cartelle non si possono nascondere in lettura; su macOS il profilo non è mai stato provato su un Mac. I server MCP stdio possono
+essere isolati (non su Windows) e chiedono conferma al primo avvio di un comando nuovo o cambiato. Modello di minaccia, limiti noti e come segnalare
+una vulnerabilità in privato: [SECURITY.md](SECURITY.md).
+
 ## Stato (v0.4)
 
 Dettagli, limiti noti e prossimi passi in [docs/STATUS.md](docs/STATUS.md).
@@ -209,7 +219,7 @@ Dettagli, limiti noti e prossimi passi in [docs/STATUS.md](docs/STATUS.md).
 | Documenti | Raccolte di file locali (testo, Markdown, codice, PDF con testo) che l'assistente cerca per parole chiave e, con un modello di embedding avviato, per significato; pagina «Documenti», `aiw kb` e gateway `/v1/embeddings` |
 | Canali e posta | Parla con l'assistente da Telegram, Slack o email (spenti di serie, solo mittenti in elenco, di serie in sola lettura); posta IMAP in sola lettura per il riepilogo e gli strumenti; pagina «Canali», `aiw channels`, guida in [docs/channels.md](docs/channels.md). Mai provato contro i servizi veri |
 | Voce | Trascrizione con whisper.cpp o con server OpenAI-compatibili (LocalAI, Nexa, dispositivo accoppiato); dettatura e conversazione a voce nella chat con le voci locali del sistema |
-| Policy e sandbox | Cinque modalità, regole, audit, kill switch; bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) |
+| Policy e sandbox | Cinque modalità, regole che leggono ogni comando di una riga composta, audit, kill switch; shell con rete chiusa di default e cartelle di credenziali nascoste (bwrap su Linux; sandbox-exec su macOS, mai provato su un Mac; su Windows integrità bassa + job object, **senza** rete chiusa né letture nascoste); server MCP stdio isolabili (non su Windows) e da approvare al primo avvio. Vedi [SECURITY.md](SECURITY.md) |
 | Tool | File, shell, `web_fetch` anti-SSRF, `web_search` (SearXNG, Brave, DuckDuckGo), browser CDP, computer-use, client MCP |
 | Agenti e workflow | Loop con subagenti, hook, skill; workflow con trigger manuale, cron, intervallo, file, webhook |
 | API | REST + SSE, gateway OpenAI e Anthropic, server MCP, A2A; token, CORS ristretto, controllo di Origin/Host |

@@ -195,6 +195,8 @@ async fn mcp_server_works_with_our_mcp_client() {
         enabled: true,
         sampling: false,
         oauth_client_id: None,
+        sandbox: "off".into(),
+        sandbox_network: true,
     };
     let client = aiw_tools::mcp::McpClient::connect(&cfg).await.unwrap();
     assert!(client.tools().iter().any(|t| t.name == "list_dir" && t.read_only));

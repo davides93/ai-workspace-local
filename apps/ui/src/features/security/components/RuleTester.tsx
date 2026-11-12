@@ -1,17 +1,19 @@
 import { Field, Input, Panel, Pill, Select, type PillTone } from "../../../shared/ui";
 import { APPROVAL_MODES, RISK_META } from "../../../shared/lib/policyModes";
-import type { PolicyMode, ToolInfo, ToolRisk } from "../../../shared/api/types";
+import type { CommandAnalysis, PolicyMode, ToolInfo, ToolRisk } from "../../../shared/api/types";
 import { DECISION_LABEL, type DecisionKind, type Probe, type ProbeResult } from "../model/policy";
 
 const TONE: Record<DecisionKind, PillTone> = { allow: "ok", ask: "warn", deny: "crit" };
 const RISKS = Object.keys(RISK_META) as ToolRisk[];
 
 /** Asks "what would happen if an agent did this?" of the rules being edited, before they are saved. */
-export function RuleTester({ probe, onProbe, result, tools }: {
+export function RuleTester({ probe, onProbe, result, tools, analysis }: {
   probe: Probe;
   onProbe: (next: Probe) => void;
   result: ProbeResult | null;
   tools: ToolInfo[];
+  /** How the backend splits a shell command line (only for the shell tool). */
+  analysis?: CommandAnalysis;
 }) {
   const set = (patch: Partial<Probe>) => onProbe({ ...probe, ...patch });
   const known = tools.find((t) => t.name === probe.tool.trim());
@@ -50,6 +52,13 @@ export function RuleTester({ probe, onProbe, result, tools }: {
         )}
       </div>
 
+      {analysis && (
+        <p className="text-sm muted" aria-live="polite">
+          {analysis.commands.length === 0 ? "Nessun comando da eseguire." : analysis.commands.length === 1 ? "Letto come un comando: " : `Letto come ${analysis.commands.length} comandi: `}
+          {analysis.commands.map((c, i) => <span key={`${i}-${c}`}>{i > 0 && " · "}<code>{c}</code></span>)}
+          {!analysis.confident && <> — <b>non analizzabile con certezza</b>: nessuna regola Consenti può valere.</>}
+        </p>
+      )}
       <div className="verdict" role="status" aria-live="polite" data-kind={result?.decision.kind}>
         {result ? (
           <>

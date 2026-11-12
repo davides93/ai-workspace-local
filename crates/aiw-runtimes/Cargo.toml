@@ -4,6 +4,7 @@ description = "Manifest-driven runtime registry: embedded, sidecar, system and L
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [features]
 default = []

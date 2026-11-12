@@ -85,6 +85,8 @@ const RULES: &[(&str, &str, Required)] = &[
     // Policy and hooks: what the assistant may do.
     ("GET", "/api/policy", DEVICE),
     ("*", "/api/policy", FULL),
+    // Pure: it only tells how a command line is split into simple commands.
+    ("POST", "/api/policy/analyze", DEVICE),
     ("*", "/api/hooks", FULL),
     // Sessions and runs.
     ("*", "/api/sessions", DEVICE),
@@ -222,5 +224,27 @@ mod tests {
         assert_eq!(required_scope("POST", "/api/pair"), Some(Public));
         assert_eq!(required_scope("GET", "/api/tokens/"), Some(FULL), "a trailing slash does not change the decision");
         assert_eq!(required_scope("PATCH", "/api/nothing-here"), None);
+    }
+
+    /// Adding or changing an MCP server (it can run a command on this computer), confirming its command
+    /// and reconnecting it are the owner's: no paired device, gateway, A2A or MCP token gets there.
+    #[test]
+    fn mcp_servers_can_only_be_changed_with_the_owner_scope() {
+        for (method, path) in [
+            ("POST", "/api/mcp/servers"),
+            ("PUT", "/api/mcp/servers"),
+            ("DELETE", "/api/mcp/servers/s1"),
+            ("POST", "/api/mcp/servers/s1/approve"),
+            ("POST", "/api/mcp/servers/s1/reconnect"),
+            ("POST", "/api/mcp/servers/s1/oauth/start"),
+            ("DELETE", "/api/mcp/servers/s1/oauth"),
+            ("PUT", "/api/config"),
+            ("PUT", "/api/policy"),
+        ] {
+            assert_eq!(required_scope(method, path), Some(FULL), "{method} {path}");
+        }
+        // A device may see the list, not change it.
+        assert_eq!(required_scope("GET", "/api/mcp/servers"), Some(DEVICE));
+        assert_eq!(required_scope("POST", "/api/policy/analyze"), Some(DEVICE));
     }
 }

@@ -182,7 +182,80 @@ impl RunMcp for EngineRunMcp {
     }
 }
 
+/// What the person confirmed for a stdio server: the hash of its command (see `approval_hash`).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct McpApproval {
+    hash: String,
+    ts: String,
+}
+
+/// Stdio servers stored before approvals existed were added by the person themselves: they are
+/// confirmed once, at the first start with this version. Servers added afterwards must be confirmed.
+pub(crate) fn migrate_mcp_approvals(store: &crate::store::Store) {
+    if store.get_doc::<bool>("mcp_meta", "approvals_migrated").ok().flatten().is_some() {
+        return;
+    }
+    for cfg in store.list_docs::<McpServerConfig>("mcp").unwrap_or_default() {
+        if cfg.transport == "stdio" {
+            let a = McpApproval { hash: aiw_tools::mcp::launch::approval_hash(&cfg), ts: now_rfc3339() };
+            let _ = store.put_doc("mcp_approval", &cfg.id, &a);
+        }
+    }
+    let _ = store.put_doc("mcp_meta", "approvals_migrated", &true);
+}
+
 impl Engine {
+    /// Has the person confirmed what this server runs? Only stdio servers run a command.
+    pub(crate) fn mcp_approved(&self, cfg: &McpServerConfig) -> bool {
+        if cfg.transport != "stdio" {
+            return true;
+        }
+        let hash = aiw_tools::mcp::launch::approval_hash(cfg);
+        self.0.store.get_doc::<McpApproval>("mcp_approval", &cfg.id).ok().flatten().is_some_and(|a| a.hash == hash)
+    }
+
+    pub(crate) fn forget_mcp_approval(&self, id: &str) {
+        let _ = self.0.store.delete_doc("mcp_approval", id);
+    }
+
+    /// The isolation of a stdio server: its mode and network from the configuration, the hidden paths
+    /// (the app's data folder and `sandbox.deny_read`) as for the shell, a private home folder.
+    pub(crate) fn mcp_sandbox_for(&self, cfg: &McpServerConfig) -> Option<aiw_tools::mcp::launch::StdioSandbox> {
+        if cfg.transport != "stdio" {
+            return None;
+        }
+        let safe: String = cfg.id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        let home = self.0.dirs.root.join("mcp-home").join(safe);
+        aiw_tools::mcp::launch::stdio_sandbox(
+            &cfg.sandbox,
+            cfg.sandbox_network,
+            &self.workspace_root(),
+            home,
+            &self.shell_sandbox(),
+            &[self.0.dirs.skills()],
+        )
+    }
+
+    /// «Consenti ed esegui»: the person confirms the command they were shown. `hash` is the one of that
+    /// command line; if the server changed in the meantime the confirmation is refused.
+    pub async fn approve_mcp_server(&self, id: &str, hash: &str) -> Result<McpServerInfo> {
+        let cfg =
+            self.0.store.get_doc::<McpServerConfig>("mcp", id)?.ok_or_else(|| Error::NotFound(format!("server MCP {id} non trovato")))?;
+        if cfg.transport != "stdio" {
+            return Err(Error::Invalid("solo i server MCP stdio eseguono un comando da confermare".into()));
+        }
+        let current = aiw_tools::mcp::launch::approval_hash(&cfg);
+        if current != hash {
+            return Err(Error::Conflict("il comando del server è cambiato: controllalo e conferma di nuovo".into()));
+        }
+        self.0.store.put_doc("mcp_approval", id, &McpApproval { hash: current, ts: now_rfc3339() })?;
+        self.audit_system("mcp_approve", &format!("{}: {}", cfg.name, aiw_tools::mcp::launch::command_line(&cfg)));
+        if cfg.enabled {
+            let _ = self.connect_mcp(cfg).await;
+        }
+        self.mcp_servers().into_iter().find(|s| s.config.id == id).ok_or_else(|| Error::NotFound(format!("server MCP {id} non trovato")))
+    }
+
     pub(crate) fn mcp_client(&self, id: &str) -> Option<Arc<McpClient>> {
         self.0.mcp.lock().unwrap().get(id).cloned()
     }

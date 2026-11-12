@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo, ToolInfo,
+  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -257,6 +257,8 @@ export interface Transport {
   /** «Riconnetti»: a new attempt now, with the backoff starting over. */
   reconnectMcpServer(id: string): Promise<McpServer>;
   /** «Accedi»: the page of the authorization server, to open in the system browser. */
+  /** Confirms the command of a stdio server (`hash` is the `approval_hash` the person saw). */
+  approveMcpServer(id: string, hash: string): Promise<McpServer>;
   mcpOAuthStart(id: string): Promise<{ authorization_url: string }>;
   mcpOAuthSignout(id: string): Promise<void>;
   /** The prompts of the connected servers. */
@@ -268,6 +270,8 @@ export interface Transport {
 
   policy(): Promise<{ rules: PolicyRule[] }>;
   setPolicy(rules: PolicyRule[]): Promise<{ rules: PolicyRule[] }>;
+  /** How a shell command line is split into simple commands, the way the backend's policy reads it. */
+  analyzeCommand(command: string): Promise<CommandAnalysis>;
   hooks(): Promise<{ hooks: HookConfig[] }>;
   setHooks(hooks: HookConfig[]): Promise<{ hooks: HookConfig[] }>;
 

@@ -108,6 +108,8 @@ mod tests {
             enabled: true,
             sampling: false,
             oauth_client_id: None,
+            sandbox: "off".into(),
+            sandbox_network: true,
         };
         // What the editor got is what it sends back, with one change of its own.
         let mut sent = masked(stored.clone());

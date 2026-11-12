@@ -11,6 +11,7 @@ use std::sync::atomic::AtomicU32;
 
 fn fast() -> McpOptions {
     McpOptions {
+        sandbox: None,
         request_timeout: Duration::from_secs(5),
         call_timeout: Duration::from_secs(10),
         backoff_base: Duration::from_millis(20),
@@ -175,6 +176,8 @@ fn stdio_cfg(name: &str, marker: Option<&str>, sampling: bool) -> McpServerConfi
         enabled: true,
         sampling,
         oauth_client_id: None,
+        sandbox: "off".into(),
+        sandbox_network: true,
     }
 }
 
@@ -512,6 +515,8 @@ fn http_cfg(url: &str, sampling: bool) -> McpServerConfig {
         enabled: true,
         sampling,
         oauth_client_id: None,
+        sandbox: "off".into(),
+        sandbox_network: true,
     }
 }
 

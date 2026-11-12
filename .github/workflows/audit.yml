@@ -1,0 +1,58 @@
+name: Audit
+
+# Known vulnerabilities in the dependencies: Rust (cargo audit, cargo deny) and npm (apps/ui, apps/desktop).
+# Runs on pull requests that touch a lockfile, once a week (new advisories appear without any change here) and on demand.
+
+on:
+  pull_request:
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - deny.toml
+      - apps/ui/package-lock.json
+      - apps/desktop/package-lock.json
+      - .github/workflows/audit.yml
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+# The jobs only read the repository: no token with write access is needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (cargo audit, cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      # Third-party actions are pinned to the major tag (not to a commit SHA): Dependabot keeps them current.
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: cargo audit
+        run: cargo audit
+      - name: cargo deny
+        run: cargo deny check advisories bans licenses sources
+
+  npm:
+    name: npm audit (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [ui, desktop]
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Production dependencies only; fails from "high" upwards.
+      - run: npm audit --omit=dev --audit-level=high

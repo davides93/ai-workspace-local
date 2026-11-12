@@ -94,6 +94,24 @@ export function useReconnectMcp() {
 }
 
 /** «Accedi»: the engine gives the page of the authorization server, which opens in the system browser; the list refreshes while the person is there. */
+/** «Consenti ed esegui»: the person approves the exact command shown (the hash is what they saw). */
+export function useApproveMcp() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (s: Pick<McpServer, "id" | "name" | "approval_hash">) => api.approveMcpServer(s.id, s.approval_hash ?? ""),
+    onSuccess: (s) => {
+      if (s.status === "connected") toast(`"${s.name}" è consentito e collegato`);
+      else toast(`"${s.name}" è consentito, ma non si collega${s.error ? `: ${s.error}` : ""}`, "crit");
+    },
+    onError: (e) => toast(e instanceof Error ? e.message : "Non è stato possibile consentire il comando", "crit"),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: qk.mcp() });
+      void qc.invalidateQueries({ queryKey: qk.tools() });
+    },
+  });
+}
+
 export function useMcpSignIn() {
   const api = useApi();
   const qc = useQueryClient();

@@ -4,6 +4,7 @@ description = "AI Workspace Local — Tauri 2 shell (desktop and mobile)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [lib]
 name = "aiw_desktop_lib"

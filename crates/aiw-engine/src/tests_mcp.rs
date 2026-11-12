@@ -149,6 +149,8 @@ async fn oauth_start_needs_a_local_address_and_an_http_server() {
         enabled: false,
         sampling: false,
         oauth_client_id: None,
+        sandbox: "off".into(),
+        sandbox_network: true,
     };
     e.save_mcp_server(stdio).await.unwrap();
     assert!(e.mcp_oauth_start("s", "http://127.0.0.1:7777").await.unwrap_err().to_string().contains("solo ai server MCP http"));
@@ -203,8 +205,13 @@ async fn the_registry_follows_list_changed_and_the_state_reaches_the_api() {
         enabled: true,
         sampling: false,
         oauth_client_id: None,
+        sandbox: "off".into(),
+        sandbox_network: true,
     };
     let info = e.save_mcp_server(cfg).await.unwrap();
+    // A command the person has not confirmed does not run.
+    assert_eq!(info.status, "approval_required");
+    let info = e.approve_mcp_server("lc", info.approval_hash.as_deref().unwrap()).await.unwrap();
     assert_eq!(info.status, "connected");
     assert!(info.capabilities.tools && info.capabilities.resources && !info.capabilities.prompts);
     let names = || e.tools().into_iter().map(|t| t.name).filter(|n| n.starts_with("mcp__mutevole__")).collect::<Vec<_>>();
@@ -225,4 +232,173 @@ async fn the_registry_follows_list_changed_and_the_state_reaches_the_api() {
     let info = e.save_mcp_server(off).await.unwrap();
     assert_eq!(info.status, "disconnected");
     assert!(names().is_empty());
+}
+
+fn stdio(id: &str, command: &str, args: &[&str], env: Option<Value>) -> McpServerConfig {
+    McpServerConfig {
+        id: id.into(),
+        name: format!("srv_{id}"),
+        transport: "stdio".into(),
+        command: Some(command.into()),
+        args: Some(args.iter().map(|s| s.to_string()).collect()),
+        url: None,
+        env: env.and_then(|v| v.as_object().cloned()),
+        headers: None,
+        enabled: true,
+        sampling: false,
+        oauth_client_id: None,
+        sandbox: "off".into(),
+        sandbox_network: true,
+    }
+}
+
+fn info(e: &Engine, id: &str) -> McpServerInfo {
+    e.mcp_servers().into_iter().find(|s| s.config.id == id).unwrap()
+}
+
+#[tokio::test]
+async fn a_new_or_changed_stdio_command_waits_for_the_confirmation_of_the_person() {
+    let (e, _d, _w) = engine(vec![]).await;
+    // Nothing runs before the confirmation, and the person is shown the command.
+    let first =
+        e.save_mcp_server(stdio("a", "/definitely/not/a/program", &["--flag", "due parole"], Some(json!({"TOKEN": "t"})))).await.unwrap();
+    assert_eq!(first.status, "approval_required");
+    assert!(first.approval_required);
+    assert_eq!(first.command_line.as_deref(), Some("/definitely/not/a/program --flag \"due parole\""));
+    assert!(first.error.as_deref().unwrap().contains("esegue il comando"), "{:?}", first.error);
+    assert!(e.mcp_client("a").is_none(), "no process was started");
+    // A reconnection does not get around it.
+    assert!(e.reconnect_mcp_server("a").await.unwrap().approval_required);
+    assert!(e.mcp_client("a").is_none());
+    // Confirming a different command line than the one shown is refused.
+    assert!(matches!(e.approve_mcp_server("a", "0123abcd").await, Err(Error::Conflict(_))));
+    assert!(info(&e, "a").approval_required);
+    // The right hash approves it (the server then tries to start; this command does not exist).
+    let hash = first.approval_hash.clone().unwrap();
+    let approved = e.approve_mcp_server("a", &hash).await.unwrap();
+    assert!(!approved.approval_required && approved.approval_hash.is_none());
+    assert_ne!(approved.status, "approval_required");
+    assert!(e.mcp_client("a").is_some(), "now it is started");
+    assert!(e.audit().iter().any(|a| a.action == "mcp_approve" && a.detail.contains("--flag")));
+    // Changing the value of a variable or the name does not ask again; its isolation neither.
+    let mut same = e.mcp_servers()[0].config.clone();
+    same.env = Some(json!({"TOKEN": "otro"}).as_object().unwrap().clone());
+    same.name = "renamed".into();
+    same.sandbox_network = false;
+    assert!(!e.save_mcp_server(same).await.unwrap().approval_required);
+    // A different argument, command or variable name does, and the running process is stopped.
+    for change in [
+        |c: &mut McpServerConfig| c.args = Some(vec!["--other".into()]),
+        |c: &mut McpServerConfig| c.command = Some("/other/program".into()),
+        |c: &mut McpServerConfig| c.env = Some(json!({"TOKEN": "t", "NODE_OPTIONS": "--require x"}).as_object().unwrap().clone()),
+    ] {
+        // Back to the approved command first.
+        let mut c = stdio("a", "/definitely/not/a/program", &["--flag", "due parole"], Some(json!({"TOKEN": "t"})));
+        c.name = "renamed".into();
+        assert!(!e.save_mcp_server(c.clone()).await.unwrap().approval_required);
+        change(&mut c);
+        let after = e.save_mcp_server(c).await.unwrap();
+        assert!(after.approval_required, "{:?}", after.config);
+        assert!(e.mcp_client("a").is_none(), "the previous command no longer runs");
+    }
+    // A removed server forgets the approval: the same id with the old command asks again.
+    e.remove_mcp_server("a").await.unwrap();
+    let again =
+        e.save_mcp_server(stdio("a", "/definitely/not/a/program", &["--flag", "due parole"], Some(json!({"TOKEN": "t"})))).await.unwrap();
+    assert!(again.approval_required);
+}
+
+#[tokio::test]
+async fn http_servers_run_no_local_command_and_need_no_confirmation() {
+    let (e, _d, _w) = engine(vec![]).await;
+    let http = McpServerConfig {
+        id: "h".into(),
+        name: "web".into(),
+        transport: "http".into(),
+        command: None,
+        url: Some("http://127.0.0.1:9/mcp".into()),
+        sandbox: "workspace-write".into(),
+        ..stdio("x", "x", &[], None)
+    };
+    let saved = e.save_mcp_server(http).await.unwrap();
+    assert!(!saved.approval_required);
+    assert_eq!(saved.config.sandbox, "off", "only a local process is isolated");
+    assert!(matches!(e.approve_mcp_server("h", "x").await, Err(Error::Invalid(_))));
+}
+
+#[tokio::test]
+async fn servers_saved_before_approvals_existed_are_confirmed_once_and_later_ones_are_not() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = crate::store::Store::open(&dir.path().join("t.db")).unwrap();
+        let old = stdio("old", "npx", &["-y", "srv"], None);
+        store.put_doc("mcp", "old", &old).unwrap();
+        crate::mcp_host::migrate_mcp_approvals(&store);
+        // The marker makes it a one-time thing: a server added afterwards is not confirmed by a second run.
+        let newer = stdio("new", "npx", &["-y", "other"], None);
+        store.put_doc("mcp", "new", &newer).unwrap();
+        crate::mcp_host::migrate_mcp_approvals(&store);
+        assert!(store.get_doc::<Value>("mcp_approval", "old").unwrap().is_some());
+        assert!(store.get_doc::<Value>("mcp_approval", "new").unwrap().is_none());
+    }
+}
+
+#[tokio::test]
+async fn the_isolation_of_a_server_is_validated_and_defaults_to_off_for_old_records() {
+    let (e, _d, _w) = engine(vec![]).await;
+    let mut bad = stdio("v", "/x", &[], None);
+    bad.sandbox = "everything".into();
+    let err = e.save_mcp_server(bad).await.unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("isolamento"), "{err}");
+    // A record written before the field existed reads back as not isolated, with the network on.
+    let old: McpServerConfig = serde_json::from_value(json!({"id": "o", "name": "o", "transport": "stdio", "command": "x"})).unwrap();
+    assert_eq!((old.sandbox.as_str(), old.sandbox_network), ("off", true));
+    // Isolating a server is possible where the machine can do it, and refused (not silently ignored) where it cannot.
+    let mut iso = stdio("w", "/x", &[], None);
+    iso.sandbox = "workspace-write".into();
+    match e.save_mcp_server(iso).await {
+        Ok(saved) => {
+            assert!(aiw_tools::sandbox::can_wrap_process());
+            assert_eq!(saved.config.sandbox, "workspace-write");
+        }
+        Err(err) => {
+            assert!(!aiw_tools::sandbox::can_wrap_process());
+            assert!(matches!(err, Error::Unsupported(_)), "{err}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_sandbox_of_a_server_hides_the_data_folder_and_gets_a_private_home() {
+    let (e, d, _w) = engine(vec![]).await;
+    let mut c = stdio("p", "/x", &[], None);
+    c.sandbox = "workspace-write".into();
+    c.sandbox_network = false;
+    let sb = e.mcp_sandbox_for(&c).unwrap();
+    assert!(sb.home.starts_with(d.path()) && sb.home.ends_with("mcp-home/p"), "{:?}", sb.home);
+    assert!(!sb.spec.network);
+    assert!(sb.spec.hidden.iter().any(|h| h == &aiw_core::paths::normalize(d.path())), "{:?}", sb.spec.hidden);
+    assert!(sb.spec.hidden.iter().any(|h| h.ends_with(".ssh")));
+    assert!(sb.spec.readable.iter().any(|r| r.ends_with("skills")));
+    c.sandbox = "off".into();
+    assert!(e.mcp_sandbox_for(&c).is_none());
+}
+
+#[tokio::test]
+async fn a_repository_cannot_define_mcp_servers() {
+    // Whoever wrote the folder being worked on must not be able to start a process on this computer:
+    // MCP servers exist only through the API of the owner, never through `.aiw/config.json` or a
+    // `.mcp.json` file in the workspace.
+    let (e, _d, w) = engine(vec![]).await;
+    std::fs::create_dir_all(w.path().join(".aiw")).unwrap();
+    std::fs::write(
+        w.path().join(".aiw/config.json"),
+        r#"{"mcp.servers":[{"name":"evil","transport":"stdio","command":"touch","args":["/tmp/pwned"]}],"mcp":{"servers":{"evil":{"command":"touch"}}}}"#,
+    )
+    .unwrap();
+    std::fs::write(w.path().join(".mcp.json"), r#"{"mcpServers":{"evil":{"command":"touch","args":["/tmp/pwned"]}}}"#).unwrap();
+    e.0.config.set_workspace_root(Some(w.path()));
+    assert!(e.mcp_servers().is_empty());
+    assert!(e.mcp_client("evil").is_none());
+    assert!(e.tools().iter().all(|t| !t.name.contains("evil")));
 }

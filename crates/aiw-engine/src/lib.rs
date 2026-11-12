@@ -203,7 +203,16 @@ fn random_digits(n: usize) -> String {
 impl Engine {
     pub async fn new(opts: EngineOptions) -> Result<Self> {
         let dirs = opts.data_dir.clone().map(DataDirs::at).unwrap_or_else(DataDirs::resolve);
+        // Before anything is created: does this data folder already belong to an installation?
+        let existing_install = dirs.db_file().exists() || dirs.config_file().exists();
         dirs.ensure()?;
+        // The shell's network is closed by default now: installations that already exist keep it open
+        // (written explicitly), with a notice for the interface; see `migrate_shell_network`.
+        if let Err(e) =
+            aiw_core::config::migrate_shell_network(&dirs.config_file(), existing_install, &dirs.root.join(".shell-network-migrated"))
+        {
+            tracing::warn!("migration of sandbox.shell_network failed: {e}");
+        }
         let device = match opts.device.clone() {
             Some(d) => d,
             None => tokio::task::spawn_blocking(aiw_hw::probe).await.map_err(Error::other)?,
@@ -226,6 +235,7 @@ impl Engine {
         runtimes.set_sandboxed(opts.sandboxed);
         runtimes.set_pyenv_dir(dirs.root.join("pyenv")); // pip-installed runtimes (MLX…) live here
         let store = Store::open(&dirs.db_file())?;
+        mcp_host::migrate_mcp_approvals(&store);
         let overrides: Vec<Value> = store.list_docs("runtime_settings")?;
         runtimes.load_overrides(
             overrides.into_iter().filter_map(|v| Some((v["id"].as_str()?.to_string(), v["settings"].as_object()?.clone()))).collect(),
@@ -454,6 +464,20 @@ impl Engine {
     pub fn workspace_root(&self) -> PathBuf {
         self.0.workspace_root.read().unwrap().clone()
     }
+
+    /// Network, hidden locations and environment of sandboxed commands, from `sandbox.*`: the data
+    /// folder of the app is always hidden, the rest is `sandbox.deny_read`.
+    pub(crate) fn shell_sandbox(&self) -> aiw_tools::ShellSandbox {
+        let cfg = &self.0.config;
+        let list = |key: &str| -> Vec<String> { cfg.get(key).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default() };
+        let mut hidden = vec![aiw_core::paths::normalize(&self.0.dirs.root)];
+        hidden.extend(aiw_tools::sandbox::expand_hidden(&list("sandbox.deny_read")));
+        aiw_tools::ShellSandbox {
+            network: cfg.get_str("sandbox.shell_network").as_deref() == Some("on"),
+            hidden,
+            env_allow: list("sandbox.env_allow"),
+        }
+    }
     pub fn token(&self) -> &str {
         &self.0.token
     }
@@ -591,6 +615,8 @@ impl Engine {
             data_dir: self.0.dirs.root.display().to_string(),
             workspace_root: self.workspace_root().display().to_string(),
             sandboxed: self.0.runtimes.sandboxed(),
+            shell_sandbox: aiw_tools::shell::sandbox_backend().map(String::from),
+            mcp_sandbox: aiw_tools::sandbox::can_wrap_process(),
             uptime_s: self.0.started.elapsed().as_secs(),
             pairing_code: include_pairing.then(|| self.pairing_code()),
             device: self.device(),
@@ -1465,7 +1491,16 @@ impl Engine {
             self.worktree_info(thread_id).map(|wt| format!(" (git worktree isolato, branch `{}`)", wt.branch)).unwrap_or_default();
         let device = self.device();
         let mut tool_ctx = ToolContext::new(run_id, ws.clone());
-        tool_ctx.read_roots = vec![self.0.dirs.skills(), ws.join(".aiw")];
+        tool_ctx.read_roots = vec![self.0.dirs.skills()];
+        // `<workspace>/.aiw` is read-only for the agent, unless it is (or holds) the app's own data folder:
+        // that one is hidden, only its skills and the attachments of the session are readable.
+        let ws_aiw = ws.join(".aiw");
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| aiw_core::paths::normalize(p));
+        let (ws_aiw_c, data_c) = (canon(&ws_aiw), canon(&self.0.dirs.root));
+        if !(ws_aiw_c.starts_with(&data_c) || data_c.starts_with(&ws_aiw_c)) {
+            tool_ctx.read_roots.push(ws_aiw);
+        }
+        tool_ctx.shell = self.shell_sandbox();
         // Files the person attached in this session: read-only, like skills.
         let attached = self.attachments_dir(thread_id);
         if attached.is_dir() {
@@ -2168,16 +2203,46 @@ impl Engine {
             .unwrap_or_default()
             .into_iter()
             .map(|c| {
-                let (status, error, attempt, capabilities) = self.mcp_state_view(&c.id);
+                let (mut status, mut error, attempt, capabilities) = self.mcp_state_view(&c.id);
+                let approval_required = c.enabled && !self.mcp_approved(&c);
+                let (approval_hash, command_line) = if approval_required {
+                    status = "approval_required".into();
+                    let line = aiw_tools::mcp::launch::command_line(&c);
+                    error = Some(format!("Questo server esegue il comando `{line}` su questo computer: confermalo per avviarlo"));
+                    (Some(aiw_tools::mcp::launch::approval_hash(&c)), Some(line))
+                } else {
+                    (None, None)
+                };
                 let t = tools.iter().filter(|t| t.server.as_deref() == Some(c.name.as_str())).map(|t| t.name.clone()).collect();
                 let signed_in = self.oauth_signed_in(&c.id);
-                McpServerInfo { config: secrets::masked(c), status, tools: t, error, capabilities, attempt, signed_in }
+                McpServerInfo {
+                    config: secrets::masked(c),
+                    status,
+                    tools: t,
+                    error,
+                    capabilities,
+                    attempt,
+                    signed_in,
+                    approval_required,
+                    approval_hash,
+                    command_line,
+                }
             })
             .collect()
     }
     pub(crate) async fn connect_mcp(&self, cfg: McpServerConfig) -> Result<()> {
+        // A command the person has not confirmed (new, or changed since) never runs; a copy of the
+        // previous command that is still running is stopped.
+        if !self.mcp_approved(&cfg) {
+            self.stop_mcp(&cfg);
+            return Err(Error::Denied(format!(
+                "Questo server esegue il comando `{}` su questo computer: serve la tua conferma",
+                aiw_tools::mcp::launch::command_line(&cfg)
+            )));
+        }
         let events = Arc::new(mcp_host::EngineMcpEvents(Arc::downgrade(&self.0)));
-        let c = McpClient::new(&cfg, events);
+        let opts = aiw_tools::mcp::McpOptions { sandbox: self.mcp_sandbox_for(&cfg), ..Default::default() };
+        let c = McpClient::with_options(&cfg, events, opts);
         let old = self.0.mcp.lock().unwrap().insert(cfg.id.clone(), c.clone());
         if let Some(old) = old {
             old.shutdown().await;
@@ -2197,6 +2262,9 @@ impl Engine {
         cfg.name = cfg.name.trim().replace(' ', "_");
         cfg.url = cfg.url.map(|u| u.trim().to_string());
         cfg.command = cfg.command.map(|c| c.trim().to_string());
+        if cfg.transport != "stdio" {
+            cfg.sandbox = "off".into(); // only a local process can be isolated
+        }
         if cfg.id.is_empty() {
             cfg.id = new_id("mcp");
         }
@@ -2222,6 +2290,7 @@ impl Engine {
         };
         self.stop_mcp(&cfg);
         self.oauth_forget(id);
+        self.forget_mcp_approval(id);
         self.0.store.delete_doc("mcp", id)?;
         Ok(())
     }
@@ -2482,6 +2551,7 @@ impl Engine {
         }
         let mut ctx = ToolContext::new(run_id, self.workspace_root());
         ctx.sandbox = SandboxMode::parse(&self.0.config.get_str("sandbox.mode").unwrap_or_else(|| "workspace-write".into()));
+        ctx.shell = self.shell_sandbox();
         ctx.checkpoint_dir = Some(self.0.dirs.checkpoints());
         ctx.allow_domains = self.0.config.get("network.allow_domains").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         t.call(args, &ctx).await
@@ -2542,6 +2612,12 @@ impl Engine {
     }
 
     /// Tool execution for workflows and the API (policy + approval apply).
+    /// How the policy reads a shell command line (the rule tester shows it).
+    pub fn analyze_command(&self, command: &str) -> aiw_core::api::CommandAnalysis {
+        let a = aiw_agent::shellparse::analyze(command, aiw_agent::shellparse::Flavor::native());
+        aiw_core::api::CommandAnalysis { commands: a.commands, also: a.also, confident: a.confident }
+    }
+
     pub(crate) fn tool_registry(&self) -> Arc<ToolRegistry> {
         self.0.tools.clone()
     }
@@ -2557,6 +2633,14 @@ fn validate_mcp(cfg: &McpServerConfig) -> Result<()> {
         "stdio" => {
             if cfg.command.as_deref().is_none_or(|c| c.trim().is_empty()) {
                 return Err(Error::Invalid("un server MCP stdio richiede il comando da avviare".into()));
+            }
+            if !["off", "read-only", "workspace-write"].contains(&cfg.sandbox.as_str()) {
+                return Err(Error::Invalid(format!("isolamento `{}` non valido: usa off, read-only o workspace-write", cfg.sandbox)));
+            }
+            if cfg.sandbox != "off" && !aiw_tools::sandbox::can_wrap_process() {
+                return Err(Error::Unsupported(
+                    "su questo sistema i server MCP non si possono isolare (su Windows non è disponibile, su Linux serve bubblewrap): scegli «Nessuno»".into(),
+                ));
             }
         }
         "http" => {

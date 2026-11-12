@@ -111,6 +111,10 @@ export const system: SystemInfo = {
   mode: "demo",
   data_dir: "C:\\Users\\demo\\.aiw",
   workspace_root: "C:\\Users\\demo\\Workspace",
+  // The demo machine is a Windows PC: the shell is contained by the low-integrity token (no network or read isolation) and
+  // MCP servers cannot be isolated.
+  shell_sandbox: "windows-low-integrity",
+  mcp_sandbox: false,
   uptime_s: 4920,
   pairing_code: "482 913",
   device: {
@@ -427,6 +431,14 @@ export const audit: AuditEntry[] = [
   { id: "a5", ts: now(), actor: "system", action: "kill", detail: "Kill switch: 1 run e 1 sidecar fermati" },
 ];
 
+/** `sandbox.deny_read` by default (crates/aiw-core/src/config.rs `DEFAULT_DENY_READ`). */
+export const DEFAULT_DENY_READ: string[] = [
+  "~/.ssh", "~/.gnupg", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.config/gh", "~/.kube", "~/.docker/config.json", "~/.netrc", "~/.npmrc", "~/.pypirc", "~/.git-credentials",
+  "~/.mozilla", "~/.config/google-chrome", "~/.config/chromium", "~/.config/BraveSoftware", "~/.config/microsoft-edge", "~/snap/firefox/common/.mozilla", "~/snap/chromium/common/chromium",
+  "~/Library/Application Support/Google/Chrome", "~/Library/Application Support/Firefox", "~/Library/Application Support/BraveSoftware", "~/Library/Application Support/Microsoft Edge", "~/Library/Safari",
+  "~/Library/Keychains", "~/.local/share/keyrings",
+];
+
 export const configSchema: SettingsSchema = {
   type: "object",
   properties: {
@@ -437,6 +449,10 @@ export const configSchema: SettingsSchema = {
     "approvals.timeout_s": { type: "integer", title: "Tempo massimo per rispondere a una richiesta di approvazione (secondi)", description: "0 = nessun limite. Allo scadere la richiesta dell'agente viene rifiutata", default: 0, minimum: 0, maximum: 86400 },
     "policy.mode": { type: "string", title: "Modalità di approvazione", enum: ["plan", "ask", "auto-edit", "auto", "yolo"], default: "ask" },
     "sandbox.mode": { type: "string", title: "Sandbox", enum: ["read-only", "workspace-write", "off"], default: "workspace-write" },
+    "sandbox.shell_network": { type: "string", title: "Rete della shell", description: "off = i comandi della shell non hanno rete (per installare pacchetti o scaricare file serve «on»); on = rete aperta. Vale per Linux e macOS: su Windows la sandbox non può chiudere la rete. Un repository può solo chiuderla, mai aprirla", enum: ["off", "on"], default: "off" },
+    "sandbox.shell_network_notice": { type: "boolean", title: "Avviso sulla rete della shell da mostrare", description: "Messo a true dalla migrazione per le installazioni esistenti (la rete è rimasta accesa); l'interfaccia lo mostra una volta e lo spegne", default: false },
+    "sandbox.deny_read": { type: "array", title: "Cartelle e file nascosti ai comandi", description: "Percorsi (~ è la tua cartella personale) che i comandi della shell e i server MCP isolati non possono né leggere né scrivere, e che i tool di file rifiutano. Le cartelle dati di AIW sono nascoste sempre. Togli una voce se un flusso di lavoro la richiede (per esempio ~/.ssh per git via ssh). Su Windows non ha effetto", items: { type: "string" }, default: DEFAULT_DENY_READ },
+    "sandbox.env_allow": { type: "array", title: "Variabili d'ambiente che i comandi possono ereditare", description: "I comandi della shell non ereditano le variabili che sembrano segreti (*_TOKEN, *_KEY, *_SECRET, *PASSWORD*, AIW_*, credenziali cloud). Qui elenchi i nomi (o un prefisso che finisce con *) da lasciare passare", items: { type: "string" }, default: [] },
     "agents.max_parallel_subagents": { type: "integer", title: "Subagenti in parallelo", default: 3, minimum: 1, maximum: 8 },
     "agents.budget.max_tokens": { type: "integer", title: "Budget di token per run (0 = nessun limite)", default: 0, minimum: 0 },
     "agents.budget.max_turns": { type: "integer", title: "Budget di turni per run (0 = nessun limite)", default: 0, minimum: 0 },
@@ -482,7 +498,7 @@ export const configSchema: SettingsSchema = {
 };
 export const configLayers: ConfigView["layers"] = [
   { name: "defaults", values: Object.fromEntries(Object.entries(configSchema.properties).map(([k, v]) => [k, v.default])) },
-  { name: "global", path: "~/.aiw/config.json", values: { "ui.theme": "system", "models.dir": "D:\\Modelli", "server.lan": true, "proactive.level": "propose", "network.allow_domains": ["docs.rs", "crates.io"] } },
+  { name: "global", path: "~/.aiw/config.json", values: { "ui.theme": "system", "sandbox.shell_network": "on", "sandbox.shell_network_notice": true, "models.dir": "D:\\Modelli", "server.lan": true, "proactive.level": "propose", "network.allow_domains": ["docs.rs", "crates.io"] } },
   { name: "device", path: "~/.aiw/devices/Studio-PC.json", values: { "context.compact_at": 0.85 } },
   { name: "workspace", path: "Workspace/.aiw/config.json", values: { "policy.mode": "auto-edit" } },
 ];

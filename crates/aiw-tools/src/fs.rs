@@ -291,8 +291,17 @@ pub fn human(n: u64) -> String {
     }
 }
 
-fn walker(root: &Path) -> ignore::Walk {
-    ignore::WalkBuilder::new(root).hidden(true).git_ignore(true).max_depth(Some(24)).build()
+/// Walks `root` the way the search tools do: dot-files and ignored files are skipped, and so are the
+/// locations hidden from the agent (a workspace that contains the app's data or credentials).
+fn walker(root: &Path, ctx: &ToolContext) -> ignore::Walk {
+    let ctx = ctx.clone();
+    let canon_root = std::fs::canonicalize(&ctx.workspace_root).unwrap_or_else(|_| ctx.workspace_root.clone());
+    ignore::WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .max_depth(Some(24))
+        .filter_entry(move |e| !ctx.is_hidden(e.path(), &canon_root))
+        .build()
 }
 
 struct Glob;
@@ -315,9 +324,10 @@ impl Tool for Glob {
         let pat = arg_str(&args, "pattern")?.to_string();
         let m = globset::Glob::new(&pat).map_err(|e| Error::Invalid(e.to_string()))?.compile_matcher();
         let ws = ctx.workspace_root.clone();
+        let tctx = ctx.clone();
         let out = tokio::task::spawn_blocking(move || {
             let mut hits = Vec::new();
-            for e in walker(&root).flatten() {
+            for e in walker(&root, &tctx).flatten() {
                 if !e.file_type().map(|t| t.is_file()).unwrap_or(false) {
                     continue;
                 }
@@ -371,9 +381,10 @@ impl Tool for Grep {
             None => None,
         };
         let ws = ctx.workspace_root.clone();
+        let tctx = ctx.clone();
         let out = tokio::task::spawn_blocking(move || {
             let mut hits = Vec::new();
-            'files: for e in walker(&root).flatten() {
+            'files: for e in walker(&root, &tctx).flatten() {
                 if !e.file_type().map(|t| t.is_file()).unwrap_or(false) {
                     continue;
                 }

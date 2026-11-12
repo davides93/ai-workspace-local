@@ -15,7 +15,7 @@ const http: McpServer = {
 describe("draft <-> payload", () => {
   it("round-trips a stdio server without losing spaces inside an argument", () => {
     const payload = draftToPayload(draftFromServer(stdio));
-    expect(payload).toEqual({ id: "m1", name: "filesystem", enabled: true, transport: "stdio", command: "npx", args: ["-y", "server-fs", "~/My Documents"], env: { LOG: "debug" } });
+    expect(payload).toEqual({ id: "m1", name: "filesystem", enabled: true, transport: "stdio", command: "npx", args: ["-y", "server-fs", "~/My Documents"], env: { LOG: "debug" }, sandbox: "off", sandbox_network: true });
   });
   it("round-trips an http server and keeps the enabled flag", () => {
     expect(draftToPayload(draftFromServer(http))).toEqual({
@@ -39,7 +39,7 @@ describe("draft <-> payload", () => {
   });
   it("omits empty env and headers, and the id of a new server", () => {
     const p = draftToPayload({ ...emptyDraft(), name: "a b", command: "node", env: [emptyRow("", "x")] });
-    expect(p).toEqual({ name: "a_b", enabled: true, transport: "stdio", command: "node", args: [] });
+    expect(p).toEqual({ name: "a_b", enabled: true, transport: "stdio", command: "node", args: [], sandbox: "workspace-write", sandbox_network: true });
   });
 });
 
@@ -128,5 +128,21 @@ describe("serverTarget", () => {
   });
   it("normalizeName matches the engine", () => {
     expect(normalizeName("  my server ")).toBe("my_server");
+  });
+});
+
+describe("isolation of a stdio server", () => {
+  it("defaults a new server to workspace-write with the network on, when the system can isolate", () => {
+    const d = emptyDraft(true);
+    expect([d.sandbox, d.sandboxNetwork]).toEqual(["workspace-write", true]);
+    expect(draftToPayload({ ...d, name: "a", command: "x" })).toMatchObject({ sandbox: "workspace-write", sandbox_network: true });
+  });
+  it("falls back to off where isolation is not available", () => {
+    expect(emptyDraft(false).sandbox).toBe("off");
+  });
+  it("keeps an existing server as it is and never sends isolation for http", () => {
+    expect(draftFromServer(stdio).sandbox).toBe("off");
+    const p = draftToPayload({ ...emptyDraft(), name: "g", transport: "http", url: "http://x.test" });
+    expect(p).not.toHaveProperty("sandbox");
   });
 });

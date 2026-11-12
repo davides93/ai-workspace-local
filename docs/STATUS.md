@@ -68,7 +68,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | Funzione | Stato | Note |
 |---|---|---|
 | File: read, write, edit, list, glob, grep, move | ✅ | **v0.4** confinamento anche rispetto ai symlink; radici di lettura che sono symlink ignorate; `read_file` limitato a 16 MB, `grep` controlla la dimensione prima di leggere |
-| Shell in sandbox: bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) | 🟡 | rete della shell aperta di default; `~/.aiw` leggibile |
+| Shell in sandbox: bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) | 🟡 | Linux: rete chiusa di default (`sandbox.shell_network`), cartella dei dati e credenziali (`sandbox.deny_read`) nascoste, variabili segrete tolte: **provato con bwrap vero**. macOS: stessa cosa con un profilo Seatbelt, **solo il testo del profilo è provato**, mai eseguito su un Mac. Windows: **rete non chiudibile e letture non nascondibili** (integrità bassa limita solo le scritture); le variabili segrete sono tolte. Le regole di policy leggono ogni comando di una riga composta |
 | `web_fetch` anti-SSRF | ✅ **v0.4** | redirect rivalidati a ogni salto, DNS fissato, IPv6 e range speciali bloccati; lettura limitata a 5 MB |
 | Ricerca web | 🟡 | strumento `web_search` (`aiw-tools/src/search.rs`) con `search.provider` = `auto` \| `duckduckgo` \| `searxng` \| `brave` \| `off`; chiave di Brave mascherata dall'API e solo a livello di macchina, indirizzo di SearXNG validato; sezione «Ricerca web» nelle Impostazioni; l'assistente proattivo la usa solo a `act_readonly`. **Mai provata contro i provider veri da questo ambiente**: i test usano un server locale con risposte scritte a mano nella forma attesa. Il parser di DuckDuckGo dipende dall'HTML della pagina `html.duckduckgo.com` e può smettere di funzionare se cambia; DuckDuckGo può chiedere una verifica anti-bot (l'errore lo dice). Gli agenti predefiniti già salvati non ricevono `web_search` da soli (solo le nuove installazioni) |
 | Browser via CDP: navigate, snapshot (elementi, albero di accessibilità, testo), click, type, scroll, back, press, wait, screenshot, schede, select, hover, upload, download, console, eval | 🟡 | `browser.rs` + `browser/cdp.rs`: connessione al browser intero con auto-attach in pausa, quindi la policy di rete (`Fetch.requestPaused`) copre anche le schede aperte dal sito; limiti: 8 schede, 10 download per run da 200 MB, console da 100 voci; download solo con permesso di scrittura, in `<workspace>/downloads/<run>/`; `browser_eval` è `exec` con permesso esplicito. **Provato solo con un CDP finto (test sempre attivi) e con Chromium headless 153 su pagine di un server locale (test `#[ignore]`); mai su siti reali.** Mancano PDF della pagina, accettare le finestre di dialogo su richiesta, iframe nell'albero di accessibilità. Sul telefono (WebView) solo snapshot elementi/testo, select, hover, eval, attese su testo/selettore: **mai compilato per mobile né provato**; **v0.4** screenshot visibili nella chat |
@@ -169,8 +169,15 @@ Non costruiti: Windows arm64, Linux arm64, Android x86_64/armv7.
 
 ### 2.9 Limiti noti
 
-- La rete della shell è aperta di default e `~/.aiw` è leggibile dentro la sandbox.
-- I server MCP stdio girano fuori dalla sandbox.
+- Sandbox della shell, dopo questo pacchetto:
+  - **Linux**: rete chiusa di default (`sandbox.shell_network` = `off`), cartella dei dati di AIW e cartelle di credenziali (`sandbox.deny_read`) nascoste, `--unshare-pid` (senza, `/proc/<pid del demone>/root` aggirerebbe il nascondiglio), variabili segrete tolte. Provato con bubblewrap vero (test che saltano da soli se bwrap o i namespace utente mancano).
+  - **macOS**: stesse regole con `sandbox-exec` (`(deny network*)`, rifiuto di lettura sui percorsi nascosti). Mai eseguito su un Mac: sono provati solo il testo del profilo e gli argomenti.
+  - **Windows**: la rete dei comandi **non si può chiudere** e le cartelle **non si possono nascondere in lettura** (un token a integrità bassa limita le scritture, non le letture; servirebbero un AppContainer o regole del firewall, non implementati). Restano valide le scritture limitate al workspace e le variabili segrete tolte. Mai eseguito qui: compilato solo per `x86_64-pc-windows-gnu`.
+  - Con la sandbox «Nessun contenimento», su Linux senza bwrap e su Android i comandi girano coi privilegi dell'utente (si tolgono comunque le variabili segrete).
+  - Non coperti: socket dell'agente SSH e `/run/user` (su Linux restano visibili se l'utente li ha); wrapper che nascondono il comando vero (`ssh host «…»`, `docker run …`, interpreti con script propri) non vengono aperti dall'analisi della riga e una regola «Consenti» non li copre; hook, valutatori degli eval e browser controllato non passano dalla sandbox.
+  - Nessuna impostazione di rete per singolo agente: i profili agente hanno solo `sandbox`; l'argomento `network` del tool può soltanto chiudere ancora di più.
+- Server MCP stdio: ora hanno un campo `sandbox` (`off` | `read-only` | `workspace-write`) e chiedono conferma al primo avvio di un comando nuovo o cambiato (solo con il token `owner`). Linux provato con bwrap vero, macOS solo il profilo, **Windows non disponibile** (il server resta «non isolato»; un nuovo server con isolamento richiesto non parte). I server già presenti restano `off` («non isolato», pulsante «Isola») e sono stati approvati una volta sola in blocco alla migrazione; un server `off` eredita ancora tutto l'ambiente dell'app.
+- Dipendenze (controllo di oggi): `cargo audit` 0 vulnerabilità dopo l'aggiornamento di `rusqlite` 0.37 → 0.42 (`libsqlite3-sys` 0.35 → 0.40, RUSTSEC-2026-0459) e di `async-executor` 1.14.0 → 1.14.1 (ritirata dal registro). Restano avvisi senza correzione, tutti nel ramo Tauri/GTK o in dipendenze transitive e **non ignorati**: `proc-macro-error`, `smartstring`, `ttf-parser`, `unsafe-libyaml`, `zbus_names`, `zvariant`, `zvariant_derive` (non mantenuti) e `glib` 0.18.5 (RUSTSEC-2024-0429, serve glib ≥ 0.20: richiede un aggiornamento di Tauri/GTK). `npm audit --omit=dev`: 0 vulnerabilità in `apps/ui` e `apps/desktop`.
 - Token e TLS: il token `owner` di questo computer sta in chiaro nel file `token` (permessi 0600, serve alla
   CLI e alla shell desktop); il database ne tiene solo l'hash e non si cambia dall'API (cancella il file e riavvia).
   I dispositivi che si erano accoppiati prima dei token per dispositivo hanno in mano il token `owner`: il server non ha mai
@@ -229,7 +236,11 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
 
 **P3 · Sicurezza e distribuzione**
 13. Rete della shell chiusa di default, `~/.aiw` fuori dalla sandbox, server MCP stdio in sandbox e
-    con conferma, protezione SSRF anche dietro proxy, regole di policy sulla shell che non si aggirano con comandi concatenati.
+    con conferma, regole di policy sulla shell che non si aggirano con comandi concatenati: **fatti**
+    (vedi riga «Shell in sandbox» e §2.9; Linux provato con bwrap vero, macOS solo il testo del profilo,
+    Windows senza chiusura della rete né nascondiglio in lettura né isolamento MCP). Restano: provare macOS su un Mac,
+    rete chiusa e nascondiglio su Windows (AppContainer o firewall), isolare hook, valutatori e browser controllato,
+    socket dell'agente SSH, protezione SSRF anche dietro proxy.
 14. Token per dispositivo con revoca e TLS per la LAN: **fatti** (vedi riga «API locale» e §2.9). Restano: prova su due computer e telefoni reali, installazione guidata dell'autorità nei browser, fissaggio per i server MCP e gli agenti A2A inseriti a mano, token `owner` ruotabile senza riavvio, migrazione dei dispositivi già accoppiati (oggi si accoppiano di nuovo).
 15. Firma e notarizzazione delle release (il flusso c'è, mancano i segreti e una prima prova: `docs/release/FIRMA.md`), pubblicazione su GitHub Releases, target arm64.
 16. Font inclusi nell'app invece di Google Fonts, i18n it/en.

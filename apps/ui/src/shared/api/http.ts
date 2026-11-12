@@ -6,7 +6,7 @@ import type {
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode,
+  CommandAnalysis, PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode,
 } from "./types";
 
 export class ApiError extends Error {
@@ -360,6 +360,7 @@ export class HttpTransport implements Transport {
   saveMcpServer = (s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }) => this.req<McpServer>("POST", "/mcp/servers", s);
   removeMcpServer = (id: string) => this.req<void>("DELETE", `/mcp/servers/${enc(id)}`);
   reconnectMcpServer = (id: string) => this.req<McpServer>("POST", `/mcp/servers/${enc(id)}/reconnect`);
+  approveMcpServer = (id: string, hash: string) => this.req<McpServer>("POST", `/mcp/servers/${enc(id)}/approve`, { hash });
   mcpOAuthStart = (id: string) => this.req<{ authorization_url: string }>("POST", `/mcp/servers/${enc(id)}/oauth/start`);
   mcpOAuthSignout = (id: string) => this.req<void>("DELETE", `/mcp/servers/${enc(id)}/oauth`);
   mcpPrompts = () => this.req<McpPromptInfo[]>("GET", "/mcp/prompts");
@@ -369,6 +370,7 @@ export class HttpTransport implements Transport {
   respondMcpElicitation = (id: string, answer: McpElicitationAnswer) => this.req<void>("POST", `/mcp/elicitations/${enc(id)}`, answer);
 
   policy = () => this.req<{ rules: PolicyRule[] }>("GET", "/policy");
+  analyzeCommand = (command: string) => this.req<CommandAnalysis>("POST", "/policy/analyze", { command });
   setPolicy = (rules: PolicyRule[]) => this.req<{ rules: PolicyRule[] }>("PUT", "/policy", { rules });
   hooks = () => this.req<{ hooks: HookConfig[] }>("GET", "/hooks");
   setHooks = (hooks: HookConfig[]) => this.req<{ hooks: HookConfig[] }>("PUT", "/hooks", { hooks });

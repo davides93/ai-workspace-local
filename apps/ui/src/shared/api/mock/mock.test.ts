@@ -1055,3 +1055,19 @@ describe("voice: neural speech demo", () => {
     await api.setConfig("device", "voice.tts.engine", "auto");
   });
 });
+
+describe("MCP approval and isolation (demo)", () => {
+  it("lists an unapproved stdio server as approval_required and approves it with its hash", async () => {
+    const api = new MockTransport();
+    const saved = await api.saveMcpServer({ name: "novo", transport: "stdio", command: "node", args: ["s.js"], enabled: true });
+    expect(saved.approval_required).toBe(true);
+    expect(saved.status).toBe("approval_required");
+    expect(saved.command_line).toContain("node");
+    const ok = await api.approveMcpServer(saved.id, saved.approval_hash ?? "");
+    expect(ok.approval_required).toBeFalsy();
+  });
+  it("refuses isolation where the demo system cannot isolate", async () => {
+    const api = new MockTransport();
+    await expect(api.saveMcpServer({ name: "iso", transport: "stdio", command: "node", sandbox: "workspace-write", enabled: true })).rejects.toBeDefined();
+  });
+});

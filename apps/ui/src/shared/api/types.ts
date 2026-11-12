@@ -40,6 +40,10 @@ export interface SystemInfo {
   workspace_root: string;
   /** Mac App Store build (App Sandbox): no external programs, the agents work in the app's own folder. */
   sandboxed?: boolean;
+  /** Sandbox that contains shell commands here: `bwrap`, `sandbox-exec`, `windows-low-integrity`; absent when there is none. */
+  shell_sandbox?: string;
+  /** MCP stdio servers can be isolated on this machine (not on Windows). */
+  mcp_sandbox?: boolean;
   uptime_s: number;
   pairing_code?: string;
   device: DeviceProfile;
@@ -1280,6 +1284,18 @@ export interface ToolInfo {
  */
 export const SECRET_MASK = "••••••";
 
+export type McpSandbox = "off" | "read-only" | "workspace-write";
+
+/** How the policy reads a shell command line (`POST /api/policy/analyze`): the simple commands it is made of. */
+export interface CommandAnalysis {
+  /** Commands that run: an allow rule applies only if every one of them is allowed. */
+  commands: string[];
+  /** Other forms (wrappers, raw text) that only deny and ask rules look at. */
+  also: string[];
+  /** False when part of the line could not be parsed with confidence: no allow rule applies. */
+  confident: boolean;
+}
+
 export interface McpServer {
   id: string;
   name: string;
@@ -1300,10 +1316,23 @@ export interface McpServer {
   /** Client id registered by hand, for authorization servers without dynamic registration. */
   oauth_client_id?: string;
   /**
-   * `connecting`, `reconnecting` (backoff in progress, see `attempt`), `unreachable` (gave up: «Riconnetti»),
-   * `auth_required` (the server answered 401: «Accedi»), `disconnected` (switched off).
+   * Isolation of a stdio server: `off` (it runs with the rights of the person; the default of servers saved before this
+   * existed), `read-only` or `workspace-write` (private home, hidden data folder and secret locations).
    */
-  status: "connected" | "connecting" | "reconnecting" | "unreachable" | "auth_required" | "disconnected";
+  sandbox?: McpSandbox;
+  /** An isolated server may use the network (default true: most servers need it). */
+  sandbox_network?: boolean;
+  /**
+   * `connecting`, `reconnecting` (backoff in progress, see `attempt`), `unreachable` (gave up: «Riconnetti»),
+   * `auth_required` (the server answered 401: «Accedi»), `disconnected` (switched off), `approval_required`
+   * (a stdio command the person has not confirmed yet, or that changed since: it does not run).
+   */
+  status: "connected" | "connecting" | "reconnecting" | "unreachable" | "auth_required" | "disconnected" | "approval_required";
+  /** The command waits for the confirmation of the person (`POST /api/mcp/servers/{id}/approve` with `approval_hash`). */
+  approval_required?: boolean;
+  approval_hash?: string;
+  /** The command line to confirm, as the person reads it. */
+  command_line?: string;
   tools: string[];
   error?: string;
   capabilities?: { tools: boolean; resources: boolean; prompts: boolean };

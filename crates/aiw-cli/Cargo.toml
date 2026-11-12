@@ -4,6 +4,7 @@ description = "`aiw` — headless daemon and command line for AI Workspace Local
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "aiw"

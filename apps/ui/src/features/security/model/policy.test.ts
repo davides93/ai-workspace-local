@@ -189,3 +189,26 @@ describe("rule list helpers", () => {
     ]);
   });
 });
+
+describe("shell command lines are read part by part", () => {
+  const allowGit: PolicyRule = { tool: "shell", pattern: "git *", action: "allow" };
+  const denyRm: PolicyRule = { tool: "shell", pattern: "rm *", action: "deny" };
+  const base = { mode: "ask", tool: "shell", risk: "exec" as const };
+  const a = (commands: string[], confident = true, also: string[] = []) => ({ commands, also, confident });
+
+  it("allows a compound line only when every part is allowed", () => {
+    const all = evaluate({ ...base, rules: [allowGit], subject: "git status && git log", analysis: a(["git status", "git log"]) });
+    expect(all.kind).toBe("allow");
+    const part = evaluate({ ...base, rules: [allowGit], subject: "git status && curl x", analysis: a(["git status", "curl x"]) });
+    expect(part.kind).toBe("ask");
+    expect(part.reason).toContain("ogni parte");
+  });
+  it("denies when any part matches a deny rule", () => {
+    const d = evaluate({ ...base, rules: [allowGit, denyRm], subject: "git status; rm -rf x", analysis: a(["git status", "rm -rf x"]) });
+    expect(d.kind).toBe("deny");
+  });
+  it("never lets an allow rule apply to a line it could not parse, but still denies", () => {
+    expect(evaluate({ ...base, rules: [allowGit], subject: "git status $(x)", analysis: a(["git status"], false) }).kind).toBe("ask");
+    expect(evaluate({ ...base, rules: [allowGit, denyRm], subject: "eval x", analysis: a([], false, ["rm x"]) }).kind).toBe("deny");
+  });
+});
