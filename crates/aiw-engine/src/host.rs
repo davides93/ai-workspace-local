@@ -28,6 +28,9 @@ pub struct EngineHost {
     deny_approvals: bool,
     /// How long a confirmation waits for an answer, instead of `approvals.timeout_s` (runs started from a channel).
     approval_timeout: Option<Duration>,
+    /// The run this host serves and the runtime router's plan for it (`runtime_id: "auto"`).
+    run_id: Option<String>,
+    route: Option<crate::router::RoutePlan>,
 }
 
 impl EngineHost {
@@ -41,6 +44,8 @@ impl EngineHost {
             workflow_session: Mutex::new(None),
             deny_approvals: false,
             approval_timeout: None,
+            run_id: None,
+            route: None,
         }
     }
     /// `first` receives the first state of the run (a resumed run has no one waiting for it).
@@ -54,7 +59,16 @@ impl EngineHost {
             workflow_session: Mutex::new(None),
             deny_approvals: false,
             approval_timeout: None,
+            run_id: None,
+            route: None,
         }
+    }
+    /// The run this host serves and, when its profile runs on `auto`, the router's plan: the
+    /// next candidates are tried when the chosen runtime does not start or cannot load the model.
+    pub fn with_route(mut self, run_id: String, route: Option<crate::router::RoutePlan>) -> Self {
+        self.run_id = Some(run_id);
+        self.route = route;
+        self
     }
     /// Confirmations expire after `t` (sub-agents inherit this).
     pub fn with_approval_timeout(mut self, t: Duration) -> Self {
@@ -134,6 +148,13 @@ impl RunHost for EngineHost {
     }
 
     async fn backend(&self, profile: &InferenceProfile) -> Result<Arc<dyn ChatBackend>> {
+        // The model the router chose for this run (not the models of the roles, or of a sub-agent).
+        if let (Some(plan), Some(run_id)) = (&self.route, &self.run_id) {
+            let first = &plan.steps[0];
+            if profile.runtime_id == first.runtime_id && profile.model == first.model {
+                return self.engine.routed_backend(plan, &profile.params, run_id).await;
+            }
+        }
         // The profile's context window goes to the runtime (launch argument of a sidecar, or the
         // in-process engine), not only to the compaction threshold of the runner.
         self.engine

@@ -4,16 +4,20 @@ import type { InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/
 import { isThinkingMode } from "../../../shared/lib/thinking";
 import { slugify, uniqueId } from "./agents";
 
-/** A speech-to-text model (Whisper): it serves the voice mode, never a chat profile. */
-export const isSpeechOnly = (capabilities: readonly string[]): boolean => capabilities.length > 0 && capabilities.every((c) => c === "stt");
+/** A speech model (Whisper to listen, a Piper voice to speak): it serves the voice mode, never a chat profile. */
+export const isSpeechOnly = (capabilities: readonly string[]): boolean => capabilities.length > 0 && capabilities.every((c) => c === "stt" || c === "tts");
 
 /** Runtimes a chat profile can use (not the speech-only ones, like whisper.cpp). */
 export function chatRuntimes<T extends { capabilities: readonly string[] }>(runtimes: readonly T[]): T[] {
   return runtimes.filter((r) => !isSpeechOnly(r.capabilities));
 }
 
-/** Models the runtime can serve, by `runtime_compat` (the same list the Models page shows); speech models are left out. */
+/** The runtime of a profile that leaves the choice to the router (decided when a run starts). */
+export const AUTO_RUNTIME = "auto";
+
+/** Models the runtime can serve, by `runtime_compat` (the same list the Models page shows); speech models are left out. With `auto` every chat model is offered. */
 export function compatibleModels(models: readonly LocalModel[], runtimeId: string): LocalModel[] {
+  if (runtimeId === AUTO_RUNTIME) return models.filter((m) => !isSpeechOnly(m.capabilities));
   return models.filter((m) => !isSpeechOnly(m.capabilities) && (m.runtime_compat.some((c) => c.id === runtimeId) || m.runtimes.includes(runtimeId)));
 }
 
@@ -55,7 +59,9 @@ export function normalizeProfile(p: InferenceProfile): InferenceProfile {
   if (isThinkingMode(p.params.thinking)) params.thinking = p.params.thinking;
   const budget = p.params.thinking_budget;
   if (budget !== undefined && Number.isFinite(budget) && budget >= 1) params.thinking_budget = Math.round(budget);
-  const adapters = (p.params.adapters ?? [])
+  // Only with the automatic runtime; adapters need a runtime that loads them at start.
+  if (p.runtime_id === AUTO_RUNTIME && p.params.allow_remote) params.allow_remote = true;
+  const adapters = p.runtime_id === AUTO_RUNTIME ? [] : (p.params.adapters ?? [])
     .map((a) => ({ path: a.path.trim(), scale: a.scale !== undefined && Number.isFinite(a.scale) ? a.scale : undefined }))
     .filter((a) => a.path !== "")
     .map((a) => (a.scale === undefined ? { path: a.path } : a));
@@ -90,14 +96,16 @@ export function validateProfile(p: InferenceProfile, ctx: { runtimes: readonly R
   if (tb !== undefined && (!Number.isFinite(tb) || tb < 1)) issues.push({ field: "thinking_budget", level: "error", message: "Indica almeno 1 token di ragionamento." });
   const named = (p.params.adapters ?? []).filter((a) => a.path.trim() !== "");
   const runtime = ctx.runtimes.find((r) => r.id === p.runtime_id);
-  if (named.length > 0 && runtime && !runtime.adapter_format) {
+  if (named.length > 0 && p.runtime_id === AUTO_RUNTIME) {
+    issues.push({ field: "adapters", level: "error", message: "Gli adapter si caricano all'avvio di un runtime preciso: scegli il runtime invece di «Automatico»." });
+  } else if (named.length > 0 && runtime && !runtime.adapter_format) {
     issues.push({ field: "adapters", level: "error", message: `${runtime.name} non carica adapter LoRA da un profilo.` });
   }
   if ((p.params.adapters ?? []).some((a) => a.scale !== undefined && (!Number.isFinite(a.scale) || a.scale <= 0))) {
     issues.push({ field: "adapters", level: "error", message: "La scala dell'adapter deve essere un numero maggiore di 0." });
   }
   const model = ctx.models.find((x) => x.id === p.model);
-  if (model && p.runtime_id) {
+  if (model && p.runtime_id && p.runtime_id !== AUTO_RUNTIME) {
     const why = incompatibility(model, p.runtime_id);
     if (why) issues.push({ field: "model", level: "warn", message: `Il modello non è compatibile con il runtime: ${why}` });
   }

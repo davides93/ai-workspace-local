@@ -80,6 +80,56 @@ pub struct VoiceStatus {
     pub tts_voice: String,
     /// Installed speech-to-text models.
     pub models: Vec<String>,
+    /// Reading replies aloud: which engine speaks, with which voices.
+    #[serde(default)]
+    pub tts: TtsStatus,
+}
+
+/// A voice of a neural speech engine.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TtsVoice {
+    pub id: String,
+    pub name: String,
+    /// ISO 639-1 code (`it`, `en`…).
+    pub language: String,
+    /// `piper` | `openai`.
+    pub engine: String,
+}
+
+/// Speech synthesis (reading replies aloud): the engine in use and why, the voices, the limits.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TtsStatus {
+    /// The setting `voice.tts.engine`: `auto` | `system` | `piper` | `openai`.
+    pub setting: String,
+    /// What would speak for the language of the voice settings: `system` (the voices of the
+    /// operating system, spoken by the app), `piper` or `openai`.
+    pub engine: String,
+    /// A neural engine can speak (for at least one language).
+    pub neural: bool,
+    /// Human description, e.g. "Piper · it_IT-paola-medium".
+    pub backend: Option<String>,
+    /// Why a neural engine is not available, or what to do to enable it.
+    pub detail: Option<String>,
+    /// Installed Piper voices, and the voice a server speaks with when one is set.
+    pub voices: Vec<TtsVoice>,
+    /// Languages the neural engine can speak; empty with `any_language` for a server.
+    pub languages: Vec<String>,
+    /// The engine speaks any language (an OpenAI-compatible server).
+    pub any_language: bool,
+    /// Voice chosen for each language (`voice.tts.voice`), as the engine resolves it now.
+    pub picks: std::collections::BTreeMap<String, String>,
+    pub speed: f64,
+    /// Most characters of one request.
+    pub max_chars: usize,
+}
+
+/// Answer of `POST /api/voice/speak`: the audio as base64 (the app's IPC bridge carries JSON only).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Speech {
+    pub mime: String,
+    pub audio: String,
+    pub backend: String,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -193,6 +243,13 @@ pub struct RuntimeInfo {
     /// missing when the runtime cannot load them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter_format: Option<String>,
+    /// Tie-break of the runtime router between equally good runtimes (lower = preferred).
+    #[serde(default = "default_route_priority")]
+    pub route_priority: u32,
+}
+
+fn default_route_priority() -> u32 {
+    50
 }
 
 // ---------------------------------------------------------------- models
@@ -529,6 +586,61 @@ pub struct RuntimeCompat {
     pub reason: String,
 }
 
+/// One way of running a model on this device, as ranked by the runtime router (`GET /api/route`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RouteCandidate {
+    /// 1 = the first choice.
+    pub rank: u32,
+    pub runtime_id: String,
+    pub runtime_name: String,
+    /// Model to send to this runtime when it is not the requested one (a system model that falls
+    /// back to a local one); empty = the requested model.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    /// Accelerator used: cpu | metal | cuda | rocm | vulkan…
+    pub accelerator: String,
+    /// How much of the model sits on the accelerator: all | partial | none.
+    pub offload: String,
+    /// Value for the runtime's `gpu_layers` setting (-1 all, 0 none), when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_layers: Option<i32>,
+    /// Context window this candidate would run with (smaller than the one wanted when the memory is short).
+    pub context: u32,
+    /// Memory needed (weights, working buffers and KV cache), in MB.
+    pub need_mb: u64,
+    /// KV cache part of it, in MB.
+    pub kv_mb: u64,
+    /// The KV cache is a rough estimate (the model header does not say its shape).
+    pub kv_estimated: bool,
+    /// Runs on another device.
+    pub remote: bool,
+    /// Already running (or built in): no start-up wait.
+    pub ready: bool,
+    /// Why it has this rank.
+    pub reason: String,
+}
+
+/// A runtime that cannot run the model here, and why.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RouteExclusion {
+    pub runtime_id: String,
+    pub runtime_name: String,
+    pub reason: String,
+}
+
+/// The answer of the runtime router for one model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RouteDecision {
+    pub model: String,
+    /// Context window asked for.
+    pub wanted_context: u32,
+    pub candidates: Vec<RouteCandidate>,
+    pub excluded: Vec<RouteExclusion>,
+    /// Limits of the estimate (no data from the remote device, rough KV cache…).
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
 /// Body of `POST /api/models/pull`: untagged, the first shape that matches wins.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
@@ -593,6 +705,10 @@ pub struct InferenceParams {
     /// has its path in `AdapterInfo.path`). Only runtimes that declare `adapters` accept them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<AdapterRef>,
+    /// With `runtime_id: "auto"`: the router may also choose a paired device or a remote server.
+    /// Off by default: the conversation stays on this device.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_remote: bool,
 }
 
 /// A LoRA adapter on disk: a GGUF file for llama.cpp, a folder for MLX and PEFT.

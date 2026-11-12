@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { Icon, Led, Markdown } from "../../../shared/ui";
+import { useStoredUiMode } from "../../../shared/lib/uiMode";
 import { ApprovalCard } from "../../approvals/components/ApprovalCard";
 import { A2uiSurface, type A2uiAction } from "../a2ui";
 import type { ApprovalRequest, Feedback } from "../../../shared/api/types";
@@ -102,6 +103,8 @@ export const ItemView = memo(function ItemView({ it, sessionId, onRespond, onAct
       );
     case "model":
       return <div className="ws-msg ws-assistant"><span className="ws-modelchip" title={it.title}><Icon name="chip" size={12} /> {it.label}</span></div>;
+    case "route":
+      return <RouteRow it={it} />;
     case "note":
       return <div className="ws-msg ws-assistant"><div className="ws-loopnote"><Icon name="refresh" size={14} /> {it.text}</div></div>;
     case "warning":
@@ -114,3 +117,17 @@ export const ItemView = memo(function ItemView({ it, sessionId, onRespond, onAct
       );
   }
 });
+
+/** Which runtime the router chose and why: details for Developer mode, nothing in Simple mode. */
+function RouteRow({ it }: { it: Extract<Item, { kind: "route" }> }) {
+  const developer = useStoredUiMode() === "developer";
+  if (!developer) return null;
+  return (
+    <div className="ws-msg ws-assistant">
+      <details className="ws-routeinfo">
+        <summary><span className="ws-modelchip"><Icon name="chip" size={12} /> {it.label}</span></summary>
+        <ul>{it.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
+      </details>
+    </div>
+  );
+}

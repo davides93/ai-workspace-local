@@ -115,6 +115,7 @@ describe("HttpTransport", () => {
     await t.recommend();
     await t.adapters();
     await t.deleteAdapter("ad 1");
+    await t.route("qwen 3", 4096, true);
     vi.unstubAllGlobals();
     expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
       "POST /runtimes/refresh",
@@ -167,6 +168,7 @@ describe("HttpTransport", () => {
       "GET /recommend",
       "GET /adapters",
       "DELETE /adapters/ad%201",
+      "GET /route?model=qwen%203&context=4096&remote=true",
     ]);
     expect(JSON.parse(calls[2].body!)).toEqual({ token: "t0k", endpoint: "https://mirror" });
     expect(JSON.parse(calls[5].body!)).toEqual({ id: "some-id" });
@@ -376,5 +378,17 @@ describe("HttpTransport channels and mail accounts", () => {
     ]);
     expect(JSON.parse(calls[1].body!)).toEqual({ kind: "telegram", name: "Casa", secrets: { bot_token: "1:x" } });
     expect(JSON.parse(calls[8].body!)).toEqual([account]);
+  });
+
+  it("speaks through POST /voice/speak with a JSON body", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response(JSON.stringify({ mime: "audio/wav", audio: "AAAA", backend: "Piper", elapsed_ms: 5 }), { status: 200 });
+    });
+    const out = await new HttpTransport("http://h", "tok").speak({ text: "Ciao.", language: "it" });
+    expect(out.mime).toBe("audio/wav");
+    expect(`${calls[0].method} ${calls[0].url}`).toBe("POST /voice/speak");
+    expect(JSON.parse(calls[0].body!)).toEqual({ text: "Ciao.", language: "it" });
   });
 });

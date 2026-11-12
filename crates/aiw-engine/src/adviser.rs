@@ -4,7 +4,8 @@
 //! the runtimes can serve, and returns for each [`AdviserTask`] the best *installed* choice and,
 //! when nothing installed fits or something clearly better would, the best one *to download*.
 //! [`Engine::recommend`] feeds it with the live state; `auto:<task>` inference profiles are
-//! resolved through it when a run starts ([`Engine::resolve_auto_profile`]).
+//! resolved through it when a run starts ([`Engine::resolve_auto_profile`]); the profile names the
+//! model and leaves the runtime to the runtime router (`runtime_id: "auto"`, see [`crate::router`]).
 //!
 //! ## One fit formula
 //! How comfortably a model runs is decided by `aiw_models::fit_need` (`size × 1.1 + 700 MB`
@@ -486,7 +487,8 @@ pub fn auto_profile(task: AdviserTask, rec: &Recommendations) -> Option<aiw_core
         AdviserTask::Vision => "immagini",
         AdviserTask::Embeddings => "ricerca",
     };
-    let mut p = crate::defaults::profile(format!("{} ({})", c.name, c.reason), &c.runtime_id, &c.model, c.context);
+    // The runtime is left to the router, which decides it (and the fallbacks) when the run starts.
+    let mut p = crate::defaults::profile(format!("{} ({})", c.name, c.reason), "auto", &c.model, c.context);
     p.id = auto_profile_id(task);
     p.name = format!("Automatico: {label}");
     p.params.thinking = c.thinking;
@@ -926,7 +928,7 @@ mod tests {
         let d = device("linux", 16, None);
         let rec = advise(&d, &[installed("qwen3-8b")], &catalog(), &avail());
         let p = auto_profile(AdviserTask::Reasoning, &rec).unwrap();
-        assert_eq!((p.id.as_str(), p.runtime_id.as_str(), p.model.as_str()), ("auto:reasoning", "llama-server", "qwen3-8b-q4_k_m"));
+        assert_eq!((p.id.as_str(), p.runtime_id.as_str(), p.model.as_str()), ("auto:reasoning", "auto", "qwen3-8b-q4_k_m"));
         assert_eq!(p.params.thinking, Some(ThinkingMode::Deep));
         assert!(p.params.context.unwrap() >= 2048);
         assert!(auto_profile(AdviserTask::Vision, &rec).is_none());

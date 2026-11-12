@@ -89,7 +89,12 @@ pub fn app_schema() -> SettingsSchema {
             "voice.language": {"type": "string", "title": "Lingua della voce", "description": "Codice ISO 639-1 (it, en…) o auto per riconoscerla", "default": "auto"},
             "voice.stt_runtime": {"type": "string", "title": "Motore di trascrizione", "description": "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", "enum": ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], "default": "auto"},
             "voice.stt_model": {"type": "string", "title": "Modello Whisper", "description": "Vuoto = il più grande installato che sta in memoria", "default": ""},
-            "voice.tts_voice": {"type": "string", "title": "Voce per leggere le risposte", "description": "Nome di una voce locale del sistema; vuoto = la prima per la lingua", "default": ""}
+            "voice.tts_voice": {"type": "string", "title": "Voce del sistema per leggere le risposte", "description": "Nome di una voce locale del sistema; vuoto = la prima per la lingua", "default": ""},
+            "voice.tts.engine": {"type": "string", "title": "Motore della voce", "description": "auto: Piper se è installato con una voce nella lingua della risposta, poi un server compatibile OpenAI se hai indicato l'indirizzo, altrimenti le voci del sistema. «Sistema» usa sempre le voci del sistema operativo", "enum": ["auto", "system", "piper", "openai"], "default": "auto"},
+            "voice.tts.voice": {"type": "object", "title": "Voce neurale per lingua", "description": "Per ogni lingua (it, en…) la voce di Piper o del server; la lingua senza voce scelta usa la prima disponibile", "default": {}},
+            "voice.tts.speed": {"type": "number", "title": "Velocità della voce", "description": "1 = normale, 0.5 = metà, 2 = doppia (solo voci neurali)", "default": 1.0, "minimum": 0.5, "maximum": 2.0, "step": 0.1},
+            "voice.tts.server_url": {"type": "string", "title": "Server della voce (compatibile OpenAI)", "description": "Per esempio Kokoro-FastAPI su http://localhost:8880 o LocalAI: AIW chiama /v1/audio/speech. Il testo da leggere viene inviato a quel server", "default": "", "placeholder": "http://localhost:8880"},
+            "voice.tts.server_model": {"type": "string", "title": "Modello del server della voce", "description": "Nome del modello da chiedere al server (kokoro, tts-1…)", "default": "kokoro"}
         }
     }))
     .expect("static schema")
@@ -141,6 +146,10 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "search.provider",
     "search.searxng_url",
     "search.brave_api_key",
+    // The server that gets the text to read aloud is the person's choice, not a repository's.
+    "voice.tts.engine",
+    "voice.tts.server_url",
+    "voice.tts.server_model",
 ];
 
 /// The address of the SearXNG instance: empty (not set) or an http(s) URL.
@@ -154,6 +163,20 @@ fn check_searxng_url(v: &Value) -> Result<()> {
         Err(Error::Invalid(
             "`search.searxng_url` deve essere un indirizzo che inizia con http:// o https:// (per esempio http://localhost:8080)".into(),
         ))
+    }
+}
+
+/// An optional http(s) address (the speech server): empty or `http://…` / `https://…`.
+fn check_server_url(v: &Value, key: &str) -> Result<()> {
+    let Some(text) = v.as_str().map(str::trim).filter(|t| !t.is_empty()) else { return Ok(()) };
+    let lower = text.to_ascii_lowercase();
+    let rest = lower.strip_prefix("http://").or_else(|| lower.strip_prefix("https://"));
+    if rest.is_some_and(|r| !r.is_empty() && !r.starts_with('/') && !r.contains(char::is_whitespace)) {
+        Ok(())
+    } else {
+        Err(Error::Invalid(format!(
+            "`{key}` deve essere un indirizzo che inizia con http:// o https:// (per esempio http://localhost:8880)"
+        )))
     }
 }
 
@@ -313,6 +336,9 @@ impl LayeredConfig {
         }
         if key == "search.searxng_url" {
             check_searxng_url(&value)?;
+        }
+        if key == "voice.tts.server_url" {
+            check_server_url(&value, key)?;
         }
         let (lock, path) = match layer {
             Layer::Global => (&self.global, Some(self.global_path.clone())),

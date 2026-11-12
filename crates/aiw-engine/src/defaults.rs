@@ -197,6 +197,7 @@ pub(crate) fn profile(description: String, runtime_id: &str, model: &str, ctx: u
             thinking: None,
             thinking_budget: None,
             adapters: vec![],
+            allow_remote: false,
         },
     }
 }

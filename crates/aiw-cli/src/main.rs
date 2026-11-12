@@ -546,6 +546,7 @@ async fn main() -> Result<()> {
                     thinking: None,
                     thinking_budget: None,
                     adapters: adapter.into_iter().map(|path| aiw_core::api::AdapterRef { path, scale: None }).collect(),
+                    allow_remote: false,
                 },
             })?;
             println!("Profilo {} → {} · {}", p.id, p.runtime_id, p.model);

@@ -1,6 +1,6 @@
 //! Voice mode: speech to text through the best backend available here (whisper.cpp first, then a
 //! local server that transcribes, then a paired device), configured under `voice.*`. Replies are
-//! read aloud by the UI with the system's local voices.
+//! read aloud by the UI, with a neural engine of the engine ([`crate::tts`]) or the system's voices.
 
 use crate::Engine;
 use aiw_core::api::{LocalModel, RuntimeInfo, Transcript, VoiceStatus};
@@ -162,6 +162,7 @@ impl Engine {
             language: text(&cfg, "voice.language").unwrap_or("auto").to_string(),
             tts_voice: text(&cfg, "voice.tts_voice").unwrap_or_default().to_string(),
             models: self.stt_models().into_iter().map(|m| m.id).collect(),
+            tts: self.tts_status(),
         }
     }
 

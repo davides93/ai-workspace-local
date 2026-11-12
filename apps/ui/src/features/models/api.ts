@@ -35,6 +35,18 @@ export function useRecommend() {
   return useQuery({ queryKey: qk.models.recommend(), queryFn: () => api.recommend(), retry: false, staleTime: 60_000 });
 }
 
+/** The runtimes that can run `model` here, best first (the runtime router). Off while there is no model. */
+export function useRoute(model: string, context: number | undefined, remote: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: qk.models.route(model, context, remote),
+    queryFn: () => api.route(model, context, remote),
+    enabled: model.trim() !== "",
+    retry: false,
+    staleTime: 15_000,
+  });
+}
+
 export function useDownloads() {
   const api = useApi();
   return useQuery({

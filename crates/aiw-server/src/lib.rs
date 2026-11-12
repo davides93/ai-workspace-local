@@ -113,6 +113,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/model-preview", post(preview_system_model))
         .route("/api/models/catalog", get(catalog))
         .route("/api/recommend", get(recommend))
+        .route("/api/route", get(route_for_model))
         .route("/api/models/providers", get(model_providers))
         .route("/api/models/providers/{id}/auth", put(provider_auth))
         .route("/api/models/search", get(search_models))
@@ -201,6 +202,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         // Voice mode.
         .route("/api/voice", get(voice_status))
         .route("/api/voice/transcribe", post(voice_transcribe).layer(DefaultBodyLimit::max(VOICE_BODY_LIMIT)))
+        .route("/api/voice/speak", post(voice_speak).layer(DefaultBodyLimit::max(SPEECH_BODY_LIMIT)))
         .route("/.well-known/agent-card.json", get(a2a::agent_card))
         .route("/a2a", post(a2a::handle))
         .route("/api/tools", get(tools))
@@ -249,6 +251,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/v1/messages", post(anthropic::messages))
         .route("/v1/messages/count_tokens", post(anthropic::count_tokens))
         .route("/v1/audio/transcriptions", post(audio_transcriptions).layer(DefaultBodyLimit::max(VOICE_BODY_LIMIT)))
+        .route("/v1/audio/speech", post(audio_speech).layer(DefaultBodyLimit::max(SPEECH_BODY_LIMIT)))
         .route("/mcp", post(mcp_server::handle).get(mcp_server::get_stream).delete(|| async { StatusCode::OK }));
     let mut app = api.method_not_allowed_fallback(method_not_allowed).with_state(st.clone());
     app = match ui_dir.filter(|d| d.join("index.html").exists()) {
@@ -448,6 +451,24 @@ async fn catalog(State(s): State<AppState>) -> ApiResult<Vec<CatalogModel>> {
 /// model for this device and the best one to download.
 async fn recommend(State(s): State<AppState>) -> ApiResult<Recommendations> {
     ok(s.engine.recommend())
+}
+
+#[derive(Deserialize)]
+struct RouteQuery {
+    model: String,
+    context: Option<u32>,
+    /// Also consider paired devices and remote servers.
+    #[serde(default)]
+    remote: bool,
+}
+
+/// `GET /api/route?model=…&context=…&remote=…`: the runtimes that can run the model here, best
+/// first, with the reason for each rank and for each exclusion (the runtime router).
+async fn route_for_model(State(s): State<AppState>, Query(q): Query<RouteQuery>) -> ApiResult<aiw_core::api::RouteDecision> {
+    if q.model.trim().is_empty() {
+        return Err(ApiError(Error::Invalid("manca il modello".into())));
+    }
+    ok(s.engine.route(q.model.trim(), q.context, q.remote))
 }
 async fn model_providers(State(s): State<AppState>) -> ApiResult<Vec<ModelProviderInfo>> {
     ok(s.engine.model_providers())
@@ -996,6 +1017,9 @@ async fn pairing_qr(State(s): State<AppState>, req: Request) -> ApiResult<Value>
 /// Audio cap plus the base64 overhead of the JSON form used over the app's IPC bridge.
 const VOICE_BODY_LIMIT: usize = aiw_engine::voice::MAX_AUDIO_BYTES / 3 * 4 + (1 << 20);
 
+/// The text to read aloud is capped at `MAX_CHARS` characters (up to 4 bytes each) plus the JSON around it.
+const SPEECH_BODY_LIMIT: usize = aiw_engine::tts::MAX_CHARS * 4 + (16 << 10);
+
 async fn voice_status(State(s): State<AppState>) -> ApiResult<VoiceStatus> {
     ok(s.engine.voice_status())
 }
@@ -1023,6 +1047,54 @@ async fn voice_transcribe(State(s): State<AppState>, Query(q): Query<VoiceQuery>
         (body.to_vec(), ct, q.language)
     };
     s.engine.transcribe(&audio, &mime, language.as_deref()).await.map(Json).map_err(|e| ApiError(e).into_response())
+}
+
+/// What the speech routes accept: the app's own shape and OpenAI's (`input`, `model`).
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct SpeakBody {
+    #[serde(alias = "input")]
+    text: String,
+    language: Option<String>,
+    voice: Option<String>,
+    speed: Option<f64>,
+    response_format: Option<String>,
+}
+
+impl SpeakBody {
+    fn request(self) -> aiw_engine::tts::SpeakRequest {
+        aiw_engine::tts::SpeakRequest { text: self.text, language: self.language, voice: self.voice, speed: self.speed }
+    }
+}
+
+/// `POST /api/voice/speak`: `{"text", "language"?, "voice"?, "speed"?}` → `{mime, audio (base64
+/// WAV), backend, elapsed_ms}` (JSON because the app's IPC bridge carries JSON only). 422 when no
+/// neural engine is active: the app then reads with the system's voices.
+async fn voice_speak(State(s): State<AppState>, Json(body): Json<SpeakBody>) -> ApiResult<Speech> {
+    use base64::Engine as _;
+    let out = s.engine.speak(body.request(), &tokio_util::sync::CancellationToken::new()).await?;
+    ok(Speech {
+        mime: "audio/wav".into(),
+        audio: base64::engine::general_purpose::STANDARD.encode(&out.wav),
+        backend: out.backend,
+        elapsed_ms: out.elapsed_ms,
+    })
+}
+
+/// `POST /v1/audio/speech` (OpenAI JSON: `model`, `input`, `voice`, `response_format`, `speed`):
+/// other apps and paired devices read text aloud with this device's voice. The answer is a WAV
+/// (`response_format` absent or `wav`). Nothing is forwarded to another device.
+async fn audio_speech(State(s): State<AppState>, Json(body): Json<SpeakBody>) -> Response {
+    if body.response_format.as_deref().is_some_and(|f| !f.eq_ignore_ascii_case("wav")) {
+        return ApiError(Error::Invalid(
+            "formato non supportato: questo dispositivo produce solo audio WAV (response_format: \"wav\")".into(),
+        ))
+        .into_response();
+    }
+    match s.engine.speak(body.request(), &tokio_util::sync::CancellationToken::new()).await {
+        Ok(out) => ([(axum::http::header::CONTENT_TYPE, "audio/wav")], out.wav).into_response(),
+        Err(e) => ApiError(e).into_response(),
+    }
 }
 
 /// 413 in the API's error shape.

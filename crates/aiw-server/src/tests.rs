@@ -588,3 +588,97 @@ async fn attachments_travel_as_base64_and_come_back_unchanged() {
     assert_eq!(st, 200);
     assert!(!d.path().join("attachments").join(&sid).exists());
 }
+
+/// Stand-in for a speech server (Kokoro-FastAPI): `POST /v1/audio/speech`, 10 ms of audio per
+/// character of the input. Records the bodies.
+async fn fake_speech() -> (String, Arc<std::sync::Mutex<Vec<Value>>>) {
+    let seen: Arc<std::sync::Mutex<Vec<Value>>> = Arc::default();
+    let log = seen.clone();
+    let app = Router::new().route(
+        "/v1/audio/speech",
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+            let log = log.clone();
+            async move {
+                let ms = body["input"].as_str().unwrap_or_default().chars().count() as u32 * 10;
+                log.lock().unwrap().push(body);
+                ([(axum::http::header::CONTENT_TYPE, "audio/wav")], wav(ms))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), seen)
+}
+
+#[tokio::test]
+async fn voice_speaks_through_the_api_and_the_gateway() {
+    use base64::Engine as _;
+    use tower::ServiceExt;
+    let (app, e, _d, _w) = app().await;
+
+    // Nothing configured: the status says the system voices speak, and speak refuses (422).
+    let (_, st) = dispatch(app.clone(), "GET", "/api/voice", None).await;
+    assert_eq!(
+        (st["tts"]["engine"].as_str(), st["tts"]["neural"].as_bool(), st["tts"]["max_chars"].as_u64()),
+        (Some("system"), Some(false), Some(4000)),
+        "{st}"
+    );
+    let (code, err) = dispatch(app.clone(), "POST", "/api/voice/speak", Some(json!({"text": "Ciao a tutti."}))).await;
+    assert_eq!(code, 422, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("voce neurale"), "{err}");
+
+    let (base, seen) = fake_speech().await;
+    e.set_config("device", "voice.tts.server_url", json!(base)).unwrap();
+    let (_, st) = dispatch(app.clone(), "GET", "/api/voice", None).await;
+    assert_eq!((st["tts"]["engine"].as_str(), st["tts"]["any_language"].as_bool()), (Some("openai"), Some(true)), "{st}");
+
+    // JSON with the audio as base64 (the app's bridge): two sentences, joined.
+    let (code, out) =
+        dispatch(app.clone(), "POST", "/api/voice/speak", Some(json!({"text": "Ciao a tutti. Come stai?", "language": "it"}))).await;
+    assert_eq!(code, 200, "{out}");
+    assert_eq!(out["mime"], "audio/wav");
+    let audio = base64::engine::general_purpose::STANDARD.decode(out["audio"].as_str().unwrap()).unwrap();
+    let info = aiw_runtimes::stt::wav_info(&audio).unwrap();
+    assert_eq!(info.duration_ms, 230, "13 + 10 characters at 10 ms each");
+    assert_eq!(seen.lock().unwrap().len(), 2);
+
+    // Too long, empty.
+    let (code, err) = dispatch(app.clone(), "POST", "/api/voice/speak", Some(json!({"text": "a".repeat(4001)}))).await;
+    assert_eq!(code, 400, "{err}");
+    let (code, _) = dispatch(app.clone(), "POST", "/api/voice/speak", Some(json!({"text": " "}))).await;
+    assert_eq!(code, 400);
+
+    // The OpenAI-compatible gateway answers with the WAV itself.
+    let post = |body: Value| {
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/audio/speech")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let res = app
+        .clone()
+        .oneshot(post(json!({"model": "tts-1", "input": "Ciao a tutti.", "voice": "im_nicola", "response_format": "wav"})))
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    assert_eq!(res.headers().get("content-type").and_then(|v| v.to_str().ok()), Some("audio/wav"));
+    assert_eq!(res.headers().get("x-frame-options").map(|v| v.to_str().unwrap()), Some("DENY"), "behind the same middleware");
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    assert_eq!(aiw_runtimes::stt::wav_info(&bytes).unwrap().duration_ms, 130);
+    assert_eq!(seen.lock().unwrap().last().unwrap()["voice"], "im_nicola");
+    // mp3 is not offered, and the error is in the API's shape.
+    let res = app.clone().oneshot(post(json!({"input": "Ciao.", "response_format": "mp3"}))).await.unwrap();
+    assert_eq!(res.status().as_u16(), 400);
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("WAV"));
+    // Nothing is ever forwarded to a paired device: without an engine the answer is a refusal.
+    e.set_config("device", "voice.tts.server_url", json!("")).unwrap();
+    let mut m = Map::new();
+    m.insert("base_url".into(), json!("http://127.0.0.1:9/v1"));
+    e.update_runtime_settings("aiw-peer", m).unwrap();
+    let res = app.clone().oneshot(post(json!({"input": "Ciao."}))).await.unwrap();
+    assert_eq!(res.status().as_u16(), 422);
+}

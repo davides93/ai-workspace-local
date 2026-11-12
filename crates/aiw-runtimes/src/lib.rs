@@ -20,10 +20,26 @@ pub mod thinking;
 pub mod trainer;
 pub mod types;
 
-pub use fallback::{FallbackBackend, FallbackResolver};
+pub use fallback::{Fallback, FallbackAttempt, FallbackBackend, FallbackResolver};
 pub use manifest::RuntimeManifest;
 pub use ollama::OllamaBackend;
 pub use openai::OpenAiBackend;
 pub use registry::{ModelResolver, RuntimeRegistry};
 pub use scripted::ScriptedBackend;
 pub use types::*;
+
+/// Accelerators the in-process llama.cpp engine was compiled with (`cpu` always). The manifest
+/// lists what the engine *can* use; this is what this build actually has.
+pub fn embedded_accelerators() -> Vec<&'static str> {
+    let mut v = vec!["cpu"];
+    if cfg!(feature = "llama-metal") {
+        v.push("metal");
+    }
+    if cfg!(feature = "llama-cuda") {
+        v.push("cuda");
+    }
+    if cfg!(feature = "llama-vulkan") {
+        v.push("vulkan");
+    }
+    v
+}

@@ -79,6 +79,54 @@ export interface VoiceStatus {
   /** Preferred local system voice for replies ("" = first one for the language). */
   tts_voice: string;
   models: string[];
+  /** Neural speech (Piper, a speech server): what reads replies aloud, besides the system voices. */
+  tts: TtsStatus;
+}
+
+/** A voice of a neural speech engine. */
+export interface TtsVoice {
+  id: string;
+  name: string;
+  /** ISO 639-1 code. */
+  language: string;
+  engine: "piper" | "openai";
+}
+
+export interface TtsStatus {
+  /** The setting `voice.tts.engine`. */
+  setting: "auto" | "system" | "piper" | "openai";
+  /** What would speak: "system" means the voices of the operating system, spoken by the app. */
+  engine: "system" | "piper" | "openai";
+  /** A neural engine can speak. */
+  neural: boolean;
+  backend: string | null;
+  /** Why a neural engine is not available, or what to do to enable it. */
+  detail: string | null;
+  voices: TtsVoice[];
+  /** Languages the neural engine speaks (empty with `any_language` for a server). */
+  languages: string[];
+  any_language: boolean;
+  /** Voice in use for each language. */
+  picks: Record<string, string>;
+  speed: number;
+  /** Most characters of one request. */
+  max_chars: number;
+}
+
+/** Request of `POST /api/voice/speak`. */
+export interface SpeakRequest {
+  text: string;
+  language?: string;
+  voice?: string;
+  speed?: number;
+}
+
+/** Synthesised audio: a WAV as base64 (the app's IPC bridge carries JSON only). */
+export interface Speech {
+  mime: string;
+  audio: string;
+  backend: string;
+  elapsed_ms: number;
 }
 
 export interface Transcript {
@@ -111,7 +159,7 @@ export interface PeerDevice {
 
 // ---------- Settings schema (JSON Schema subset → generated forms) ----------
 export interface FieldSchema {
-  type: "string" | "integer" | "number" | "boolean" | "array";
+  type: "string" | "integer" | "number" | "boolean" | "array" | "object";
   title?: string;
   description?: string;
   default?: unknown;
@@ -316,6 +364,40 @@ export interface TaskAdvice {
   download: ModelChoice | null;
 }
 
+/** One way of running a model here, as ranked by the runtime router (`GET /api/route`). */
+export interface RouteCandidate {
+  rank: number;
+  runtime_id: string;
+  runtime_name: string;
+  /** Model sent to this runtime when it is not the requested one. */
+  model?: string;
+  accelerator: string;
+  /** `all` | `partial` | `none`. */
+  offload: "all" | "partial" | "none";
+  gpu_layers?: number;
+  context: number;
+  need_mb: number;
+  kv_mb: number;
+  kv_estimated: boolean;
+  remote: boolean;
+  ready: boolean;
+  reason: string;
+}
+
+export interface RouteExclusion {
+  runtime_id: string;
+  runtime_name: string;
+  reason: string;
+}
+
+export interface RouteDecision {
+  model: string;
+  wanted_context: number;
+  candidates: RouteCandidate[];
+  excluded: RouteExclusion[];
+  notes: string[];
+}
+
 /** `GET /api/recommend`. */
 export type Recommendations = { tier: "xs" | "s" | "m" | "l" | "xl" } & Record<AdviserTask, TaskAdvice>;
 
@@ -445,6 +527,8 @@ export interface InferenceParams {
   /** Most tokens spent reasoning, when the runtime can limit it. */
   thinking_budget?: number;
   adapters?: AdapterRef[];
+  /** With the runtime `auto`: the router may also pick a paired device or a remote server. */
+  allow_remote?: boolean;
 }
 
 /** A LoRA adapter on disk: a GGUF file for llama.cpp, a folder for MLX and PEFT. */

@@ -34,6 +34,7 @@ pub fn runtimes_for_format(format: &str) -> Vec<&'static str> {
         "pte" => vec!["executorch"],
         "safetensors" => vec!["vllm", "sglang", "trtllm", "mistralrs"],
         "ggml" => vec!["whisper-server"],
+        "piper" => vec!["piper"],
         _ => vec![],
     }
 }

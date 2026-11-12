@@ -4,10 +4,11 @@ import { useUiMode } from "../../../app/useUiMode";
 import { canReason, effectiveThinking, isThinkingMode, THINKING_HINT, THINKING_LABEL, THINKING_MODES } from "../../../shared/lib/thinking";
 import { STYLE_PRESETS, styleOf, withStyle, type StyleChoice } from "../model/style";
 import { Button, Dialog, Field, Input, Select, StatusPill } from "../../../shared/ui";
+import { RoutePanel } from "./RoutePanel";
 import { formatBytes, formatContext } from "../../../shared/lib/format";
 import type { AdapterRef, InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
 import {
-  blankProfile, chatRuntimes, compatibleModels, CONTEXT_PRESETS, hasProfileErrors, hiddenProfileErrors, idForProfile, modelAfterRuntimeChange, normalizeProfile, validateProfile,
+  AUTO_RUNTIME, blankProfile, chatRuntimes, compatibleModels, CONTEXT_PRESETS, hasProfileErrors, hiddenProfileErrors, idForProfile, modelAfterRuntimeChange, normalizeProfile, validateProfile,
   type ProfileIssue,
 } from "../model/profiles";
 
@@ -49,6 +50,7 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
   // Errors show up once the form has been touched; the button stays off until it is valid.
   const issues = JSON.stringify(draft) === initial ? all.filter((i) => i.level === "warn") : all;
   const runtime = runtimes.find((r) => r.id === draft.runtime_id);
+  const auto = draft.runtime_id === AUTO_RUNTIME;
   const set = (patch: Partial<InferenceProfile>) => setDraft((d) => ({ ...d, ...patch }));
   const setParam = (patch: Partial<InferenceProfile["params"]>) => setDraft((d) => ({ ...d, params: { ...d.params, ...patch } }));
 
@@ -66,7 +68,7 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
   const hiddenErrors = hiddenProfileErrors(all);
   const changeModel = (id: string) => {
     const model = availableModels.find((item) => item.id === id);
-    const runtimeId = model && pickRuntime(model, draft.runtime_id);
+    const runtimeId = model && (draft.runtime_id === AUTO_RUNTIME ? AUTO_RUNTIME : pickRuntime(model, draft.runtime_id));
     if (!runtimeId) return;
     set({ model: id, runtime_id: runtimeId });
     setCustom(false);
@@ -129,9 +131,10 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
         {developer && <details open={!chosenModel && !availableModels.length || undefined}>
           <summary>Runtime e parametri avanzati</summary>
         <div className="cols-2">
-          <Field label="Runtime" htmlFor="pf-runtime" error={err(issues, "runtime_id")} hint={runtime ? <span className="row"><StatusPill status={runtime.status} /><span>{runtime.status_detail ?? ""}</span></span> : undefined}>
+          <Field label="Runtime" htmlFor="pf-runtime" error={err(issues, "runtime_id")} hint={auto ? "Alla partenza AIW sceglie il runtime e, se non parte, prova il successivo" : runtime ? <span className="row"><StatusPill status={runtime.status} /><span>{runtime.status_detail ?? ""}</span></span> : undefined}>
             <Select id="pf-runtime" value={draft.runtime_id} onChange={(e) => changeRuntime(e.target.value)} aria-invalid={!!err(issues, "runtime_id")}>
               {!draft.runtime_id && <option value="">Scegli un runtime…</option>}
+              <option value={AUTO_RUNTIME}>Automatico (lo sceglie AIW)</option>
               {draft.runtime_id && !runtime && <option value={draft.runtime_id}>{draft.runtime_id} (non registrato)</option>}
               {usable.map((r) => <option key={r.id} value={r.id}>{r.name} · {r.kind}</option>)}
             </Select>
@@ -153,6 +156,15 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
             )}
           </Field>
         </div>
+        {auto && (
+          <div className="stack">
+            <RoutePanel profile={draft} />
+            <label className="row">
+              <input type="checkbox" checked={draft.params.allow_remote === true} onChange={(e) => setParam({ allow_remote: e.target.checked ? true : undefined })} />
+              <span>Consenti un dispositivo accoppiato o un server remoto (la conversazione lascia questo dispositivo)</span>
+            </label>
+          </div>
+        )}
 
         <fieldset className="param-set">
           <legend className="field-label">Parametri di generazione</legend>
@@ -177,13 +189,13 @@ export function ProfileDialog({ profile, profiles, runtimes, models, saving, onS
         </fieldset>
         <Field
           label="Adapter LoRA" htmlFor="pf-adapter" error={err(issues, "adapters")}
-          hint={runtime?.adapter_format
+          hint={auto ? "Con il runtime automatico non si usano adapter: scegli un runtime preciso." : runtime?.adapter_format
             ? runtime.adapter_format === "gguf" ? "Percorso di un file GGUF. Facoltativo." : "Percorso della cartella dell'adapter. Facoltativo."
             : "Questo runtime non carica adapter da un profilo."}
         >
           <div className="copyfield-row">
             <Input
-              id="pf-adapter" mono value={draft.params.adapters?.[0]?.path ?? ""} disabled={!runtime?.adapter_format && !draft.params.adapters?.length}
+              id="pf-adapter" mono value={draft.params.adapters?.[0]?.path ?? ""} disabled={auto || (!runtime?.adapter_format && !draft.params.adapters?.length)}
               onChange={(e) => setAdapter({ path: e.target.value })} placeholder={runtime?.adapter_format === "gguf" ? "/percorso/adapter.gguf" : "/percorso/adapter"} autoComplete="off" aria-invalid={!!err(issues, "adapters")}
             />
             <Input

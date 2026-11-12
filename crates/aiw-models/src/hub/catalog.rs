@@ -67,6 +67,27 @@ impl CatalogProvider {
     }
 }
 
+/// The single variant of a Piper voice: the `.onnx` model and its `.onnx.json` configuration.
+/// Sizes and checksums are not known (the catalog's size is rounded): the downloader trusts the server.
+fn piper_variant(c: &CatalogModel, file: &str) -> ModelVariant {
+    ModelVariant {
+        id: c.quant.clone(),
+        label: format!("{} ({})", c.name, c.quant),
+        format: "piper".into(),
+        quant: Some(c.quant.clone()),
+        files: vec![
+            RemoteFile { path: file.to_string(), size_bytes: 0, sha256: None, role: "weights".into() },
+            RemoteFile { path: format!("{file}.json"), size_bytes: 0, sha256: None, role: "config".into() },
+        ],
+        size_bytes: c.size_bytes,
+        fit: String::new(),
+        fit_detail: String::new(),
+        recommended: false,
+        runtimes: vec![],
+        installed: false,
+    }
+}
+
 #[async_trait]
 impl ModelProvider for CatalogProvider {
     fn info(&self) -> ModelProviderInfo {
@@ -76,7 +97,7 @@ impl ModelProvider for CatalogProvider {
             description: "Modelli selezionati e provati con AI Workspace Local, con la compatibilità per questo dispositivo.".into(),
             homepage: String::new(),
             capabilities: ["search", "files"].map(String::from).to_vec(),
-            formats: ["gguf", "mlx", "litertlm", "ggml"].map(String::from).to_vec(),
+            formats: ["gguf", "mlx", "litertlm", "ggml", "piper"].map(String::from).to_vec(),
             auth: "none".into(),
             auth_configured: false,
             endpoint: String::new(),
@@ -120,6 +141,10 @@ impl ModelProvider for CatalogProvider {
         let c = self.entry(model)?;
         let (repo, file) = self.target(model)?;
         let mut m = self.remote_model(c);
+        if c.format == "piper" {
+            // The voices repository holds hundreds of voices: no listing, the entry names the two files.
+            return Ok(RemoteModelDetail { model: m, revision: "main".into(), variants: vec![piper_variant(c, &file)] });
+        }
         // Real listing (sha256, shards, mmproj) when the Hub answers; the entry's own file otherwise.
         let listing = tokio::time::timeout(Duration::from_secs(12), self.hf.detail(&repo, revision)).await;
         let wanted = |v: &ModelVariant| {
@@ -165,7 +190,17 @@ impl ModelProvider for CatalogProvider {
     }
 
     fn plan(&self, detail: &RemoteModelDetail, variant: &str) -> Result<Vec<FileJob>> {
-        self.hf.plan(&self.hf_view(detail)?, variant)
+        let mut jobs = self.hf.plan(&self.hf_view(detail)?, variant)?;
+        if self.entry(&detail.model.id).is_ok_and(|c| c.format == "piper") {
+            // `it/it_IT/paola/medium/x.onnx` upstream, `x.onnx` here: the scan of the models folder is shallow.
+            let folder = self.folder(detail, variant);
+            for job in &mut jobs {
+                if let Some(name) = job.dest.file_name() {
+                    job.dest = folder.join(name);
+                }
+            }
+        }
+        Ok(jobs)
     }
 
     fn folder(&self, detail: &RemoteModelDetail, variant: &str) -> PathBuf {
@@ -240,5 +275,35 @@ mod tests {
         let jobs = p.plan(&d, "Q8_0").unwrap();
         assert_eq!(jobs.len(), 3);
         assert!(jobs[0].sha256.is_some());
+    }
+}
+
+#[cfg(test)]
+mod piper_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn piper_voices_download_both_files_flat_without_listing_the_big_repository() {
+        // The Hub is not reachable: the entry alone is enough.
+        let p = CatalogProvider::new(Arc::new(HfProvider::new("http://127.0.0.1:1")));
+        let d = p.detail("piper-it-paola-medium", None).await.unwrap();
+        assert_eq!(d.variants.len(), 1);
+        let v = &d.variants[0];
+        assert_eq!((v.id.as_str(), v.format.as_str()), ("medium", "piper"));
+        assert_eq!(
+            v.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            ["it/it_IT/paola/medium/it_IT-paola-medium.onnx", "it/it_IT/paola/medium/it_IT-paola-medium.onnx.json"]
+        );
+        assert!(v.files.iter().all(|f| f.size_bytes == 0 && f.sha256.is_none()), "unverified sizes are never enforced");
+        let jobs = p.plan(&d, "medium").unwrap();
+        assert_eq!(jobs[0].url, "http://127.0.0.1:1/rhasspy/piper-voices/resolve/main/it/it_IT/paola/medium/it_IT-paola-medium.onnx");
+        assert_eq!(jobs[1].url, format!("{}.json", jobs[0].url));
+        assert_eq!(jobs[0].dest, PathBuf::from("hf/rhasspy/piper-voices/it_IT-paola-medium.onnx"));
+        assert_eq!(jobs[1].dest, PathBuf::from("hf/rhasspy/piper-voices/it_IT-paola-medium.onnx.json"));
+        // The voices are searchable as a format of their own.
+        let page =
+            p.search(&SearchQuery { q: String::new(), format: Some("piper".into()), limit: 50, ..Default::default() }).await.unwrap();
+        assert_eq!(page.items.len(), 4);
+        assert!(page.items.iter().all(|m| m.capabilities == ["tts"]));
     }
 }

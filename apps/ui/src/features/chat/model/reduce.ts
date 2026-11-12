@@ -99,6 +99,37 @@ export function reduce(items: Item[], e: AgEvent): Item[] {
   }
 }
 
+interface RuntimeEvent {
+  runtime?: string;
+  name?: string;
+  model?: string;
+  context?: number;
+  reason?: string;
+  alternatives?: { name?: string; runtime?: string; reason?: string }[];
+  excluded?: { name?: string; runtime?: string; reason?: string }[];
+  fallback?: { from?: string; note?: string } | null;
+}
+
+/**
+ * The runtime router (`aiw.runtime`): the first event says what it chose and why (a Developer-mode row); a
+ * later one says that it moved on to another runtime, and that is a note for everybody.
+ */
+export function reduceRuntime(items: Item[], value: unknown): Item[] {
+  const v = (value ?? {}) as RuntimeEvent;
+  const name = v.name ?? v.runtime ?? "runtime";
+  if (v.fallback?.note) {
+    return [...items, { kind: "note", id: `rt-${items.length}`, text: `${v.fallback.note}.` }, { kind: "route", id: `rr-${items.length}`, label: `Runtime: ${name}`, lines: routeLines(v) }];
+  }
+  return [...items, { kind: "route", id: `rr-${items.length}`, label: `Runtime automatico: ${name}`, lines: routeLines(v) }];
+}
+
+function routeLines(v: RuntimeEvent): string[] {
+  const lines = [v.reason ? `Perché: ${v.reason}` : "", v.model ? `Modello: ${v.model}${v.context ? ` · contesto ${v.context}` : ""}` : ""];
+  for (const a of v.alternatives ?? []) lines.push(`Alternativa · ${a.name ?? a.runtime}: ${a.reason ?? ""}`);
+  for (const x of v.excluded ?? []) lines.push(`Escluso · ${x.name ?? x.runtime}: ${x.reason ?? ""}`);
+  return lines.filter((l) => l !== "");
+}
+
 function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
   switch (name) {
     case "a2ui": {
@@ -126,6 +157,8 @@ function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
       if (last && last.kind === "model" && last.label === label) return items;
       return [...items, { kind: "model", id: `md-${items.length}`, label, title: [v.runtime, v.model].filter(Boolean).join(" · ") }];
     }
+    case "aiw.runtime":
+      return reduceRuntime(items, value);
     case "aiw.roles": {
       const notes = (value as { notes?: string[] }).notes ?? [];
       return notes.length > 0 ? [...items, { kind: "note", id: `rl-${items.length}`, text: rolesNoteText(notes) }] : items;

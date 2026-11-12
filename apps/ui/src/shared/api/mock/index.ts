@@ -3,11 +3,13 @@ import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
 import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, guessKind, humanSize } from "../../lib/attachments";
 import { mockRecommend } from "./recommend";
+import { mockRoute } from "./route";
+import { mockSpeak, mockTtsStatus } from "./voice";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
+  SearchPage, Session, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody,
 } from "../types";
 import {
@@ -149,6 +151,7 @@ export class MockTransport implements Transport {
   async models() { return structuredClone(models); }
   async catalog() { return structuredClone(catalog); }
   async recommend() { return mockRecommend(); }
+  async route(model: string, context?: number, remote?: boolean) { return mockRoute(model, context, remote); }
 
   // ---------------------------------------------------------------- model hub
 
@@ -1467,8 +1470,13 @@ export class MockTransport implements Transport {
     const lang = String(eff["voice.language"] ?? "auto");
     return {
       available: true, runtime: "whisper-server", model: "ggml-large-v3-turbo-q5_0", backend: "whisper.cpp server · ggml-large-v3-turbo-q5_0",
-      detail: null, language: lang === "auto" ? "it" : lang, tts_voice: String(eff["voice.tts_voice"] ?? ""), models: ["ggml-large-v3-turbo-q5_0"],
+      detail: null, language: lang === "auto" ? "it" : lang, tts_voice: String(eff["voice.tts_voice"] ?? ""), models: ["ggml-large-v3-turbo-q5_0"], tts: mockTtsStatus(eff),
     };
+  }
+  /** Demo: a short tone per request (a real engine speaks the text). */
+  async speak(req: SpeakRequest): Promise<Speech> {
+    await sleep(120);
+    return mockSpeak(req, effective());
   }
   /** Demo: a plausible sentence per request (the audio itself stays in the browser). */
   async transcribe(wav: Blob): Promise<Transcript> {

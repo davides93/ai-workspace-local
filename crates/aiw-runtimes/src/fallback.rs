@@ -1,8 +1,10 @@
 //! A backend that falls back to another one when the first fails before producing output.
 //!
-//! Used for platform system models (Apple Foundation Models): when the system model is not
-//! ready, refuses to start or errors on the first request, the conversation continues on a
-//! local model instead of ending with an error.
+//! One mechanism for two cases: a platform system model (Apple Foundation Models) that is not
+//! ready or errors on the first request continues on a local model, and a run whose runtime was
+//! chosen by the router (`runtime_id: "auto"`) moves on to the next candidate when the chosen one
+//! fails with a load error. Never once the first event of the stream has been seen: a reply that
+//! has started is not restarted on another model.
 
 use crate::types::{ChatBackend, ChatDelta, ChatRequest, DeltaStream};
 use aiw_core::Result;
@@ -12,17 +14,60 @@ use futures::StreamExt;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// Chooses the backend (and the model to send to it) used when the primary one fails.
-pub type FallbackResolver = Arc<dyn Fn() -> BoxFuture<'static, Option<(Arc<dyn ChatBackend>, String)>> + Send + Sync>;
+/// Why a fallback is asked for.
+#[derive(Debug, Clone)]
+pub struct FallbackAttempt {
+    /// 1 for the first fallback.
+    pub attempt: usize,
+    /// The error of the backend that just failed.
+    pub error: String,
+}
+
+/// Where the request goes instead.
+#[derive(Clone)]
+pub struct Fallback {
+    pub backend: Arc<dyn ChatBackend>,
+    /// Model to send to it.
+    pub model: String,
+    /// Text put in front of the reply to tell the person what happened (`None`: the caller tells
+    /// it some other way, e.g. a run event).
+    pub prefix: Option<String>,
+}
+
+/// Chooses the backend (and the model to send to it) used when the primary one fails; `None` ends
+/// the attempts and the original error is returned.
+pub type FallbackResolver = Arc<dyn Fn(FallbackAttempt) -> BoxFuture<'static, Option<Fallback>> + Send + Sync>;
 
 pub struct FallbackBackend {
     primary: Arc<dyn ChatBackend>,
     resolver: FallbackResolver,
+    max_fallbacks: usize,
 }
 
 impl FallbackBackend {
     pub fn new(primary: Arc<dyn ChatBackend>, resolver: FallbackResolver) -> Self {
-        Self { primary, resolver }
+        Self { primary, resolver, max_fallbacks: 1 }
+    }
+
+    /// Most fallbacks for one request (default 1).
+    pub fn with_max_fallbacks(mut self, n: usize) -> Self {
+        self.max_fallbacks = n;
+        self
+    }
+}
+
+/// The stream of `backend` once its first event has arrived, or the error that came instead.
+async fn first_event(
+    backend: &Arc<dyn ChatBackend>,
+    req: ChatRequest,
+    cancel: CancellationToken,
+) -> std::result::Result<Option<DeltaStream>, aiw_core::Error> {
+    let mut stream = backend.chat(req, cancel).await?;
+    match stream.next().await {
+        Some(Ok(first)) => Ok(Some(futures::stream::once(async move { Ok(first) }).chain(stream).boxed())),
+        Some(Err(e)) => Err(e),
+        // Closed without a single event: nothing to show, let the caller see it.
+        None => Ok(None),
     }
 }
 
@@ -37,31 +82,37 @@ impl ChatBackend for FallbackBackend {
     }
 
     async fn chat(&self, req: ChatRequest, cancel: CancellationToken) -> Result<DeltaStream> {
-        let first_error = match self.primary.chat(req.clone(), cancel.clone()).await {
-            Ok(mut stream) => match stream.next().await {
-                Some(Ok(first)) => {
-                    return Ok(futures::stream::once(async move { Ok(first) }).chain(stream).boxed());
+        let mut backend = self.primary.clone();
+        let mut current = req;
+        let mut prefix: Option<String> = None;
+        let mut first_error: Option<aiw_core::Error> = None;
+        for attempt in 0..=self.max_fallbacks {
+            let error = match first_event(&backend, current.clone(), cancel.clone()).await {
+                Ok(Some(stream)) => {
+                    return Ok(match prefix {
+                        Some(note) => futures::stream::once(async move { Ok(ChatDelta::Text(note)) }).chain(stream).boxed(),
+                        None => stream,
+                    });
                 }
-                Some(Err(e)) => e,
-                // Closed without a single event: nothing to show, let the caller see it.
-                None => return Ok(futures::stream::empty().boxed()),
-            },
-            Err(e) => e,
-        };
-        if cancel.is_cancelled() {
-            return Err(first_error);
-        }
-        let Some((backend, model)) = (self.resolver)().await else { return Err(first_error) };
-        tracing::warn!("system model failed ({first_error}); continuing on the local model {model}");
-        let mut next = req;
-        next.model = model;
-        match backend.chat(next, cancel).await {
-            Ok(stream) => {
-                let note = format!("[Modello di sistema non disponibile ({first_error}): risposta di un modello locale]\n\n");
-                Ok(futures::stream::once(async move { Ok(ChatDelta::Text(note)) }).chain(stream).boxed())
+                Ok(None) => return Ok(futures::stream::empty().boxed()),
+                Err(e) => e,
+            };
+            if cancel.is_cancelled() {
+                return Err(first_error.unwrap_or(error));
             }
-            Err(_) => Err(first_error),
+            let message = error.to_string();
+            let first = first_error.get_or_insert(error);
+            if attempt == self.max_fallbacks {
+                break;
+            }
+            let Some(next) = (self.resolver)(FallbackAttempt { attempt: attempt + 1, error: message.clone() }).await else { break };
+            tracing::warn!("backend failed ({message}); continuing on model {}", next.model);
+            let _ = first;
+            current.model = next.model;
+            backend = next.backend;
+            prefix = next.prefix;
         }
+        Err(first_error.unwrap_or_else(|| aiw_core::Error::Runtime("nessun backend disponibile".into())))
     }
 
     fn availability(&self) -> std::result::Result<(), String> {
@@ -101,10 +152,14 @@ mod tests {
     }
 
     fn resolver(text: &'static str) -> FallbackResolver {
-        Arc::new(move || {
+        Arc::new(move |attempt| {
             Box::pin(async move {
                 let b: Arc<dyn ChatBackend> = Arc::new(ScriptedBackend::new(vec![ScriptedBackend::text_turn(text)]));
-                Some((b, "local".to_string()))
+                Some(Fallback {
+                    backend: b,
+                    model: "local".to_string(),
+                    prefix: Some(format!("[Modello di sistema non disponibile ({}): risposta di un modello locale]\n\n", attempt.error)),
+                })
             })
         })
     }
@@ -125,7 +180,7 @@ mod tests {
 
     #[tokio::test]
     async fn reports_original_error_without_fallback() {
-        let r: FallbackResolver = Arc::new(|| Box::pin(async { None }));
+        let r: FallbackResolver = Arc::new(|_| Box::pin(async { None }));
         let b = FallbackBackend::new(Arc::new(Failing), r);
         assert!(collect(&b).await.is_err());
     }

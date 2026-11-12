@@ -29,6 +29,8 @@ export type Item =
   | { kind: "warning"; id: string; text: string }
   /** Which model handled the calls that follow (runs with model roles only): a small label. */
   | { kind: "model"; id: string; label: string; title: string }
+  /** The runtime the router chose for a run on `auto` (`aiw.runtime`): shown in Developer mode only. */
+  | { kind: "route"; id: string; label: string; lines: string[] }
   | { kind: "surface"; id: string; surface: SurfaceState }
   | { kind: "action"; id: string; name: string; context: Record<string, unknown> }
   | { kind: "error"; id: string; message: string; code?: string; /** Rebuilt from the stored history (not announced as a live alert). */ stored?: boolean };

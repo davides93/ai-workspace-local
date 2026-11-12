@@ -4,6 +4,7 @@ import { cx } from "../../../shared/lib/cx";
 import { Button, Field, IconButton, Textarea } from "../../../shared/ui";
 import { ratingChange } from "../model/feedback";
 import { CopyMessage } from "./CopyMessage";
+import { ReadAloud } from "./ReadAloud";
 
 interface Props {
   messageId: string;
@@ -18,7 +19,7 @@ interface Props {
 }
 
 /**
- * What can be done with a reply: copy it and, when it is the final answer of a turn, rate it. The row floats under
+ * What can be done with a reply: copy it, read it aloud and, when it is the final answer of a turn, rate it. The row floats under
  * the reply and shows on hover or focus, except when the reply is rated (the choice stays visible). A thumb pressed
  * again takes the rating back; a thumbs down offers an optional note on what went wrong.
  */
@@ -53,6 +54,7 @@ export function MessageActions({ messageId, text, rateable, rating, pending, onR
     <>
       <div className={cx("ws-msg-tools", rating && "is-rated", showNote && "is-open")}>
         <CopyMessage text={text} />
+        <ReadAloud text={text} />
         {rateable && (
           <>
             <IconButton

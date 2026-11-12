@@ -203,6 +203,25 @@ assegnabile per agente, per workflow step o per sessione. Il router, a partire d
 (RAM, VRAM, acceleratori), propone il runtime migliore per un modello e stima se ci sta in memoria
 (pesi + KV cache). L'utente può sempre forzare un'altra scelta.
 
+**Router automatico** (`aiw-engine/src/router.rs`). Un profilo con `runtime_id: "auto"` (e i profili
+`auto:*` dell'adviser) viene risolto quando parte il run: `rank` (pura) ordina i runtime che sanno
+servire il modello su questo dispositivo, ciascuno col motivo del suo posto, ed esclude gli altri col
+motivo. Ordine: dove gira il modello (GPU nativa 60, GPU portabile o NPU 50, diviso GPU/RAM 30, CPU 10),
+pronto prima di «da avviare», poi `route_priority` del manifest; i remoti solo se `allow_remote`. Il
+contesto si dimezza (minimo 2048) se la memoria non basta. I candidati successivi sono i **fallback**
+del run: `FallbackBackend` guarda il primo evento di ogni tentativo, quindi non cambia mai modello a
+metà risposta, con al massimo 2 cambi; i fallimenti restano in RAM per 10 minuti (`FailureMemory`).
+Lo stesso meccanismo copre il modello di sistema (Apple Foundation Models → il più piccolo modello
+locale). La scelta e i cambi escono come evento `aiw.runtime`; `GET /api/route` mostra la decisione.
+`gpu_layers` è riportato ma non applicato.
+
+**Voce neurale** (`aiw-engine/src/tts.rs`, specchio di `voice.rs` per la trascrizione). `voice.tts.engine`
+= `auto` (Piper se c'è l'eseguibile e una voce per la lingua, poi un server `POST /v1/audio/speech`,
+poi le voci di sistema, che parlano nella UI), `system`, `piper`, `openai`. Il testo (tetto 4000
+caratteri) è diviso in frasi, sintetizzato in ordine sotto un solo lock per motore e riunito in un WAV;
+chiudere la richiesta ferma Piper (`kill_on_drop`). Piper è un runtime senza server (`api: "none"`):
+l'eseguibile parte per frase. Le voci sono modelli di tipo `piper` (capacità `tts`).
+
 ## 5. Layer agentico (L5)
 
 ### 5.1 Ciclo di un run
@@ -673,7 +692,10 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET | `/api/runtimes` · POST `/api/runtimes/{id}/start` · `/stop` · PUT `/settings` | Catalogo e ciclo di vita dei runtime |
 | GET | `/api/models` · POST `/api/models/pull` · GET `/api/models/catalog` | Modelli locali, download, catalogo consigliato |
 | GET | `/api/recommend` | Consigliere: per compito (chat, agent, reasoning, vision, embeddings) il modello installato migliore e quello da scaricare |
-| GET/PUT | `/api/profiles` | Profili di inferenza |
+| GET/PUT | `/api/profiles` | Profili di inferenza (`runtime_id: "auto"` = router automatico) |
+| GET | `/api/route?model=&context=&remote=` | Decisione del router: candidati in ordine con motivo, memoria e KV stimate, runtime esclusi con motivo |
+| GET | `/api/voice` · POST `/api/voice/transcribe` · POST `/api/voice/speak` | Stato della voce (trascrizione e voce neurale), trascrizione, sintesi (`{text, language?, voice?, speed?}` → `{mime, audio base64, backend, elapsed_ms}`; 422 se parlano le voci di sistema) |
+| POST | `/v1/audio/transcriptions` · `/v1/audio/speech` | Gateway OpenAI di trascrizione (multipart) e di sintesi (JSON, risposta WAV); mai inoltrati a un altro dispositivo |
 | GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run. Il corpo del run ha `input`, `kind?`, `thinking?` e `attachments?: [{name, mime, data}]` (base64; al massimo 8 file, 10 MB ciascuno, 25 MB in tutto, errore 400 in italiano; il testo può mancare se c'è un allegato) |
 | GET | `/api/sessions/{id}/attachments/{attachment_id}` | Un allegato di un messaggio: `{name, mime, data}` (base64), 404 in JSON se manca |
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
@@ -784,12 +806,12 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
    renderer A2UI, git worktree per i task paralleli, sandbox Windows a integrità Low.
 3. v0.3 (fatto): device mesh (mDNS, pairing via QR, A2A 1.0, peer come runtime e server MCP), worker
    RPC di llama.cpp ed exo per l'inferenza distribuita, voice mode (whisper.cpp o server
-   OpenAI-compatibili o peer, voci di sistema locali), code mode (Rhai ermetico, P13), trigger webhook.
+   OpenAI-compatibili o peer, voci di sistema locali; poi voce neurale con Piper o un server `/v1/audio/speech`), code mode (Rhai ermetico, P13), trigger webhook.
 4. v0.4 (fatto): UI riorganizzata per domini con data layer TanStack Query, model hub multi-provider
    (Hugging Face, ModelScope, registry Ollama, URL diretto, catalogo con i modelli Whisper), API locale
    protetta (token, CORS ristretto, controllo di Origin/Host), correzioni di agent loop e runtime.
    Il voice mode della 0.3 è nella nuova struttura (`features/chat/voice/`).
-5. Prossimi passi: MLX Swift su iOS (template Xcode con mlx-swift-lm e bridge `@_cdecl`), Kokoro come voce
-   neurale locale, trascrizione nativa on-device su mobile (SpeechAnalyzer, SpeechRecognizer)
+5. Prossimi passi: MLX Swift su iOS (template Xcode con mlx-swift-lm e bridge `@_cdecl`), Kokoro Core ML/MLX in-process come voce
+   neurale locale (oggi via server OpenAI-compatibile), trascrizione nativa on-device su mobile (SpeechAnalyzer, SpeechRecognizer)
    quando manca whisper, catalogo degli execution provider di Windows ML, HTTPS in LAN (serve al
    microfono nei browser), firma e notarizzazione dei pacchetti.

@@ -29,12 +29,12 @@ conferme umane.
 crates/
   aiw-core       tipi API, eventi AG-UI 1.0, schemi delle impostazioni, configurazione a strati
   aiw-hw         probe hardware: CPU, RAM, CUDA/ROCm/Metal/Vulkan/DirectML, NPU → classe del device
-  aiw-runtimes   33 manifest di runtime, rilevamento, adapter OpenAI/Ollama/nativo, supervisor dei sidecar, client di trascrizione (whisper.cpp e API OpenAI)
+  aiw-runtimes   33 manifest di runtime, rilevamento, adapter OpenAI/Ollama/nativo, supervisor dei sidecar, client di trascrizione (whisper.cpp e API OpenAI), fallback a catena tra backend
   aiw-models     model hub multi-provider (Hugging Face, ModelScope, registry Ollama, URL diretto), parser GGUF, compatibilità per device (anche i modelli Whisper), download con ripresa
   aiw-tools      file, ricerca, shell (bwrap/sandbox-exec), web_fetch anti-SSRF, web_search, browser CDP, computer-use, client MCP
   aiw-agent      loop agentico: streaming, tool paralleli, policy, hook, skill, subagenti, compattazione
   aiw-workflow   workflow YAML/JSON: tool/agent/llm/approval/condition, trigger cron/intervallo/file
-  aiw-engine     facciata unica: SQLite, sessioni, run, approvazioni, audit, kill switch, gateway, voice mode
+  aiw-engine     facciata unica: SQLite, sessioni, run, approvazioni, audit, kill switch, gateway, voice mode (anche la voce neurale), router automatico dei runtime
   aiw-server     REST + SSE (AG-UI), gateway OpenAI /v1, pairing LAN, UI statica
   aiw-winsandbox sandbox Windows: integrità bassa e job object (usata da aiw-tools)
   aiw-cli        `aiw`: serve, doctor, runtimes, models, profile, run, workflow
@@ -106,6 +106,7 @@ token ottenuto con il codice di pairing a 6 cifre.
 | `/v1/chat/completions`, `/v1/models` | Client OpenAI-compatibili (editor, SDK, CopilotKit, agenti CLI `--oss`) |
 | `/v1/messages` | Client Anthropic Messages, streaming e tool compresi |
 | `/v1/audio/transcriptions` | Trascrizione (multipart OpenAI) con il whisper di questo dispositivo |
+| `/v1/audio/speech` | Sintesi vocale (JSON OpenAI, risposta WAV) con la voce neurale di questo dispositivo |
 | `/mcp` | Server MCP: strumenti e agenti locali per altre app o dispositivi |
 | `/a2a`, `/.well-known/agent-card.json` | A2A 1.0 (JSON-RPC, anche in streaming SSE): altri agenti affidano task a quelli locali |
 | `/hooks/{id}` | Trigger webhook dei workflow (segreto o firma HMAC-SHA256 stile GitHub) |
@@ -120,8 +121,37 @@ più un modello Whisper, oppure LocalAI, oppure un dispositivo accoppiato che ce
 ```
 
 Nella chat il microfono detta il messaggio; l'icona accanto avvia la conversazione a voce: parli,
-l'agente lavora e risponde con una voce locale del sistema, poi torna in ascolto. Nel browser il
+l'agente lavora e risponde con la voce neurale (se c'è) o con una voce locale del sistema, poi torna
+in ascolto. Ogni risposta ha il pulsante «Leggi ad alta voce»; Esc ferma la lettura. Nel browser il
 microfono richiede `localhost` o HTTPS.
+
+#### Voce neurale (Piper, Kokoro)
+
+Di serie le risposte si leggono con le voci del sistema. Per una voce migliore, in Impostazioni → Voce
+(`voice.tts.engine`, di serie `auto`: Piper se è installato con una voce nella lingua della risposta, poi
+il server della voce se è indicato, altrimenti il sistema):
+
+- **Piper** (locale, CPU). Scarica la release di Piper da <https://github.com/rhasspy/piper/releases>,
+  estraila e metti la cartella nel `PATH` (o nella cartella dei runtime di AIW, o indica il percorso nel
+  runtime «Piper»). Poi scarica una voce da Modelli («Voce Paola» per l'italiano, «Voce Lessac» per
+  l'inglese) oppure mettine una (`xx_XX-nome-qualità.onnx` con il suo `.onnx.json`) nella cartella dei modelli.
+  Piper parte una volta per frase.
+- **Kokoro** tramite un server compatibile OpenAI. Con [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI):
+  `docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest` (per la GPU NVIDIA l'immagine
+  `kokoro-fastapi-gpu` con `--gpus all`). In Impostazioni → Voce indica «Server della voce»
+  `http://localhost:8880` e il modello `kokoro`; le voci italiane di Kokoro sono `if_sara` e `im_nicola`.
+  Va bene anche LocalAI o qualunque server con `POST /v1/audio/speech`. **Il testo da leggere viene inviato
+  a quel server**: usa solo server di cui ti fidi.
+
+«Prova» accanto alla voce di una lingua legge una frase di esempio. Piper e Kokoro non sono mai stati
+provati dall'ambiente di sviluppo (solo un eseguibile e un server finti nei test) e le dimensioni delle voci
+nel catalogo sono indicative.
+
+#### Runtime automatico
+
+Nel profilo, «Runtime: Automatico» (vista Sviluppatore) lascia scegliere ad AIW il runtime migliore per il
+modello su questo dispositivo, con i motivi e le alternative; se quello scelto non parte, il run continua
+sul successivo (al massimo due cambi, mai a metà risposta) e la chat lo dice in una nota.
 
 ### Rete di dispositivi
 

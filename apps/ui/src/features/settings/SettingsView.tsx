@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useUiMode } from "../../app/useUiMode";
 import { useTheme } from "../../shared/lib/theme";
 import { UI_MODE_LABEL, UI_MODES } from "../../shared/lib/uiMode";
+import { VoiceBlock } from "./components/VoiceBlock";
 import { Button, EmptyState, Field, Icon, Input, Page, PageHeader, QueryState, Section, Segmented } from "../../shared/ui";
 import { useSystem } from "../../shared/query/system";
 import { useBackgroundActions, useConfig, useSetConfig } from "./api";
@@ -82,7 +83,7 @@ export function SettingsView() {
       <QueryState query={cfg}>
         {(view) => {
           const groups = groupSettings(view.schema, query)
-            .map((group) => ({ ...group, entries: group.entries.filter((entry) => entry.key !== "update.channel" && entry.key !== "connectors.mail.imap" && (uiMode === "developer" || !DEVELOPER_ONLY.includes(entry.key))) }))
+            .map((group) => ({ ...group, entries: group.entries.filter((entry) => entry.key !== "update.channel" && entry.key !== "voice.tts.voice" && entry.key !== "connectors.mail.imap" && (uiMode === "developer" || !DEVELOPER_ONLY.includes(entry.key))) }))
             .filter((group) => group.entries.length > 0);
           return (
             <>
@@ -101,6 +102,7 @@ export function SettingsView() {
                     </ul>
                   </div>
                   {section.id === "connectors" && <MailAccountsEditor />}
+                  {section.id === "voice" && <VoiceBlock picks={view.effective["voice.tts.voice"]} onPick={(v) => commit("voice.tts.voice", "Voce neurale", v)} />}
                   {section.id === "proactive" && <BackgroundBlock os={os} level={view.effective["proactive.level"] as never} />}
                 </Section>
               ))}

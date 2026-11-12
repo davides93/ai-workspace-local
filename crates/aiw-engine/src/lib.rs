@@ -23,6 +23,7 @@ pub mod peers;
 pub mod proactive;
 pub mod reward;
 mod roles;
+pub mod router;
 pub mod routing;
 mod secrets;
 pub mod store;
@@ -30,6 +31,7 @@ pub mod traces;
 pub mod train;
 pub mod train_jobs;
 mod training_tool;
+pub mod tts;
 pub mod update;
 pub mod voice;
 pub mod webhook;
@@ -139,6 +141,10 @@ pub(crate) struct Inner {
     pub search: aiw_tools::search::Shared,
     pub browser: Arc<BrowserManager>,
     pub native_stt: RwLock<Option<Arc<dyn voice::NativeStt>>>,
+    /// One speech synthesis at a time (see [`tts`]).
+    pub tts_gate: tokio::sync::Mutex<()>,
+    /// Runtime candidates that failed to run a model a moment ago (see [`router::FailureMemory`]).
+    pub route_failures: Arc<router::FailureMemory>,
     pub mcp: Mutex<HashMap<String, Arc<McpClient>>>,
     /// Questions an MCP server asked the person (`elicitation/create`), waiting for an answer.
     pub elicitations: Mutex<HashMap<String, (McpElicitation, oneshot::Sender<aiw_tools::mcp::Elicited>)>>,
@@ -284,6 +290,8 @@ impl Engine {
             search,
             browser,
             native_stt: Default::default(),
+            tts_gate: Default::default(),
+            route_failures: Default::default(),
             mcp: Default::default(),
             elicitations: Default::default(),
             oauth_pending: Default::default(),
@@ -470,12 +478,17 @@ impl Engine {
     /// smallest chat model downloaded on this device (see [`Engine::local_fallback_model`]).
     pub fn register_system_runtime(&self, id: &str, backend: Arc<dyn ChatBackend>) {
         let weak = Arc::downgrade(&self.0);
-        let resolver: aiw_runtimes::FallbackResolver = Arc::new(move || {
+        let resolver: aiw_runtimes::FallbackResolver = Arc::new(move |attempt| {
             let weak = weak.clone();
             Box::pin(async move {
                 let engine = Engine(weak.upgrade()?);
-                let model = engine.local_fallback_model()?;
-                engine.gateway_backend(&model).await.ok()
+                let local = engine.local_fallback_model()?;
+                let (backend, model) = engine.gateway_backend(&local).await.ok()?;
+                Some(aiw_runtimes::Fallback {
+                    backend,
+                    model,
+                    prefix: Some(format!("[Modello di sistema non disponibile ({}): risposta di un modello locale]\n\n", attempt.error)),
+                })
             })
         });
         self.register_native_runtime(id, Arc::new(aiw_runtimes::FallbackBackend::new(backend, resolver)));
@@ -716,10 +729,16 @@ impl Engine {
     /// An inference profile by id. `auto:<task>` (chat, agent, reasoning, vision) is not stored:
     /// the model adviser resolves it to what is installed now (see [`Engine::resolve_auto_profile`]).
     pub fn profile(&self, id: &str) -> Result<InferenceProfile> {
-        if let Some(task) = adviser::parse_auto_profile(id) {
-            return self.resolve_auto_profile(task);
-        }
-        self.0.store.get_doc("profile", id)?.ok_or_else(|| Error::NotFound(format!("profilo {id} non trovato")))
+        Ok(self.profile_routed(id)?.0)
+    }
+    /// Like [`Engine::profile`], with the plan of the runtime router when the profile's runtime is
+    /// `auto` (the returned profile always names a real runtime).
+    pub(crate) fn profile_routed(&self, id: &str) -> Result<(InferenceProfile, Option<router::RoutePlan>)> {
+        let p = match adviser::parse_auto_profile(id) {
+            Some(task) => self.resolve_auto_profile(task)?,
+            None => self.0.store.get_doc("profile", id)?.ok_or_else(|| Error::NotFound(format!("profilo {id} non trovato")))?,
+        };
+        self.resolve_runtime(p)
     }
     /// The model adviser's answer for this device, from the models found on disk right now.
     pub fn recommend(&self) -> aiw_core::api::Recommendations {
@@ -771,9 +790,20 @@ impl Engine {
         if p.id.starts_with("auto:") {
             return Err(Error::Invalid("gli id che iniziano con «auto:» sono riservati ai profili automatici".into()));
         }
-        let manifest = self.0.runtimes.manifest(&p.runtime_id)?;
-        // A runtime that cannot load an adapter says so now, not at the first message.
-        aiw_runtimes::adapters::validate(&manifest, &p.params.adapters)?;
+        if p.runtime_id == "auto" {
+            if p.model.trim().is_empty() {
+                return Err(Error::Invalid("con il runtime automatico serve un modello".into()));
+            }
+            if !p.params.adapters.is_empty() {
+                return Err(Error::Invalid(
+                    "gli adapter si caricano all'avvio di un runtime preciso: scegli il runtime invece di «Automatico»".into(),
+                ));
+            }
+        } else {
+            let manifest = self.0.runtimes.manifest(&p.runtime_id)?;
+            // A runtime that cannot load an adapter says so now, not at the first message.
+            aiw_runtimes::adapters::validate(&manifest, &p.params.adapters)?;
+        }
         self.0.store.put_doc("profile", &p.id, &p)?;
         Ok(p)
     }
@@ -1588,9 +1618,11 @@ impl Engine {
         // The router (top-level runs of agents with candidate profiles) may replace the agent's own profile.
         // A team session keeps the profile of its own agent: its members run with theirs.
         let routed = if team.is_none() { self.route_profile(&agent) } else { None };
-        let profile = match &routed {
-            Some((p, _)) => p.clone(),
-            None => self.profile(&agent.inference_profile).map_err(|e| gone("il profilo", e))?,
+        // A profile whose runtime is `auto` is resolved now, by the runtime router; `route_plan` keeps the
+        // alternatives for the fallback.
+        let (profile, route_plan) = match &routed {
+            Some((p, _)) => self.profile_routed(&p.id).map_err(|e| gone("il profilo", e))?,
+            None => self.profile_routed(&agent.inference_profile).map_err(|e| gone("il profilo", e))?,
         };
         let manifest = self.0.runtimes.manifest(&profile.runtime_id).map_err(|e| gone("il runtime", e))?;
         if profile.model.is_empty() && manifest.launch.as_ref().map(|l| l.requires_model).unwrap_or(false) {
@@ -1629,6 +1661,9 @@ impl Engine {
                 &run_id,
                 AgEvent::Custom { name: "aiw.route".into(), value: json!({"profile": choice.profile, "reason": choice.reason}) },
             );
+        }
+        if let Some(plan) = &route_plan {
+            self.emit(&run_id, AgEvent::Custom { name: router::RUNTIME_EVENT.into(), value: router::runtime_event(plan, None) });
         }
         // Only a model known not to see images loses them; an unknown one gets them and the runner
         // retries without them if the backend refuses.
@@ -1698,7 +1733,7 @@ impl Engine {
         let rid = run_id.clone();
         let (from_name, from_mode) = (run_input.agent.name.clone(), run_input.policy.mode.clone());
         tokio::spawn(async move {
-            let host = EngineHost::new(engine.clone(), Some(session.id.clone()), None);
+            let host = EngineHost::new(engine.clone(), Some(session.id.clone()), None).with_route(rid.clone(), route_plan);
             let host = if read_only_run { host.denying_approvals() } else { host };
             let host = Arc::new(if channel_kind == Some(channels::RunKind::Ask) {
                 host.with_approval_timeout(channels::APPROVAL_WAIT)
@@ -2577,6 +2612,8 @@ mod tests_proactive;
 #[cfg(test)]
 mod tests_roles;
 #[cfg(test)]
+mod tests_router;
+#[cfg(test)]
 mod tests_routing;
 #[cfg(test)]
 mod tests_search;
@@ -2586,6 +2623,8 @@ mod tests_thinking;
 mod tests_traces;
 #[cfg(test)]
 mod tests_train;
+#[cfg(test)]
+mod tests_tts;
 #[cfg(test)]
 mod tests_validation;
 #[cfg(test)]

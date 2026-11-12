@@ -807,7 +807,7 @@ describe("voice mode (demo)", () => {
     expect(v.models).toContain("ggml-large-v3-turbo-q5_0");
     expect(v.language).toBe("it");
     const view = await api.config();
-    expect(Object.keys(view.schema.properties).filter((k) => k.startsWith("voice."))).toEqual(["voice.language", "voice.stt_runtime", "voice.stt_model", "voice.tts_voice"]);
+    expect(Object.keys(view.schema.properties).filter((k) => k.startsWith("voice."))).toEqual(["voice.language", "voice.stt_runtime", "voice.stt_model", "voice.tts_voice", "voice.tts.engine", "voice.tts.voice", "voice.tts.speed", "voice.tts.server_url", "voice.tts.server_model"]);
   });
 
   it("offers the interface mode, simple by default, and saves a change in a layer", async () => {
@@ -1010,5 +1010,48 @@ describe("the model adviser of the demo", () => {
       expect(r[task].installed && r[task].download, task).toBeFalsy();
     }
     expect(r.tier).toBe("xl");
+  });
+});
+
+describe("the runtime router in the demo", () => {
+  it("ranks ready runtimes first, leaves out the ones that cannot run, and keeps remote devices for the profiles that allow them", async () => {
+    const api = new MockTransport();
+    const gguf = (await api.models()).find((m) => m.format === "gguf")!;
+    const local = await api.route(gguf.id, 4096);
+    expect(local.wanted_context).toBe(4096);
+    expect(local.candidates.length).toBeGreaterThan(0);
+    expect(local.candidates.map((c) => c.rank)).toEqual(local.candidates.map((_, i) => i + 1));
+    expect(local.candidates.every((c) => !c.remote && c.reason !== "")).toBe(true);
+    expect(local.excluded.some((x) => x.runtime_name !== "" && x.reason !== "")).toBe(true);
+    const remote = await api.route(gguf.id, undefined, true);
+    expect(remote.wanted_context).toBe(8192);
+    expect((await api.route("sconosciuto")).candidates).toEqual([]);
+  });
+});
+
+describe("voice: neural speech demo", () => {
+  it("reports Piper with voices, and follows the engine setting", async () => {
+    const api = new MockTransport();
+    const st = await api.voice();
+    expect(st.tts).toMatchObject({ setting: "auto", engine: "piper", neural: true, max_chars: 4000 });
+    expect(st.tts.languages).toEqual(["en", "it"]);
+    expect(st.tts.picks.it).toBe("it_it-paola-medium");
+    await api.setConfig("device", "voice.tts.engine", "system");
+    const off = (await api.voice()).tts;
+    expect(off).toMatchObject({ engine: "system", neural: false, voices: [] });
+    await api.setConfig("device", "voice.tts.engine", "auto");
+  });
+
+  it("speaks a WAV and refuses like the engine does", async () => {
+    const api = new MockTransport();
+    const out = await api.speak({ text: "Ciao a tutti." });
+    expect(out.mime).toBe("audio/wav");
+    const bytes = Uint8Array.from(atob(out.audio), (c) => c.charCodeAt(0));
+    expect(String.fromCharCode(...bytes.subarray(0, 4))).toBe("RIFF");
+    await expect(api.speak({ text: "   " })).rejects.toMatchObject({ status: 400 });
+    await expect(api.speak({ text: "a".repeat(4001) })).rejects.toMatchObject({ status: 400 });
+    await api.setConfig("device", "voice.tts.engine", "system");
+    await expect(api.speak({ text: "Ciao" })).rejects.toMatchObject({ status: 422 });
+    await api.setConfig("device", "voice.tts.engine", "auto");
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { models, profiles, runtimes } from "../../../shared/api/mock/fixtures";
 import type { InferenceProfile, LocalModel } from "../../../shared/api/types";
 import {
-  blankProfile, chatRuntimes, compatibleModels, hasProfileErrors, hiddenProfileErrors, idForProfile, incompatibility, modelAfterRuntimeChange, normalizeProfile, validateProfile,
+  blankProfile, chatRuntimes, compatibleModels, hasProfileErrors, hiddenProfileErrors, idForProfile, incompatibility, isSpeechOnly, modelAfterRuntimeChange, normalizeProfile, validateProfile,
 } from "./profiles";
 
 const model = (id: string, compat: { id: string; available: boolean; reason?: string }[], over: Partial<LocalModel> = {}): LocalModel => ({
@@ -130,5 +130,42 @@ describe("what saving the simple form keeps", () => {
   it("tells errors in fields the simple form hides from the ones it shows", () => {
     const issues = validateProfile(ok({ name: "", params: { context: 100 } }), ctx);
     expect(hiddenProfileErrors(issues).map((i) => i.field)).toEqual(["context"]);
+  });
+});
+
+describe("the automatic runtime", () => {
+  const auto = (over: Partial<InferenceProfile["params"]> = {}): InferenceProfile => ({
+    id: "a", name: "Auto", runtime_id: "auto", model: models[0].id, params: { context: 8192, ...over },
+  });
+
+  it("offers every chat model, whatever the runtime", () => {
+    const list = compatibleModels(models, "auto");
+    expect(list.length).toBeGreaterThan(0);
+    expect(list.every((m) => !m.capabilities.every((c) => c === "stt"))).toBe(true);
+  });
+
+  it("is valid with a model, and keeps allow_remote only then", () => {
+    expect(hasProfileErrors(validateProfile(auto(), { runtimes, models }))).toBe(false);
+    expect(normalizeProfile(auto({ allow_remote: true })).params.allow_remote).toBe(true);
+    expect(normalizeProfile(auto({ allow_remote: false })).params.allow_remote).toBeUndefined();
+    expect(normalizeProfile({ ...auto({ allow_remote: true }), runtime_id: "llama-server" }).params.allow_remote).toBeUndefined();
+  });
+
+  it("refuses adapters: they need a runtime that loads them at start", () => {
+    const issues = validateProfile(auto({ adapters: [{ path: "/a.gguf" }] }), { runtimes, models });
+    expect(issues.some((i) => i.field === "adapters" && i.level === "error")).toBe(true);
+    expect(normalizeProfile(auto({ adapters: [{ path: "/a.gguf" }] })).params.adapters).toBeUndefined();
+  });
+});
+
+describe("speech-only models", () => {
+  it("keeps Whisper models, Piper voices and their runtimes out of chat profiles", () => {
+    expect(isSpeechOnly(["stt"])).toBe(true);
+    expect(isSpeechOnly(["tts"])).toBe(true);
+    expect(isSpeechOnly(["chat", "tts"])).toBe(false);
+    expect(isSpeechOnly([])).toBe(false);
+    const voice = model("it_it-paola-medium", [{ id: "piper", available: true }], { format: "piper", capabilities: ["tts"] });
+    expect(compatibleModels([voice, a], "piper")).toEqual([]);
+    expect(chatRuntimes([{ capabilities: ["tts"] }, { capabilities: ["chat"] }])).toHaveLength(1);
   });
 });
