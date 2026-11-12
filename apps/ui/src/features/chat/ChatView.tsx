@@ -1,3 +1,6 @@
+import { useStoredUiMode } from "../../shared/lib/uiMode";
+import { useMcpPrompts } from "../mcp/api";
+import { McpPromptPicker } from "../mcp/McpPromptPicker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, navigate, useParams } from "../../app/router";
@@ -115,6 +118,10 @@ export function ChatView() {
   const memoryToConfirm = memoryPendingFor(pendingLessons, openId);
   const lessonToReview = memoryToConfirm ? undefined : pendingFor(pendingLessons, openId);
   const [input, setInput] = useDraft(openId);
+  // «Prompt MCP»: developer mode, and only when a connected server has prompts.
+  const developer = useStoredUiMode() === "developer";
+  const mcpPrompts = useMcpPrompts(developer);
+  const [promptPicker, setPromptPicker] = useState(false);
   const [focusTick, setFocusTick] = useState(0);
   const [showSessions, setShowSessions] = useState(false);
   const compactSessions = useMediaQuery(COMPACT_SESSIONS_QUERY);
@@ -250,10 +257,17 @@ export function ChatView() {
         <Composer
           attachments={{ items: attachments.files, onAdd: attachments.add, onRemove: attachments.remove }}
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}
+          onMcpPrompt={developer && (mcpPrompts.data?.length ?? 0) > 0 ? () => setPromptPicker(true) : undefined}
           focusKey={`${openId}:${focusTick}`} voice={voice} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined}
           modelLabel={profile ? `${profile.runtime_id} · ${profile.model || "nessun modello"}` : undefined}
           placeholder={!openId ? "Crea una sessione per iniziare" : logState.status === "loading" ? "Carico la conversazione…" : `Scrivi a ${agent?.name ?? "l'agente"}…`}
         />
+        {promptPicker && mcpPrompts.data && (
+          <McpPromptPicker
+            prompts={mcpPrompts.data} onClose={() => setPromptPicker(false)}
+            onInsert={(text) => { setInput(input.trim() ? `${input.trimEnd()}\n\n${text}` : text); setFocusTick((n) => n + 1); }}
+          />
+        )}
         <p className="sr-only" role="status" aria-live="polite">{announce}</p>
       </section>
 

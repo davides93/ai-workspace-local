@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { PairingScreen } from "../features/pairing/PairingScreen";
 import { ApprovalsCenter } from "../features/approvals/ApprovalsCenter";
+import { McpElicitationCenter } from "../features/mcp/McpElicitationCenter";
 import { useDownloadsWatcher } from "../features/models/api";
 import { rememberChatSession } from "../shared/lib/navMemory";
 import { useHotkey } from "../shared/lib/useHotkey";
@@ -65,6 +66,7 @@ export function App() {
         <DemoBanner />
         <ConnectionBanner />
         <ApprovalsCenter />
+        <McpElicitationCenter />
         <ErrorBoundary key={resolved?.route.id ?? "404"}>
           <Suspense fallback={<PageSkeleton />}>
             {needsPairing ? (

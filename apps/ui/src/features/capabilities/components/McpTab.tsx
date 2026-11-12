@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { McpServer } from "../../../shared/api/types";
 import { Button, Dialog, EmptyState, Icon, QueryState, Section } from "../../../shared/ui";
-import { useMcpServers, useRemoveMcpServer, useSaveMcpServer, useSetToolsEnabled, useTools } from "../api";
+import { useMcpServers, useMcpSignIn, useMcpSignOut, useReconnectMcp, useRemoveMcpServer, useSaveMcpServer, useSetToolsEnabled, useTools } from "../api";
 import { draftFromServer, draftToPayload } from "../model/mcpForm";
 import { McpServerCard } from "./McpServerCard";
 import { McpServerDrawer } from "./McpServerDrawer";
@@ -13,6 +13,9 @@ export function McpTab() {
   const save = useSaveMcpServer();
   const remove = useRemoveMcpServer();
   const setTools = useSetToolsEnabled();
+  const reconnect = useReconnectMcp();
+  const signIn = useMcpSignIn();
+  const signOut = useMcpSignOut();
   // `"new"` opens an empty form, a server opens it for editing.
   const [editing, setEditing] = useState<McpServer | "new" | null>(null);
   const [removing, setRemoving] = useState<McpServer | null>(null);
@@ -54,6 +57,8 @@ export function McpTab() {
                 onToggleServer={(enabled) => toggleServer(s, enabled)}
                 onToggleTool={(name, enabled) => setTools.mutate({ names: [name], enabled })}
                 onEdit={() => setEditing(s)} onRemove={() => setRemoving(s)}
+                onReconnect={() => reconnect.mutate(s)} onSignIn={() => signIn.mutate(s)} onSignOut={() => signOut.mutate(s)}
+                busy={reconnect.isPending || signIn.isPending || signOut.isPending}
               />
             ))}
           </div>

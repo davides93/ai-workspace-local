@@ -162,6 +162,8 @@ impl RunHost for EngineHost {
         }
         // The run budget is shared with the parent: delegating does not buy more.
         input.budget = parent.budget.clone();
+        // Its MCP servers are served by the same run hooks: same caps, same budget.
+        input.tool_ctx.mcp_run = parent.tool_ctx.mcp_run.clone();
         // Same for the sandbox and the tool list.
         input.tool_ctx.sandbox = narrow_sandbox(parent.tool_ctx.sandbox, input.tool_ctx.sandbox);
         input.agent.tools = narrow_tools(&parent.agent.tools, &input.agent.tools);

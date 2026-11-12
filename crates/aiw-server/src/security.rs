@@ -29,6 +29,11 @@ use std::net::IpAddr;
 /// Paths that need the token (everything else is the static UI, the public agent card and the
 /// webhooks, which carry their own secret).
 pub(crate) fn is_guarded(path: &str) -> bool {
+    // The return of the browser from an OAuth authorization server cannot carry the token: the handler
+    // checks the peer and the one-time `state` itself.
+    if path == "/api/mcp/oauth/callback" {
+        return false;
+    }
     path.starts_with("/api/") || path.starts_with("/v1/") || path == "/mcp" || path == "/a2a"
 }
 

@@ -312,10 +312,26 @@ proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs
 - **Stato condiviso**: il tool `team_state` (leggi, scrivi, elimina; 64 chiavi, 32 KB) vive nel `RunState.shared` del run
   radice ed è pubblicato con `STATE_SNAPSHOT`.
 - **Agenti remoti**: il registro (`remote_agent`, API `/api/remote-agents`) e i dispositivi accoppiati. Il client A2A
-  (`aiw-engine/src/a2a_client.rs`) legge l'Agent Card, invia `SendMessage` non bloccante, interroga `GetTask` con
+  (`aiw-engine/src/a2a_client.rs`) legge l'Agent Card; se annuncia `capabilities.streaming` invia
+  `SendStreamingMessage` e segue il flusso SSE (avanzamenti come eventi `aiw.remote_progress` del run padre), altrimenti
+  (o se il flusso non parte o si interrompe) invia `SendMessage` non bloccante e interroga `GetTask` con
   attesa crescente fino a `completed`, `failed` o `canceled` (o al timeout `a2a.timeout_seconds`) e invia `CancelTask`
   se il run viene annullato. Rete solo verso gli URL registrati; ogni delega è nell'audit (`a2a.delegate`, `a2a.result`).
-  Il server A2A (`aiw-server/src/a2a.rs`) tiene i task in SQLite (`a2a_tasks`, scadenza 24 ore, pulizia all'avvio).
+  Il server A2A (`aiw-server/src/a2a.rs`) tiene i task in SQLite (`a2a_tasks`, scadenza 24 ore, pulizia all'avvio) e
+  trasmette `SendStreamingMessage` / `SubscribeToTask` in SSE: il primo evento è il task, poi `statusUpdate` e
+  `artifactUpdate` ricavati dal bus degli eventi del run (testo → pezzi dell'artefatto, strumenti → messaggi di stato);
+  lo stato finale si legge dal task salvato, così il flusso si chiude anche se il run lo ha avviato un altro.
+- **Client MCP** (`aiw-tools/src/mcp.rs`): una `McpClient` per server, che sopravvive alle riconnessioni (la connessione
+  `Conn` — un processo o una sessione HTTP — si sostituisce). Stati: connesso, in connessione, riconnessione (attesa
+  esponenziale 1→30 s, 6 tentativi), non raggiungibile, serve l'accesso (401). Richieste e notifiche del server
+  arrivano da stdio, dal flusso SSE di ogni POST e dal GET facoltativo; `McpEvents` (implementato dal motore) dà il
+  token OAuth e riceve i cambi di stato e di elenco, `RunMcp` (nel `ToolContext`, uno per run, condiviso coi
+  sotto-agenti) risponde al campionamento (profilo e budget del run, tetti in `mcp.sampling.*`, audit) e alle domande
+  del server (`McpElicitation` in attesa di risposta). `aiw-tools/src/mcp_oauth.rs` è il protocollo OAuth 2.1
+  (scoperta RFC 9728/8414, registrazione RFC 7591, PKCE S256, `resource` RFC 8707, controlli su https/origine/issuer);
+  `aiw-engine/src/mcp_oauth.rs` conserva stato e token (raccolta `mcp_oauth`, come gli altri segreti) e li rinnova.
+  Il ritorno dal browser è `GET /api/mcp/oauth/callback`, escluso dal token API ma solo da questo computer e con
+  `state` monouso.
 
 ### 5.2 Policy, sandbox, audit
 
@@ -638,7 +654,7 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | `computer_*` (screenshot, click, type, key, scroll) | desktop (feature `computer-use`) · Android via AccessibilityService (plugin) | Modalità *vision* oppure *accessibility* |
 | `todo`, `agent` (subagente), `skill` | tutte | — |
 | `kb_search` | tutte | Rischio `read`, nessuna conferma. Visibile solo se esiste una raccolta di documenti; cerca per parole chiave e per significato nelle raccolte dell'agente (`AgentProfile.knowledge`, vuoto = tutte) e restituisce estratti «[documento · parte N]» |
-| `mcp__<server>__<tool>` | tutte (stdio solo desktop) | Client MCP: stdio e streamable HTTP |
+| `mcp__<server>__<tool>` | tutte (stdio solo desktop) | Client MCP: stdio e streamable HTTP; con le risorse anche `mcp__<server>__list_resources` e `mcp__<server>__read_resource` (rischio `read`) |
 
 ## 7. Configurazione a strati
 
@@ -677,7 +693,8 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET/POST | `/api/datasets` · GET/DELETE `/api/datasets/{id}` | Dataset di addestramento: POST crea da sessioni, feedback e report (`DatasetSpec`), rifiuta con meno di 10 esempi |
 | GET/POST | `/api/train/jobs` · GET `/api/train/jobs/{id}` · `/api/train/jobs/{id}/log?lines=` · POST `/api/train/jobs/{id}/cancel` | Addestramenti (uno alla volta), log e annullamento |
 | GET/DELETE | `/api/adapters[/{id}]` | Adapter registrati; un adapter usato da un profilo non si cancella |
-| GET/POST | `/api/mcp/servers` | Server MCP |
+| GET/POST | `/api/mcp/servers` · POST `/api/mcp/servers/{id}/reconnect` · POST `/api/mcp/servers/{id}/oauth/start` · DELETE `/api/mcp/servers/{id}/oauth` · GET `/api/mcp/oauth/callback` | Server MCP, riconnessione, accesso OAuth (il ritorno non richiede il token API) |
+| GET/POST | `/api/mcp/prompts` · `/api/mcp/prompts/get` · GET `/api/mcp/elicitations` · POST `/api/mcp/elicitations/{id}` | Prompt dei server MCP e domande dei server alla persona |
 | GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
 | GET/POST | `/api/kb/collections` · PATCH/DELETE `/api/kb/collections/{id}` | Raccolte di documenti |

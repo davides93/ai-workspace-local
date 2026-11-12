@@ -162,6 +162,8 @@ fn http_server(url: &str) -> McpServerConfig {
         env: None,
         headers: None,
         enabled: false,
+        sampling: false,
+        oauth_client_id: None,
     }
 }
 

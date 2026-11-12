@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
   AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
+  InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -239,6 +239,17 @@ export interface Transport {
   mcpServers(): Promise<McpServer[]>;
   saveMcpServer(s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }): Promise<McpServer>;
   removeMcpServer(id: string): Promise<void>;
+  /** «Riconnetti»: a new attempt now, with the backoff starting over. */
+  reconnectMcpServer(id: string): Promise<McpServer>;
+  /** «Accedi»: the page of the authorization server, to open in the system browser. */
+  mcpOAuthStart(id: string): Promise<{ authorization_url: string }>;
+  mcpOAuthSignout(id: string): Promise<void>;
+  /** The prompts of the connected servers. */
+  mcpPrompts(): Promise<McpPromptInfo[]>;
+  mcpPromptGet(serverId: string, name: string, args: Record<string, string>): Promise<McpPromptResult>;
+  /** Questions of MCP servers waiting for the person. */
+  mcpElicitations(): Promise<McpElicitation[]>;
+  respondMcpElicitation(id: string, answer: McpElicitationAnswer): Promise<void>;
 
   policy(): Promise<{ rules: PolicyRule[] }>;
   setPolicy(rules: PolicyRule[]): Promise<{ rules: PolicyRule[] }>;

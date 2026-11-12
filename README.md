@@ -106,7 +106,7 @@ token ottenuto con il codice di pairing a 6 cifre.
 | `/v1/messages` | Client Anthropic Messages, streaming e tool compresi |
 | `/v1/audio/transcriptions` | Trascrizione (multipart OpenAI) con il whisper di questo dispositivo |
 | `/mcp` | Server MCP: strumenti e agenti locali per altre app o dispositivi |
-| `/a2a`, `/.well-known/agent-card.json` | A2A 1.0 (JSON-RPC): altri agenti affidano task a quelli locali |
+| `/a2a`, `/.well-known/agent-card.json` | A2A 1.0 (JSON-RPC, anche in streaming SSE): altri agenti affidano task a quelli locali |
 | `/hooks/{id}` | Trigger webhook dei workflow (segreto o firma HMAC-SHA256 stile GitHub) |
 
 ### Voce

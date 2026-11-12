@@ -1167,9 +1167,54 @@ export interface McpServer {
   /** Extra HTTP headers of an http server (e.g. `Authorization`); secret values come back as `SECRET_MASK`. */
   headers?: Record<string, unknown>;
   enabled: boolean;
-  status: "connected" | "disconnected" | "error";
+  /** Lets the server ask the model of a run for completions (`sampling/createMessage`). Off by default. */
+  sampling?: boolean;
+  /** Client id registered by hand, for authorization servers without dynamic registration. */
+  oauth_client_id?: string;
+  /**
+   * `connecting`, `reconnecting` (backoff in progress, see `attempt`), `unreachable` (gave up: «Riconnetti»),
+   * `auth_required` (the server answered 401: «Accedi»), `disconnected` (switched off).
+   */
+  status: "connected" | "connecting" | "reconnecting" | "unreachable" | "auth_required" | "disconnected";
   tools: string[];
   error?: string;
+  capabilities?: { tools: boolean; resources: boolean; prompts: boolean };
+  attempt?: number;
+  /** OAuth tokens are stored for this server (their values are never returned). */
+  signed_in?: boolean;
+}
+
+/** A prompt a connected MCP server offers (`GET /api/mcp/prompts`). */
+export interface McpPromptInfo {
+  server_id: string;
+  server: string;
+  name: string;
+  description: string;
+  arguments: { name: string; description: string; required: boolean }[];
+}
+
+/** A prompt rendered (`POST /api/mcp/prompts/get`): `text` goes in the composer for the person to review. */
+export interface McpPromptResult {
+  description: string;
+  text: string;
+}
+
+/** A question an MCP server asks the person during a run: a flat form (`GET /api/mcp/elicitations`). */
+export interface McpElicitation {
+  id: string;
+  run_id: string;
+  server: string;
+  message: string;
+  schema: {
+    type: "object";
+    properties: Record<string, { type: "string" | "number" | "integer" | "boolean"; title?: string; description?: string; enum?: string[] }>;
+    required?: string[];
+  };
+}
+
+export interface McpElicitationAnswer {
+  action: "accept" | "decline" | "cancel";
+  content?: Record<string, string | number | boolean>;
 }
 
 // ---------- Config & audit ----------

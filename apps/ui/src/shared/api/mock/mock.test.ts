@@ -610,6 +610,28 @@ describe("backend fixes in the demo", () => {
     await api.setToolEnabled("shell", true);
   });
 
+  it("supports reconnection, sign-in, prompts and questions of MCP servers", async () => {
+    const api = new MockTransport();
+    const list = await api.mcpServers();
+    const pg = list.find((s) => s.name === "postgres")!;
+    const notes = list.find((s) => s.name === "appunti")!;
+    expect([pg.status, notes.status]).toEqual(["unreachable", "auth_required"]);
+    expect(list.find((s) => s.name === "github")!.capabilities).toEqual({ tools: true, resources: false, prompts: true });
+    expect((await api.reconnectMcpServer(pg.id)).status).toBe("connected");
+    await expect(api.reconnectMcpServer("nope")).rejects.toMatchObject({ status: 404 });
+    expect(await api.mcpOAuthStart(notes.id)).toEqual({ authorization_url: "" });
+    const after = (await api.mcpServers()).find((s) => s.name === "appunti")!;
+    expect([after.status, after.signed_in]).toEqual(["connected", true]);
+    await api.mcpOAuthSignout(notes.id);
+    expect((await api.mcpServers()).find((s) => s.name === "appunti")!.signed_in).toBe(false);
+    await expect(api.mcpOAuthStart("mcp_fs")).rejects.toMatchObject({ status: 400 });
+    const prompts = await api.mcpPrompts();
+    expect(prompts[0]).toMatchObject({ server: "github", name: "rivedi_pr" });
+    expect((await api.mcpPromptGet("mcp_gh", "rivedi_pr", { numero: "42" })).text).toContain("#42");
+    await expect(api.mcpPromptGet("mcp_gh", "rivedi_pr", {})).rejects.toMatchObject({ status: 400 });
+    expect(await api.mcpElicitations()).toEqual([]);
+  });
+
   it("masks the secrets of MCP servers and keeps the stored value when the mask comes back", async () => {
     const api = new MockTransport();
     const gh = (await api.mcpServers()).find((s) => s.name === "github")!;

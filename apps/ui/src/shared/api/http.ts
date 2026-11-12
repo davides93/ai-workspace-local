@@ -2,7 +2,7 @@ import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
   AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -319,6 +319,14 @@ export class HttpTransport implements Transport {
   mcpServers = () => this.req<McpServer[]>("GET", "/mcp/servers");
   saveMcpServer = (s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }) => this.req<McpServer>("POST", "/mcp/servers", s);
   removeMcpServer = (id: string) => this.req<void>("DELETE", `/mcp/servers/${enc(id)}`);
+  reconnectMcpServer = (id: string) => this.req<McpServer>("POST", `/mcp/servers/${enc(id)}/reconnect`);
+  mcpOAuthStart = (id: string) => this.req<{ authorization_url: string }>("POST", `/mcp/servers/${enc(id)}/oauth/start`);
+  mcpOAuthSignout = (id: string) => this.req<void>("DELETE", `/mcp/servers/${enc(id)}/oauth`);
+  mcpPrompts = () => this.req<McpPromptInfo[]>("GET", "/mcp/prompts");
+  mcpPromptGet = (serverId: string, name: string, args: Record<string, string>) =>
+    this.req<McpPromptResult>("POST", "/mcp/prompts/get", { server_id: serverId, name, arguments: args });
+  mcpElicitations = () => this.req<McpElicitation[]>("GET", "/mcp/elicitations");
+  respondMcpElicitation = (id: string, answer: McpElicitationAnswer) => this.req<void>("POST", `/mcp/elicitations/${enc(id)}`, answer);
 
   policy = () => this.req<{ rules: PolicyRule[] }>("GET", "/policy");
   setPolicy = (rules: PolicyRule[]) => this.req<{ rules: PolicyRule[] }>("PUT", "/policy", { rules });

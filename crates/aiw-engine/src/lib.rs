@@ -10,6 +10,8 @@ pub mod eval;
 mod host;
 pub mod kb;
 mod learning;
+mod mcp_host;
+mod mcp_oauth;
 pub mod memory;
 mod models;
 pub mod notices;
@@ -43,7 +45,7 @@ use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use aiw_models::{DownloadManager, DownloadOptions, ExternalRoots, Hub, HubConfig};
 use aiw_runtimes::{ChatBackend, RuntimeRegistry};
 use aiw_tools::browser::BrowserManager;
-use aiw_tools::mcp::{McpClient, McpTool};
+use aiw_tools::mcp::McpClient;
 use aiw_tools::{SandboxMode, ToolContext, ToolRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -135,8 +137,11 @@ pub(crate) struct Inner {
     pub search: aiw_tools::search::Shared,
     pub browser: Arc<BrowserManager>,
     pub native_stt: RwLock<Option<Arc<dyn voice::NativeStt>>>,
-    pub mcp: tokio::sync::Mutex<HashMap<String, Arc<McpClient>>>,
-    pub mcp_status: RwLock<HashMap<String, (String, Option<String>)>>,
+    pub mcp: Mutex<HashMap<String, Arc<McpClient>>>,
+    /// Questions an MCP server asked the person (`elicitation/create`), waiting for an answer.
+    pub elicitations: Mutex<HashMap<String, (McpElicitation, oneshot::Sender<aiw_tools::mcp::Elicited>)>>,
+    /// OAuth sign-ins in progress, by `state` (see `mcp_oauth`).
+    pub oauth_pending: Mutex<HashMap<String, mcp_oauth::PendingAuth>>,
     pub store: Store,
     pub runs: Mutex<HashMap<String, RunHandle>>,
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
@@ -276,7 +281,8 @@ impl Engine {
             browser,
             native_stt: Default::default(),
             mcp: Default::default(),
-            mcp_status: Default::default(),
+            elicitations: Default::default(),
+            oauth_pending: Default::default(),
             store,
             runs: Default::default(),
             approvals: Default::default(),
@@ -1404,6 +1410,15 @@ impl Engine {
             .chain(self.remote_subagents())
             .collect();
         let agent_budget = agent.budget.clone().unwrap_or_default();
+        let budget = Arc::new(if depth == 0 { self.run_budget(&agent_budget, None) } else { RunBudget::unlimited() });
+        tool_ctx.mcp_run = Some(Arc::new(mcp_host::EngineRunMcp::new(
+            self.clone(),
+            run_id,
+            thread_id,
+            profile.clone(),
+            budget.clone(),
+            tool_ctx.cancel.clone(),
+        )));
         let thinking = self.thinking_for(&profile, None);
         // Models by role: only for the run the person started, never for a sub-agent.
         let roles = if depth == 0 { self.resolve_roles(&agent, &profile) } else { None };
@@ -1427,7 +1442,7 @@ impl Engine {
             depth,
             session_allow,
             subagents,
-            budget: Arc::new(if depth == 0 { self.run_budget(&agent_budget, None) } else { RunBudget::unlimited() }),
+            budget,
             max_parallel_subagents: self.0.config.get("agents.max_parallel_subagents").and_then(|v| v.as_u64()).unwrap_or(3).max(1)
                 as usize,
             in_team: false,
@@ -2041,7 +2056,6 @@ impl Engine {
         self.0.store.put_doc("tool_settings", "disabled", &self.0.tools.disabled())
     }
     pub fn mcp_servers(&self) -> Vec<McpServerInfo> {
-        let status = self.0.mcp_status.read().unwrap().clone();
         let tools = self.0.tools.info();
         self.0
             .store
@@ -2049,33 +2063,26 @@ impl Engine {
             .unwrap_or_default()
             .into_iter()
             .map(|c| {
-                let (st, err) = status.get(&c.id).cloned().unwrap_or_else(|| ("disconnected".into(), None));
+                let (status, error, attempt, capabilities) = self.mcp_state_view(&c.id);
                 let t = tools.iter().filter(|t| t.server.as_deref() == Some(c.name.as_str())).map(|t| t.name.clone()).collect();
-                McpServerInfo { config: secrets::masked(c), status: st, tools: t, error: err }
+                let signed_in = self.oauth_signed_in(&c.id);
+                McpServerInfo { config: secrets::masked(c), status, tools: t, error, capabilities, attempt, signed_in }
             })
             .collect()
     }
-    async fn connect_mcp(&self, cfg: McpServerConfig) -> Result<()> {
-        self.0.mcp_status.write().unwrap().insert(cfg.id.clone(), ("disconnected".into(), None));
-        match McpClient::connect(&cfg).await {
-            Ok(c) => {
-                let c = Arc::new(c);
-                self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", cfg.name)));
-                for t in McpTool::wrap(c.clone()) {
-                    self.0.tools.register(t);
-                }
-                if let Some(old) = self.0.mcp.lock().await.insert(cfg.id.clone(), c) {
-                    old.shutdown().await;
-                }
-                self.0.mcp_status.write().unwrap().insert(cfg.id.clone(), ("connected".into(), None));
-                Ok(())
-            }
-            Err(e) => {
-                tracing::warn!(server = %cfg.name, "MCP connection failed: {e}");
-                self.0.mcp_status.write().unwrap().insert(cfg.id.clone(), ("error".into(), Some(e.to_string())));
-                Err(e)
-            }
+    pub(crate) async fn connect_mcp(&self, cfg: McpServerConfig) -> Result<()> {
+        let events = Arc::new(mcp_host::EngineMcpEvents(Arc::downgrade(&self.0)));
+        let c = McpClient::new(&cfg, events);
+        let old = self.0.mcp.lock().unwrap().insert(cfg.id.clone(), c.clone());
+        if let Some(old) = old {
+            old.shutdown().await;
         }
+        self.register_mcp_tools(&c);
+        let r = c.start().await;
+        if let Err(e) = &r {
+            tracing::warn!(server = %cfg.name, "MCP connection failed: {e}");
+        }
+        r
     }
     /// Saves (and connects, when enabled) an MCP server. The configuration is checked before
     /// anything is stored; a header or variable that comes back as [`SECRET_MASK`] keeps the
@@ -2091,8 +2098,13 @@ impl Engine {
         let stored = self.0.store.get_doc::<McpServerConfig>("mcp", &cfg.id)?;
         let cfg = secrets::unmasked(cfg, stored.as_ref());
         self.0.store.put_doc("mcp", &cfg.id, &cfg)?;
+        if let Some(old) = stored.as_ref().filter(|o| o.name != cfg.name) {
+            self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", old.name)));
+        }
         if cfg.enabled {
             let _ = self.connect_mcp(cfg.clone()).await;
+        } else {
+            self.stop_mcp(&cfg);
         }
         self.mcp_servers()
             .into_iter()
@@ -2103,13 +2115,18 @@ impl Engine {
         let Some(cfg) = self.0.store.get_doc::<McpServerConfig>("mcp", id)? else {
             return Err(Error::NotFound(format!("server MCP {id} non trovato")));
         };
-        self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", cfg.name)));
-        if let Some(c) = self.0.mcp.lock().await.remove(id) {
-            c.shutdown().await;
-        }
-        self.0.mcp_status.write().unwrap().remove(id);
+        self.stop_mcp(&cfg);
+        self.oauth_forget(id);
         self.0.store.delete_doc("mcp", id)?;
         Ok(())
+    }
+    /// Disconnects a server and takes its tools out of the registry.
+    fn stop_mcp(&self, cfg: &McpServerConfig) {
+        self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", cfg.name)));
+        let old = self.0.mcp.lock().unwrap().remove(&cfg.id);
+        if let Some(c) = old {
+            tokio::spawn(async move { c.shutdown().await });
+        }
     }
 
     // ------------------------------------------------------------------ config & audit
@@ -2504,6 +2521,8 @@ mod tests_inference;
 mod tests_kb;
 #[cfg(test)]
 mod tests_learning;
+#[cfg(test)]
+mod tests_mcp;
 #[cfg(test)]
 mod tests_memory;
 #[cfg(test)]

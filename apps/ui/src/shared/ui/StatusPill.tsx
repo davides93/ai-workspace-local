@@ -16,8 +16,12 @@ export function statusTone(s: string): LedTone {
     case "verifying":
     case "waiting_approval":
     case "waiting":
+    case "connecting":
+    case "reconnecting":
+    case "auth_required":
       return "run";
     case "error":
+    case "unreachable":
     case "failed":
       return "crit";
     default:
@@ -29,6 +33,7 @@ export const statusLabel: Record<string, string> = {
   running: "In esecuzione", starting: "Avvio…", available: "Disponibile", installable: "Da installare", unsupported: "Non supportato",
   stopped: "Fermo", error: "Errore", connected: "Connesso", disconnected: "Disconnesso", succeeded: "Completato", completed: "Completato", failed: "Fallito",
   waiting_approval: "Attende conferma", cancelled: "Annullato", pending: "In coda", done: "Fatto", applied: "Applicato", skipped: "Saltato", waiting: "In attesa",
+  reconnecting: "Riconnessione…", connecting: "Connessione…", unreachable: "Non raggiungibile", auth_required: "Serve l'accesso",
   online: "Online", offline: "Offline", queued: "In coda", verifying: "Verifica",
 };
 

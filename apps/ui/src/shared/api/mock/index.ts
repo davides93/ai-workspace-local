@@ -5,7 +5,7 @@ import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, gue
 import { mockRecommend } from "./recommend";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody,
@@ -1356,6 +1356,51 @@ export class MockTransport implements Transport {
     if (i >= 0) mcp[i] = srv;
     else mcp.push(srv);
     return { ...structuredClone(srv), env: maskSecrets(srv.env), headers: maskSecrets(srv.headers) };
+  }
+  async reconnectMcpServer(id: string) {
+    const m = mcp.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `server MCP ${id} non trovato`);
+    // The demo has no servers to reach: a server that gave up is "connected" again, one that needs the sign-in stays so.
+    if (m.enabled && m.status === "unreachable") {
+      m.status = "connected";
+      m.error = undefined;
+    }
+    return { ...structuredClone(m), env: maskSecrets(m.env), headers: maskSecrets(m.headers) };
+  }
+  async mcpOAuthStart(id: string) {
+    const m = mcp.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `server MCP ${id} non trovato`);
+    if (m.transport !== "http") throw new ApiError(400, "l'accesso OAuth serve solo ai server MCP http");
+    // Demo: signing in completes on the spot, without a browser.
+    m.signed_in = true;
+    m.status = "connected";
+    m.error = undefined;
+    return { authorization_url: "" };
+  }
+  async mcpOAuthSignout(id: string) {
+    const m = mcp.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `server MCP ${id} non trovato`);
+    m.signed_in = false;
+  }
+  async mcpPrompts(): Promise<McpPromptInfo[]> {
+    return [
+      { server_id: "mcp_gh", server: "github", name: "rivedi_pr", description: "Prepara la revisione di una pull request", arguments: [
+        { name: "numero", description: "Numero della pull request", required: true }, { name: "attenzione", description: "Cosa guardare con più cura", required: false },
+      ] },
+    ];
+  }
+  async mcpPromptGet(serverId: string, name: string, args: Record<string, string>): Promise<McpPromptResult> {
+    if (!mcp.some((m) => m.id === serverId)) throw new ApiError(404, `server MCP ${serverId} non trovato`);
+    if (name !== "rivedi_pr") throw new ApiError(404, "prompt non trovato");
+    if (!args.numero) throw new ApiError(400, "manca l'argomento numero");
+    return { description: "Revisione di una pull request", text: `Rivedi la pull request #${args.numero}.${args.attenzione ? ` Guarda con più cura: ${args.attenzione}.` : ""}` };
+  }
+  /** Demo: nobody asks questions (the live engine does, while an MCP tool is running). */
+  async mcpElicitations(): Promise<McpElicitation[]> {
+    return [];
+  }
+  async respondMcpElicitation(_id: string, _answer: McpElicitationAnswer) {
+    throw new ApiError(404, "richiesta non trovata (forse già gestita)");
   }
   async removeMcpServer(id: string) {
     const i = mcp.findIndex((m) => m.id === id);

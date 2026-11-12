@@ -193,13 +193,15 @@ async fn mcp_server_works_with_our_mcp_client() {
         env: None,
         headers: None,
         enabled: true,
+        sampling: false,
+        oauth_client_id: None,
     };
     let client = aiw_tools::mcp::McpClient::connect(&cfg).await.unwrap();
-    assert!(client.tools.iter().any(|t| t.name == "list_dir" && t.read_only));
-    assert!(client.tools.iter().any(|t| t.name == "aiw_agent_run"));
-    let out = client.call_tool("list_dir", json!({"path": "."})).await.unwrap();
+    assert!(client.tools().iter().any(|t| t.name == "list_dir" && t.read_only));
+    assert!(client.tools().iter().any(|t| t.name == "aiw_agent_run"));
+    let out = client.call_tool("list_dir", json!({"path": "."}), None).await.unwrap();
     assert!(!out.is_error && out.content.contains("hello.txt"), "{}", out.content);
-    let denied = client.call_tool("read_file", json!({"path": "/etc/passwd"})).await.unwrap();
+    let denied = client.call_tool("read_file", json!({"path": "/etc/passwd"}), None).await.unwrap();
     assert!(denied.is_error, "outside the workspace must fail: {}", denied.content);
 }
 

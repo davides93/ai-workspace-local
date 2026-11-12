@@ -151,7 +151,7 @@ impl Redactor {
 
 /// The values of the stored MCP servers that are secrets (see `secrets::is_secret_name`).
 pub(crate) fn mcp_secret_values(store: &Store) -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out = crate::mcp_oauth::secret_values(store);
     for cfg in store.list_docs::<McpServerConfig>("mcp").unwrap_or_default() {
         for map in [cfg.headers.as_ref(), cfg.env.as_ref()].into_iter().flatten() {
             for (k, v) in map {

@@ -200,6 +200,15 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/tools/{name}", put(set_tool))
         .route("/api/mcp/servers", get(mcp_servers).post(save_mcp))
         .route("/api/mcp/servers/{id}", delete(remove_mcp))
+        .route("/api/mcp/servers/{id}/reconnect", post(reconnect_mcp))
+        .route("/api/mcp/servers/{id}/oauth/start", post(mcp_oauth_start))
+        .route("/api/mcp/servers/{id}/oauth", delete(mcp_oauth_signout))
+        // The browser comes back here from the authorization server: no token (see `security::is_guarded`).
+        .route("/api/mcp/oauth/callback", get(mcp_oauth_callback))
+        .route("/api/mcp/prompts", get(mcp_prompts))
+        .route("/api/mcp/prompts/get", post(mcp_prompt_get))
+        .route("/api/mcp/elicitations", get(mcp_elicitations))
+        .route("/api/mcp/elicitations/{id}", post(respond_mcp_elicitation))
         .route("/api/config", get(config).put(set_config))
         .route("/api/audit", get(audit))
         .route("/api/traces/export", get(traces_export))
@@ -1288,6 +1297,78 @@ async fn remove_mcp(State(s): State<AppState>, Path(id): Path<String>) -> ApiRes
     s.engine.remove_mcp_server(&id).await?;
     ok(json!({}))
 }
+async fn reconnect_mcp(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<McpServerInfo> {
+    ok(s.engine.reconnect_mcp_server(&id).await?)
+}
+/// Where the browser reaches this engine, for the OAuth redirect address: the `Host` the UI used when
+/// it is a local name, else the default local address (in-process shell).
+fn oauth_base(req: &Request) -> String {
+    let host = req.headers().get("host").and_then(|h| h.to_str().ok()).unwrap_or("");
+    if security::is_loopback_host(host) {
+        format!("http://{host}")
+    } else {
+        "http://127.0.0.1:7777".into()
+    }
+}
+async fn mcp_oauth_start(State(s): State<AppState>, Path(id): Path<String>, req: Request) -> ApiResult<McpOAuthStart> {
+    ok(s.engine.mcp_oauth_start(&id, &oauth_base(&req)).await?)
+}
+async fn mcp_oauth_signout(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.mcp_oauth_signout(&id).await?;
+    ok(json!({}))
+}
+fn oauth_page(ok: bool, text: &str) -> Response {
+    let esc = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let title = if ok { "Accesso completato" } else { "Accesso non riuscito" };
+    let status = if ok { StatusCode::OK } else { StatusCode::BAD_REQUEST };
+    (
+        status,
+        [("content-type", "text/html; charset=utf-8")],
+        format!("<!doctype html><meta charset=utf-8><title>{title}</title><body style=\"font-family:sans-serif;margin:3rem\"><h1>{title}</h1><p>{esc}</p></body>"),
+    )
+        .into_response()
+}
+/// `GET /api/mcp/oauth/callback?code=…&state=…`: the return from the authorization server. It needs no API
+/// token (a browser redirect cannot carry one) so it is strictly validated: only from this machine, and only
+/// with a `state` this engine issued a moment ago, used once.
+async fn mcp_oauth_callback(State(s): State<AppState>, req: Request) -> Response {
+    if !is_local(&req) {
+        return oauth_page(false, "Il ritorno dall'accesso è accettato solo da questo dispositivo.");
+    }
+    let query: std::collections::HashMap<String, String> =
+        reqwest::Url::parse(&format!("http://local{}", req.uri())).map(|u| u.query_pairs().into_owned().collect()).unwrap_or_default();
+    match s
+        .engine
+        .mcp_oauth_callback(
+            query.get("state").map(String::as_str),
+            query.get("code").map(String::as_str),
+            query.get("error").map(String::as_str),
+        )
+        .await
+    {
+        Ok(name) => {
+            oauth_page(true, &format!("Hai effettuato l'accesso al server {name}. Puoi chiudere questa scheda e tornare ad AI Workspace."))
+        }
+        Err(e) => oauth_page(false, &e.to_string()),
+    }
+}
+async fn mcp_prompts(State(s): State<AppState>) -> ApiResult<Vec<McpPromptInfo>> {
+    ok(s.engine.mcp_prompts().await)
+}
+async fn mcp_prompt_get(State(s): State<AppState>, Json(b): Json<McpPromptGetRequest>) -> ApiResult<McpPromptResult> {
+    ok(s.engine.mcp_prompt_get(b).await?)
+}
+async fn mcp_elicitations(State(s): State<AppState>) -> ApiResult<Vec<McpElicitation>> {
+    ok(s.engine.mcp_elicitations())
+}
+async fn respond_mcp_elicitation(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<McpElicitationAnswer>,
+) -> ApiResult<Value> {
+    s.engine.respond_mcp_elicitation(&id, b)?;
+    ok(json!({}))
+}
 async fn config(State(s): State<AppState>) -> ApiResult<ConfigView> {
     ok(s.engine.config())
 }
@@ -1355,6 +1436,8 @@ mod tests_eval;
 mod tests_kb;
 #[cfg(test)]
 mod tests_learning;
+#[cfg(test)]
+mod tests_mcp;
 #[cfg(test)]
 mod tests_memory;
 #[cfg(test)]

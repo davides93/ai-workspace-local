@@ -364,10 +364,11 @@ tools.push(
  * secret when it lists them (`mcpServers()`), as `GET /api/mcp/servers` does.
  */
 export const mcp: McpServer[] = [
-  { id: "mcp_fs", name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Workspace"], env: { LOG_LEVEL: "info" }, enabled: true, status: "connected", tools: ["search_files", "read_text_file", "directory_tree"] },
-  { id: "mcp_gh", name: "github", transport: "http", url: "http://127.0.0.1:8931/mcp", headers: { Authorization: "Bearer ghp_demo_0000" }, enabled: true, status: "connected", tools: ["list_issues", "create_issue"] },
+  { id: "mcp_fs", name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Workspace"], env: { LOG_LEVEL: "info" }, enabled: true, status: "connected", tools: ["search_files", "read_text_file", "directory_tree"], capabilities: { tools: true, resources: true, prompts: false } },
+  { id: "mcp_gh", name: "github", transport: "http", url: "http://127.0.0.1:8931/mcp", headers: { Authorization: "Bearer ghp_demo_0000" }, enabled: true, status: "connected", tools: ["list_issues", "create_issue"], capabilities: { tools: true, resources: false, prompts: true }, signed_in: true, sampling: false },
   { id: "mcp_pw", name: "playwright", transport: "stdio", command: "npx", args: ["@playwright/mcp@latest"], enabled: false, status: "disconnected", tools: [] },
-  { id: "mcp_db", name: "postgres", transport: "stdio", command: "uvx", args: ["mcp-server-postgres", "--dsn", "postgresql://localhost/app"], env: { PGPASSWORD: "demo" }, enabled: true, status: "error", tools: [], error: "spawn uvx ENOENT: comando non trovato nel PATH" },
+  { id: "mcp_db", name: "postgres", transport: "stdio", command: "uvx", args: ["mcp-server-postgres", "--dsn", "postgresql://localhost/app"], env: { PGPASSWORD: "demo" }, enabled: true, status: "unreachable", tools: [], error: "spawn uvx ENOENT: comando non trovato nel PATH" },
+  { id: "mcp_notes", name: "appunti", transport: "http", url: "https://mcp.example.test/notes", enabled: true, status: "auth_required", tools: [], error: "il server MCP appunti richiede l'accesso: premi «Accedi» in Integrazioni" },
 ];
 
 export const workflows: WorkflowDef[] = [

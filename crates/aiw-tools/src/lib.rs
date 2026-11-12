@@ -7,6 +7,7 @@ pub mod computer;
 pub mod connectors;
 pub mod fs;
 pub mod mcp;
+pub mod mcp_oauth;
 pub mod search;
 pub mod shell;
 pub mod web;
@@ -80,6 +81,8 @@ pub struct ToolContext {
     pub seen_files: Arc<Mutex<HashSet<PathBuf>>>,
     /// Training jobs started by this run, used to enforce its attempt budget.
     pub training_jobs: Arc<tokio::sync::Mutex<Vec<String>>>,
+    /// What an MCP server may ask of this run while it serves a tool call (sampling, questions to the person).
+    pub mcp_run: Option<Arc<dyn mcp::RunMcp>>,
 }
 
 impl ToolContext {
@@ -96,6 +99,7 @@ impl ToolContext {
             require_read_before_overwrite: false,
             seen_files: Arc::default(),
             training_jobs: Arc::default(),
+            mcp_run: None,
         }
     }
 

@@ -1800,21 +1800,106 @@ pub struct McpServerConfig {
     pub headers: Option<Map<String, Value>>,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Lets the server ask the model of the run for completions (`sampling/createMessage`). Off by default.
+    #[serde(default)]
+    pub sampling: bool,
+    /// Client id registered by hand with the authorization server (when it has no dynamic registration).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_client_id: Option<String>,
 }
 
 fn yes() -> bool {
     true
 }
 
+/// What a connected MCP server offers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct McpCapabilities {
+    pub tools: bool,
+    pub resources: bool,
+    pub prompts: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerInfo {
     #[serde(flatten)]
     pub config: McpServerConfig,
-    /// connected | disconnected | error
+    /// connected | connecting | reconnecting | unreachable | auth_required | disconnected (switched off)
     pub status: String,
     pub tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default)]
+    pub capabilities: McpCapabilities,
+    /// Reconnection attempt in progress (`status: "reconnecting"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+    /// OAuth tokens are stored for this server (their values are never returned).
+    #[serde(default)]
+    pub signed_in: bool,
+}
+
+/// A prompt a connected MCP server offers (`prompts/list`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpPromptInfo {
+    pub server_id: String,
+    pub server: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub arguments: Vec<McpPromptArgument>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpPromptArgument {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// Body of `POST /api/mcp/prompts/get`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPromptGetRequest {
+    pub server_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Map<String, Value>,
+}
+
+/// The prompt of a server, rendered: `text` is what goes into the composer for the person to review.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpPromptResult {
+    #[serde(default)]
+    pub description: String,
+    pub text: String,
+}
+
+/// A question an MCP server asks the person during a run (`elicitation/create`): a flat form.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpElicitation {
+    pub id: String,
+    pub run_id: String,
+    pub server: String,
+    pub message: String,
+    /// Flat JSON schema: an object whose properties are string, number, integer, boolean or a string enum.
+    pub schema: Value,
+}
+
+/// Body of `POST /api/mcp/elicitations/{id}`: `action` is accept | decline | cancel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpElicitationAnswer {
+    pub action: String,
+    #[serde(default)]
+    pub content: Map<String, Value>,
+}
+
+/// Answer of `POST /api/mcp/servers/{id}/oauth/start`: the page the UI opens in the system browser.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpOAuthStart {
+    pub authorization_url: String,
 }
 
 // ---------------------------------------------------------------- config & audit
@@ -1947,10 +2032,15 @@ mod tests {
                 env: None,
                 headers: None,
                 enabled: true,
+                sampling: false,
+                oauth_client_id: None,
             },
             status: "connected".into(),
             tools: vec!["read".into()],
             error: None,
+            capabilities: McpCapabilities::default(),
+            attempt: None,
+            signed_in: false,
         };
         let v = serde_json::to_value(info).unwrap();
         assert_eq!(v["name"], "fs");

@@ -36,6 +36,28 @@ describe("HttpTransport", () => {
     expect(t.capabilities).toEqual({ demo: false, native: false, pairing: true });
   });
 
+  it("calls the MCP paths (reconnect, sign-in, prompts, questions)", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url, body: init.body as string | undefined });
+      return new Response("{}", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.reconnectMcpServer("m 1");
+    await t.mcpOAuthStart("m 1");
+    await t.mcpOAuthSignout("m 1");
+    await t.mcpPrompts();
+    await t.mcpPromptGet("m1", "p", { a: "b" });
+    await t.mcpElicitations();
+    await t.respondMcpElicitation("e1", { action: "accept", content: { n: 1 } });
+    expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
+      "POST /mcp/servers/m%201/reconnect", "POST /mcp/servers/m%201/oauth/start", "DELETE /mcp/servers/m%201/oauth",
+      "GET /mcp/prompts", "POST /mcp/prompts/get", "GET /mcp/elicitations", "POST /mcp/elicitations/e1",
+    ]);
+    expect(JSON.parse(calls[4].body!)).toEqual({ server_id: "m1", name: "p", arguments: { a: "b" } });
+    expect(JSON.parse(calls[6].body!)).toEqual({ action: "accept", content: { n: 1 } });
+  });
+
   it("calls the paths of the contract", async () => {
     const calls: { method: string; url: string; body?: string }[] = [];
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {

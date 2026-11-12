@@ -978,7 +978,7 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
     }
 
     /// One short question, the whole answer as text.
-    async fn ask_once(&self, p: &InferenceProfile, messages: Vec<Msg>, cancel: &CancellationToken) -> Result<String> {
+    pub(crate) async fn ask_once(&self, p: &InferenceProfile, messages: Vec<Msg>, cancel: &CancellationToken) -> Result<String> {
         let backend = self
             .0
             .runtimes

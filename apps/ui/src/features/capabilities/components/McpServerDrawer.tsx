@@ -120,6 +120,23 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
           </>
         )}
 
+        {draft.transport === "http" && (
+          <Field label="Client id OAuth (facoltativo)" htmlFor="mcp-client-id" hint="Serve solo se il server di autorizzazione non permette la registrazione automatica. Per l'accesso usa «Accedi» sulla scheda del server.">
+            <Input id="mcp-client-id" mono value={draft.oauthClientId} autoComplete="off" spellCheck={false} onChange={(e) => patch({ oauthClientId: e.target.value })} />
+          </Field>
+        )}
+
+        <div className="row row-between nowrap">
+          <div className="field">
+            <span className="field-label" id="mcp-sampling-label">Consenti al server di usare il modello</span>
+            <span className="hint">Campionamento MCP: il server può chiedere risposte al modello dell'esecuzione in corso. Consuma token del tuo budget (con un tetto per esecuzione) e il testo che invia non è attendibile. Lascialo spento se non ti serve.</span>
+          </div>
+          <Toggle id="mcp-sampling" checked={!!draft.sampling} onChange={(sampling) => patch({ sampling })} label="Consenti al server di usare il modello" />
+        </div>
+        {draft.sampling && (
+          <p className="cap-note cap-note-warn text-sm"><Icon name="alert" size={15} /> Un server che non controlli può usare così il tuo modello (e il tuo tempo di calcolo) per i suoi scopi. Ogni richiesta è registrata nel registro delle attività.</p>
+        )}
+
         <div className="row row-between nowrap">
           <div className="field">
             <span className="field-label" id="mcp-enabled-label">Collega il server</span>

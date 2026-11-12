@@ -17,12 +17,16 @@ export interface McpDraft {
   url: string;
   headers: KvRow[];
   enabled: boolean;
+  /** Sampling for this server; `undefined` = not set (off). */
+  sampling?: boolean;
+  /** Client id registered by hand (http servers without dynamic registration). */
+  oauthClientId: string;
 }
 
 export type McpPayload = Partial<McpServer> & { name: string; transport: McpTransportKind };
 
 export function emptyDraft(): McpDraft {
-  return { name: "", transport: "stdio", command: "", args: [], env: [], url: "", headers: [], enabled: true };
+  return { name: "", transport: "stdio", command: "", args: [], env: [], url: "", headers: [], enabled: true, oauthClientId: "" };
 }
 
 export function draftFromServer(s: McpServer): McpDraft {
@@ -37,6 +41,8 @@ export function draftFromServer(s: McpServer): McpDraft {
     url: s.url ?? "",
     headers: recordToRows(s.headers, SECRET_MASK),
     enabled: s.enabled,
+    sampling: s.sampling,
+    oauthClientId: s.oauth_client_id ?? "",
   };
 }
 
@@ -48,13 +54,14 @@ export const normalizeName = (name: string) => name.trim().replace(/ /g, "_");
  * did not touch goes back as `SECRET_MASK`, which the backend reads as "keep the stored value".
  */
 export function draftToPayload(d: McpDraft): McpPayload {
-  const base = { ...(d.id ? { id: d.id } : {}), name: normalizeName(d.name), enabled: d.enabled };
+  const base = { ...(d.id ? { id: d.id } : {}), name: normalizeName(d.name), enabled: d.enabled, ...(d.sampling !== undefined ? { sampling: d.sampling } : {}) };
   if (d.transport === "stdio") {
     const env = rowsToRecord(d.env);
     return { ...base, transport: "stdio", command: d.command.trim(), args: d.args, ...(Object.keys(env).length ? { env } : {}) };
   }
   const headers = rowsToRecord(d.headers);
-  return { ...base, transport: "http", url: d.url.trim(), ...(Object.keys(headers).length ? { headers } : {}) };
+  const clientId = d.oauthClientId.trim();
+  return { ...base, transport: "http", url: d.url.trim(), ...(Object.keys(headers).length ? { headers } : {}), ...(clientId ? { oauth_client_id: clientId } : {}) };
 }
 
 export type McpErrors = Partial<Record<"name" | "command" | "url" | "env" | "headers", string>>;

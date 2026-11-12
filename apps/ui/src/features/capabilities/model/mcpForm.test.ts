@@ -9,7 +9,7 @@ const stdio: McpServer = {
 };
 const http: McpServer = {
   id: "m2", name: "github", transport: "http", url: "http://127.0.0.1:8931/mcp",
-  headers: { Authorization: "Bearer abc" }, enabled: false, status: "error", tools: [], error: "connessione rifiutata",
+  headers: { Authorization: "Bearer abc" }, enabled: false, status: "unreachable", tools: [], error: "connessione rifiutata",
 };
 
 describe("draft <-> payload", () => {
@@ -40,6 +40,17 @@ describe("draft <-> payload", () => {
   it("omits empty env and headers, and the id of a new server", () => {
     const p = draftToPayload({ ...emptyDraft(), name: "a b", command: "node", env: [emptyRow("", "x")] });
     expect(p).toEqual({ name: "a_b", enabled: true, transport: "stdio", command: "node", args: [] });
+  });
+});
+
+describe("sampling and OAuth client id", () => {
+  it("sends the sampling choice only once it was set, and the client id only when filled", () => {
+    expect(draftToPayload(draftFromServer(http))).not.toHaveProperty("sampling");
+    expect(draftToPayload({ ...draftFromServer(http), sampling: true })).toMatchObject({ sampling: true });
+    expect(draftToPayload({ ...draftFromServer({ ...http, sampling: true }), sampling: false })).toMatchObject({ sampling: false });
+    expect(draftToPayload({ ...draftFromServer(http), oauthClientId: " abc " })).toMatchObject({ oauth_client_id: "abc" });
+    expect(draftToPayload(draftFromServer(http))).not.toHaveProperty("oauth_client_id");
+    expect(draftFromServer({ ...http, oauth_client_id: "x" }).oauthClientId).toBe("x");
   });
 });
 

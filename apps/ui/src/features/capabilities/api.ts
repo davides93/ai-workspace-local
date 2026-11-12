@@ -12,7 +12,12 @@ export function useTools() {
 
 export function useMcpServers() {
   const api = useApi();
-  return useQuery({ queryKey: qk.mcp(), queryFn: () => api.mcpServers() });
+  return useQuery({
+    queryKey: qk.mcp(),
+    queryFn: () => api.mcpServers(),
+    // A server that is reconnecting or waiting for the sign-in changes by itself: look again soon.
+    refetchInterval: (q) => (q.state.data?.some((s) => s.enabled && ["connecting", "reconnecting", "auth_required"].includes(s.status)) ? 3_000 : false),
+  });
 }
 
 /**
@@ -50,7 +55,7 @@ export function useSaveMcpServer() {
   return useMutation({
     mutationFn: (s: SavePayload) => api.saveMcpServer(s),
     onSuccess: (s, v) => {
-      if (s.enabled && s.status === "error") toast(`"${s.name}" salvato, ma non si collega${s.error ? `: ${s.error}` : ""}`, "crit");
+      if (s.enabled && (s.status === "unreachable" || s.status === "auth_required")) toast(`"${s.name}" salvato, ma non si collega${s.error ? `: ${s.error}` : ""}`, "crit");
       else toast(v.id ? `Server MCP "${s.name}" aggiornato` : `Server MCP "${s.name}" aggiunto`);
       void qc.invalidateQueries({ queryKey: qk.mcp() });
       void qc.invalidateQueries({ queryKey: qk.tools() });
@@ -66,6 +71,52 @@ export function useRemoveMcpServer() {
     mutationFn: (s: Pick<McpServer, "id" | "name">) => ignoreNotFound(api.removeMcpServer(s.id)),
     onSuccess: (_r, s) => {
       toast(`Server MCP "${s.name}" rimosso`);
+      void qc.invalidateQueries({ queryKey: qk.mcp() });
+      void qc.invalidateQueries({ queryKey: qk.tools() });
+    },
+  });
+}
+
+export function useReconnectMcp() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (s: Pick<McpServer, "id" | "name">) => api.reconnectMcpServer(s.id),
+    onSuccess: (s) => {
+      if (s.status === "connected") toast(`"${s.name}" è collegato`);
+      else toast(`"${s.name}" non si collega${s.error ? `: ${s.error}` : ""}`, "crit");
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: qk.mcp() });
+      void qc.invalidateQueries({ queryKey: qk.tools() });
+    },
+  });
+}
+
+/** «Accedi»: the engine gives the page of the authorization server, which opens in the system browser; the list refreshes while the person is there. */
+export function useMcpSignIn() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (s: Pick<McpServer, "id" | "name">) => api.mcpOAuthStart(s.id),
+    onSuccess: (r, s) => {
+      if (r.authorization_url) {
+        window.open(r.authorization_url, "_blank", "noopener,noreferrer");
+        toast(`Completa l'accesso a "${s.name}" nel browser`);
+      } else toast(`Accesso a "${s.name}" eseguito`);
+    },
+    onError: (e) => toast(e instanceof Error ? e.message : "Accesso non riuscito", "crit"),
+    onSettled: () => void qc.invalidateQueries({ queryKey: qk.mcp() }),
+  });
+}
+
+export function useMcpSignOut() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (s: Pick<McpServer, "id" | "name">) => api.mcpOAuthSignout(s.id),
+    onSuccess: (_r, s) => toast(`Accesso a "${s.name}" dimenticato`),
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: qk.mcp() });
       void qc.invalidateQueries({ queryKey: qk.tools() });
     },

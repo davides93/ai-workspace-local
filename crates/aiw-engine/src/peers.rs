@@ -116,6 +116,8 @@ impl Engine {
             env: None,
             headers: Some(headers),
             enabled: true,
+            sampling: false,
+            oauth_client_id: None,
         };
         if let Err(e) = self.save_mcp_server(mcp).await {
             tracing::warn!("MCP del dispositivo {}: {e}", peer.name);

@@ -16,7 +16,7 @@ const finePointer = () => typeof window !== "undefined" && !!window.matchMedia?.
  * ring is drawn on the box (`:focus-within`), the textarea grows with its text, and the box takes
  * the focus back when a session opens or a run ends (on touch screens it never pops the keyboard).
  */
-export function Composer({ value, onChange, onSend, onStop, running, disabled, placeholder, modelLabel, focusKey, voice, thinking, attachments }: {
+export function Composer({ value, onChange, onSend, onStop, running, disabled, placeholder, modelLabel, focusKey, voice, thinking, attachments, onMcpPrompt }: {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
@@ -35,6 +35,8 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
   thinking?: { value: ThinkingMode; onChange: (mode: ThinkingMode) => void };
   /** Files for the message: chosen with the paperclip, dropped on the box or pasted. Without it the box takes text only. */
   attachments?: { items: PendingFile[]; onAdd: (files: File[], opts?: { pasted?: boolean }) => void; onRemove: (key: string) => void };
+  /** Opens the «Prompt MCP» picker (developer mode, when a connected server has prompts). */
+  onMcpPrompt?: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -110,6 +112,9 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
               title="Allega un file o un'immagine (puoi anche trascinarli qui o incollarli)" disabled={disabled} onClick={() => picker.current?.click()}
             />
           </>
+        )}
+        {onMcpPrompt && (
+          <IconButton icon="plug" aria-label="Prompt MCP" title="Inserisci un prompt di un server MCP" disabled={disabled} onClick={onMcpPrompt} />
         )}
         <textarea
           ref={ref}

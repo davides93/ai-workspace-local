@@ -99,6 +99,8 @@ export const qk = {
 
   tools: () => ["tools"] as const,
   mcp: () => ["mcp", "servers"] as const,
+  mcpPrompts: () => ["mcp", "prompts"] as const,
+  mcpElicitations: () => ["mcp", "elicitations"] as const,
 
   mesh: () => ["mesh"] as const,
   pairingQr: (address: string | null, code: string | undefined) => ["mesh", "qr", address, code ?? ""] as const,
