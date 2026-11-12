@@ -1022,7 +1022,7 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
 
     /// The agent a proposal run uses: the configured one, read-only. Never more permissive than its own
     /// policy: plan mode (so only reading is allowed), a read-only sandbox, only the tools that read (plus
-    /// `todo` and the memory search), no sub-agents and a small budget.
+    /// `todo` and the memory and document searches), no sub-agents and a small budget.
     pub(crate) fn proactive_agent(&self, base_id: &str) -> Result<AgentProfile> {
         let mut a = self.agent(base_id)?;
         let network = self.proactive_level() == "act_readonly";
@@ -1042,7 +1042,7 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
             })
             .map(|t| t.name().to_string())
             .collect();
-        for internal in ["todo", "memory_search"] {
+        for internal in ["todo", "memory_search", aiw_agent::internal::KB_SEARCH] {
             if allowed(internal) {
                 tools.push(internal.into());
             }

@@ -191,6 +191,14 @@ impl RunHost for EngineHost {
         self.engine.memory_tool(&input.thread_id, &input.agent.id, name, args).await
     }
 
+    fn kb_available(&self, input: &RunInput) -> bool {
+        self.engine.kb_available(&input.agent.knowledge)
+    }
+
+    async fn kb_tool(&self, input: &RunInput, name: &str, args: &Value) -> Result<String> {
+        self.engine.kb_tool(&input.agent.knowledge, name, args).await
+    }
+
     fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {
         if agent_id.starts_with(crate::REMOTE_PREFIX) {
             return Err(Error::Denied("la conversazione non può passare a un agente remoto: delegagli il lavoro".into()));

@@ -107,6 +107,37 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<LessonsCmd>,
     },
+    /// Documenti locali che gli assistenti possono cercare (base di conoscenza)
+    Kb {
+        #[command(subcommand)]
+        cmd: Option<KbCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum KbCmd {
+    /// Elenca raccolte e documenti (predefinito)
+    List,
+    /// Aggiunge file o cartelle (testo, Markdown, codice, PDF) a una raccolta; la crea se non c'è
+    Add {
+        /// Nome o id della raccolta
+        collection: String,
+        /// File o cartelle del computer
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Cerca nei documenti
+    Search {
+        query: String,
+        /// Solo in questa raccolta (nome o id)
+        #[arg(long)]
+        collection: Option<String>,
+        /// Quanti passaggi mostrare (massimo 10)
+        #[arg(long, short = 'n', default_value_t = 5)]
+        max: usize,
+    },
+    /// Elimina un documento (id o nome)
+    Rm { document: String },
 }
 
 #[derive(Subcommand)]
@@ -546,6 +577,7 @@ async fn main() -> Result<()> {
             }
         },
         Cmd::Lessons { cmd } => lessons_cmd(&engine, cmd.unwrap_or(LessonsCmd::List { status: "pending".into() }))?,
+        Cmd::Kb { cmd } => kb_cmd(&engine, cmd.unwrap_or(KbCmd::List)).await?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Rewind { run_id, dry_run } => {
             let info = engine.checkpoint_info(&run_id)?;
@@ -803,6 +835,103 @@ fn lessons_cmd(engine: &Engine, cmd: LessonsCmd) -> Result<()> {
         LessonsCmd::Reject { id } => {
             let l = engine.reject_lesson(&id)?;
             println!("Lezione «{}» scartata.", l.title);
+        }
+    }
+    Ok(())
+}
+
+async fn kb_cmd(engine: &Engine, cmd: KbCmd) -> Result<()> {
+    use aiw_core::api::{KbAddBody, KbCollectionCreate};
+    match cmd {
+        KbCmd::List => {
+            let cols = engine.kb_collections()?;
+            if cols.is_empty() {
+                println!("Nessuna raccolta. Aggiungi dei documenti con: aiw kb add <raccolta> <percorso>");
+            }
+            for c in cols {
+                println!("{:<24} {:>3} documenti  {:>5} passaggi  {}", c.id, c.documents, c.chunks, c.name);
+                for d in engine.kb_documents(&c.id)? {
+                    let note = d.error.as_deref().map(|e| format!("  ({e})")).unwrap_or_default();
+                    println!("    {:<24} {:<9} {:>4} passaggi  {}{note}", d.id, d.status, d.chunks, d.name);
+                }
+            }
+            match engine.embedding_model_name() {
+                Some(m) => println!("Ricerca anche per significato con il modello {m}."),
+                None => println!("Ricerca per parole chiave: per trovare anche per significato serve un modello di embedding acceso."),
+            }
+        }
+        KbCmd::Add { collection, paths } => {
+            let col = match engine.kb_collection(&collection) {
+                Ok(c) => c,
+                Err(aiw_core::Error::NotFound(_)) => {
+                    let c = engine.kb_create_collection(KbCollectionCreate { name: collection.clone(), description: None })?;
+                    println!("Creata la raccolta «{}».", c.name);
+                    c
+                }
+                Err(e) => return Err(e.into()),
+            };
+            for p in paths {
+                let path = std::fs::canonicalize(&p).with_context(|| format!("il percorso {} non esiste", p.display()))?;
+                let job =
+                    engine.kb_add(&col.id, KbAddBody { files: None, path: Some(path.to_string_lossy().into_owned()) }, true).await?.job;
+                let mut shown = usize::MAX;
+                let done = loop {
+                    let j = engine.kb_job(&job.id).unwrap_or_else(|| job.clone());
+                    if j.done != shown && j.total > 0 {
+                        shown = j.done;
+                        eprint!("\r  {} / {}  {:<60}", j.done, j.total, j.current.as_deref().unwrap_or(""));
+                    }
+                    if j.state != "running" {
+                        break j;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                };
+                eprintln!();
+                println!(
+                    "{}: aggiunti {}, già presenti {}, sostituiti {}, falliti {}, esclusi {}.",
+                    path.display(),
+                    done.added,
+                    done.unchanged,
+                    done.replaced,
+                    done.failed,
+                    done.skipped_total
+                );
+                for s in &done.skipped {
+                    println!("    escluso: {} ({})", s.name, s.reason);
+                }
+                if done.skipped_total > done.skipped.len() {
+                    println!("    … e altri {} file esclusi.", done.skipped_total - done.skipped.len());
+                }
+            }
+            engine.kb_wait_idle().await;
+            if engine.embedding_model_name().is_some() {
+                let n = engine.kb_embed_now().await?;
+                if n > 0 {
+                    println!("Calcolati {n} vettori per la ricerca per significato.");
+                }
+            } else {
+                println!("Nessun modello di embedding acceso: la ricerca funziona per parole chiave.");
+            }
+        }
+        KbCmd::Search { query, collection, max } => {
+            let r = engine.kb_search(&query, collection.as_deref(), max).await?;
+            if r.hits.is_empty() {
+                println!("Nessun passaggio trovato.");
+            }
+            for (i, h) in r.hits.iter().enumerate() {
+                println!("[{}] {} · parte {}  ({})", i + 1, h.document_name, h.part, h.collection_name);
+                for line in h.text.lines().filter(|l| !l.trim().is_empty()).take(6) {
+                    println!("    {}", line.trim());
+                }
+            }
+            if !r.semantic {
+                println!("(Ricerca per parole chiave: nessun modello di embedding acceso.)");
+            }
+        }
+        KbCmd::Rm { document } => {
+            let d = engine.kb_document(&document)?;
+            engine.kb_delete_document(&d.id)?;
+            println!("Documento «{}» eliminato.", d.name);
         }
     }
     Ok(())

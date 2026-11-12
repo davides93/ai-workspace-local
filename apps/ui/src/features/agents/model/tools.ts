@@ -2,7 +2,7 @@
 //
 // Rules of the backend this mirrors (crates/aiw-agent/src/runner.rs):
 //  - `tools` is a list of names, and `"*"` means every tool that is enabled;
-//  - eleven tools are internal to the agent loop (todo, agent, skill, render_ui, code, handoff, team_state and the four memory tools): the catalogue
+//  - twelve tools are internal to the agent loop (todo, agent, skill, render_ui, code, handoff, team_state the four memory tools and kb_search): the catalogue
 //    (`GET /api/tools`) lists them with `source: "internal"` and the backend accepts them by name, or by `"*"`,
 //    like any other. Dropping them while editing a list would silently take the plan, sub-agents, skills and
 //    code mode away from the agent. `INTERNAL_TOOLS` is the fallback for a catalogue that does not list them
@@ -30,6 +30,7 @@ export const INTERNAL_TOOLS: InternalTool[] = [
   { name: "memory_search", risk: "read", description: "Cerca tra i ricordi per parole e per significato." },
   { name: "memory_update", risk: "read", description: "Corregge un ricordo esistente." },
   { name: "memory_forget", risk: "read", description: "Dimentica un ricordo: puoi sempre ripristinarlo." },
+  { name: "kb_search", risk: "read", description: "Cerca nei tuoi documenti (le raccolte della pagina Documenti) per parole e per significato." },
 ];
 
 export const INTERNAL_NAMES: ReadonlySet<string> = new Set(INTERNAL_TOOLS.map((t) => t.name));

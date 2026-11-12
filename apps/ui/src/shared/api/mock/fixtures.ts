@@ -200,12 +200,12 @@ export const profiles: InferenceProfile[] = [
 ];
 
 export const agents: AgentProfile[] = [
-  { id: "operator", name: "Operatore", description: "Task operativi su file, cartelle, documenti e app.", inference_profile: "balanced", system_prompt: "Sei un operatore preciso. Pianifica, chiedi conferma prima delle azioni distruttive e riporta cosa hai fatto.", tools: ["read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "shell", "web_fetch", "web_search", "todo", "agent"], mode: "ask", sandbox: "workspace-write", max_turns: 30 },
+  { id: "operator", name: "Operatore", description: "Task operativi su file, cartelle, documenti e app.", inference_profile: "balanced", system_prompt: "Sei un operatore preciso. Pianifica, chiedi conferma prima delle azioni distruttive e riporta cosa hai fatto.", tools: ["read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "shell", "web_fetch", "web_search", "todo", "agent", "kb_search"], mode: "ask", sandbox: "workspace-write", max_turns: 30 },
   { id: "coder", name: "Coder", description: "Coding agent sul workspace corrente.", inference_profile: "balanced", system_prompt: "Sei un ingegnere software. Leggi prima di modificare e verifica con i test.", tools: ["*"], mode: "auto-edit", sandbox: "workspace-write", max_turns: 60 },
   { id: "browser", name: "Navigatore", description: "Ricerca e azioni nel browser via CDP.", inference_profile: "fast-local", system_prompt: "Usi il browser per raccogliere informazioni e completare form.", tools: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot", "web_fetch", "web_search", "todo"], mode: "ask", sandbox: "read-only", max_turns: 40 },
   { id: "desktop", name: "Pilota desktop", description: "Computer-use: vede lo schermo e usa mouse e tastiera.", inference_profile: "vision-cu", system_prompt: "Controlli il desktop tramite screenshot e azioni. Chiedi conferma prima di inviare, pagare o cancellare.", tools: ["computer_screenshot", "computer_click", "computer_type", "computer_key", "computer_scroll", "todo"], mode: "ask", sandbox: "read-only", max_turns: 50 },
   { id: "teacher", name: "Insegnante", description: "Impara da ciò che gli racconti: salva, corregge e dimentica i ricordi.", inference_profile: "fast-local", system_prompt: "Sei l'Insegnante: aiuti l'utente a insegnare all'assistente ciò che deve ricordare.", tools: ["memory_save", "memory_search", "memory_update", "memory_forget", "render_ui", "todo"], mode: "auto", sandbox: "read-only", max_turns: 12 },
-  { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "web_search", "todo"], mode: "plan", sandbox: "read-only", max_turns: 20 },
+  { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "web_search", "todo", "kb_search"], mode: "plan", sandbox: "read-only", max_turns: 20 },
 ];
 
 /** Teams of the demo: a supervisor with two members, and a chain. */
@@ -341,7 +341,7 @@ tools.push(
  * The tools of the agent loop, as `GET /api/tools` lists them after the built-in and MCP ones: `source: "internal"`,
  * always on, risk `read`, no switch (crates/aiw-agent/src/internal.rs).
  */
-export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state", "memory_save", "memory_search", "memory_update", "memory_forget"] as const;
+export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state", "memory_save", "memory_search", "memory_update", "memory_forget", "kb_search"] as const;
 tools.push(
   ...([
     ["todo", "Pubblica e aggiorna il piano di lavoro dell'agente: elenco di passi con il loro stato."],
@@ -355,6 +355,7 @@ tools.push(
     ["memory_search", "Cerca tra i ricordi dell'utente per parole e per significato."],
     ["memory_update", "Corregge un ricordo esistente."],
     ["memory_forget", "Dimentica un ricordo (l'utente può ripristinarlo)."],
+    ["kb_search", "Cerca nei documenti dell'utente (raccolte di file) per parole e per significato."],
   ] as const).map(([name, description]): ToolInfo => ({ name, description, source: "internal", risk: "read", enabled: true, available: true, parameters: {} })),
 );
 

@@ -21,12 +21,16 @@ pub struct RunRow {
 
 mod memory;
 pub use memory::MemoryFilter;
+mod kb;
 mod proposals;
+pub use kb::{KbChunkRow, KbFilter};
 
 pub struct Store {
     conn: Mutex<Connection>,
     /// Whether the bundled SQLite has FTS5 (the memory search falls back to Rust when not).
     fts: bool,
+    /// Same for the knowledge-base passages.
+    kb_fts: bool,
 }
 
 fn db<E: std::fmt::Display>(e: E) -> Error {
@@ -76,7 +80,8 @@ impl Store {
         .map_err(db)?;
         let fts = memory::migrate(&conn)?;
         proposals::migrate(&conn)?;
-        Ok(Self { conn: Mutex::new(conn), fts })
+        let kb_fts = kb::migrate(&conn)?;
+        Ok(Self { conn: Mutex::new(conn), fts, kb_fts })
     }
 
     // ---------------- A2A tasks (served to other agents; they expire)

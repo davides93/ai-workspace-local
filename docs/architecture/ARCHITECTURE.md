@@ -637,6 +637,7 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | `browser_*` (navigate, snapshot, click, type, screenshot) | desktop (Chrome/Edge/Chromium via CDP) | Snapshot testuale con riferimenti numerati per i modelli solo testo; screenshot per i VLM |
 | `computer_*` (screenshot, click, type, key, scroll) | desktop (feature `computer-use`) · Android via AccessibilityService (plugin) | Modalità *vision* oppure *accessibility* |
 | `todo`, `agent` (subagente), `skill` | tutte | — |
+| `kb_search` | tutte | Rischio `read`, nessuna conferma. Visibile solo se esiste una raccolta di documenti; cerca per parole chiave e per significato nelle raccolte dell'agente (`AgentProfile.knowledge`, vuoto = tutte) e restituisce estratti «[documento · parte N]» |
 | `mcp__<server>__<tool>` | tutte (stdio solo desktop) | Client MCP: stdio e streamable HTTP |
 
 ## 7. Configurazione a strati
@@ -679,8 +680,12 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET/POST | `/api/mcp/servers` | Server MCP |
 | GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
+| GET/POST | `/api/kb/collections` · PATCH/DELETE `/api/kb/collections/{id}` | Raccolte di documenti |
+| GET/POST | `/api/kb/collections/{id}/documents` | Documenti; POST con `{files: [{name, mime, data}]}` (base64, 8 file, 10 MB, 25 MB) o `{path}` (solo da questo computer), risponde con un lavoro in background |
+| POST | `/api/kb/collections/{id}/reindex` · `/api/kb/jobs/{id}/cancel` · DELETE `/api/kb/documents/{id}` | Reindicizzazione, interruzione, eliminazione |
+| GET/POST | `/api/kb/status` · `/api/kb/search` | Lavori e modello di embedding; ricerca `{query, collection?, max_results?}` → `{hits, semantic}` |
 | POST | `/api/kill` | Kill switch |
-| — | `/v1/models`, `/v1/chat/completions` | Gateway OpenAI-compatibile verso i runtime locali |
+| — | `/v1/models`, `/v1/chat/completions`, `/v1/embeddings` | Gateway OpenAI-compatibile verso i runtime locali (gli embedding usano un runtime di embedding già avviato, 503 in JSON altrimenti) |
 
 Autenticazione: in loopback (e nel canale in-process della shell Tauri) non serve; per l'accesso
 dalla LAN serve un **token di pairing** (QR mostrato nell'app) inviato come `Authorization: Bearer`.
@@ -704,6 +709,15 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
   `runtimes/` (manifest utente), `skills/`, `checkpoints/`, `evals/` (suite di valutazione),
   `eval-work/` (cartelle temporanee dei task), `attachments/<sessione>/` (allegati della chat:
   `<id>-<nome>` e, per un PDF con testo, `<id>.extracted.txt`; si cancella con la sessione).
+- **Documenti (knowledge base)** (`crates/aiw-engine/src/kb.rs`, `store/kb.rs`): `kb_collections`
+  (nome unico senza maiuscole), `kb_documents` (percorso o «caricato», mime, dimensione, `sha256`,
+  stato `indexing|ready|failed`, errore) e `kb_chunks` (testo, posizione, vettore f32 LE e modello
+  di embedding) con indice FTS5 `kb_chunks_fts` e trigger; l'eliminazione di una raccolta cancella a
+  cascata documenti e passaggi. Il chunker è puro (`chunk_text`: blocchi per paragrafo e titolo,
+  circa 1.200 caratteri, 150 di sovrapposizione). L'aggiunta è un lavoro in background con
+  avanzamento e annullamento; la ricerca riusa la meccanica della memoria (FTS5 con ripiego in Rust,
+  coseno sui vettori, reciprocal rank fusion) e gli embedding si calcolano in background solo con un
+  runtime di embedding già avviato.
 - Workspace utente: `AGENTS.md`, `.aiw/config.json`, `.aiw/skills/`, `.aiw/workflows/`.
 - **Allegati della chat** (`crates/aiw-engine/src/attachments.rs`): il messaggio salvato ha solo i
   metadati (`ChatMessage.attachments`); i byte sono in `attachments/<sessione>/`, mai nel workspace.

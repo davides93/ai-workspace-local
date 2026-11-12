@@ -142,6 +142,7 @@ Dettagli, limiti noti e prossimi passi in [docs/STATUS.md](docs/STATUS.md).
 | Inferenza | 33 manifest; sidecar OpenAI-compatibili, Ollama, llama.cpp e ONNX Runtime GenAI in-process; 6 runtime solo manifest |
 | Modelli | Model hub: Hugging Face, ModelScope, registry Ollama, URL diretto; download con ripresa e sha256 |
 | Allegati | Immagini e file nella chat (graffetta, trascinamento, incolla): testo e PDF con testo letti dal modello, immagini ai modelli con visione |
+| Documenti | Raccolte di file locali (testo, Markdown, codice, PDF con testo) che l'assistente cerca per parole chiave e, con un modello di embedding avviato, per significato; pagina «Documenti», `aiw kb` e gateway `/v1/embeddings` |
 | Voce | Trascrizione con whisper.cpp o con server OpenAI-compatibili (LocalAI, Nexa, dispositivo accoppiato); dettatura e conversazione a voce nella chat con le voci locali del sistema |
 | Policy e sandbox | Cinque modalità, regole, audit, kill switch; bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) |
 | Tool | File, shell, `web_fetch` anti-SSRF, `web_search` (SearXNG, Brave, DuckDuckGo), browser CDP, computer-use, client MCP |

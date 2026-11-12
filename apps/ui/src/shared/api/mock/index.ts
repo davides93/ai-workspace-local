@@ -8,7 +8,7 @@ import type {
   AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary,
+  DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, maskConfigSecrets, mcp, models, nid, now, policyRules, profiles,
@@ -16,6 +16,7 @@ import {
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
 import * as mem from "./memories";
+import * as kb from "./kb";
 import { proactiveState, PROPOSAL_KINDS, PROPOSAL_STATUSES, proposals } from "./proposals";
 import { teacherTurn } from "./teacher";
 import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
@@ -399,6 +400,8 @@ export class MockTransport implements Transport {
     if (dup) throw new ApiError(400, `il profilo candidato \`${dup}\` è elencato due volte`);
     const missing = (a.candidate_profiles ?? []).find((p) => !profiles.some((x) => x.id === p));
     if (missing) throw new ApiError(400, `il profilo candidato \`${missing}\` non esiste`);
+    const noCollection = (a.knowledge ?? []).find((k) => !kb.collectionExists(k));
+    if (noCollection) throw new ApiError(400, `documenti: la raccolta «${noCollection}» non esiste`);
     const i = agents.findIndex((x) => x.id === a.id);
     if (i >= 0) agents[i] = a; else agents.push(a);
     return a;
@@ -628,6 +631,23 @@ export class MockTransport implements Transport {
       throw new ApiError(400, e instanceof Error ? e.message : String(e));
     }
   }
+  async kbCollections() { return kb.listCollections(); }
+  async createKbCollection(body: KbCollectionCreate) { return kb.createCollection(body); }
+  async updateKbCollection(id: string, patch: KbCollectionPatch) { return kb.updateCollection(id, patch); }
+  async deleteKbCollection(id: string) {
+    kb.deleteCollection(id);
+    // Like the engine: an agent no longer points at a collection that is gone.
+    for (const a of agents) if (a.knowledge?.includes(id)) a.knowledge = a.knowledge.filter((k) => k !== id);
+  }
+  async kbDocuments(collectionId: string) { return kb.listDocuments(collectionId); }
+  async addKbFiles(collectionId: string, files: AttachmentUpload[]) { return kb.addFiles(collectionId, files); }
+  async addKbPath(collectionId: string, path: string) { return kb.addPath(collectionId, path); }
+  async reindexKbCollection(collectionId: string) { return kb.reindex(collectionId); }
+  async deleteKbDocument(id: string) { kb.deleteDocument(id); }
+  async kbSearch(body: KbSearchBody) { return kb.search(body); }
+  async kbStatus() { return kb.status(); }
+  async cancelKbJob(jobId: string) { kb.cancelJob(jobId); }
+
   async memories(query: MemoryQuery = {}) {
     const status = query.status;
     if (status && status !== "all" && !["active", "proposed", "forgotten"].includes(status)) throw new ApiError(400, `stato non valido «${status}»: usa active, proposed, forgotten o all`);

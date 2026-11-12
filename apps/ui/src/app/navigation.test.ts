@@ -6,12 +6,12 @@ import { resolveRoute } from "./router";
 const ids = (rs: { id: string }[]) => rs.map((r) => r.id);
 
 describe("visibleRoutes", () => {
-  it("shows the seven everyday sections in simple mode", () => {
-    expect(ids(visibleRoutes(ROUTES, "simple"))).toEqual(["home", "chat", "inbox", "agents", "teach", "models", "settings"]);
+  it("shows the eight everyday sections in simple mode", () => {
+    expect(ids(visibleRoutes(ROUTES, "simple"))).toEqual(["home", "chat", "inbox", "agents", "teach", "documents", "models", "settings"]);
   });
   it("shows the whole table in developer mode", () => {
     expect(visibleRoutes(ROUTES, "developer")).toEqual(ROUTES);
-    expect(ROUTES).toHaveLength(17);
+    expect(ROUTES).toHaveLength(18);
   });
   it("hides routes without the simple marker, but they still resolve by URL", () => {
     expect(ids(visibleRoutes(ROUTES, "simple"))).not.toContain("runtimes");
@@ -48,7 +48,7 @@ describe("navGroups", () => {
   it("drops the groups with no visible route", () => {
     const simple = navGroups(GROUPS, ROUTES, "simple");
     expect(simple.map((g) => g.group.id)).toEqual(["overview", "work", "inference", "control"]);
-    expect(simple.find((g) => g.group.id === "work")?.routes.map((r) => r.id)).toEqual(["chat", "inbox", "agents", "teach"]);
+    expect(simple.find((g) => g.group.id === "work")?.routes.map((r) => r.id)).toEqual(["chat", "inbox", "agents", "teach", "documents"]);
   });
   it("keeps every group in developer mode, with every route", () => {
     const all = navGroups(GROUPS, ROUTES, "developer");

@@ -3,7 +3,7 @@ import { agents, profiles } from "../../../shared/api/mock/fixtures";
 import type { AgentProfile } from "../../../shared/api/types";
 import {
   BUILTIN_AGENT_IDS, NEW_AGENT, agentsUsingProfile, blankAgent, copyName, duplicateAgent, estimateTokens, hasErrors, idForNew, isBuiltinAgent,
-  cleanBudget, normalizeAgent, parseSchemaText, schemaToText, slugify, uniqueId, unknownTools, validateAgent,
+  cleanBudget, normalizeAgent, withKnowledge, parseSchemaText, schemaToText, slugify, uniqueId, unknownTools, validateAgent,
 } from "./agents";
 
 const ctx = { profileIds: profiles.map((p) => p.id), otherNames: [] as string[] };
@@ -56,6 +56,19 @@ describe("new and duplicated agents", () => {
     expect(coder.tools).toEqual(["*"]);
     expect(copyName("Coder", ["Copia di Coder"])).toBe("Copia di Coder (2)");
     expect(copyName("Coder", ["copia di coder", "Copia di Coder (2)"])).toBe("Copia di Coder (3)");
+  });
+});
+
+describe("knowledge", () => {
+  it("ticks and unticks a collection, without duplicates", () => {
+    const a = withKnowledge(withKnowledge(valid(), "k1", true), "k2", true);
+    expect(a.knowledge).toEqual(["k1", "k2"]);
+    expect(withKnowledge(a, "k1", true).knowledge).toEqual(["k2", "k1"]);
+    expect(withKnowledge(a, "k1", false).knowledge).toEqual(["k2"]);
+  });
+  it("drops an empty list and repeated ids when normalizing", () => {
+    expect("knowledge" in normalizeAgent(valid({ knowledge: [] }))).toBe(false);
+    expect(normalizeAgent(valid({ knowledge: ["k1", "k1"] })).knowledge).toEqual(["k1"]);
   });
 });
 

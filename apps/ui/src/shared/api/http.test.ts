@@ -220,6 +220,48 @@ describe("HttpTransport memories", () => {
   });
 });
 
+describe("HttpTransport knowledge base", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("calls the paths of the contract", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response("{}", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.kbCollections();
+    await t.createKbCollection({ name: "Casa" });
+    await t.updateKbCollection("k/1", { description: "Bollette" });
+    await t.kbDocuments("k/1");
+    await t.addKbFiles("k/1", [{ name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }]);
+    await t.addKbPath("k/1", "/home/g/Documenti");
+    await t.reindexKbCollection("k/1");
+    await t.deleteKbDocument("d/1");
+    await t.kbSearch({ query: "affitto", collection: "Casa" });
+    await t.kbStatus();
+    await t.cancelKbJob("j/1");
+    await t.deleteKbCollection("k/1");
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      "GET /kb/collections",
+      "POST /kb/collections",
+      "PATCH /kb/collections/k%2F1",
+      "GET /kb/collections/k%2F1/documents",
+      "POST /kb/collections/k%2F1/documents",
+      "POST /kb/collections/k%2F1/documents",
+      "POST /kb/collections/k%2F1/reindex",
+      "DELETE /kb/documents/d%2F1",
+      "POST /kb/search",
+      "GET /kb/status",
+      "POST /kb/jobs/j%2F1/cancel",
+      "DELETE /kb/collections/k%2F1",
+    ]);
+    expect(JSON.parse(calls[4].body!)).toEqual({ files: [{ name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }] });
+    expect(JSON.parse(calls[5].body!)).toEqual({ path: "/home/g/Documenti" });
+    expect(JSON.parse(calls[8].body!)).toEqual({ query: "affitto", collection: "Casa" });
+  });
+});
+
 describe("HttpTransport.subscribeRun", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];

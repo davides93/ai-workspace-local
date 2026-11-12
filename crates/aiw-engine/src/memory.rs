@@ -111,6 +111,16 @@ pub fn fts_expr(query: &str) -> Option<String> {
     (!t.is_empty()).then(|| t.iter().map(|w| format!("\"{w}\"*")).collect::<Vec<_>>().join(" OR "))
 }
 
+/// How many of the (already tokenised) query words start a word of `text`, or are started by a
+/// long-enough word of it. The keyword score used without FTS5, by the memory and the knowledge base.
+pub fn keyword_hits(query_words: &[String], text: &str) -> usize {
+    let words = tokenize(text);
+    query_words
+        .iter()
+        .filter(|w| words.iter().any(|t| t.starts_with(w.as_str()) || (t.chars().count() >= 4 && w.starts_with(t.as_str()))))
+        .count()
+}
+
 /// Keyword ranking without FTS5: how many query words start a word of the memory (or are started
 /// by a long-enough word of it), best first, then most recently changed, then id.
 pub fn keyword_rank(query: &str, memories: &[Memory]) -> Vec<String> {
@@ -121,11 +131,7 @@ pub fn keyword_rank(query: &str, memories: &[Memory]) -> Vec<String> {
     let mut scored: Vec<(usize, &Memory)> = memories
         .iter()
         .filter_map(|m| {
-            let words = tokenize(&m.text);
-            let hits = q
-                .iter()
-                .filter(|w| words.iter().any(|t| t.starts_with(w.as_str()) || (t.chars().count() >= 4 && w.starts_with(t.as_str()))))
-                .count();
+            let hits = keyword_hits(&q, &m.text);
             (hits > 0).then_some((hits, m))
         })
         .collect();
@@ -238,7 +244,48 @@ pub(crate) enum Embedder {
     Off,
 }
 
+/// A backend that can embed, and the model to ask it for.
+pub(crate) type EmbedTarget = (std::sync::Arc<dyn aiw_runtimes::ChatBackend>, String);
+
 impl Engine {
+    /// The backend and model to compute embeddings with, shared by the memory and the knowledge
+    /// base. `Auto` is the adviser's installed embedding model on a runtime that is already up (or
+    /// the one a shell brought with [`Engine::use_embedder`]); it is asked only when
+    /// `has_work(model)` says there is something to compare with or to embed, so an idle search
+    /// never wakes a runtime. `None`: no embedding model, or its runtime is not running.
+    pub(crate) async fn embed_target(&self, embedder: Embedder, has_work: impl FnOnce(&str) -> bool) -> Option<EmbedTarget> {
+        match embedder {
+            Embedder::Off => None,
+            #[cfg(test)]
+            Embedder::Fixed(b, m) => Some((b, m)),
+            Embedder::Auto => {
+                if let Some(fixed) = self.0.embedder_override.read().unwrap().clone() {
+                    return Some(fixed);
+                }
+                let (runtime, model) = self.embedding_model()?;
+                if !has_work(&model) {
+                    return None;
+                }
+                let b = self.0.runtimes.embedding_backend(&runtime, &model).await?;
+                Some((b, model))
+            }
+        }
+    }
+
+    /// Makes `backend` the embedding provider (model `model`) instead of the adviser's choice: for
+    /// a shell that has its own, and for tests with a fake. `None` goes back to the adviser.
+    pub fn use_embedder(&self, backend: Option<std::sync::Arc<dyn aiw_runtimes::ChatBackend>>, model: &str) {
+        *self.0.embedder_override.write().unwrap() = backend.map(|b| (b, model.to_string()));
+    }
+
+    /// The model that gives search by meaning right now, if any.
+    pub fn embedding_model_name(&self) -> Option<String> {
+        if let Some((_, m)) = self.0.embedder_override.read().unwrap().clone() {
+            return Some(m);
+        }
+        self.embedding_model().map(|(_, m)| m)
+    }
+
     /// `memory.enabled` (default on): off means no prompt injection and no memory tools.
     pub fn memory_enabled(&self) -> bool {
         self.0.config.get("memory.enabled").and_then(|v| v.as_bool()).unwrap_or(true)
@@ -362,24 +409,18 @@ impl Engine {
     }
 
     async fn semantic_ranking(&self, query: &str, filter: &MemoryFilter, embedder: Embedder) -> Vec<(String, f32)> {
-        let (backend, model) = match embedder {
-            Embedder::Off => return vec![],
-            #[cfg(test)]
-            Embedder::Fixed(b, m) => (b, m),
-            Embedder::Auto => {
-                let Some((runtime, model)) = self.embedding_model() else { return vec![] };
-                // Nothing to compare with yet: do not even ask the runtime.
-                let stored = self.0.store.memory_embeddings(filter, &model).unwrap_or_default();
-                if stored.is_empty() {
-                    if self.0.store.memory_missing_embeddings(&model, 1).map(|m| !m.is_empty()).unwrap_or(false) {
-                        self.schedule_embedding();
-                    }
-                    return vec![];
+        // Nothing to compare with yet: do not even ask the runtime.
+        let has_work = |model: &str| {
+            let stored = self.0.store.memory_embeddings(filter, model).unwrap_or_default();
+            if stored.is_empty() {
+                if self.0.store.memory_missing_embeddings(model, 1).map(|m| !m.is_empty()).unwrap_or(false) {
+                    self.schedule_embedding();
                 }
-                let Some(b) = self.0.runtimes.embedding_backend(&runtime, &model).await else { return vec![] };
-                (b, model)
+                return false;
             }
+            true
         };
+        let Some((backend, model)) = self.embed_target(embedder, has_work).await else { return vec![] };
         let stored = self.0.store.memory_embeddings(filter, &model).unwrap_or_default();
         if stored.is_empty() {
             return vec![];
@@ -557,7 +598,7 @@ impl Engine {
 
     // -------------------------------------------------------------- embeddings
     /// The adviser's installed embedding model: `(runtime id, model)`.
-    fn embedding_model(&self) -> Option<(String, String)> {
+    pub(crate) fn embedding_model(&self) -> Option<(String, String)> {
         self.live_recommendations().embeddings.installed.map(|c| (c.runtime_id, c.model))
     }
 
@@ -583,24 +624,17 @@ impl Engine {
     }
 
     async fn embed_loop(&self, embedder: Embedder) -> Result<usize> {
-        let (backend, model) = match embedder {
-            Embedder::Off => return Ok(0),
-            #[cfg(test)]
-            Embedder::Fixed(b, m) => (b, m),
-            Embedder::Auto => {
-                let Some((runtime, model)) = self.embedding_model() else { return Ok(0) };
-                if self.0.store.memory_missing_embeddings(&model, 1)?.is_empty() {
-                    return Ok(0);
-                }
-                let Some(b) = self.0.runtimes.embedding_backend(&runtime, &model).await else { return Ok(0) };
-                (b, model)
-            }
+        let missing = |model: &str| {
+            self.0.store.memory_missing_embeddings(model, 1).map(|m| !m.is_empty()).unwrap_or(false)
+                || self.0.store.kb_missing_embeddings(model, 1).map(|m| !m.is_empty()).unwrap_or(false)
         };
+        let Some((backend, model)) = self.embed_target(embedder, missing).await else { return Ok(0) };
         let mut done = 0;
+        // The memories first (small and what the next reply may need), then the documents.
         loop {
             let batch = self.0.store.memory_missing_embeddings(&model, EMBED_BATCH)?;
             if batch.is_empty() {
-                return Ok(done);
+                break;
             }
             let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
             let vectors = match backend.embed(&model, &texts).await {
@@ -616,6 +650,86 @@ impl Engine {
                 done += 1;
             }
         }
+        loop {
+            let batch = self.0.store.kb_missing_embeddings(&model, EMBED_BATCH)?;
+            if batch.is_empty() {
+                return Ok(done);
+            }
+            let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
+            let vectors = match backend.embed(&model, &texts).await {
+                Ok(v) if v.len() == batch.len() => v,
+                Ok(_) => return Ok(done),
+                Err(e) => {
+                    tracing::debug!("embedding dei documenti non disponibile: {e}");
+                    return Ok(done);
+                }
+            };
+            for ((id, _), v) in batch.iter().zip(&vectors) {
+                self.0.store.kb_set_embedding(id, &model, v)?;
+                done += 1;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------- gateway
+    /// The backend and model for a gateway request naming `requested`: an inference profile of an embedding model, a
+    /// `runtime/model` pair, or an installed embedding model that is served right now. Anything
+    /// else (OpenAI clients send names like `text-embedding-3-small`) gets the adviser's embedding
+    /// model, like the memory and the knowledge base. Never starts or restarts a runtime.
+    async fn embed_target_named(&self, requested: &str) -> Option<EmbedTarget> {
+        let r = requested.trim();
+        if !r.is_empty() && self.0.embedder_override.read().unwrap().is_none() {
+            if let Ok(p) = self.profile(r) {
+                // A chat profile is not an embedding model: only one that names an embedding model is used.
+                if crate::defaults::looks_like_embedding_model(&p.model) {
+                    if let Some(b) = self.0.runtimes.embedding_backend(&p.runtime_id, &p.model).await {
+                        return Some((b, p.model));
+                    }
+                }
+            }
+            if let Some((rt, m)) = r.split_once('/') {
+                if self.0.runtimes.manifest(rt).is_ok() {
+                    if let Some(b) = self.0.runtimes.embedding_backend(rt, m).await {
+                        return Some((b, m.to_string()));
+                    }
+                }
+            }
+            let avail = crate::defaults::Availability::from_runtimes(&self.0.runtimes.list());
+            let installed_embedding = self.0.models.read().unwrap().iter().any(|m| {
+                m.id == r && (m.capabilities.iter().any(|c| c == "embeddings") || crate::defaults::looks_like_embedding_model(&m.id))
+            });
+            let runtime = if avail.ollama_models.iter().any(|m| m == r) {
+                Some("ollama")
+            } else if installed_embedding {
+                Some(avail.gguf_runtime().unwrap_or("llama-server"))
+            } else {
+                None
+            };
+            if let Some(rt) = runtime {
+                if let Some(b) = self.0.runtimes.embedding_backend(rt, r).await {
+                    return Some((b, r.to_string()));
+                }
+            }
+        }
+        self.embed_target(Embedder::Auto, |_| true).await
+    }
+
+    /// The vectors of `texts` for the gateway (`POST /v1/embeddings`), with the model that made
+    /// them. `None`: no embedding model is available (the caller answers 503). The model has to be
+    /// running already: nothing is started for it.
+    pub async fn embed_texts(&self, requested: &str, texts: &[String]) -> Result<Option<(String, Vec<Vec<f32>>)>> {
+        let Some((backend, model)) = self.embed_target_named(requested).await else { return Ok(None) };
+        let mut vectors = Vec::with_capacity(texts.len());
+        for batch in texts.chunks(EMBED_BATCH * 4) {
+            let v = backend.embed(&model, batch).await?;
+            if v.len() != batch.len() {
+                return Err(Error::Runtime(
+                    "il modello di embedding ha restituito un numero di vettori diverso da quello dei testi".into(),
+                ));
+            }
+            vectors.extend(v);
+        }
+        Ok(Some((model, vectors)))
     }
 
     // -------------------------------------------------------------- prompt

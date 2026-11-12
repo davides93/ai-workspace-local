@@ -142,6 +142,7 @@ mod tests {
                 budget: None,
                 candidate_profiles: vec![],
                 roles: None,
+                knowledge: vec![],
             },
             profile: InferenceProfile {
                 id: "p".into(),

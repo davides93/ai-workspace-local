@@ -34,8 +34,11 @@ pub fn is_memory_tool(name: &str) -> bool {
     MEMORY_TOOLS.contains(&name)
 }
 
+/// The tool that searches the knowledge base (the documents the person added; handled by the host).
+pub const KB_SEARCH: &str = "kb_search";
+
 /// Names of the internal tools.
-pub const NAMES: [&str; 11] = [
+pub const NAMES: [&str; 12] = [
     "todo",
     "agent",
     "skill",
@@ -47,6 +50,7 @@ pub const NAMES: [&str; 11] = [
     MEMORY_SEARCH,
     MEMORY_UPDATE,
     MEMORY_FORGET,
+    KB_SEARCH,
 ];
 
 /// Is `name` an internal tool?
@@ -114,6 +118,19 @@ pub fn memory_specs() -> Vec<aiw_runtimes::ToolSpec> {
     ]
 }
 
+/// The spec of `kb_search`.
+pub fn kb_search_spec() -> aiw_runtimes::ToolSpec {
+    aiw_runtimes::ToolSpec::function(
+        KB_SEARCH,
+        "Cerca passaggi nei documenti che l'utente ha aggiunto alla sua base di conoscenza (per parole e per significato). Restituisce estratti numerati con «[documento · parte N]»: cita il documento quando li usi. Usalo quando la domanda può riguardare quei documenti.",
+        json!({"type":"object","properties":{
+            "query":{"type":"string","description":"Cosa cercare, in una frase o con le parole chiave"},
+            "collection":{"type":"string","description":"Nome o id di una raccolta (assente = tutte)"},
+            "max_results":{"type":"integer","minimum":1,"maximum":10,"description":"Quanti passaggi (predefinito 5)"}
+        },"required":["query"]}),
+    )
+}
+
 fn parameters_of(spec: aiw_runtimes::ToolSpec) -> Value {
     spec.function.parameters
 }
@@ -168,6 +185,11 @@ pub fn internal_tools() -> Vec<InternalTool> {
         },
         parameters: s.function.parameters,
     }))
+    .chain(std::iter::once(InternalTool {
+        name: KB_SEARCH,
+        description: "Cerca passaggi nei documenti della base di conoscenza dell'utente (offerto solo se esiste almeno una raccolta).",
+        parameters: parameters_of(kb_search_spec()),
+    }))
     .collect()
 }
 
@@ -205,5 +227,29 @@ mod tests {
         assert!(offered(&["handoff"], 0).await);
         assert!(!offered(&["read_file"], 0).await);
         assert!(!offered(&["*"], 1).await, "a sub-agent cannot hand the conversation over");
+    }
+
+    #[tokio::test]
+    async fn kb_search_is_offered_only_when_the_host_has_documents_and_the_agent_lists_it() {
+        use crate::tests_support::{input, setup};
+        let offered = |tools: &[&str]| {
+            let tools: Vec<String> = tools.iter().map(|t| t.to_string()).collect();
+            async move {
+                let (host, dir) = setup(vec![aiw_runtimes::ScriptedBackend::text_turn("ok")], true);
+                let mut inp = input(dir.path(), "auto");
+                inp.agent.tools = tools;
+                crate::AgentRunner::run(inp, host.clone()).await.unwrap();
+                let reqs = host.backend.requests.lock().unwrap();
+                reqs[0].tools.iter().any(|t| t.function.name == KB_SEARCH)
+            }
+        };
+        // The test host has no knowledge base: nothing is offered, whatever the agent lists.
+        assert!(!offered(&["*"]).await);
+        assert!(!offered(&["kb_search"]).await);
+        let spec = kb_search_spec();
+        assert_eq!(spec.function.parameters["required"], json!(["query"]));
+        assert!(
+            spec.function.description.contains("[documento · parte N]") || spec.function.description.contains("«[documento · parte N]»")
+        );
     }
 }

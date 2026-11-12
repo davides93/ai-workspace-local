@@ -8,6 +8,7 @@ mod dataset;
 pub mod defaults;
 pub mod eval;
 mod host;
+pub mod kb;
 mod learning;
 pub mod memory;
 mod models;
@@ -144,6 +145,10 @@ pub(crate) struct Inner {
     pub reflecting: Mutex<HashSet<String>>,
     /// A background pass that computes memory embeddings is running (see `memory`).
     pub embedding_busy: std::sync::atomic::AtomicBool,
+    /// An embedding provider that replaces the adviser's choice (see `Engine::use_embedder`).
+    pub embedder_override: RwLock<Option<memory::EmbedTarget>>,
+    /// Indexing jobs of the knowledge base (see `kb`).
+    pub kb_jobs: Mutex<kb::Jobs>,
     pub bus: broadcast::Sender<RunEventMsg>,
     pub workflow_runs: Mutex<Vec<WorkflowRun>>,
     pub scheduler: Mutex<aiw_workflow::Scheduler>,
@@ -278,6 +283,8 @@ impl Engine {
             session_allow: Default::default(),
             reflecting: Default::default(),
             embedding_busy: Default::default(),
+            embedder_override: Default::default(),
+            kb_jobs: Default::default(),
             bus,
             workflow_runs: Default::default(),
             scheduler: Default::default(),
@@ -799,6 +806,11 @@ impl Engine {
                 }
             }
         }
+        // Collections the agent may search: they must exist now (one deleted later is just ignored).
+        let existing = self.0.store.kb_collections()?;
+        if let Some(missing) = a.knowledge.iter().find(|id| !existing.iter().any(|c| &c.id == *id)) {
+            return Err(Error::Invalid(format!("documenti: la raccolta «{missing}» non esiste")));
+        }
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
     }
@@ -889,6 +901,7 @@ impl Engine {
                     budget: None,
                     candidate_profiles: vec![],
                     roles: None,
+                    knowledge: vec![],
                 }
             }
         };
@@ -1628,6 +1641,8 @@ impl Engine {
         // What the assistant remembers: pinned notes and the ones that match this message.
         let memory = self.memory_prompt(&run_input.agent.id, &run_input.user_input).await;
         run_input.system_extra.extend(memory);
+        // Which document collections exist (the passages themselves are found with `kb_search`, never injected).
+        run_input.system_extra.extend(self.kb_prompt(&run_input.agent));
         if let Some(team) = &team {
             self.apply_team(&mut run_input, team);
         }
@@ -2485,6 +2500,8 @@ mod tests_eval;
 mod tests_hardening;
 #[cfg(test)]
 mod tests_inference;
+#[cfg(test)]
+mod tests_kb;
 #[cfg(test)]
 mod tests_learning;
 #[cfg(test)]

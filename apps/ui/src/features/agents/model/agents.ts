@@ -67,7 +67,8 @@ export function cleanBudget(b: BudgetLimits | undefined): BudgetLimits | undefin
 /** Form values trimmed and clamped the way the backend will keep them. */
 export function normalizeAgent(a: AgentProfile): AgentProfile {
   const turns = Number.isFinite(a.max_turns) ? Math.round(a.max_turns) : 30;
-  const { budget: _budget, candidate_profiles: _candidates, roles: _roles, ...rest } = a;
+  const { budget: _budget, candidate_profiles: _candidates, roles: _roles, knowledge: _knowledge, ...rest } = a;
+  const knowledge = [...new Set(a.knowledge ?? [])];
   const budget = cleanBudget(a.budget);
   const candidates = [...new Set(a.candidate_profiles ?? [])];
   const roles = normalizeRoles(a.roles);
@@ -76,12 +77,19 @@ export function normalizeAgent(a: AgentProfile): AgentProfile {
     ...(budget ? { budget } : {}),
     ...(candidates.length > 0 ? { candidate_profiles: candidates } : {}),
     ...(roles ? { roles } : {}),
+    ...(knowledge.length > 0 ? { knowledge } : {}),
     name: a.name.trim(),
     description: a.description.trim(),
     system_prompt: a.system_prompt,
     tools: normalizeTools(a.tools),
     max_turns: Math.min(MAX_TURNS_LIMIT, Math.max(1, turns)),
   };
+}
+
+/** Ticks or unticks a collection of documents the agent may search. */
+export function withKnowledge(a: AgentProfile, collectionId: string, on: boolean): AgentProfile {
+  const rest = (a.knowledge ?? []).filter((k) => k !== collectionId);
+  return { ...a, knowledge: on ? [...rest, collectionId] : rest };
 }
 
 /** The id a new agent is saved under: from its name, unique among `existing`. */

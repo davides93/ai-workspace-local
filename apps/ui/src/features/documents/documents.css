@@ -1,0 +1,54 @@
+/* Documenti: raccolte, file, ricerca. Tokens only. Class prefix `kb-`. */
+
+.kb { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); overflow-y: auto; }
+.kb-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) max(18px, env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--line); }
+.kb-head > svg { flex: none; color: var(--accent); }
+.kb-head h1 { font-size: var(--fs-lg); line-height: 1.2; }
+.kb-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); }
+.kb-side { min-width: 0; border-right: 1px solid var(--line); background: var(--surface); padding: var(--space-4); }
+.kb-main { min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4); padding-right: max(var(--space-4), env(safe-area-inset-right, 0px)); }
+.kb-title h2 { font-size: var(--fs-lg); }
+
+.kb-cols { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.kb-cols h2 { font-size: var(--fs-md, var(--fs-lg)); }
+.kb-col-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1, 4px); }
+.kb-col { width: 100%; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); color: var(--fg); text-align: left; cursor: pointer; min-height: 44px; }
+.kb-col.is-on { border-color: var(--accent); background: var(--accent-soft); }
+.kb-col-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.kb-new { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
+
+.kb-add, .kb-docs, .kb-search { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.kb-add h3, .kb-docs h3, .kb-search h3 { font-size: var(--fs-md, var(--fs-lg)); }
+.kb-drop { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-4); text-align: center; border: 2px dashed var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.kb-drop.is-dragging { border-color: var(--accent); background: var(--accent-soft); }
+.kb-drop > svg { color: var(--accent); }
+.kb-path { display: flex; flex-direction: column; gap: var(--space-2); }
+.kb-path-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.kb-error { color: var(--crit); margin: 0; }
+.kb-notes { margin: 0; padding-left: 1.2em; color: var(--fg-muted); overflow-wrap: anywhere; }
+.kb-jobs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.kb-job { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.kb-job-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+
+.kb-doc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.kb-doc { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); min-width: 0; }
+.kb-doc-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.kb-doc-name { overflow-wrap: anywhere; }
+.kb-doc-error { color: var(--crit); }
+
+.kb-search-form { display: flex; align-items: flex-end; gap: var(--space-2); }
+.kb-hits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.kb-hit { padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); min-width: 0; }
+.kb-hit p { margin: 0; }
+.kb-hit-text { margin-top: var(--space-1, 4px) !important; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.kb-know { display: flex; flex-direction: column; gap: var(--space-2); }
+.kb-know label { display: flex; align-items: flex-start; gap: var(--space-2); }
+
+/* Phones: one column, the collections on top. */
+@media (max-width: 900px) {
+  .kb-body { display: flex; flex-direction: column; }
+  .kb-side { border-right: 0; border-bottom: 1px solid var(--line); }
+  .kb-main { padding-bottom: calc(var(--space-6, 32px) + env(safe-area-inset-bottom, 0px)); }
+  .kb-search-form { flex-direction: column; align-items: stretch; }
+}

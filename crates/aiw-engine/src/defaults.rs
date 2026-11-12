@@ -22,6 +22,7 @@ pub fn agents() -> Vec<AgentProfile> {
         budget: None,
         candidate_profiles: vec![],
         roles: None,
+        knowledge: vec![],
     };
     vec![
         a(
@@ -29,7 +30,7 @@ pub fn agents() -> Vec<AgentProfile> {
             "Operatore",
             "Task operativi su file, cartelle, documenti e comandi.",
             "Sei un operatore preciso che lavora sul computer dell'utente. Pianifica i passi, verifica con gli strumenti, chiedi conferma prima delle azioni distruttive e alla fine riepiloga cosa hai fatto davvero.",
-            &["read_file", "write_file", "edit_file", "move_file", "list_dir", "glob", "grep", "shell", "web_fetch", "web_search", "todo", "agent", "skill", "render_ui", "code", "memory_save", "memory_search", "memory_update", "memory_forget", "calendar_today", "calendar_upcoming", "mail_recent", "mail_search"],
+            &["read_file", "write_file", "edit_file", "move_file", "list_dir", "glob", "grep", "shell", "web_fetch", "web_search", "todo", "agent", "skill", "render_ui", "code", "memory_save", "memory_search", "memory_update", "memory_forget", "kb_search", "calendar_today", "calendar_upcoming", "mail_recent", "mail_search"],
             "ask",
             "workspace-write",
             30,
@@ -69,7 +70,7 @@ pub fn agents() -> Vec<AgentProfile> {
             "Pianificatore",
             "Solo lettura: analizza e propone piani.",
             "Analizzi senza modificare nulla. Produci piani numerati, rischi e alternative.",
-            &["read_file", "list_dir", "glob", "grep", "web_fetch", "web_search", "todo", "skill", "render_ui", "code", "memory_search", "calendar_today", "calendar_upcoming", "mail_recent", "mail_search"],
+            &["read_file", "list_dir", "glob", "grep", "web_fetch", "web_search", "todo", "skill", "render_ui", "code", "memory_search", "kb_search", "calendar_today", "calendar_upcoming", "mail_recent", "mail_search"],
             "plan",
             "read-only",
             20,

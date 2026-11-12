@@ -65,6 +65,13 @@ export const qk = {
     list: (query?: { status?: string; kind?: string; q?: string }) => ["memories", "list", query?.status ?? "", query?.kind ?? "", query?.q ?? ""] as const,
   },
 
+  kb: {
+    all: () => ["kb"] as const,
+    collections: () => ["kb", "collections"] as const,
+    documents: (collectionId: string) => ["kb", "documents", collectionId] as const,
+    status: () => ["kb", "status"] as const,
+  },
+
   workflows: {
     all: () => ["workflows"] as const,
     list: () => ["workflows", "list"] as const,

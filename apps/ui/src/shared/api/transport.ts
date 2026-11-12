@@ -1,6 +1,6 @@
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -143,6 +143,24 @@ export interface Transport {
   deleteMemory(id: string): Promise<void>;
   /** Deletes every memory for good; returns how many. */
   deleteAllMemories(): Promise<{ deleted: number }>;
+  // ---- documents (local knowledge base)
+  kbCollections(): Promise<KbCollection[]>;
+  createKbCollection(body: KbCollectionCreate): Promise<KbCollection>;
+  updateKbCollection(id: string, patch: KbCollectionPatch): Promise<KbCollection>;
+  /** Deletes the collection with its documents and passages. */
+  deleteKbCollection(id: string): Promise<void>;
+  kbDocuments(collectionId: string): Promise<KbDocument[]>;
+  /** Sends files (up to 8, 25 MB in all, per call); the work goes on in the background: see `kbStatus`. */
+  addKbFiles(collectionId: string, files: AttachmentUpload[]): Promise<KbAddResult>;
+  /** A file or folder on this computer (only from this device); the work goes on in the background. */
+  addKbPath(collectionId: string, path: string): Promise<KbAddResult>;
+  /** Reads the files again and computes the vectors again. */
+  reindexKbCollection(collectionId: string): Promise<KbAddResult>;
+  deleteKbDocument(id: string): Promise<void>;
+  kbSearch(body: KbSearchBody): Promise<KbSearchResult>;
+  /** The embedding model in use (absent: keywords only) and the indexing jobs. */
+  kbStatus(): Promise<KbStatus>;
+  cancelKbJob(jobId: string): Promise<void>;
   /** What the proactive assistant noticed, newest first (`status`/`kind` narrow it). */
   proposals(query?: ProposalQuery): Promise<Proposal[]>;
   /** Approving starts a normal run in a new session; `instruction` replaces the proposed one. */

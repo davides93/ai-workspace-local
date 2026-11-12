@@ -65,7 +65,7 @@ pub(crate) fn sanitize_name(raw: &str) -> String {
     format!("{stem}{ext}")
 }
 
-fn extension(name: &str) -> String {
+pub(crate) fn extension(name: &str) -> String {
     name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default()
 }
 
@@ -165,15 +165,23 @@ pub(crate) struct Prepared {
 /// Checks the limits, decodes the base64 and detects the kind of every file. Errors are in Italian
 /// and meant for the person (HTTP 400).
 pub(crate) fn prepare(uploads: Vec<AttachmentUpload>) -> Result<Vec<Prepared>> {
+    prepare_with(
+        uploads,
+        format!("Puoi allegare al massimo {MAX_ATTACHMENTS_PER_MESSAGE} file a un messaggio."),
+        format!("Gli allegati pesano troppo: in totale al massimo {} MB per messaggio.", MAX_ATTACHMENTS_TOTAL_BYTES >> 20),
+    )
+}
+
+/// [`prepare`] with the wording of the two "too many / too heavy" errors, so that another place
+/// that takes the same uploads (the knowledge base) can say what it means.
+pub(crate) fn prepare_with(uploads: Vec<AttachmentUpload>, too_many: String, too_heavy: String) -> Result<Vec<Prepared>> {
     if uploads.len() > MAX_ATTACHMENTS_PER_MESSAGE {
-        return Err(Error::Invalid(format!("Puoi allegare al massimo {MAX_ATTACHMENTS_PER_MESSAGE} file a un messaggio.")));
+        return Err(Error::Invalid(too_many));
     }
     let too_big = |name: &str| {
         Error::Invalid(format!("«{name}» è troppo grande: ogni file può pesare al massimo {} MB.", MAX_ATTACHMENT_BYTES >> 20))
     };
-    let total_err = || {
-        Error::Invalid(format!("Gli allegati pesano troppo: in totale al massimo {} MB per messaggio.", MAX_ATTACHMENTS_TOTAL_BYTES >> 20))
-    };
+    let total_err = || Error::Invalid(too_heavy.clone());
     // Cheap size check on the encoded text, before decoding anything.
     let mut estimate = 0usize;
     for u in &uploads {
@@ -210,7 +218,7 @@ pub(crate) fn prepare(uploads: Vec<AttachmentUpload>) -> Result<Vec<Prepared>> {
 
 /// The text of a PDF, or `None` when there is none (a scan), the file is damaged, or the extractor
 /// panics or takes too long. Runs on a blocking thread.
-async fn extract_pdf_text(bytes: Vec<u8>) -> Option<String> {
+pub(crate) async fn extract_pdf_text(bytes: Vec<u8>) -> Option<String> {
     let job = tokio::task::spawn_blocking(move || std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes)));
     let text = match tokio::time::timeout(PDF_TIMEOUT, job).await {
         Ok(Ok(Ok(Ok(t)))) => t,

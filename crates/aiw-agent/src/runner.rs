@@ -63,6 +63,16 @@ pub trait RunHost: Send + Sync {
         let _ = (input, args);
         Err(Error::Unsupported(format!("lo strumento {name} non è disponibile")))
     }
+    /// Is `kb_search` offered in this run? (At least one document collection the agent can see.)
+    fn kb_available(&self, input: &RunInput) -> bool {
+        let _ = input;
+        false
+    }
+    /// Runs `kb_search` for the run `input`; the error is a message for the model.
+    async fn kb_tool(&self, input: &RunInput, name: &str, args: &Value) -> Result<String> {
+        let _ = (input, args);
+        Err(Error::Unsupported(format!("lo strumento {name} non è disponibile")))
+    }
 }
 
 /// What the person attached to the message of this run, ready for the model: the text of the
@@ -181,7 +191,7 @@ pub fn to_msgs(history: &[ChatMessage]) -> Vec<Msg> {
         .collect()
 }
 
-fn internal_specs(input: &RunInput, skills: &[Skill], memory: bool) -> Vec<ToolSpec> {
+fn internal_specs(input: &RunInput, skills: &[Skill], memory: bool, kb: bool) -> Vec<ToolSpec> {
     let allowed = |n: &str| input.agent.tools.iter().any(|t| t == "*" || t == n);
     let mut v = Vec::new();
     if allowed("todo") {
@@ -214,6 +224,9 @@ fn internal_specs(input: &RunInput, skills: &[Skill], memory: bool) -> Vec<ToolS
     }
     if memory {
         v.extend(crate::internal::memory_specs().into_iter().filter(|s| allowed(&s.function.name)));
+    }
+    if kb && allowed(crate::internal::KB_SEARCH) {
+        v.push(crate::internal::kb_search_spec());
     }
     if allowed("skill") && !skills.is_empty() {
         let names: Vec<Value> = skills.iter().map(|s| Value::String(s.name.clone())).collect();
@@ -504,7 +517,7 @@ impl AgentRunner {
             })
             .map(|t| ToolSpec::function(t.name(), t.description(), t.parameters()))
             .collect();
-        specs.extend(internal_specs(input, &skills, host.memory_enabled()));
+        specs.extend(internal_specs(input, &skills, host.memory_enabled(), host.kb_available(input)));
 
         let mut state = RunState {
             runtime: Some(input.profile.runtime_id.clone()),
@@ -1417,6 +1430,24 @@ impl AgentRunner {
                     }
                     Err(e) => {
                         audit("error", detail(n));
+                        (ToolOutput::error(e.to_string()), None)
+                    }
+                };
+            }
+            crate::internal::KB_SEARCH => {
+                if !host.kb_available(input) || !input.agent.tools.iter().any(|t| t == "*" || t == crate::internal::KB_SEARCH) {
+                    audit("deny", "documenti non disponibili per questo agente".into());
+                    return (ToolOutput::error("Lo strumento `kb_search` non è disponibile."), None);
+                }
+                // Reading only, like `memory_search`: no approval prompt, every call is in the activity log.
+                let detail = || format!("kb_search: {}", args["query"].as_str().unwrap_or_default().chars().take(120).collect::<String>());
+                return match host.kb_tool(input, crate::internal::KB_SEARCH, &args).await {
+                    Ok(text) => {
+                        audit("allow", detail());
+                        (ToolOutput::text(text), None)
+                    }
+                    Err(e) => {
+                        audit("error", detail());
                         (ToolOutput::error(e.to_string()), None)
                     }
                 };

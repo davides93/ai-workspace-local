@@ -475,6 +475,8 @@ export interface AgentProfile {
   candidate_profiles?: string[];
   /** Models by role inside one run. Absent: one model (`inference_profile`) for everything. */
   roles?: AgentRoles;
+  /** Ids of the document collections this agent can search with `kb_search`. Absent or empty: all of them. */
+  knowledge?: string[];
 }
 
 /** The four jobs a model can have inside one run (plan, act, check, summarize). */
@@ -692,6 +694,120 @@ export interface MemoryQuery {
   kind?: MemoryKind;
   /** Search text: the answer is ranked by relevance. */
   q?: string;
+}
+
+// ---- Documents: the local knowledge base (crates/aiw-engine/src/kb.rs)
+
+/** A set of documents the assistant can search. */
+export interface KbCollection {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  /** Documents, whatever their status. */
+  documents: number;
+  /** Searchable passages (of the documents that are ready). */
+  chunks: number;
+  /** Passages that also have a vector for the current embedding model. */
+  embedded_chunks: number;
+}
+
+export interface KbCollectionCreate {
+  name: string;
+  description?: string;
+}
+
+export interface KbCollectionPatch {
+  name?: string;
+  description?: string;
+}
+
+export type KbDocumentStatus = "indexing" | "ready" | "failed";
+
+export interface KbDocument {
+  id: string;
+  collection_id: string;
+  name: string;
+  /** Path of the file on this computer, or `caricato` for a file sent from the app. */
+  source: string;
+  mime: string;
+  /** Bytes. */
+  size: number;
+  sha256: string;
+  status: KbDocumentStatus;
+  /** Why it failed (Italian). */
+  error?: string;
+  chunks: number;
+  embedded_chunks: number;
+  created_at: string;
+}
+
+/** Body of `POST /api/kb/collections/{id}/documents`: files sent from the app, or a path on this computer. Exactly one. */
+export interface KbAddBody {
+  files?: AttachmentUpload[];
+  path?: string;
+}
+
+export interface KbSkipped {
+  name: string;
+  reason: string;
+}
+
+export type KbJobState = "running" | "done" | "cancelled";
+
+/** Progress and outcome of adding files or a folder, or of a reindex. */
+export interface KbJob {
+  id: string;
+  collection_id: string;
+  state: KbJobState;
+  total: number;
+  done: number;
+  added: number;
+  /** Same content already there: nothing was done. */
+  unchanged: number;
+  /** A changed file at the same path replaced its old document. */
+  replaced: number;
+  failed: number;
+  current?: string;
+  /** The first files left out (see `skipped_total`). */
+  skipped: KbSkipped[];
+  skipped_total: number;
+}
+
+export interface KbAddResult {
+  job: KbJob;
+}
+
+export interface KbStatus {
+  /** The embedding model that gives search by meaning; absent = keywords only. */
+  embedding_model?: string;
+  /** Running jobs and the latest finished ones, newest first. */
+  jobs: KbJob[];
+}
+
+export interface KbSearchBody {
+  query: string;
+  /** Name or id; absent = every collection. */
+  collection?: string;
+  max_results?: number;
+}
+
+export interface KbHit {
+  chunk_id: string;
+  document_id: string;
+  document_name: string;
+  collection_id: string;
+  collection_name: string;
+  /** Position of the passage in the document, from 1. */
+  part: number;
+  text: string;
+  score: number;
+}
+
+export interface KbSearchResult {
+  hits: KbHit[];
+  /** Was the meaning of the question used too? False = keywords only. */
+  semantic: boolean;
 }
 
 /** Longest memory text the engine accepts (characters). */

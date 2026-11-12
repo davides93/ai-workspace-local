@@ -32,6 +32,7 @@ async-trait.workspace = true
 chrono.workspace = true
 futures.workspace = true
 globset.workspace = true
+ignore.workspace = true
 regex.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

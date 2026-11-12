@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -264,6 +264,18 @@ export class HttpTransport implements Transport {
   approveMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/approve`, {});
   rejectMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/reject`, {});
   deleteMemory = (id: string) => this.req<void>("DELETE", `/memories/${enc(id)}`);
+  kbCollections = () => this.req<KbCollection[]>("GET", "/kb/collections");
+  createKbCollection = (body: KbCollectionCreate) => this.req<KbCollection>("POST", "/kb/collections", body);
+  updateKbCollection = (id: string, patch: KbCollectionPatch) => this.req<KbCollection>("PATCH", `/kb/collections/${enc(id)}`, patch);
+  deleteKbCollection = (id: string) => this.req<void>("DELETE", `/kb/collections/${enc(id)}`);
+  kbDocuments = (collectionId: string) => this.req<KbDocument[]>("GET", `/kb/collections/${enc(collectionId)}/documents`);
+  addKbFiles = (collectionId: string, files: AttachmentUpload[]) => this.req<KbAddResult>("POST", `/kb/collections/${enc(collectionId)}/documents`, { files });
+  addKbPath = (collectionId: string, path: string) => this.req<KbAddResult>("POST", `/kb/collections/${enc(collectionId)}/documents`, { path });
+  reindexKbCollection = (collectionId: string) => this.req<KbAddResult>("POST", `/kb/collections/${enc(collectionId)}/reindex`, {});
+  deleteKbDocument = (id: string) => this.req<void>("DELETE", `/kb/documents/${enc(id)}`);
+  kbSearch = (body: KbSearchBody) => this.req<KbSearchResult>("POST", "/kb/search", body);
+  kbStatus = () => this.req<KbStatus>("GET", "/kb/status");
+  cancelKbJob = (jobId: string) => this.req<void>("POST", `/kb/jobs/${enc(jobId)}/cancel`, {});
   proposals = (query?: ProposalQuery) => {
     const qs = new URLSearchParams();
     if (query?.status) qs.set("status", query.status);

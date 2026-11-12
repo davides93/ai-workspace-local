@@ -649,6 +649,10 @@ pub struct AgentProfile {
     /// `inference_profile` for everything, as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roles: Option<AgentRoles>,
+    /// Ids of the knowledge-base collections this agent can search with `kb_search`. Empty: all
+    /// of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge: Vec<String>,
 }
 
 /// The four jobs a model can have inside one agent run.
@@ -1158,6 +1162,160 @@ pub struct MemoryHit {
     #[serde(flatten)]
     pub memory: Memory,
     pub score: f64,
+}
+
+// ---------------------------------------------------------------- knowledge base
+
+/// A set of documents the assistant can search (the local knowledge base).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbCollection {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub created_at: String,
+    /// Documents in the collection, whatever their status.
+    #[serde(default)]
+    pub documents: usize,
+    /// Searchable passages (chunks of the documents that are ready).
+    #[serde(default)]
+    pub chunks: usize,
+    /// Passages that also have a vector for the current embedding model.
+    #[serde(default)]
+    pub embedded_chunks: usize,
+}
+
+/// Body of `POST /api/kb/collections`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct KbCollectionCreate {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Body of `PATCH /api/kb/collections/{id}`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct KbCollectionPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// One document of a collection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbDocument {
+    pub id: String,
+    pub collection_id: String,
+    pub name: String,
+    /// Absolute path of the file on this computer, or `caricato` for a file sent from the app.
+    pub source: String,
+    pub mime: String,
+    /// Size in bytes.
+    pub size: u64,
+    pub sha256: String,
+    /// indexing | ready | failed
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Passages the document was split into.
+    pub chunks: usize,
+    /// Passages that have a vector for the current embedding model.
+    #[serde(default)]
+    pub embedded_chunks: usize,
+    pub created_at: String,
+}
+
+/// Body of `POST /api/kb/collections/{id}/documents`: files sent from the app, or a path on this
+/// computer (a file or a folder). Exactly one of the two.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct KbAddBody {
+    #[serde(default)]
+    pub files: Option<Vec<AttachmentUpload>>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// A file that was not added, and why (Italian, for the person).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbSkipped {
+    pub name: String,
+    pub reason: String,
+}
+
+/// Progress and outcome of one indexing job (adding files or a folder, reindexing).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbJob {
+    pub id: String,
+    pub collection_id: String,
+    /// running | done | cancelled
+    pub state: String,
+    /// Files to process.
+    pub total: usize,
+    /// Files processed so far.
+    pub done: usize,
+    pub added: usize,
+    /// Same content already in the collection: nothing done.
+    pub unchanged: usize,
+    /// A changed file at the same path replaced its old document.
+    pub replaced: usize,
+    pub failed: usize,
+    /// Name of the file being processed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+    /// First files that were left out (see `skipped_total`).
+    pub skipped: Vec<KbSkipped>,
+    pub skipped_total: usize,
+}
+
+/// Answer of `POST /api/kb/collections/{id}/documents` and `.../reindex`: the job that does the work.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbAddResult {
+    pub job: KbJob,
+}
+
+/// Answer of `GET /api/kb/status`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbStatus {
+    /// The embedding model that gives search by meaning, when there is one ready to use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_model: Option<String>,
+    /// Running jobs and the most recent finished ones, newest first.
+    pub jobs: Vec<KbJob>,
+}
+
+/// Body of `POST /api/kb/search`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct KbSearchBody {
+    pub query: String,
+    /// Name or id; absent = every collection.
+    #[serde(default)]
+    pub collection: Option<String>,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+}
+
+/// A passage found by a search.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbHit {
+    pub chunk_id: String,
+    pub document_id: String,
+    pub document_name: String,
+    pub collection_id: String,
+    pub collection_name: String,
+    /// Position of the passage in the document, from 1.
+    pub part: usize,
+    pub text: String,
+    /// Fused rank score (higher is better).
+    pub score: f64,
+}
+
+/// Answer of `POST /api/kb/search`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbSearchResult {
+    pub hits: Vec<KbHit>,
+    /// Was the meaning of the question used too (an embedding model answered)? False = keywords only.
+    pub semantic: bool,
 }
 
 /// Body of `POST /api/memories`.

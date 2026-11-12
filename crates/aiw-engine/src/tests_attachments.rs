@@ -18,7 +18,7 @@ fn upload(name: &str, mime: &str, bytes: &[u8]) -> AttachmentUpload {
 }
 
 /// A one-page PDF with a line of text, with correct cross-reference offsets.
-fn tiny_pdf(text: &str) -> Vec<u8> {
+pub(crate) fn tiny_pdf(text: &str) -> Vec<u8> {
     let stream = format!("BT /F1 18 Tf 72 700 Td ({text}) Tj ET");
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),

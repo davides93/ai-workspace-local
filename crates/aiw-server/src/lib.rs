@@ -5,6 +5,7 @@ mod a2a;
 mod anthropic;
 mod extract;
 mod gateway;
+mod kb_api;
 mod mcp_server;
 pub mod mesh;
 mod security;
@@ -145,6 +146,17 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/lessons", get(lessons))
         .route("/api/lessons/{id}/approve", post(approve_lesson))
         .route("/api/lessons/{id}/reject", post(reject_lesson))
+        .route("/api/kb/status", get(kb_api::status))
+        .route("/api/kb/collections", get(kb_api::collections).post(kb_api::create_collection))
+        .route("/api/kb/collections/{id}", patch(kb_api::patch_collection).delete(kb_api::delete_collection))
+        .route(
+            "/api/kb/collections/{id}/documents",
+            get(kb_api::documents).post(kb_api::add_documents).layer(DefaultBodyLimit::max(RUN_BODY_LIMIT)),
+        )
+        .route("/api/kb/collections/{id}/reindex", post(kb_api::reindex))
+        .route("/api/kb/documents/{id}", delete(kb_api::delete_document))
+        .route("/api/kb/jobs/{id}/cancel", post(kb_api::cancel_job))
+        .route("/api/kb/search", post(kb_api::search))
         .route("/api/memories", get(memories).post(create_memory).delete(delete_all_memories))
         .route("/api/memories/{id}", patch(patch_memory).delete(delete_memory))
         .route("/api/memories/{id}/forget", post(forget_memory))
@@ -217,6 +229,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/adapters/{id}", get(adapter).delete(delete_adapter))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat_completions))
+        .route("/v1/embeddings", post(gateway::embeddings))
         .route("/v1/messages", post(anthropic::messages))
         .route("/v1/messages/count_tokens", post(anthropic::count_tokens))
         .route("/v1/audio/transcriptions", post(audio_transcriptions).layer(DefaultBodyLimit::max(VOICE_BODY_LIMIT)))
@@ -297,6 +310,20 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ClientIp {
     type Rejection = Infallible;
     async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
         Ok(ClientIp(parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_canonical().to_string())))
+    }
+}
+
+/// Does the request come from this device (loopback, or the in-process shell)? For the routes that
+/// make the engine read this computer's files.
+struct IsLocal(bool);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for IsLocal {
+    type Rejection = Infallible;
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(IsLocal(match parts.extensions.get::<ConnectInfo<SocketAddr>>() {
+            Some(ConnectInfo(addr)) => addr.ip().to_canonical().is_loopback(),
+            None => true,
+        }))
     }
 }
 
@@ -1324,6 +1351,8 @@ mod tests;
 mod tests_errors;
 #[cfg(test)]
 mod tests_eval;
+#[cfg(test)]
+mod tests_kb;
 #[cfg(test)]
 mod tests_learning;
 #[cfg(test)]
