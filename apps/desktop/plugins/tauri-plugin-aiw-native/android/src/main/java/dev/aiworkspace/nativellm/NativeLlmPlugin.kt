@@ -1,8 +1,17 @@
 package dev.aiworkspace.nativellm
 
+import android.Manifest
 import android.app.Activity
+import android.content.Intent
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.webkit.WebView
+import app.tauri.PermissionState
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
+import app.tauri.annotation.Permission
+import app.tauri.annotation.PermissionCallback
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Channel
 import app.tauri.plugin.Invoke
@@ -47,12 +56,34 @@ class GenerateArgs {
  *  - `litert-lm`:   LiteRT-LM engine with `.litertlm` files placed in the app's models folder.
  * Tokens are streamed to Rust through the `onEvent` channel as {type:"text", delta}.
  */
-@TauriPlugin
+@TauriPlugin(permissions = [Permission(strings = [Manifest.permission.POST_NOTIFICATIONS], alias = "notifications")])
 class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val gemini by lazy { GeminiNanoBackend(activity) }
     private val litert by lazy { LiteRtLmBackend(activity) }
     private val browser by lazy { AgentBrowser(activity) }
+
+    private var webView: WebView? = null
+
+    override fun load(webView: WebView) {
+        super.load(webView)
+        this.webView = webView
+        // Cold start from a notification: the page needs a moment before it can be told where to go.
+        routeFrom(activity.intent, 1500)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        routeFrom(intent, 0)
+    }
+
+    /** A notification tap carries `aiw_route` (`#/inbox`): the app is a hash router, so setting the hash opens the page. */
+    private fun routeFrom(intent: Intent?, delayMs: Long) {
+        val route = intent?.getStringExtra("aiw_route") ?: return
+        intent.removeExtra("aiw_route")
+        val js = "window.location.hash = " + org.json.JSONObject.quote(route) + ";"
+        Handler(Looper.getMainLooper()).postDelayed({ webView?.evaluateJavascript(js, null) }, delayMs)
+    }
 
     private fun modelsDir(): File = File(activity.filesDir, "models").apply { mkdirs() }
 
@@ -137,4 +168,56 @@ class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
     fun browserClose(invoke: Invoke) {
         browser.hide { invoke.resolve() }
     }
+
+    // Background checks (see Background.kt); called from Rust through `aiw_background`.
+    private fun notificationsState(): String = when {
+        ProactiveNotifier.permissionGranted(activity) -> "granted"
+        BackgroundScheduler.asked(activity) -> "denied"
+        else -> "not_determined"
+    }
+
+    private fun backgroundAnswer(invoke: Invoke) {
+        scope.launch {
+            invoke.resolve(
+                JSObject()
+                    .put("platform", "android")
+                    .put("supported", true)
+                    .put("notifications", notificationsState())
+                    .put("scheduled", BackgroundScheduler.isScheduled(activity))
+                    .put("detail", "Android decide quando far partire i controlli: di solito ogni 15-30 minuti, meno a batteria scarica."),
+            )
+        }
+    }
+
+    @Command
+    fun backgroundState(invoke: Invoke) = backgroundAnswer(invoke)
+
+    /** The payload is the shell's schedule (`schedule_payload`): keep it for the workers and (re)schedule them. */
+    @Command
+    fun backgroundSchedule(invoke: Invoke) {
+        val data = invoke.getArgs()
+        BackgroundScheduler.save(activity, data)
+        BackgroundScheduler.apply(activity, BackgroundConfig.from(data))
+        backgroundAnswer(invoke)
+    }
+
+    @Command
+    fun backgroundCheckNow(invoke: Invoke) {
+        BackgroundScheduler.checkNow(activity)
+        backgroundAnswer(invoke)
+    }
+
+    /** Asked only when the person turns the assistant on (or presses the button): Android 13+ shows its own dialog. */
+    @Command
+    fun backgroundRequestNotifications(invoke: Invoke) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && getPermissionState("notifications") != PermissionState.GRANTED) {
+            BackgroundScheduler.markAsked(activity)
+            requestPermissionForAlias("notifications", invoke, "notificationsResult")
+        } else {
+            backgroundAnswer(invoke)
+        }
+    }
+
+    @PermissionCallback
+    fun notificationsResult(invoke: Invoke) = backgroundAnswer(invoke)
 }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- DMG fuori dallo store (Developer ID, senza sandbox) con hardened runtime, come richiede la notarizzazione.
+     Usato solo quando i segreti di firma ci sono (release.yml). Il microfono serve alla dettatura. -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

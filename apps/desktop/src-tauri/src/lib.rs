@@ -5,6 +5,7 @@
 use aiw_engine::{Engine, EngineOptions};
 use serde_json::{json, Value};
 use std::sync::Arc;
+mod background;
 #[cfg(desktop)]
 mod desktop;
 
@@ -36,6 +37,12 @@ async fn aiw_browser_show(state: tauri::State<'_, Shell>) -> Result<bool, String
     state.engine.browser().show_webview().await.map_err(|e| e.to_string())
 }
 
+/// Where the agents work on a phone and in the sandboxed Mac App Store build: inside the app's own container.
+#[cfg(mobile)]
+pub(crate) fn mobile_workspace(app: &tauri::AppHandle<tauri::Wry>, data_dir: &std::path::Path) -> std::path::PathBuf {
+    app.path().document_dir().unwrap_or_else(|_| data_dir.join("workspace")).join("AIW-Workspace")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -62,7 +69,10 @@ pub fn run() {
             let sandboxed = cfg!(feature = "mas");
             // Desktop: agents work in ~/AIW-Workspace by default (changeable in Settings); mobile and the
             // sandboxed Mac App Store build: inside the app's own container.
-            let workspace_root = if cfg!(mobile) || sandboxed {
+            #[cfg(mobile)]
+            let workspace_root = Some(mobile_workspace(app.handle(), &data_dir));
+            #[cfg(not(mobile))]
+            let workspace_root = if sandboxed {
                 Some(app.path().document_dir().unwrap_or_else(|_| data_dir.join("workspace")).join("AIW-Workspace"))
             } else {
                 None
@@ -137,10 +147,12 @@ pub fn run() {
             let router = aiw_server::router(engine.clone(), None);
             #[cfg(desktop)]
             desktop::setup(app, &engine);
+            #[cfg(mobile)]
+            background::setup(app.handle(), &engine);
             app.manage(Shell { engine, router });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![aiw_request, aiw_run_events, aiw_browser_show])
+        .invoke_handler(tauri::generate_handler![aiw_request, aiw_run_events, aiw_browser_show, background::aiw_background])
         .build(tauri::generate_context!())
         .expect("error while building AI Workspace Local");
 

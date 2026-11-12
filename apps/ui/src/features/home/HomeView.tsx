@@ -12,6 +12,7 @@ import { useApprovals } from "../approvals/api";
 import { useLessons } from "../learning/api";
 import { AssistantCard } from "./components/AssistantCard";
 import { ApprovalsPanel } from "./components/ApprovalsPanel";
+import { BriefingPanel } from "../inbox/components/BriefingPanel";
 import { DevicePanel } from "./components/DevicePanel";
 import { DownloadsPanel } from "./components/DownloadsPanel";
 import { FirstRun } from "./components/FirstRun";
@@ -86,12 +87,14 @@ export function HomeView() {
       {mode === "simple" ? (
         <div className="hm-grid">
           {show.assistant && <AssistantCard name={modelName!} />}
+          <BriefingPanel />
           {show.approvals && <ApprovalsPanel />}
           {show.recent && <RecentSessions simple />}
           {show.lessons && <LessonsPanel />}
         </div>
       ) : (
       <div className="hm-grid">
+        <BriefingPanel />
         <DevicePanel />
         <RuntimesPanel />
         <ModelPanel />

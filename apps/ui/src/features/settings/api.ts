@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { ConfigView } from "../../shared/api/types";
+import type { BackgroundStatus, ConfigView } from "../../shared/api/types";
 import { LAYER_LABEL, type WritableLayer } from "./model/config";
 
 export function useConfig() {
@@ -26,4 +26,33 @@ export function useSetConfig() {
       toast(v.value === null ? `«${v.title}» ripristinato nello strato ${LAYER_LABEL[v.layer]}` : `«${v.title}» salvato nello strato ${LAYER_LABEL[v.layer]}`);
     },
   });
+}
+
+/** The phone's side of the background checks (notification permission, what is scheduled). Desktop answers "not supported". */
+export function useBackgroundStatus(enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["background"] as const,
+    queryFn: () => (api.backgroundStatus ? api.backgroundStatus() : Promise.reject(new Error("non disponibile"))),
+    enabled: enabled && api.backgroundStatus !== undefined,
+    retry: false,
+  });
+}
+
+export function useBackgroundActions() {
+  const api = useApi();
+  const qc = useQueryClient();
+  const done = (s: BackgroundStatus) => qc.setQueryData(["background"], s);
+  return {
+    askNotifications: useMutation({ mutationFn: async () => (api.backgroundRequestNotifications ? api.backgroundRequestNotifications() : undefined), onSuccess: (s) => s && done(s) }),
+    configure: useMutation({ mutationFn: async () => (api.backgroundConfigure ? api.backgroundConfigure() : undefined), onSuccess: (s) => s && done(s) }),
+    checkNow: useMutation({
+      mutationFn: async () => (api.backgroundCheckNow ? api.backgroundCheckNow() : undefined),
+      onSuccess: (s) => {
+        if (s) done(s);
+        void qc.invalidateQueries({ queryKey: qk.config() });
+        toast("Controllo avviato");
+      },
+    }),
+  };
 }

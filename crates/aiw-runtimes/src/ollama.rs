@@ -96,6 +96,10 @@ impl ChatBackend for OllamaBackend {
     async fn chat(&self, req: ChatRequest, cancel: CancellationToken) -> Result<DeltaStream> {
         self.inner.chat(req, cancel).await
     }
+
+    async fn embed(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.inner.embed(model, texts).await
+    }
 }
 
 #[cfg(test)]

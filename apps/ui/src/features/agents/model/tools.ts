@@ -2,7 +2,7 @@
 //
 // Rules of the backend this mirrors (crates/aiw-agent/src/runner.rs):
 //  - `tools` is a list of names, and `"*"` means every tool that is enabled;
-//  - seven tools are internal to the agent loop (todo, agent, skill, render_ui, code, handoff, team_state): the catalogue
+//  - eleven tools are internal to the agent loop (todo, agent, skill, render_ui, code, handoff, team_state and the four memory tools): the catalogue
 //    (`GET /api/tools`) lists them with `source: "internal"` and the backend accepts them by name, or by `"*"`,
 //    like any other. Dropping them while editing a list would silently take the plan, sub-agents, skills and
 //    code mode away from the agent. `INTERNAL_TOOLS` is the fallback for a catalogue that does not list them
@@ -26,6 +26,10 @@ export const INTERNAL_TOOLS: InternalTool[] = [
   { name: "code", risk: "read", description: "Orchestra più tool con uno script in un solo passo. Ogni chiamata dello script passa da policy, conferme e hook come una diretta." },
   { name: "handoff", risk: "read", description: "Passa la conversazione a un altro agente: il tuo run termina e prosegue lui con il tuo riassunto." },
   { name: "team_state", risk: "read", description: "Legge e scrive lo stato condiviso tra gli agenti di un team: serve solo dentro un team." },
+  { name: "memory_save", risk: "read", description: "Salva un ricordo a lungo termine: subito se l'hai chiesto tu, come proposta da confermare se lo ha dedotto l'agente." },
+  { name: "memory_search", risk: "read", description: "Cerca tra i ricordi per parole e per significato." },
+  { name: "memory_update", risk: "read", description: "Corregge un ricordo esistente." },
+  { name: "memory_forget", risk: "read", description: "Dimentica un ricordo: puoi sempre ripristinarlo." },
 ];
 
 export const INTERNAL_NAMES: ReadonlySet<string> = new Set(INTERNAL_TOOLS.map((t) => t.name));

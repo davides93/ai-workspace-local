@@ -53,6 +53,17 @@ export const qk = {
     list: (status?: string) => ["lessons", "list", status ?? "all"] as const,
   },
 
+  proposals: {
+    all: () => ["proposals"] as const,
+    list: (query?: { status?: string; kind?: string }) => ["proposals", "list", query?.status ?? "", query?.kind ?? ""] as const,
+  },
+  proactive: () => ["proactive"] as const,
+
+  memories: {
+    all: () => ["memories"] as const,
+    list: (query?: { status?: string; kind?: string; q?: string }) => ["memories", "list", query?.status ?? "", query?.kind ?? "", query?.q ?? ""] as const,
+  },
+
   workflows: {
     all: () => ["workflows"] as const,
     list: () => ["workflows", "list"] as const,

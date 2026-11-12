@@ -30,6 +30,8 @@ interface Props {
   sessionKey: string | null;
   /** Thumbs up/down on the final answers. */
   feedback?: FeedbackController;
+  /** Something that belongs to the conversation after its last row (a proposal waiting for an answer). */
+  footer?: ReactNode;
 }
 
 /**
@@ -38,7 +40,7 @@ interface Props {
  * region of the view tells when a reply starts and ends.
  */
 export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function ConversationLog(
-  { items, state, onRetry, busy, respondingId, onRespond, onAction, notice, empty, sessionKey, feedback },
+  { items, state, onRetry, busy, respondingId, onRespond, onAction, notice, empty, sessionKey, feedback, footer },
   ref,
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -65,6 +67,7 @@ export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function
             />
           ))}
           {state.status === "ready" && notice && <RunNote info={notice} />}
+          {state.status === "ready" && footer}
         </div>
       </div>
       {unseen && (

@@ -204,6 +204,7 @@ export const agents: AgentProfile[] = [
   { id: "coder", name: "Coder", description: "Coding agent sul workspace corrente.", inference_profile: "balanced", system_prompt: "Sei un ingegnere software. Leggi prima di modificare e verifica con i test.", tools: ["*"], mode: "auto-edit", sandbox: "workspace-write", max_turns: 60 },
   { id: "browser", name: "Navigatore", description: "Ricerca e azioni nel browser via CDP.", inference_profile: "fast-local", system_prompt: "Usi il browser per raccogliere informazioni e completare form.", tools: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot", "web_fetch", "todo"], mode: "ask", sandbox: "read-only", max_turns: 40 },
   { id: "desktop", name: "Pilota desktop", description: "Computer-use: vede lo schermo e usa mouse e tastiera.", inference_profile: "vision-cu", system_prompt: "Controlli il desktop tramite screenshot e azioni. Chiedi conferma prima di inviare, pagare o cancellare.", tools: ["computer_screenshot", "computer_click", "computer_type", "computer_key", "computer_scroll", "todo"], mode: "ask", sandbox: "read-only", max_turns: 50 },
+  { id: "teacher", name: "Insegnante", description: "Impara da ciò che gli racconti: salva, corregge e dimentica i ricordi.", inference_profile: "fast-local", system_prompt: "Sei l'Insegnante: aiuti l'utente a insegnare all'assistente ciò che deve ricordare.", tools: ["memory_save", "memory_search", "memory_update", "memory_forget", "render_ui", "todo"], mode: "auto", sandbox: "read-only", max_turns: 12 },
   { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "todo"], mode: "plan", sandbox: "read-only", max_turns: 20 },
 ];
 
@@ -325,6 +326,13 @@ export const tools: ToolInfo[] = [
   ["browser_click", "Clic su un elemento", "computer"], ["browser_type", "Scrive in un campo", "computer"], ["browser_screenshot", "Screenshot della pagina", "read"],
   ["computer_screenshot", "Screenshot del desktop", "computer"], ["computer_click", "Clic alle coordinate", "computer"], ["computer_type", "Digita testo", "computer"], ["computer_key", "Combinazione di tasti", "computer"], ["computer_scroll", "Scroll", "computer"],
 ].map(([name, description, risk]) => ({ name, description, risk: risk as ToolInfo["risk"], source: "builtin" as const, enabled: true, available: true, parameters: {} }));
+/** The read-only calendar and mail tools: listed always, available only while their switch (`connectors.*.enabled`) is on. */
+export const CONNECTOR_TOOLS: { name: string; description: string; switch: "connectors.calendar.enabled" | "connectors.mail.enabled" }[] = [
+  { name: "calendar_today", description: "Elenca gli eventi di oggi dai calendari scelti dall'utente. Sola lettura.", switch: "connectors.calendar.enabled" },
+  { name: "calendar_upcoming", description: "Elenca gli eventi dei prossimi giorni dai calendari scelti dall'utente. Sola lettura.", switch: "connectors.calendar.enabled" },
+  { name: "mail_recent", description: "Elenca la posta recente dalle cartelle locali scelte dall'utente. Sola lettura.", switch: "connectors.mail.enabled" },
+  { name: "mail_search", description: "Cerca nella posta locale scelta dall'utente. Sola lettura.", switch: "connectors.mail.enabled" },
+];
 tools.push(
   { name: "mcp__github__list_issues", description: "Elenca le issue di un repository", source: "mcp", server: "github", risk: "network", enabled: true, available: true, parameters: {} },
   { name: "mcp__filesystem__search_files", description: "Ricerca file (server MCP filesystem)", source: "mcp", server: "filesystem", risk: "read", enabled: false, available: true, parameters: {} },
@@ -333,7 +341,7 @@ tools.push(
  * The tools of the agent loop, as `GET /api/tools` lists them after the built-in and MCP ones: `source: "internal"`,
  * always on, risk `read`, no switch (crates/aiw-agent/src/internal.rs).
  */
-export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state"] as const;
+export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state", "memory_save", "memory_search", "memory_update", "memory_forget"] as const;
 tools.push(
   ...([
     ["todo", "Pubblica e aggiorna il piano di lavoro dell'agente: elenco di passi con il loro stato."],
@@ -343,6 +351,10 @@ tools.push(
     ["code", "Esegue uno script Rhai che orchestra più strumenti in un solo passo (cicli, filtri, conteggi)."],
     ["handoff", "Passa la conversazione a un altro agente: il run termina e il nuovo agente prosegue con il tuo riassunto."],
     ["team_state", "Legge e scrive lo stato condiviso tra gli agenti di un team (solo nei run di team)."],
+    ["memory_save", "Salva un ricordo a lungo termine: subito se l'utente lo ha chiesto, come proposta da confermare se dedotto."],
+    ["memory_search", "Cerca tra i ricordi dell'utente per parole e per significato."],
+    ["memory_update", "Corregge un ricordo esistente."],
+    ["memory_forget", "Dimentica un ricordo (l'utente può ripristinarlo)."],
   ] as const).map(([name, description]): ToolInfo => ({ name, description, source: "internal", risk: "read", enabled: true, available: true, parameters: {} })),
 );
 
@@ -425,8 +437,21 @@ export const configSchema: SettingsSchema = {
     "update.channel": { type: "string", title: "Canale di aggiornamento", description: "auto segue la versione installata (una beta resta sulle beta); stable = produzione; beta e alpha ricevono anche le versioni più stabili", enum: ["auto", "stable", "beta", "alpha"], default: "auto" },
     "update.auto_check": { type: "boolean", title: "Cerca aggiornamenti da solo", description: "All'avvio e ogni 6 ore, dalle release del repository pubblico su GitHub", default: true },
     "update.auto_download": { type: "boolean", title: "Scarica da solo gli aggiornamenti", description: "L'installer viene scaricato e verificato (SHA-256) in anticipo; l'installazione parte solo quando la confermi", default: false },
+    "memory.enabled": { type: "boolean", title: "Memoria: l'assistente ricorda ciò che gli insegni", description: "Le cose che gli chiedi di ricordare restano sul tuo dispositivo e vengono ritrovate nelle conversazioni future. Spenta, l'assistente non usa né salva ricordi", default: true },
     "learning.reflect": { type: "string", title: "Riflessione dell'agente", description: "Quando l'agente propone una lezione da approvare: off = mai; on_feedback = dopo un pollice giù; on_failure = anche dopo un run fallito o fermato dal budget", enum: ["off", "on_feedback", "on_failure"], default: "on_feedback" },
     "learning.profile": { type: "string", title: "Profilo per riflessione e ottimizzazione del prompt", description: "Profilo di inferenza che scrive le lezioni e le varianti del prompt; vuoto = quello dell'agente", default: "" },
+    "proactive.level": {"type": "string", "title": "Assistente proattivo", "description": "Spento per ora: lo accendi tu dopo averlo provato. Con «Propone» l'assistente controlla ogni tanto cosa c'è di nuovo e ti lascia nella casella Proposte delle idee pronte; non fa mai nulla da solo, e ogni proposta parte solo se la approvi. Con «Propone e legge» può anche consultare il web, sempre in sola lettura. Un pulsante di emergenza lo ferma subito", "enum": ["off", "propose", "act_readonly"], "default": "off"},
+    "proactive.interval_minutes": {"type": "integer", "title": "Controlla ogni (minuti)", "description": "Ogni quanto l'assistente guarda cosa c'è di nuovo mentre l'app è aperta", "default": 30, "minimum": 5, "maximum": 1440},
+    "proactive.briefing_time": {"type": "string", "title": "Riepilogo del mattino alle", "description": "Ora del giorno (HH:MM) in cui prepara il riepilogo: promemoria, proposte aperte, ieri e cartelle osservate", "default": "08:00"},
+    "proactive.quiet_hours": {"type": "string", "title": "Orario di silenzio", "description": "Fascia (HH:MM-HH:MM, anche a cavallo della mezzanotte, ad esempio 22:00-07:00) in cui non controlla e non ti avvisa. Vuoto = nessuna fascia", "default": ""},
+    "proactive.daily_budget_minutes": {"type": "integer", "title": "Tempo massimo al giorno (minuti)", "description": "Quanto tempo di calcolo al giorno può usare l'assistente proattivo. Finito il tempo, aspetta domani", "default": 15, "minimum": 0, "maximum": 1440},
+    "proactive.only_on_power": {"type": "boolean", "title": "Solo con il computer collegato alla corrente", "description": "Dove il sistema dice se sei a batteria; dove non lo dice, questa scelta non ha effetto", "default": true},
+    "proactive.agent": {"type": "string", "title": "Assistente che prepara le proposte", "default": "operator"},
+    "proactive.watch_folders": {"type": "array", "title": "Cartelle da osservare", "description": "I file nuovi in queste cartelle finiscono tra le cose da guardare", "items": {"type": "string"}, "default": []},
+    "connectors.calendar.enabled": { type: "boolean", title: "Calendario: l'assistente può leggere i tuoi eventi", description: "Sola lettura: legge i file .ics e i calendari che scegli, e i dati restano sul dispositivo", default: false },
+    "connectors.calendar.sources": { type: "array", title: "Calendari da leggere", description: "File .ics, cartelle con file .ics o indirizzi di sottoscrizione (https:// o webcal://)", items: { type: "string" }, default: [] },
+    "connectors.mail.enabled": { type: "boolean", title: "Posta: l'assistente può leggere la posta salvata sul computer", description: "Sola lettura: non invia, non cancella e non segna nulla; legge solo ciò che scegli, e i dati restano sul dispositivo", default: false },
+    "connectors.mail.sources": { type: "array", title: "Posta da leggere", description: "Cartelle Maildir, file .mbox o .eml", items: { type: "string" }, default: [] },
     "voice.language": { type: "string", title: "Lingua della voce", description: "Codice ISO 639-1 (it, en…) o auto per riconoscerla", default: "auto" },
     "voice.stt_runtime": { type: "string", title: "Motore di trascrizione", description: "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", enum: ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], default: "auto" },
     "voice.stt_model": { type: "string", title: "Modello Whisper", description: "Vuoto = il più grande installato che sta in memoria", default: "" },
@@ -435,7 +460,7 @@ export const configSchema: SettingsSchema = {
 };
 export const configLayers: ConfigView["layers"] = [
   { name: "defaults", values: Object.fromEntries(Object.entries(configSchema.properties).map(([k, v]) => [k, v.default])) },
-  { name: "global", path: "~/.aiw/config.json", values: { "ui.theme": "system", "models.dir": "D:\\Modelli", "server.lan": true, "network.allow_domains": ["docs.rs", "crates.io"] } },
+  { name: "global", path: "~/.aiw/config.json", values: { "ui.theme": "system", "models.dir": "D:\\Modelli", "server.lan": true, "proactive.level": "propose", "network.allow_domains": ["docs.rs", "crates.io"] } },
   { name: "device", path: "~/.aiw/devices/Studio-PC.json", values: { "context.compact_at": 0.85 } },
   { name: "workspace", path: "Workspace/.aiw/config.json", values: { "policy.mode": "auto-edit" } },
 ];

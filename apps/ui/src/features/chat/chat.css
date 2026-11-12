@@ -142,6 +142,7 @@
 .ws-section-more { display: block; width: 100%; padding: 6px 10px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--accent-ink); font-size: var(--fs-xs); text-align: left; cursor: pointer; }
 
 /* How a run ended */
+.ws-modelchip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--fg-muted); font-size: var(--fs-xs); }
 .ws-note { display: flex; align-items: flex-start; gap: var(--space-3); min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); font-size: var(--fs-sm); }
 .ws-note > svg { flex: none; margin-top: 2px; color: var(--fg-muted); }
 .ws-note-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

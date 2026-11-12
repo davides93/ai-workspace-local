@@ -4,10 +4,11 @@
 import type { AgentProfile, BudgetLimits } from "../../../shared/api/types";
 import { slugify as slug, uniqueSlug } from "../../../shared/lib/slug";
 import { isAutoProfile } from "../../models/model/adviser";
+import { normalizeRoles } from "./roles";
 import { ALL, normalizeTools } from "./tools";
 
 /** Seeded on first run by crates/aiw-engine/src/defaults.rs `agents()`; the backend refuses to delete them (409). */
-export const BUILTIN_AGENT_IDS: readonly string[] = ["operator", "coder", "browser", "desktop", "planner"];
+export const BUILTIN_AGENT_IDS: readonly string[] = ["operator", "coder", "browser", "desktop", "planner", "teacher"];
 
 export const isBuiltinAgent = (id: string): boolean => BUILTIN_AGENT_IDS.includes(id);
 
@@ -66,13 +67,15 @@ export function cleanBudget(b: BudgetLimits | undefined): BudgetLimits | undefin
 /** Form values trimmed and clamped the way the backend will keep them. */
 export function normalizeAgent(a: AgentProfile): AgentProfile {
   const turns = Number.isFinite(a.max_turns) ? Math.round(a.max_turns) : 30;
-  const { budget: _budget, candidate_profiles: _candidates, ...rest } = a;
+  const { budget: _budget, candidate_profiles: _candidates, roles: _roles, ...rest } = a;
   const budget = cleanBudget(a.budget);
   const candidates = [...new Set(a.candidate_profiles ?? [])];
+  const roles = normalizeRoles(a.roles);
   return {
     ...rest,
     ...(budget ? { budget } : {}),
     ...(candidates.length > 0 ? { candidate_profiles: candidates } : {}),
+    ...(roles ? { roles } : {}),
     name: a.name.trim(),
     description: a.description.trim(),
     system_prompt: a.system_prompt,

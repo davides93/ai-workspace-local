@@ -8,6 +8,17 @@
 	<string>AI Workspace usa il microfono per la dettatura e la conversazione a voce. L'audio viene trascritto in locale, su questo dispositivo o su uno accoppiato.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>AI Workspace usa il riconoscimento vocale di iOS per trascrivere la dettatura e la conversazione a voce.</string>
+	<!-- Proactive assistant: short checks (fetch) and longer ones, usually at night on the charger (processing). iOS decides when. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>dev.aiworkspace.local.proactive.refresh</string>
+		<string>dev.aiworkspace.local.proactive.processing</string>
+	</array>
 	<key>UIRequiresFullScreen</key>
 	<false/>
 	<key>UISupportedInterfaceOrientations</key>

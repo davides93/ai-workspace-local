@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigView, SettingsSchema } from "../../../shared/api/types";
 import {
-  configTheme, configUiMode, definingLayers, formatValue, groupSettings, hasOwn, hintOf, overriddenBy, parseNumber, sectionOf, shortTitle, shownValue, uiModeLayer, winningLayer,
+  configTheme, configUiMode, DEVELOPER_ONLY, definingLayers, formatValue, groupSettings, hasOwn, hintOf, overriddenBy, parseNumber, sectionOf, shortTitle, shownValue, uiModeLayer, winningLayer,
 } from "./config";
 
 const schema: SettingsSchema = {
@@ -64,6 +64,14 @@ describe("sections", () => {
     expect(sectionOf("network.allow_domains").id).toBe("security");
     expect(sectionOf("workspace.root").id).toBe("folders");
     expect(sectionOf("x.unknown").id).toBe("other");
+    expect(sectionOf("proactive.level").title).toBe("Assistente proattivo");
+    expect(DEVELOPER_ONLY).toContain("proactive.watch_folders");
+  });
+  it("puts the calendar and mail switches in their own section, visible in the simple view too", () => {
+    expect(sectionOf("connectors.mail.enabled").title).toBe("Calendario e posta");
+    expect(sectionOf("connectors.calendar.sources").id).toBe("connectors");
+    expect(sectionOf("connectors.mail.sources").description).toMatch(/Sola lettura.*restano su questo dispositivo/);
+    for (const k of ["connectors.calendar.enabled", "connectors.calendar.sources", "connectors.mail.enabled", "connectors.mail.sources"]) expect(DEVELOPER_ONLY).not.toContain(k);
   });
   it("puts the voice settings in their own section", () => {
     const voice = { type: "object", properties: { "voice.language": { type: "string" }, "voice.stt_runtime": { type: "string" }, "server.port": { type: "integer" } } } as unknown as SettingsSchema;

@@ -19,8 +19,14 @@ pub struct RunRow {
     pub finished_at: Option<String>,
 }
 
+mod memory;
+pub use memory::MemoryFilter;
+mod proposals;
+
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Whether the bundled SQLite has FTS5 (the memory search falls back to Rust when not).
+    fts: bool,
 }
 
 fn db<E: std::fmt::Display>(e: E) -> Error {
@@ -68,7 +74,9 @@ impl Store {
              CREATE INDEX IF NOT EXISTS a2a_tasks_context ON a2a_tasks(context_id, updated_at);",
         )
         .map_err(db)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        let fts = memory::migrate(&conn)?;
+        proposals::migrate(&conn)?;
+        Ok(Self { conn: Mutex::new(conn), fts })
     }
 
     // ---------------- A2A tasks (served to other agents; they expire)

@@ -4,6 +4,7 @@
 pub mod browser;
 pub mod checkpoint;
 pub mod computer;
+pub mod connectors;
 pub mod fs;
 pub mod mcp;
 pub mod shell;
@@ -327,7 +328,7 @@ impl ToolRegistry {
 }
 
 /// Registers every built-in tool available in this build.
-pub fn register_builtins(reg: &ToolRegistry, browser: Arc<browser::BrowserManager>) {
+pub fn register_builtins(reg: &ToolRegistry, browser: Arc<browser::BrowserManager>, connectors: connectors::Shared) {
     for t in fs::tools() {
         reg.register(t);
     }
@@ -337,6 +338,10 @@ pub fn register_builtins(reg: &ToolRegistry, browser: Arc<browser::BrowserManage
         reg.register(t);
     }
     for t in computer::tools() {
+        reg.register(t);
+    }
+    // Calendar and mail kept on this computer, read-only; listed only while the settings switch them on.
+    for t in connectors::tools(connectors) {
         reg.register(t);
     }
 }

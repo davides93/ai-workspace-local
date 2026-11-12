@@ -493,6 +493,202 @@ pub fn auto_profile(task: AdviserTask, rec: &Recommendations) -> Option<aiw_core
     Some(p)
 }
 
+// ------------------------------------------------------------------------- model roles ("auto")
+
+/// The model the agent runs on by itself (its own inference profile), as far as the roles care.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MainModel {
+    pub runtime_id: String,
+    pub model: String,
+}
+
+/// A paired device that may take the `plan` role: online, with a model to offer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PeerPlanner {
+    pub name: String,
+    /// Device class of the paired device (xs..xl).
+    pub tier: String,
+    /// The model to ask for on its gateway.
+    pub model: String,
+}
+
+/// What `roles: "auto"` assigns to a role instead of the agent's own model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RolePick {
+    pub runtime_id: String,
+    pub model: String,
+    pub name: String,
+    pub context: u32,
+    /// The model is on a paired device, not here.
+    pub peer: bool,
+}
+
+/// The decision of `roles: "auto"` for a device class. A role left `None` runs on the agent's own
+/// model; `check` is never assigned a model of its own by `auto` (it asks the model that did the work).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AutoRolePicks {
+    pub tier: String,
+    pub plan: Option<RolePick>,
+    pub act: Option<RolePick>,
+    pub summarize: Option<RolePick>,
+    /// Why, one sentence each, in Italian (run events).
+    pub notes: Vec<String>,
+}
+
+fn tier_rank(t: &str) -> usize {
+    ["xs", "s", "m", "l", "xl"].iter().position(|x| *x == t).unwrap_or(0)
+}
+
+/// Memory a candidate takes while loaded (system models and unknown sizes take none of ours).
+fn need_mb(c: &Candidate) -> u64 {
+    if c.system || c.size_bytes == 0 {
+        0
+    } else {
+        aiw_models::min_memory_mb(c.size_bytes, 0)
+    }
+}
+
+/// Do these models fit in memory together, by the same formula as one model (`fit_need`: the
+/// summed need against the device budget, `ok` or better)?
+fn fit_together(device: &DeviceProfile, models: &[&Candidate]) -> bool {
+    let mut seen: Vec<&str> = vec![];
+    let mut total = 0u64;
+    for c in models {
+        if !seen.contains(&c.id.as_str()) {
+            seen.push(c.id.as_str());
+            total += need_mb(c);
+        }
+    }
+    total == 0 || matches!(Fit::from_label(&aiw_models::fit_need(total, "gguf", device).0), Fit::Great | Fit::Ok)
+}
+
+fn role_pick(c: &Candidate, task: AdviserTask) -> RolePick {
+    RolePick {
+        runtime_id: c.runtime.clone(),
+        model: c.id.clone(),
+        name: c.name.clone(),
+        context: match task {
+            AdviserTask::Embeddings => 2048,
+            _ => context_for(c.context, c.fit),
+        },
+        peer: false,
+    }
+}
+
+/// Decides `roles: "auto"` from the device class (see the module documentation of the roles in
+/// `aiw_agent::roles`). Pure: the installed models, the catalog, what the runtimes can serve, the
+/// agent's own model and a paired device that could plan.
+/// - xs, s: one model only (the roles differ by reasoning and prompt, not by model);
+/// - m: the agent's model plus the smallest installed chat model for `summarize`, only if both fit
+///   in memory together;
+/// - l, xl: a `plan` model (adviser `reasoning`) and an `act` model (adviser `agent`) when they are
+///   two different installed models that fit together; the smallest chat model for `summarize` when
+///   it fits as well;
+/// - a paired device of a higher class takes `plan` at any class.
+///
+/// A second model is never picked if it does not fit: the answer is then one model.
+pub fn plan_auto_roles(
+    device: &DeviceProfile,
+    local: &[LocalModel],
+    catalog: &[CatalogModel],
+    avail: &Availability,
+    main: &MainModel,
+    peer: Option<&PeerPlanner>,
+) -> AutoRolePicks {
+    let rec = advise(device, local, catalog, avail);
+    let tier = rec.tier.clone();
+    let mut installed: Vec<Candidate> = local.iter().filter_map(|m| local_candidate(m, device, avail, catalog)).collect();
+    installed.extend(avail.ollama_models.iter().map(|n| ollama_candidate(n)));
+    let mut out = AutoRolePicks { tier: tier.clone(), ..Default::default() };
+    let main_c = installed
+        .iter()
+        .find(|c| c.id == main.model && c.runtime == main.runtime_id)
+        .or_else(|| installed.iter().find(|c| c.id == main.model));
+
+    if let Some(p) = peer.filter(|p| tier_rank(&p.tier) > tier_rank(&tier) && tier_rank(&p.tier) >= tier_rank("l")) {
+        out.plan =
+            Some(RolePick { runtime_id: "aiw-peer".into(), model: p.model.clone(), name: p.name.clone(), context: 8192, peer: true });
+        out.notes.push(format!("Il piano lo fa «{}», il dispositivo collegato più potente.", p.name));
+    }
+    let mut resident: Vec<&Candidate> = main_c.into_iter().collect();
+
+    match tier.as_str() {
+        "l" | "xl" if out.plan.is_none() => {
+            let by_task = |a: &TaskAdvice| a.installed.as_ref().and_then(|c| installed.iter().find(|i| i.id == c.model));
+            // `plan`: the adviser's reasoning choice. `act`: the adviser's agent choice when it is another
+            // model; else the faster alternative: the smallest installed model that still works as an agent.
+            let plan_c = by_task(&rec.reasoning);
+            let act_c = plan_c.and_then(|plan| match by_task(&rec.agent) {
+                Some(a) if a.id != plan.id => Some(a),
+                _ => installed
+                    .iter()
+                    .filter(|c| {
+                        c.id != plan.id
+                            && c.runtime_ready
+                            && c.tools_cap
+                            && c.scores.agent >= 2
+                            && c.fit >= Fit::Ok
+                            && c.params_b < plan.params_b
+                    })
+                    .max_by(|a, b| {
+                        a.scores
+                            .agent
+                            .cmp(&b.scores.agent)
+                            .then(((b.params_b * 10.0) as u32).cmp(&((a.params_b * 10.0) as u32)))
+                            .then_with(|| b.id.cmp(&a.id))
+                    }),
+            });
+            match (plan_c, act_c) {
+                (Some(plan), Some(act)) => {
+                    let mut set = resident.clone();
+                    set.extend([plan, act]);
+                    if fit_together(device, &set) {
+                        out.plan = Some(role_pick(plan, AdviserTask::Reasoning));
+                        out.act = Some(role_pick(act, AdviserTask::Agent));
+                        resident = set;
+                        out.notes.push("Due modelli installati stanno insieme in memoria: uno pianifica, l'altro esegue.".into());
+                    } else {
+                        out.notes.push("Due modelli adatti, ma insieme non stanno in memoria: ne uso uno solo.".into());
+                    }
+                }
+                _ => out.notes.push("C'è un solo modello adatto tra quelli installati: ne uso uno solo.".into()),
+            }
+        }
+        "l" | "xl" => {}
+        "m" => {}
+        _ => out
+            .notes
+            .push("Questo dispositivo regge un solo modello alla volta: i ruoli cambiano solo il ragionamento e il compito.".into()),
+    }
+
+    if matches!(tier.as_str(), "m" | "l" | "xl") {
+        // The smallest installed chat model, if it is a different (and smaller) one than what runs already.
+        let smallest = installed.iter().filter(|c| c.runtime_ready && c.scores.chat > 0 && c.fit >= Fit::Ok).min_by(|a, b| {
+            ((a.params_b * 10.0) as u32)
+                .cmp(&((b.params_b * 10.0) as u32))
+                .then(a.size_bytes.cmp(&b.size_bytes))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        if let Some(small) = smallest {
+            let known_main = resident.iter().map(|c| c.params_b).fold(f64::MAX, f64::min);
+            let is_new = !resident.iter().any(|c| c.id == small.id);
+            let smaller = resident.is_empty() || small.params_b < known_main;
+            if is_new && smaller {
+                let mut set = resident.clone();
+                set.push(small);
+                if fit_together(device, &set) {
+                    out.summarize = Some(role_pick(small, AdviserTask::Chat));
+                    out.notes.push(format!("Per i riassunti uso il modello più piccolo ({}).", small.name));
+                } else {
+                    out.notes
+                        .push("Il modello piccolo per i riassunti non sta in memoria insieme agli altri: uso quello principale.".into());
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,5 +939,102 @@ mod tests {
         assert_eq!(params_from_name("gemma3:12b"), Some(12.0));
         assert_eq!(params_from_name("nomic-embed-text:latest"), None);
         assert!((estimate_params_b(5 * GB / 2, Some("Q4_K_M")) - 4.47).abs() < 0.1);
+    }
+
+    // ---------------------------------------------------------------- roles: auto
+
+    fn main_model(id: &str) -> MainModel {
+        MainModel { runtime_id: "llama-server".into(), model: id.into() }
+    }
+
+    /// `main` is a catalog id; the model id it gets once installed is used for the agent's own model.
+    fn picks(d: &DeviceProfile, local: &[&str], main: &str, peer: Option<&PeerPlanner>) -> AutoRolePicks {
+        let local: Vec<LocalModel> = local.iter().map(|c| installed(c)).collect();
+        plan_auto_roles(d, &local, &catalog(), &avail(), &main_model(&installed(main).id), peer)
+    }
+
+    fn id_of(p: &Option<RolePick>) -> Option<&str> {
+        p.as_ref().map(|p| p.model.as_str())
+    }
+
+    #[test]
+    fn small_devices_use_one_model_only() {
+        for (tier, d) in classes().into_iter().filter(|(t, _)| *t == "xs" || *t == "s") {
+            let p = picks(&d, &["qwen3-0.6b", "llama-3.2-3b"], "llama-3.2-3b", None);
+            assert_eq!((p.plan, p.act, p.summarize), (None, None, None), "{tier}");
+            assert_eq!(p.tier, tier);
+            assert!(p.notes[0].contains("un solo modello"), "{tier}: {:?}", p.notes);
+        }
+    }
+
+    #[test]
+    fn a_medium_device_adds_the_smallest_chat_model_for_summaries_when_both_fit() {
+        let d = device("linux", 24, None);
+        assert_eq!(aiw_hw::tier_for(&d), "m");
+        let p = picks(&d, &["qwen3-8b", "qwen3-0.6b"], "qwen3-8b", None);
+        assert_eq!(id_of(&p.summarize), Some(installed("qwen3-0.6b").id.as_str()));
+        assert_eq!((p.plan, p.act), (None, None));
+    }
+
+    #[test]
+    fn a_medium_device_with_no_smaller_model_or_no_room_stays_with_one() {
+        let d = device("linux", 24, None);
+        // Only the main model: nothing smaller.
+        assert_eq!(picks(&d, &["qwen3-8b"], "qwen3-8b", None).summarize, None);
+        // The small one is not smaller than main (main is the 0.6B).
+        assert_eq!(picks(&d, &["qwen3-8b", "qwen3-0.6b"], "qwen3-0.6b", None).summarize, None);
+        // Not enough memory for both: 16 GB laptop (8 GB budget) with the 8B (~6.4 GB) and a 4B (~3.2 GB).
+        let tight = device("linux", 16, None);
+        assert_eq!(aiw_hw::tier_for(&tight), "m");
+        let p = picks(&tight, &["qwen3-8b", "qwen3-4b"], "qwen3-8b", None);
+        assert_eq!(p.summarize, None);
+        assert!(p.notes.iter().any(|n| n.contains("non sta in memoria")), "{:?}", p.notes);
+    }
+
+    #[test]
+    fn large_devices_split_plan_and_act_when_two_models_fit_together() {
+        for (tier, d) in classes().into_iter().filter(|(t, _)| *t == "l" || *t == "xl") {
+            let p = picks(&d, &["qwen3-8b", "llama-3.2-3b"], "llama-3.2-3b", None);
+            let (plan, act) = (id_of(&p.plan), id_of(&p.act));
+            assert!(plan.is_some() && act.is_some() && plan != act, "{tier}: {p:?}");
+        }
+    }
+
+    #[test]
+    fn large_devices_with_one_suitable_model_or_no_room_use_one_model() {
+        let l = device("linux", 48, Some(16));
+        // One installed model only: reasoning falls back to the agent's choice, the same model.
+        let p = picks(&l, &["qwen3-8b"], "qwen3-8b", None);
+        assert_eq!((p.plan, p.act), (None, None));
+        // Two suitable models that do not fit together: a 22 GB budget, a ~20 GB and a ~3 GB model.
+        let l = device("linux", 44, None);
+        assert_eq!(aiw_hw::tier_for(&l), "l");
+        let p = picks(&l, &["qwen3-30b-a3b", "llama-3.2-3b"], "qwen3-30b-a3b", None);
+        assert_eq!((p.plan.clone(), p.act.clone()), (None, None), "{:?}", p.notes);
+        assert!(p.notes.iter().any(|n| n.contains("non stanno in memoria")), "{:?}", p.notes);
+    }
+
+    #[test]
+    fn a_more_powerful_paired_device_takes_the_plan_at_any_class() {
+        let peer = PeerPlanner { name: "Studio".into(), tier: "xl".into(), model: "gpt-oss-120b".into() };
+        for (tier, d) in classes() {
+            let p = picks(&d, &["llama-3.2-3b"], "llama-3.2-3b", Some(&peer));
+            if tier == "xl" {
+                // Not more powerful than this device: it does not take the plan.
+                assert!(p.plan.is_none(), "{tier}");
+            } else {
+                let plan = p.plan.as_ref().unwrap_or_else(|| panic!("{tier}"));
+                assert!(
+                    (plan.peer, plan.runtime_id.as_str(), plan.model.as_str()) == (true, "aiw-peer", "gpt-oss-120b"),
+                    "{tier}: {plan:?}"
+                );
+            }
+        }
+        // A weaker paired device never does.
+        let weak = PeerPlanner { name: "Telefono".into(), tier: "s".into(), model: "x".into() };
+        assert!(picks(&device("linux", 24, None), &[], "qwen3-8b", Some(&weak)).plan.is_none());
+        // Nor one that is only as strong as "m".
+        let mid = PeerPlanner { name: "Portatile".into(), tier: "m".into(), model: "x".into() };
+        assert!(picks(&device("android", 4, None), &[], "qwen3-8b", Some(&mid)).plan.is_none());
     }
 }

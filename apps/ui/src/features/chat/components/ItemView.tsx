@@ -92,6 +92,8 @@ export const ItemView = memo(function ItemView({ it, onRespond, onAction, busy, 
           <SubagentCard it={it} renderItem={(row) => <ItemView it={row} onRespond={onRespond} onAction={onAction} busy respondingId={null} />} />
         </div>
       );
+    case "model":
+      return <div className="ws-msg ws-assistant"><span className="ws-modelchip" title={it.title}><Icon name="chip" size={12} /> {it.label}</span></div>;
     case "note":
       return <div className="ws-msg ws-assistant"><div className="ws-loopnote"><Icon name="refresh" size={14} /> {it.text}</div></div>;
     case "error":

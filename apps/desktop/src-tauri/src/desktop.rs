@@ -130,6 +130,12 @@ fn spawn_background(app: &AppHandle<Wry>, engine: &Engine) {
                     for n in tracker.on_downloads(&e.downloads()) {
                         deliver(&handle, &e, &n);
                     }
+                    // The assistant's new proposals, held back during quiet hours (uncompiled: Tauri is not built here).
+                    if let Ok(open) = e.proposals(Some("open"), None) {
+                        for n in tracker.on_proposals(&open, e.proactive_quiet_now()) {
+                            deliver(&handle, &e, &n);
+                        }
+                    }
                     // Only act when the setting changes (and once at start): a login item the person
                     // added or removed by hand in the system settings is not fought over.
                     let want = flag(&e, "app.start_at_login", false);

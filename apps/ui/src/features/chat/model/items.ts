@@ -19,6 +19,8 @@ export type Item =
   | { kind: "approval"; req: ApprovalRequest; resolved?: boolean }
   | { kind: "subagent"; id: string; name: string; /** Run of the sub-agent, when the backend named it: its events are its trace. */ runId?: string; result?: string; interrupted?: boolean }
   | { kind: "note"; id: string; text: string }
+  /** Which model handled the calls that follow (runs with model roles only): a small label. */
+  | { kind: "model"; id: string; label: string; title: string }
   | { kind: "surface"; id: string; surface: SurfaceState }
   | { kind: "action"; id: string; name: string; context: Record<string, unknown> }
   | { kind: "error"; id: string; message: string; code?: string; /** Rebuilt from the stored history (not announced as a live alert). */ stored?: boolean };
@@ -57,3 +59,21 @@ export const formatCheckText = (errors: string[]) =>
 
 export const selfCheckText = (failed: string[]) =>
   `Controllo automatico: ${failed.length === 1 ? "un'azione era fallita" : "alcune azioni erano fallite"} (${failed.join(", ")}). L'agente le riprende prima di concludere.`;
+
+/** `name` of the stored user messages that hand the final check's objection back to the model (crates/aiw-agent `CHECK_NAME`). */
+export const CHECK = "aiw.check";
+
+const ROLE_LABEL: Record<string, string> = { plan: "Pianifica", act: "Esegue", check: "Verifica", summarize: "Riassume" };
+
+/** The small label of a call in a run with model roles: «Pianifica · qwen3-8b». */
+export function modelLabel(role: string | null | undefined, model: string | undefined): string {
+  const r = role ? ROLE_LABEL[role] : undefined;
+  return [r, model].filter(Boolean).join(" · ") || "Modello";
+}
+
+/** The note for the result of the final check. */
+export const checkText = (passed: boolean, note?: string | null) =>
+  passed ? "Verifica finale: tutto a posto." : `Verifica finale: ${note ?? "qualcosa non torna"}. L'agente corregge prima di concludere.`;
+
+/** The note for a run that uses one model although the agent asks for roles (a model does not fit, or the engine holds one at a time). */
+export const rolesNoteText = (notes: string[]) => notes.join(" ");

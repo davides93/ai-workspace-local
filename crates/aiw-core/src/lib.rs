@@ -5,6 +5,7 @@
 //! * [`schema`] — settings schemas used to generate configuration forms (ADR 0003).
 //! * [`config`] — layered configuration: defaults → global → device → workspace.
 //! * [`paths`] — data directories per platform.
+#![recursion_limit = "256"]
 
 pub mod api;
 pub mod config;

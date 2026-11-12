@@ -61,6 +61,10 @@ tauri-plugin-notification = "2"
 # forbids writing the launch agent (or driving System Events) that the plugin uses on macOS.
 tauri-plugin-autostart = "2"
 
+# Android: the WorkManager worker calls into this library through JNI (`background.rs`).
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 # A second launch focuses the running window. macOS already opens one instance per app by itself.
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"

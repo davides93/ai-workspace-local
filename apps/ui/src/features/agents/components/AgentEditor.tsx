@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "../../../app/router";
+import { useUiMode } from "../../../app/useUiMode";
 import { Button, EmptyState, Icon, Panel, Pill, QueryState, Skeleton, DecisionDialog, FormSection, FormSections, SaveBar, UnsavedChangesDialog } from "../../../shared/ui";
 import { useDraft } from "../../../shared/lib/useDraft";
 import { useUnsavedGuard } from "../../../shared/lib/useUnsavedGuard";
@@ -11,6 +12,7 @@ import { BudgetSection } from "./BudgetSection";
 import { IdentitySection } from "./IdentitySection";
 import { ModelSection } from "./ModelSection";
 import { OutputSection } from "./OutputSection";
+import { RolesSection } from "./RolesSection";
 import { RoutingSection } from "./RoutingSection";
 import { SecuritySection } from "./SecuritySection";
 import { ToolPicker } from "./ToolPicker";
@@ -22,6 +24,7 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
   const tools = useAgentTools();
   const runtimes = useRuntimeList();
   const save = useSaveAgent();
+  const [uiMode] = useUiMode();
   const del = useDeleteAgent();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const isNew = agentId === NEW_AGENT;
@@ -107,6 +110,11 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
           <FormSection id="model" title="Modello" hint="Quale motore risponde.">
             <ModelSection agent={draft} profiles={profiles.data ?? []} runtimes={runtimes.data ?? []} issues={shown} onChange={change} />
           </FormSection>
+          {uiMode === "developer" && (
+            <FormSection id="roles" title="Ruoli dei modelli" hint="Più modelli nello stesso run.">
+              <RolesSection agent={draft} profiles={profiles.data ?? []} onChange={(next) => setDraft(() => next)} />
+            </FormSection>
+          )}
           <FormSection id="routing" title="Router" hint="Più profili, scelti da quello che funziona meglio.">
             <RoutingSection agent={draft} savedAgent={isNew ? undefined : saved} profiles={profiles.data ?? []} onChange={change} />
           </FormSection>

@@ -645,6 +645,77 @@ pub struct AgentProfile {
     /// `inference_profile`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_profiles: Vec<String>,
+    /// Models by role inside one run (`plan`, `act`, `check`, `summarize`). Absent: the run uses
+    /// `inference_profile` for everything, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<AgentRoles>,
+}
+
+/// The four jobs a model can have inside one agent run.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelRole {
+    /// The first model call of the run and the call after a failure: the most capable model, thinking on.
+    Plan,
+    /// The calls that carry on after successful tool results: thinking off.
+    Act,
+    /// A short verification pass before the run declares it is finished (only after acting tools).
+    Check,
+    /// Context compaction: the smallest available model.
+    Summarize,
+}
+
+impl ModelRole {
+    pub const ALL: [ModelRole; 4] = [ModelRole::Plan, ModelRole::Act, ModelRole::Check, ModelRole::Summarize];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModelRole::Plan => "plan",
+            ModelRole::Act => "act",
+            ModelRole::Check => "check",
+            ModelRole::Summarize => "summarize",
+        }
+    }
+}
+
+/// The word `"auto"`: the engine decides the roles from the device class.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AutoRoles {
+    #[serde(rename = "auto")]
+    Auto,
+}
+
+/// Profile id of each role (an `auto:*` id is allowed); a role left out uses the agent's own
+/// `inference_profile`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RoleProfiles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub act: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summarize: Option<String>,
+}
+
+impl RoleProfiles {
+    pub fn get(&self, r: ModelRole) -> Option<&str> {
+        match r {
+            ModelRole::Plan => self.plan.as_deref(),
+            ModelRole::Act => self.act.as_deref(),
+            ModelRole::Check => self.check.as_deref(),
+            ModelRole::Summarize => self.summarize.as_deref(),
+        }
+    }
+}
+
+/// `roles` of an agent: the string `"auto"` or an object `{plan, act, check, summarize}`.
+/// Absent (the default) means one model for the whole run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum AgentRoles {
+    Auto(AutoRoles),
+    Custom(RoleProfiles),
 }
 
 /// What the bandit router knows about one candidate profile of an agent.
@@ -997,6 +1068,72 @@ pub struct Lesson {
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_at: Option<String>,
+}
+
+/// What the assistant remembers (long-term memory). Stored only on this device.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Memory {
+    pub id: String,
+    /// One fact, one sentence.
+    pub text: String,
+    /// about_you | preference | how_to_work | fact | reminder
+    pub kind: String,
+    /// `all` (every assistant) or the id of one agent.
+    pub scope: String,
+    /// Pinned memories are always in the prompt.
+    pub pinned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<String>,
+    /// When a reminder is due (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<String>,
+    /// active | proposed (waiting for the user) | forgotten (soft delete, can be restored)
+    pub status: String,
+    /// Whether a semantic vector is stored for it (the vector itself is never sent out).
+    #[serde(default)]
+    pub has_embedding: bool,
+}
+
+/// A memory found by a search, with its fused rank score (higher is better).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryHit {
+    #[serde(flatten)]
+    pub memory: Memory,
+    pub score: f64,
+}
+
+/// Body of `POST /api/memories`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MemoryCreate {
+    pub text: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub pinned: Option<bool>,
+    #[serde(default)]
+    pub due_at: Option<String>,
+}
+
+/// Body of `PATCH /api/memories/{id}`: only the given fields change.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MemoryPatch {
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub pinned: Option<bool>,
+    /// Empty string clears the due date.
+    #[serde(default)]
+    pub due_at: Option<String>,
 }
 
 /// A candidate system prompt tried by a [`PromptOptimization`], with how the suite went with it.
@@ -1622,4 +1759,147 @@ mod tests {
         }
         assert!(serde_json::from_value::<InferenceParams>(serde_json::json!({"thinking": "tanto"})).is_err());
     }
+}
+
+// ---------------------------------------------------------------------------------- proactive assistant
+
+/// `proposals.kind`: something to approve (`proposal`) or a read-only summary of the morning (`briefing`).
+pub const PROPOSAL_KINDS: [&str; 2] = ["proposal", "briefing"];
+/// `proposals.status`.
+pub const PROPOSAL_STATUSES: [&str; 5] = ["open", "approved", "dismissed", "expired", "done"];
+
+/// What the proactive assistant noticed and what it would do about it. It never acts by itself:
+/// approving it starts a normal run of `agent_id` with `instruction`, under the agent's usual policy.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Proposal {
+    pub id: String,
+    /// proposal | briefing
+    pub kind: String,
+    pub title: String,
+    /// What was noticed, in plain words.
+    pub noticed: String,
+    /// What the assistant would do, as a ready-to-run instruction (empty for a briefing).
+    pub instruction: String,
+    /// Where it came from: `reminder:<id>`, `workflow_failed:<run>`, `files:<folder>`, `approval:<id>`, `briefing:<date>`…
+    pub source: String,
+    /// The agent that would run the instruction.
+    pub agent_id: String,
+    /// open | approved | dismissed | expired | done
+    pub status: String,
+    pub created_at: String,
+    pub expires_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<String>,
+    /// The run (and session) an approval started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// Body of `POST /api/proposals/{id}/approve`: the instruction may be edited first.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ProposalApprove {
+    #[serde(default)]
+    pub instruction: Option<String>,
+}
+
+/// What one heartbeat did.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TickResult {
+    /// interval | briefing | reminder | manual
+    pub wake: String,
+    /// proposed | nothing | skipped
+    pub outcome: String,
+    /// Why nothing happened (skipped, or nothing worth doing), in Italian.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Ids of the proposals this tick created.
+    #[serde(default)]
+    pub proposals: Vec<String>,
+    /// Whether a model was asked (an empty context never calls one).
+    #[serde(default)]
+    pub model_called: bool,
+    /// Why the model step was left out although there was something to look at (no model on this device and
+    /// no paired device answering), in Italian. The parts that need no model were done anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_skipped: Option<String>,
+    /// Name of the paired device that answered the filter question instead of a model on this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_to: Option<String>,
+    pub at: String,
+}
+
+/// `POST /api/proactive/background-tick` and the plugin command of the mobile shells: one short check with a hard
+/// time budget, woken by the operating system (WorkManager, BGTaskScheduler, a Shortcut).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundRequest {
+    /// interval | briefing | shortcut (default interval)
+    #[serde(default)]
+    pub reason: String,
+    /// Hard time budget in seconds (default 25, between 5 and 600).
+    #[serde(default)]
+    pub budget_s: Option<u32>,
+    /// The platform says whether the device is charging (`None`: unknown, the setting is ignored).
+    #[serde(default)]
+    pub on_power: Option<bool>,
+}
+
+/// A local notification ready to show.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalNotice {
+    pub title: String,
+    pub body: String,
+}
+
+/// What a background tick did, in a form small enough for a local notification or a Shortcuts answer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundSummary {
+    /// interval | briefing | shortcut
+    pub reason: String,
+    /// proposed | nothing | skipped
+    pub outcome: String,
+    /// Proposals (not briefings) this check created.
+    pub new_proposals: u32,
+    /// Text of the briefing: the one this check wrote, or, for `briefing` and `shortcut`, today's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub briefing: Option<String>,
+    /// ran | delegated | skipped | not_needed
+    pub model_step: String,
+    /// Why the model step was skipped, or the name of the device it was delegated to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_note: Option<String>,
+    /// Why the whole check did not run (quiet hours, power, budget, level off…), in Italian.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
+    /// What to show as a local notification; `None` when there is nothing worth interrupting for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification: Option<LocalNotice>,
+    /// The time budget ran out before the check ended (what was done is kept).
+    #[serde(default)]
+    pub timed_out: bool,
+    pub elapsed_ms: u64,
+    pub at: String,
+}
+
+/// `GET /api/proactive/status`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProactiveStatus {
+    /// off | propose | act_readonly
+    pub level: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tick: Option<TickResult>,
+    /// Why the last tick did nothing because it could not run (quiet hours, budget, power, kill switch…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_wake: Option<String>,
+    pub budget_used_minutes: f64,
+    pub budget_minutes: u32,
+    pub open_proposals: u32,
+    /// The kill switch stopped it; it starts again when the level is set again.
+    pub stopped_by_kill_switch: bool,
+    /// Power state when the platform reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_power: Option<bool>,
 }

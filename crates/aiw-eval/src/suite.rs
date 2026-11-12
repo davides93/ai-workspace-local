@@ -287,6 +287,13 @@ tasks:
         assert!((3..=5).contains(&s.tasks.len()));
     }
 
+    #[test]
+    fn the_proactive_filter_suite_is_valid() {
+        let s = Suite::parse(include_str!("../../../docs/evals/proattivo-filtro.yaml")).unwrap();
+        assert_eq!(s.id, "proattivo-filtro");
+        assert_eq!(s.tasks.len(), 6);
+    }
+
     fn err(text: &str) -> String {
         Suite::parse(text).unwrap_err().to_string()
     }

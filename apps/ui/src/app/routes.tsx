@@ -9,7 +9,7 @@ import type { IconName } from "../shared/ui";
  */
 
 export type RouteId =
-  | "home" | "chat" | "agents" | "teams" | "workflows" | "evals" | "training" | "capabilities" | "integrations"
+  | "home" | "chat" | "inbox" | "agents" | "teach" | "teams" | "workflows" | "evals" | "training" | "capabilities" | "integrations"
   | "models" | "runtimes" | "devices" | "security" | "activity" | "settings";
 
 export type GroupId = "overview" | "work" | "capabilities" | "inference" | "control";
@@ -21,6 +21,8 @@ export interface AppRoute extends RoutePattern {
   group: GroupId;
   /** Position in the phone tab bar (the fifth slot is always "Altro"). */
   tab?: number;
+  /** Position in the phone tab bar in simple mode, when it differs from `tab`. */
+  simpleTab?: number;
   /** Shown in simple mode (`ui.mode`); developer mode shows every route. */
   simple?: boolean;
   /** Plainer name used in simple mode. */
@@ -44,13 +46,15 @@ const view = <K extends string>(load: () => Promise<Record<K, ComponentType>>, n
 export const ROUTES: AppRoute[] = [
   { id: "home", path: "/", label: "Panoramica", icon: "home", group: "overview", tab: 0, simple: true, keywords: ["home", "dashboard", "inizio"], View: view(() => import("../features/home/HomeView"), "HomeView") },
   { id: "chat", path: "/chat/:sessionId?", label: "Workspace", simpleLabel: "Chat", icon: "chat", group: "work", tab: 1, simple: true, keywords: ["chat", "workspace", "conversazione", "sessioni"], View: view(() => import("../features/chat/ChatView"), "ChatView") },
+  { id: "inbox", path: "/inbox", label: "Proposte", icon: "sparkle", group: "work", simple: true, keywords: ["proposte", "inbox", "suggerimenti", "promemoria", "riepilogo", "proattivo", "notato"], View: view(() => import("../features/inbox/InboxView"), "InboxView") },
   { id: "agents", path: "/agents/:agentId?", label: "Agenti", simpleLabel: "Assistenti", icon: "agent", group: "work", simple: true, keywords: ["agenti", "assistenti", "profili", "prompt"], View: view(() => import("../features/agents/AgentsView"), "AgentsView") },
+  { id: "teach", path: "/teach", label: "Insegna", icon: "bulb", group: "work", simpleTab: 2, simple: true, keywords: ["insegna", "memoria", "ricorda", "ricordi", "cosa sai di me", "preferenze", "impara"], View: view(() => import("../features/teach/TeachView"), "TeachView") },
   { id: "teams", path: "/teams/:teamId?", label: "Team", icon: "team", group: "work", keywords: ["squadra", "supervisore", "multi-agente", "parallelo", "catena"], View: view(() => import("../features/teams/TeamsView"), "TeamsView") },
   { id: "workflows", path: "/workflows/:workflowId?", label: "Workflow", icon: "flow", group: "work", keywords: ["automazioni", "trigger", "webhook"], View: view(() => import("../features/workflows/WorkflowsView"), "WorkflowsView") },
   { id: "evals", path: "/evals/:tab?", label: "Valutazioni", icon: "check", group: "work", keywords: ["valutazione", "eval", "test", "benchmark", "grader", "confronto", "qualità"], View: view(() => import("../features/evals/EvalsView"), "EvalsView") },
   { id: "capabilities", path: "/capabilities/:tab?", label: "Tool, MCP e browser", icon: "tool", group: "capabilities", keywords: ["tool", "mcp", "browser", "computer-use", "strumenti"], View: view(() => import("../features/capabilities/CapabilitiesView"), "CapabilitiesView") },
   { id: "integrations", path: "/integrations", label: "Integrazioni", icon: "plug", group: "capabilities", keywords: ["api", "openai", "anthropic", "a2a", "webhook", "endpoint"], View: view(() => import("../features/integrations/IntegrationsView"), "IntegrationsView") },
-  { id: "models", path: "/models/:tab?", label: "Modelli", icon: "cube", group: "inference", tab: 2, simple: true, keywords: ["modelli", "scarica", "gguf", "hugging face", "ollama", "download"], View: view(() => import("../features/models/ModelsView"), "ModelsView") },
+  { id: "models", path: "/models/:tab?", label: "Modelli", icon: "cube", group: "inference", tab: 2, simpleTab: 3, simple: true, keywords: ["modelli", "scarica", "gguf", "hugging face", "ollama", "download"], View: view(() => import("../features/models/ModelsView"), "ModelsView") },
   { id: "runtimes", path: "/runtimes/:runtimeId?", label: "Runtime", icon: "chip", group: "inference", tab: 3, keywords: ["llama", "motore", "inferenza"], View: view(() => import("../features/runtimes/RuntimesView"), "RuntimesView") },
   { id: "devices", path: "/devices", label: "Dispositivi", icon: "device", group: "inference", keywords: ["hardware", "pairing", "gpu", "rete"], View: view(() => import("../features/devices/DevicesView"), "DevicesView") },
   { id: "training", path: "/training/:tab?", label: "Addestramento", icon: "bolt", group: "inference", keywords: ["fine-tuning", "lora", "adapter", "sft", "dpo", "grpo", "dataset", "addestra"], View: view(() => import("../features/training/TrainingView"), "TrainingView") },

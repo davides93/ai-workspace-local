@@ -4,16 +4,19 @@ import { isSecretName } from "../../lib/secrets";
 import { mockRecommend } from "./recommend";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
+  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
   MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  DatasetSpec, TrainJobRequest, ThinkingMode,
+  DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary,
 } from "../types";
 import {
-  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
+  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
   remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
+import * as mem from "./memories";
+import { proactiveState, PROPOSAL_KINDS, PROPOSAL_STATUSES, proposals } from "./proposals";
+import { teacherTurn } from "./teacher";
 import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
@@ -608,6 +611,146 @@ export class MockTransport implements Transport {
     return structuredClone(l);
   }
 
+  // ---- long-term memory (crates/aiw-engine/src/memory.rs)
+  private memory(id: string): Memory {
+    const m = mem.memories.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `ricordo ${id} non trovato`);
+    return m;
+  }
+  /** Runs a rule of the engine that throws a plain Error with the message, as a 400. */
+  private invalid<T>(f: () => T): T {
+    try {
+      return f();
+    } catch (e) {
+      if (e instanceof ApiError) throw e;
+      throw new ApiError(400, e instanceof Error ? e.message : String(e));
+    }
+  }
+  async memories(query: MemoryQuery = {}) {
+    const status = query.status;
+    if (status && status !== "all" && !["active", "proposed", "forgotten"].includes(status)) throw new ApiError(400, `stato non valido «${status}»: usa active, proposed, forgotten o all`);
+    this.invalid(() => { const p = mem.kindProblem(query.kind); if (p) throw new Error(p); });
+    let list = mem.memories.filter((m) => (status === "all" ? true : status ? m.status === status : m.status !== "forgotten"));
+    if (query.kind) list = list.filter((m) => m.kind === query.kind);
+    return structuredClone(query.q?.trim() ? mem.rank(query.q, list) : mem.ordered(list));
+  }
+  async createMemory(body: MemoryCreate) {
+    const { memory, created } = this.invalid(() => mem.build(body, nid("mem")));
+    if (created) mem.memories.unshift(memory);
+    return structuredClone(memory);
+  }
+  async updateMemory(id: string, p: MemoryPatch) {
+    const m = this.memory(id);
+    this.invalid(() => mem.patch(m, p));
+    return structuredClone(m);
+  }
+  private setStatus(id: string, from: Memory["status"][], to: Memory["status"], what: string): Memory {
+    const m = this.memory(id);
+    if (!from.includes(m.status)) throw new ApiError(409, `il ricordo non è ${what}`);
+    Object.assign(m, { status: to, updated_at: new Date().toISOString() });
+    return m;
+  }
+  async forgetMemory(id: string) { return structuredClone(this.setStatus(id, ["active", "proposed"], "forgotten", "attivo")); }
+  async restoreMemory(id: string) { return structuredClone(this.setStatus(id, ["forgotten"], "active", "dimenticato")); }
+  async approveMemory(id: string) { return structuredClone(this.setStatus(id, ["proposed"], "active", "in attesa di conferma")); }
+  async rejectMemory(id: string) {
+    const m = this.memory(id);
+    if (m.status !== "proposed") throw new ApiError(409, "il ricordo non è in attesa di conferma");
+    mem.memories.splice(mem.memories.indexOf(m), 1);
+    return structuredClone(m);
+  }
+  async deleteMemory(id: string) {
+    mem.memories.splice(mem.memories.indexOf(this.memory(id)), 1);
+  }
+  async deleteAllMemories() {
+    const deleted = mem.memories.length;
+    mem.memories.length = 0;
+    return { deleted };
+  }
+
+  // ---- proactive assistant (crates/aiw-engine/src/proactive.rs)
+  private proposal(id: string): Proposal {
+    const p = proposals.find((x) => x.id === id);
+    if (!p) throw new ApiError(404, `proposta ${id} non trovata`);
+    return p;
+  }
+  async proposals(query: ProposalQuery = {}) {
+    if (query.status && !PROPOSAL_STATUSES.includes(query.status)) throw new ApiError(400, `stato non valido «${query.status}»: usa ${PROPOSAL_STATUSES.join(", ")}`);
+    if (query.kind && !PROPOSAL_KINDS.includes(query.kind)) throw new ApiError(400, `tipo non valido «${query.kind}»: usa ${PROPOSAL_KINDS.join(", ")}`);
+    const list = proposals.filter((p) => (!query.status || p.status === query.status) && (!query.kind || p.kind === query.kind));
+    return structuredClone(list.sort((a, b) => b.created_at.localeCompare(a.created_at)));
+  }
+  async approveProposal(id: string, instruction?: string) {
+    const p = this.proposal(id);
+    if (p.kind !== "proposal") throw new ApiError(409, "un riepilogo non si esegue: puoi solo leggerlo o scartarlo");
+    if (p.status !== "open") throw new ApiError(409, `la proposta «${p.title}» non è più in attesa (${p.status})`);
+    const text = instruction?.trim() || p.instruction;
+    const session = await this.createSession({ agent_id: p.agent_id, title: p.title });
+    const { run_id } = await this.startRun(session.id, text);
+    Object.assign(p, { status: "approved", decided_at: now(), run_id, session_id: session.id });
+    return structuredClone(p);
+  }
+  async dismissProposal(id: string) {
+    const p = this.proposal(id);
+    if (p.status !== "open") throw new ApiError(409, `la proposta «${p.title}» non è più in attesa (${p.status})`);
+    Object.assign(p, { status: "dismissed", decided_at: now() });
+    return structuredClone(p);
+  }
+  async proactiveStatus(): Promise<ProactiveStatus> {
+    const level = String(effective()["proactive.level"] ?? proactiveState.level) as ProactiveStatus["level"];
+    return {
+      level, last_tick: proactiveState.lastTick, next_wake: level === "off" ? undefined : new Date(Date.now() + 30 * 60_000).toISOString(),
+      budget_used_minutes: 2.5, budget_minutes: 15, open_proposals: proposals.filter((p) => p.kind === "proposal" && p.status === "open").length,
+      stopped_by_kill_switch: false,
+    };
+  }
+  async proactiveTick(): Promise<TickResult> {
+    const level = String(effective()["proactive.level"] ?? proactiveState.level);
+    const r: TickResult = level === "off"
+      ? { wake: "manual", outcome: "skipped", reason: "L'assistente proattivo è spento: lo accendi dalle impostazioni.", proposals: [], model_called: false, at: now() }
+      : { wake: "manual", outcome: "nothing", reason: "Niente di nuovo da guardare.", proposals: [], model_called: false, at: now() };
+    proactiveState.lastTick = r;
+    return r;
+  }
+
+  /** The demo answers as the engine does: off = skipped with the reason, else a quiet check; no model needed. */
+  async proactiveBackgroundTick(req: BackgroundRequest = {}): Promise<BackgroundSummary> {
+    const level = String(effective()["proactive.level"] ?? proactiveState.level);
+    const reason = req.reason ?? "interval";
+    const base = { reason, new_proposals: 0, timed_out: false, elapsed_ms: 12, at: now() };
+    if (level === "off") {
+      return { ...base, outcome: "skipped", model_step: "skipped", model_note: "L'assistente proattivo è spento: lo accendi dalle impostazioni.", skipped_reason: "L'assistente proattivo è spento: lo accendi dalle impostazioni." };
+    }
+    const briefing = proposals.find((p) => p.kind === "briefing");
+    return {
+      ...base, outcome: "nothing", model_step: "not_needed",
+      briefing: reason === "interval" ? undefined : briefing?.noticed ?? "Niente da segnalare per oggi.",
+    };
+  }
+
+  // ---- the phone's side of the background checks. The demo runs on a computer: `phone` switches it to a phone for tests.
+  phone: "ios" | "android" | null = null;
+  private background: { notifications: BackgroundStatus["notifications"]; scheduled: boolean } = { notifications: "not_determined", scheduled: false };
+  private backgroundNow(): BackgroundStatus {
+    if (!this.phone) return { platform: "desktop", supported: false, notifications: "unsupported", scheduled: false };
+    return {
+      platform: this.phone, supported: true, notifications: this.background.notifications, scheduled: this.background.scheduled,
+      detail: this.phone === "ios"
+        ? "iOS decide quando far partire i controlli: può farlo di rado. Per un orario preciso usa un'automazione dei Comandi rapidi."
+        : "Android decide quando far partire i controlli: di solito ogni 15-30 minuti, meno a batteria scarica.",
+    };
+  }
+  async backgroundStatus() { return this.backgroundNow(); }
+  async backgroundRequestNotifications() {
+    if (this.phone && this.background.notifications === "not_determined") this.background.notifications = "granted";
+    return this.backgroundNow();
+  }
+  async backgroundConfigure() {
+    this.background.scheduled = this.phone !== null && String(effective()["proactive.level"] ?? proactiveState.level) !== "off";
+    return this.backgroundNow();
+  }
+  async backgroundCheckNow() { return this.backgroundNow(); }
+
   async activeRun(sessionId?: string) {
     if (sessionId !== undefined && !sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     return null;
@@ -813,8 +956,42 @@ export class MockTransport implements Transport {
     this.finish(sessionId, final);
   }
 
+  /** The Insegnante: saves, corrects and forgets memories like the real agent does with its tools, and announces each change (`aiw.memory`). */
+  private async teacherRun(runId: string, sessionId: string, input: string) {
+    await sleep(150);
+    const threadId = sessionId;
+    this.emit(runId, { type: "RUN_STARTED", threadId, runId });
+    const turn = teacherTurn(input, mem.memories);
+    let reply = turn.reply;
+    for (const step of turn.steps) {
+      if (step.tool === "memory_save") {
+        const { memory, created } = this.invalid(() => mem.build({ text: step.args.text, kind: step.args.kind, pinned: step.args.pinned, due_at: step.args.due_at }, nid("mem")));
+        if (created) mem.memories.unshift({ ...memory, session_id: sessionId });
+        await this.toolCall(runId, step.tool, step.args, created ? `Ricordato (id ${memory.id}): «${memory.text}».` : `Lo sapevo già (id ${memory.id}): «${memory.text}».`);
+        if (!created) reply = `Lo sapevo già: «${memory.text}».`;
+      } else if (step.tool === "memory_update") {
+        const m = this.memory(step.args.id);
+        mem.patch(m, { text: step.args.text });
+        await this.toolCall(runId, step.tool, step.args, `Aggiornato (id ${m.id}): «${m.text}».`);
+      } else if (step.tool === "memory_forget") {
+        const m = this.setStatus(step.args.id, ["active", "proposed"], "forgotten", "attivo");
+        await this.toolCall(runId, step.tool, step.args, `Dimenticato (id ${m.id}): «${m.text}».`);
+      } else {
+        await this.toolCall(runId, step.tool, step.args, step.summary);
+      }
+      this.emit(runId, { type: "CUSTOM", name: "aiw.memory", value: { tool: step.tool } });
+    }
+    const m = nid("m");
+    this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m, role: "assistant" });
+    await this.streamText(runId, m, reply, "text");
+    this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m });
+    this.emit(runId, { type: "RUN_FINISHED", threadId, runId });
+    this.finish(sessionId, reply);
+  }
+
   private async scriptedRun(runId: string, sessionId: string, input: string) {
     if (sessions.find((x) => x.id === sessionId)?.agent_id === "browser") return this.browserRun(runId, sessionId);
+    if (sessions.find((x) => x.id === sessionId)?.agent_id === "teacher") return this.teacherRun(runId, sessionId, input);
     await sleep(150);
     const threadId = sessionId;
     this.emit(runId, { type: "RUN_STARTED", threadId, runId });
@@ -826,6 +1003,13 @@ export class MockTransport implements Transport {
     ];
     const state = () => ({ todos: structuredClone(todos), runtime: "llama-server", model: "qwen3.5-35b-a3b-q4_k_m", usage: { prompt_tokens: 1840 + Math.round(Math.random() * 400), completion_tokens: 220, tokens_per_s: 108 + Math.round(Math.random() * 10), context_used: 6100, context_max: 32768 } });
     this.emit(runId, { type: "STATE_SNAPSHOT", snapshot: state() });
+    // An agent with model roles: who does what, announced like the engine does (`aiw.roles`, `aiw.model`).
+    const withRoles = !!agents.find((a) => a.id === sessions.find((x) => x.id === sessionId)?.agent_id)?.roles;
+    const label = (role: string, model: string) => ({ role, model, runtime: "llama-server" });
+    if (withRoles) {
+      this.emit(runId, { type: "CUSTOM", name: "aiw.roles", value: { mode: "auto", plan: label("plan", "qwen3.5-35b-a3b-q4_k_m"), act: label("act", "llama-3.2-3b-instruct-q4_k_m"), single: false, notes: [] } });
+      this.emit(runId, { type: "CUSTOM", name: "aiw.model", value: label("plan", "qwen3.5-35b-a3b-q4_k_m") });
+    }
 
     const r1 = nid("r");
     this.emit(runId, { type: "REASONING_START", messageId: r1 });
@@ -843,6 +1027,7 @@ export class MockTransport implements Transport {
     todos[1].status = "in_progress";
     this.emit(runId, { type: "STATE_SNAPSHOT", snapshot: state() });
 
+    if (withRoles) this.emit(runId, { type: "CUSTOM", name: "aiw.model", value: label("act", "llama-3.2-3b-instruct-q4_k_m") });
     const m2 = nid("m");
     this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m2, role: "assistant" });
     await this.streamText(runId, m2, "Ho trovato 7 PDF tra il 2024 e il 2026. Creo le cartelle `2024`, `2025` e `2026` e ci sposto i file. Per questo comando serve la tua conferma.", "text");
@@ -1070,7 +1255,14 @@ export class MockTransport implements Transport {
     return structuredClone(o);
   }
 
-  async tools() { return structuredClone(tools); }
+  async tools() {
+    const eff = effective() as Record<string, unknown>;
+    const connectors = CONNECTOR_TOOLS.map((c): ToolInfo => {
+      const on = eff[c.switch] === true;
+      return { name: c.name, description: c.description, source: "builtin", risk: "read", enabled: true, available: on, unavailable_reason: on ? undefined : "Spento: lo accendi in Impostazioni, «Calendario e posta».", parameters: {} };
+    });
+    return structuredClone([...tools, ...connectors]);
+  }
   async setToolEnabled(name: string, enabled: boolean) {
     if ((INTERNAL_TOOL_NAMES as readonly string[]).includes(name)) {
       throw new ApiError(400, `«${name}» è uno strumento interno dell'agente: non si può attivare o disattivare`);

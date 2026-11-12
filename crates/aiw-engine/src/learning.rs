@@ -267,6 +267,10 @@ impl Engine {
         l.status = "approved".into();
         l.decided_at = Some(now_rfc3339());
         self.0.store.put_doc(LESSON_KIND, &l.id, &l)?;
+        if l.kind == "memory" {
+            // The same lesson is also a pinned memory, so that the "Insegna" page shows and edits it.
+            self.memory_from_lesson(&l.title, &l.content, &l.session_id);
+        }
         self.audit_user("lesson.approve", &format!("{} «{}» → {target}", l.kind, l.title));
         Ok(l)
     }

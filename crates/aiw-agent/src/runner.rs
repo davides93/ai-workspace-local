@@ -5,12 +5,13 @@ use crate::budget::RunBudget;
 use crate::fallback::{bare_json_call, extract_text_tool_calls, has_text_tool_call, MarkerNormaliser};
 use crate::hooks::{run_hooks, HookConfig};
 use crate::policy::{risk_level, Decision, Policy};
+use crate::roles::{self, RolePlan, Routing};
 use crate::skills::{self, Skill};
 use crate::think::{Piece, ThinkSplitter};
 use crate::thinking::{self, CallSite};
 use aiw_core::api::{
-    AgentProfile, ApprovalOutcome, ApprovalRequest, AuditEntry, ChatMessage, InferenceProfile, RunState, ThinkingMode, Todo, ToolCall,
-    Usage,
+    AgentProfile, ApprovalOutcome, ApprovalRequest, AuditEntry, ChatMessage, InferenceProfile, ModelRole, RunState, ThinkingMode, Todo,
+    ToolCall, Usage,
 };
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
@@ -52,6 +53,16 @@ pub trait RunHost: Send + Sync {
         let _ = from;
         Ok(agent_id.to_string())
     }
+    /// Are the memory tools offered in this run? (The setting, and not an evaluation run.)
+    fn memory_enabled(&self) -> bool {
+        false
+    }
+    /// Runs one of the memory tools ([`crate::internal::MEMORY_TOOLS`]) for the run `input`; the
+    /// error is a message for the model.
+    async fn memory_tool(&self, input: &RunInput, name: &str, args: &Value) -> Result<String> {
+        let _ = (input, args);
+        Err(Error::Unsupported(format!("lo strumento {name} non è disponibile")))
+    }
 }
 
 pub struct RunInput {
@@ -87,6 +98,9 @@ pub struct RunInput {
     /// `thinking`, already dropped for a model that cannot reason. Sub-agents get the parent's.
     /// `None` sends nothing to the runtime.
     pub thinking: Option<ThinkingMode>,
+    /// Models by role (plan, act, check, summarize), decided by the engine when the agent asks for
+    /// them. `None`: every call uses `profile`, as always. Sub-agents never get one.
+    pub roles: Option<RolePlan>,
 }
 
 #[derive(Debug, Default)]
@@ -137,7 +151,7 @@ pub fn to_msgs(history: &[ChatMessage]) -> Vec<Msg> {
         .collect()
 }
 
-fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
+fn internal_specs(input: &RunInput, skills: &[Skill], memory: bool) -> Vec<ToolSpec> {
     let allowed = |n: &str| input.agent.tools.iter().any(|t| t == "*" || t == n);
     let mut v = Vec::new();
     if allowed("todo") {
@@ -167,6 +181,9 @@ fn internal_specs(input: &RunInput, skills: &[Skill]) -> Vec<ToolSpec> {
     }
     if allowed(crate::code::TOOL) {
         v.push(crate::code::spec());
+    }
+    if memory {
+        v.extend(crate::internal::memory_specs().into_iter().filter(|s| allowed(&s.function.name)));
     }
     if allowed("skill") && !skills.is_empty() {
         let names: Vec<Value> = skills.iter().map(|s| Value::String(s.name.clone())).collect();
@@ -253,6 +270,22 @@ enum BatchKind {
     /// Consecutive `agent` calls run concurrently, up to `max_parallel_subagents`.
     Subagents,
 }
+
+/// Does a call of this tool change something outside the conversation (files, shell, browser,
+/// computer)? What the `check` pass looks at.
+fn is_acting_tool(registry: &ToolRegistry, name: &str) -> bool {
+    name == crate::code::TOOL || registry.get(name).is_some_and(|t| matches!(t.risk(), Risk::Write | Risk::Exec | Risk::Computer))
+}
+
+/// Name of the AG-UI CUSTOM event that says which model handled a call (only in runs with roles).
+pub const MODEL_EVENT: &str = "aiw.model";
+/// Name of the AG-UI CUSTOM event emitted once at the start of a run with roles: who does what.
+pub const ROLES_EVENT: &str = "aiw.roles";
+/// Name of the AG-UI CUSTOM event with the verdict of the `check` pass.
+pub const CHECK_EVENT: &str = "aiw.check";
+
+/// Name of the AG-UI CUSTOM event emitted after a memory tool ran (the UI refreshes what it shows).
+pub const MEMORY_EVENT: &str = "aiw.memory";
 
 /// Name of the AG-UI CUSTOM event that carries a tool's image (screenshot) to the UI.
 pub const IMAGE_EVENT: &str = "aiw.image";
@@ -440,7 +473,7 @@ impl AgentRunner {
             })
             .map(|t| ToolSpec::function(t.name(), t.description(), t.parameters()))
             .collect();
-        specs.extend(internal_specs(input, &skills));
+        specs.extend(internal_specs(input, &skills, host.memory_enabled()));
 
         let mut state = RunState {
             runtime: Some(input.profile.runtime_id.clone()),
@@ -506,7 +539,27 @@ impl AgentRunner {
                 return Err(e);
             }
         };
-        let ctx_max = effective_context(input.profile.params.context, backend.served_context());
+        let mut routing = Routing::new(input.profile.clone(), backend, input.roles.clone());
+        if let Some(plan) = routing.plan() {
+            let label = |r: ModelRole| {
+                let m = plan.model(r).map(|m| &m.profile).unwrap_or(&input.profile);
+                json!({"model": m.model, "runtime": m.runtime_id})
+            };
+            ev.emit(AgEvent::Custom {
+                name: ROLES_EVENT.into(),
+                value: json!({
+                    "mode": plan.mode,
+                    "plan": label(ModelRole::Plan), "act": label(ModelRole::Act),
+                    "check": plan.check_enabled.then(|| label(ModelRole::Check)),
+                    "summarize": label(ModelRole::Summarize),
+                    "single": plan.distinct_models(&input.profile) == 1,
+                    "notes": plan.notes,
+                }),
+            });
+        }
+        // Check pass (roles): did the run use a tool that writes or acts, and how many extra rounds were spent.
+        let mut acted: Vec<(String, String)> = Vec::new();
+        let mut check_rounds = 0u32;
         let mut strip_images = false;
         // Tool errors of the latest batch that the model has not retried yet (self-check, below).
         let mut unresolved: Vec<(String, String)> = Vec::new();
@@ -529,6 +582,10 @@ impl AgentRunner {
                     format!("{last_text}\n\n(Budget del run esaurito: {reason}. Dimmi se devo continuare.)").trim().to_string();
                 break;
             }
+            let site = CallSite { first_call: !made_call, after_failure };
+            let role = roles::role_for_call(site);
+            let picked = routing.pick(role, &host).await;
+            let ctx_max = effective_context(picked.profile.params.context, picked.backend.served_context());
             // Context compaction (P10).
             if estimate_tokens(&messages) as f64 > input.compact_at * ctx_max as f64 && messages.len() > 6 {
                 let pre = run_hooks(
@@ -540,26 +597,32 @@ impl AgentRunner {
                 .await;
                 if let Some(reason) = pre.block {
                     tracing::info!("PreCompact hook blocked the compaction for this turn: {reason}");
-                } else if let Some(n) = compact(&mut messages, backend.as_ref(), input).await {
-                    ev.emit(AgEvent::Custom { name: "aiw.compacted".into(), value: json!({"removed_messages": n}) });
+                } else {
+                    let summ = routing.pick(ModelRole::Summarize, &host).await;
+                    if routing.active() {
+                        Self::announce(&ev, &summ, None);
+                    }
+                    if let Some(n) = compact(&mut messages, summ.backend.as_ref(), &summ.profile.model, input).await {
+                        ev.emit(AgEvent::Custom { name: "aiw.compacted".into(), value: json!({"removed_messages": n}) });
+                    }
                 }
             }
             let req_messages = if strip_images { without_images(&messages) } else { messages.clone() };
             let req = ChatRequest {
-                model: input.profile.model.clone(),
+                model: picked.profile.model.clone(),
                 messages: req_messages,
                 tools: specs.clone(),
-                temperature: input.profile.params.temperature,
-                top_p: input.profile.params.top_p,
-                max_tokens: input.profile.params.max_tokens,
+                temperature: picked.profile.params.temperature,
+                top_p: picked.profile.params.top_p,
+                max_tokens: picked.profile.params.max_tokens,
                 stop: vec![],
-                thinking: thinking::resolve(
-                    input.thinking,
-                    input.profile.params.thinking_budget,
-                    CallSite { first_call: !made_call, after_failure },
-                ),
+                thinking: if routing.active() {
+                    roles::role_thinking(role, picked.can_reason, input.thinking, picked.profile.params.thinking_budget)
+                } else {
+                    thinking::resolve(input.thinking, input.profile.params.thinking_budget, site)
+                },
             };
-            let stream = match backend.chat(req, input.tool_ctx.cancel.clone()).await {
+            let stream = match picked.backend.chat(req, input.tool_ctx.cancel.clone()).await {
                 Ok(s) => s,
                 Err(e) if !strip_images && has_images(&messages) && looks_like_vision_error(&e.to_string()) => {
                     strip_images = true;
@@ -579,6 +642,9 @@ impl AgentRunner {
             made_call = true;
             // The stored message keeps the id its live events carry, so that clients can refer to it (feedback).
             let msg_id = new_id("msg");
+            if routing.active() {
+                Self::announce(&ev, &picked, Some(&msg_id));
+            }
             let (text, reasoning, mut calls, usage, stream_error) = Self::consume(stream, &ev, turn, &msg_id).await;
             if let Some(e) = stream_error {
                 // Keep what the model had said before the stream broke (cancellation included);
@@ -707,6 +773,13 @@ impl AgentRunner {
                         .and_then(|v| crate::schema::validate(schema, &v).map(|()| v));
                     match checked {
                         Ok(v) => {
+                            if let Some(note) =
+                                Self::maybe_check(&mut routing, &host, input, &ev, &acted, &mut check_rounds, turn, &text).await
+                            {
+                                Self::push_check_feedback(&mut messages, outcome, note);
+                                after_failure = true;
+                                continue;
+                            }
                             outcome.final_text = v.to_string();
                             outcome.structured = Some(v);
                             break;
@@ -734,6 +807,11 @@ impl AgentRunner {
                         }
                         Err(errors) => ev.emit(AgEvent::Custom { name: "aiw.format_error".into(), value: json!({"errors": errors}) }),
                     }
+                }
+                if let Some(note) = Self::maybe_check(&mut routing, &host, input, &ev, &acted, &mut check_rounds, turn, &text).await {
+                    Self::push_check_feedback(&mut messages, outcome, note);
+                    after_failure = true;
+                    continue;
                 }
                 outcome.final_text = text;
                 break;
@@ -796,6 +874,9 @@ impl AgentRunner {
                     handoff = Some((to, a["summary"].as_str().unwrap_or_default().trim().to_string()));
                 }
                 let content = aiw_tools::truncate_middle(&out.content, MAX_TOOL_OUTPUT);
+                if !out.is_error && is_acting_tool(&registry, &tc.name) {
+                    acted.push((tc.name.clone(), content.chars().take(300).collect()));
+                }
                 // User/policy denials are final: they are not handed back by the self-check.
                 if out.is_error && !content.starts_with("Negato") && content != "annullato" {
                     unresolved.push((tc.name.clone(), content.chars().take(300).collect()));
@@ -881,6 +962,115 @@ impl AgentRunner {
             }),
         });
         Ok(())
+    }
+
+    /// The small label of the inspector: which model handles this call, and in which role.
+    fn announce(ev: &Emitter<'_>, picked: &roles::Picked, message_id: Option<&str>) {
+        ev.emit(AgEvent::Custom {
+            name: MODEL_EVENT.into(),
+            value: json!({
+                "role": picked.role.map(|r| r.as_str()),
+                "model": picked.profile.model,
+                "runtime": picked.profile.runtime_id,
+                "messageId": message_id,
+            }),
+        });
+    }
+
+    /// Runs the `check` pass when it applies: roles with a check, a tool that acted, at most
+    /// [`roles::MAX_CHECK_ROUNDS`] extra round per run, a turn left for the correction and budget left.
+    #[allow(clippy::too_many_arguments)]
+    async fn maybe_check(
+        routing: &mut Routing,
+        host: &Arc<dyn RunHost>,
+        input: &RunInput,
+        ev: &Emitter<'_>,
+        acted: &[(String, String)],
+        rounds: &mut u32,
+        turn: u32,
+        answer: &str,
+    ) -> Option<String> {
+        if !routing.check_enabled()
+            || acted.is_empty()
+            || *rounds >= roles::MAX_CHECK_ROUNDS
+            || turn + 1 >= input.agent.max_turns
+            || input.budget.exceeded().is_some()
+            || input.tool_ctx.cancel.is_cancelled()
+        {
+            return None;
+        }
+        *rounds += 1;
+        Self::final_check(routing, host, input, ev, acted, answer).await
+    }
+
+    fn push_check_feedback(messages: &mut Vec<Msg>, outcome: &mut RunOutcome, sentence: String) {
+        let note = roles::feedback_note(&sentence);
+        messages.push(Msg::user(note.clone()));
+        outcome.new_messages.push(ChatMessage {
+            id: new_id("msg"),
+            role: "user".into(),
+            content: note,
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: Some(roles::CHECK_NAME.into()),
+            created_at: now_rfc3339(),
+        });
+    }
+
+    /// The `check` pass: a short review of what the run did before it declares itself finished.
+    /// Returns the objection (one sentence) when the reviewer found a problem. Costs one model
+    /// call, counted in the run budget; an error or an unreadable answer counts as a pass.
+    async fn final_check(
+        routing: &mut Routing,
+        host: &Arc<dyn RunHost>,
+        input: &RunInput,
+        ev: &Emitter<'_>,
+        actions: &[(String, String)],
+        answer: &str,
+    ) -> Option<String> {
+        let picked = routing.pick(ModelRole::Check, host).await;
+        Self::announce(ev, &picked, None);
+        let req = ChatRequest {
+            model: picked.profile.model.clone(),
+            messages: roles::check_messages(&input.user_input, actions, answer),
+            temperature: Some(0.0),
+            max_tokens: Some(200),
+            thinking: roles::role_thinking(ModelRole::Check, picked.can_reason, input.thinking, None),
+            ..Default::default()
+        };
+        let mut stream = match picked.backend.chat(req, input.tool_ctx.cancel.clone()).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::info!("check pass skipped: {e}");
+                return None;
+            }
+        };
+        input.budget.record_turn();
+        let mut splitter = ThinkSplitter::default();
+        let mut text = String::new();
+        let collect = |pieces: Vec<Piece>, text: &mut String| {
+            for p in pieces {
+                if let Piece::Text(t) = p {
+                    text.push_str(&t);
+                }
+            }
+        };
+        while let Some(d) = stream.next().await {
+            match d {
+                Ok(ChatDelta::Text(t)) => collect(splitter.push(&t), &mut text),
+                Ok(ChatDelta::Usage(u)) => input.budget.record_tokens(u.prompt_tokens + u.completion_tokens),
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::info!("check pass interrupted: {e}");
+                    return None;
+                }
+            }
+        }
+        collect(splitter.finish(), &mut text);
+        let objection = roles::parse_check(&text);
+        ev.emit(AgEvent::Custom { name: CHECK_EVENT.into(), value: json!({"passed": objection.is_none(), "note": objection}) });
+        objection
     }
 
     /// Streams one model turn, emitting text/reasoning/tool-call events. When the stream breaks
@@ -1164,6 +1354,34 @@ impl AgentRunner {
                     None => (ToolOutput::error(format!("skill `{name}` non trovata")), None),
                 };
             }
+            n if crate::internal::is_memory_tool(n) => {
+                if !host.memory_enabled() || !input.agent.tools.iter().any(|t| t == "*" || t == n) {
+                    audit("deny", "memoria non disponibile per questo agente".into());
+                    return (ToolOutput::error(format!("Lo strumento `{n}` non è disponibile.")), None);
+                }
+                // The plan mode is read-only: nothing is written, not even a memory.
+                if input.policy.mode == "plan" && n != crate::internal::MEMORY_SEARCH {
+                    audit("deny", format!("{n}: modalità piano"));
+                    return (ToolOutput::error("In modalità piano non posso modificare i ricordi: li posso solo cercare."), None);
+                }
+                // No approval prompt: saving is reversible (the person can forget it), the agent's
+                // guesses are only proposals, and every call goes to the activity log.
+                let detail = |what: &str| {
+                    let text = args["text"].as_str().or(args["query"].as_str()).or(args["id"].as_str()).unwrap_or_default();
+                    format!("{what}: {}", text.chars().take(120).collect::<String>())
+                };
+                return match host.memory_tool(input, n, &args).await {
+                    Ok(text) => {
+                        audit("allow", detail(n));
+                        host.emit(&input.run_id, AgEvent::Custom { name: MEMORY_EVENT.into(), value: json!({"tool": n}) });
+                        (ToolOutput::text(text), None)
+                    }
+                    Err(e) => {
+                        audit("error", detail(n));
+                        (ToolOutput::error(e.to_string()), None)
+                    }
+                };
+            }
             crate::internal::TEAM_STATE => {
                 if !input.in_team {
                     return (ToolOutput::error("lo stato condiviso esiste solo nei run di un team"), None);
@@ -1362,7 +1580,7 @@ fn effective_context(profile: Option<u32>, served: Option<u32>) -> u64 {
     served.map_or(profile, |s| s.min(profile)) as u64
 }
 
-async fn compact(messages: &mut Vec<Msg>, backend: &dyn ChatBackend, input: &RunInput) -> Option<usize> {
+async fn compact(messages: &mut Vec<Msg>, backend: &dyn ChatBackend, model: &str, input: &RunInput) -> Option<usize> {
     let keep_tail = 4;
     let mut cut = messages.len().saturating_sub(keep_tail);
     while cut > 1 && messages[cut].role == "tool" {
@@ -1388,7 +1606,7 @@ async fn compact(messages: &mut Vec<Msg>, backend: &dyn ChatBackend, input: &Run
         .collect::<Vec<_>>()
         .join("\n");
     let req = ChatRequest {
-        model: input.profile.model.clone(),
+        model: model.to_string(),
         messages: vec![
             Msg::system("Riassumi la conversazione tra utente e agente per poterla continuare: obiettivo, decisioni, file e risorse toccati, risultati dei tool, passi rimanenti. Massimo 300 parole."),
             Msg::user(transcript.chars().take(60_000).collect::<String>()),

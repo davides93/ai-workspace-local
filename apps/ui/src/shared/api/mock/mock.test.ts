@@ -401,6 +401,135 @@ describe("other v0.4 methods", () => {
     await expect(api.reflectSession("ses_none")).rejects.toThrow(/non trovata/);
   });
 
+  it("keeps proposals like the engine: filtered, approved into a new session once, dismissed, a briefing only read", async () => {
+    await expect(api.proposals({ status: "boh" as never })).rejects.toThrow(/stato non valido/);
+    await expect(api.proposals({ kind: "boh" as never })).rejects.toThrow(/tipo non valido/);
+    const open = await api.proposals({ status: "open", kind: "proposal" });
+    expect(open.length).toBeGreaterThanOrEqual(2);
+    const [a, b] = open;
+    const approved = await api.approveProposal(a.id, "Fai solo l'elenco");
+    expect(approved.status).toBe("approved");
+    expect(approved.run_id && approved.session_id).toBeTruthy();
+    expect((await api.sessions()).some((s) => s.id === approved.session_id)).toBe(true);
+    await expect(api.approveProposal(a.id)).rejects.toThrow(/non è più in attesa/);
+    expect((await api.dismissProposal(b.id)).status).toBe("dismissed");
+    await expect(api.dismissProposal(b.id)).rejects.toThrow(/non è più in attesa/);
+    const briefing = (await api.proposals({ kind: "briefing" }))[0];
+    await expect(api.approveProposal(briefing.id)).rejects.toThrow(/riepilogo/);
+    await expect(api.approveProposal("prp_none")).rejects.toThrow(/non trovata/);
+    expect((await api.proactiveStatus()).level).toBe("propose");
+    expect((await api.proactiveTick()).outcome).toBe("nothing");
+  });
+
+  it("offers the calendar and mail tools only while their switch is on, and keeps the settings in a section of their own", async () => {
+    const api = new MockTransport();
+    const connector = async () => (await api.tools()).filter((t) => /^(calendar|mail)_/.test(t.name));
+    expect((await connector()).map((t) => [t.name, t.risk, t.available])).toEqual([
+      ["calendar_today", "read", false], ["calendar_upcoming", "read", false], ["mail_recent", "read", false], ["mail_search", "read", false],
+    ]);
+    expect((await connector())[0].unavailable_reason).toMatch(/Calendario e posta/);
+    const schema = (await api.config()).schema.properties;
+    expect(schema["connectors.calendar.enabled"].default).toBe(false);
+    expect(schema["connectors.mail.sources"].type).toBe("array");
+    await api.setConfig("global", "connectors.calendar.enabled", true);
+    await api.setConfig("global", "connectors.calendar.sources", ["~/Calendari/lavoro.ics"]);
+    const after = await connector();
+    expect(after.filter((t) => t.available).map((t) => t.name)).toEqual(["calendar_today", "calendar_upcoming"]);
+    expect((await api.config()).effective["connectors.calendar.sources"]).toEqual(["~/Calendari/lavoro.ics"]);
+    await api.setConfig("global", "connectors.calendar.enabled", null);
+    await api.setConfig("global", "connectors.calendar.sources", null);
+  });
+
+  it("answers the background check like the engine and keeps the phone side in step with the settings", async () => {
+    const api = new MockTransport();
+    // The demo runs on a computer: no background jobs, no notification permission.
+    expect(await api.backgroundStatus()).toMatchObject({ platform: "desktop", supported: false, notifications: "unsupported", scheduled: false });
+    api.phone = "android";
+    expect(await api.backgroundStatus()).toMatchObject({ platform: "android", supported: true, notifications: "not_determined", scheduled: false });
+    expect((await api.backgroundConfigure()).scheduled).toBe(true);
+    expect((await api.backgroundRequestNotifications()).notifications).toBe("granted");
+    expect((await api.backgroundCheckNow()).platform).toBe("android");
+
+    const quiet = await api.proactiveBackgroundTick({ reason: "interval" });
+    expect(quiet).toMatchObject({ outcome: "nothing", model_step: "not_needed", new_proposals: 0, timed_out: false });
+    expect(quiet.briefing).toBeUndefined();
+    expect((await api.proactiveBackgroundTick({ reason: "briefing" })).briefing).toMatch(/Buongiorno/);
+
+    await api.setConfig("global", "proactive.level", "off");
+    const off = await api.proactiveBackgroundTick({ reason: "shortcut" });
+    expect(off).toMatchObject({ outcome: "skipped", model_step: "skipped", reason: "shortcut" });
+    expect(off.skipped_reason).toMatch(/spento/);
+    expect((await api.backgroundConfigure()).scheduled).toBe(false);
+    await api.setConfig("global", "proactive.level", null);
+  });
+
+  it("keeps memories like the engine: validated, deduplicated, searched, forgotten and restored, proposals approved or dropped", async () => {
+    const all = await api.memories();
+    expect(all.some((m) => m.status === "forgotten")).toBe(false);
+    expect(all[0].pinned).toBe(true);
+    expect(new Set(all.map((m) => m.kind)).size).toBe(5);
+    expect(all.some((m) => m.status === "proposed")).toBe(true);
+
+    await expect(api.createMemory({ text: "  " })).rejects.toThrow(/vuoto/);
+    await expect(api.createMemory({ text: "x", kind: "boh" as never })).rejects.toThrow(/tipo di ricordo/);
+    await expect(api.createMemory({ text: "x".repeat(1001) })).rejects.toThrow(/troppo lungo/);
+    await expect(api.memories({ status: "boh" as never })).rejects.toThrow(/stato non valido/);
+    await expect(api.updateMemory("mem_none", { text: "x" })).rejects.toThrow(/non trovato/);
+
+    const a = await api.createMemory({ text: "Ho   due gatti", kind: "about_you" });
+    expect(a).toMatchObject({ text: "Ho due gatti", status: "active", scope: "all", pinned: false });
+    expect((await api.createMemory({ text: "ho DUE gatti" })).id).toBe(a.id);
+
+    const found = await api.memories({ q: "gatt" });
+    expect(found.map((m) => m.id)).toEqual([a.id]);
+    expect(found[0].score).toBeGreaterThan(0);
+    expect((await api.memories({ q: "caffe" }))[0].text).toMatch(/caffè/);
+    expect(await api.memories({ q: "zebra" })).toEqual([]);
+
+    const u = await api.updateMemory(a.id, { text: "Ho tre gatti", pinned: true });
+    expect(u).toMatchObject({ text: "Ho tre gatti", pinned: true });
+    await expect(api.updateMemory(a.id, { kind: "boh" as never })).rejects.toThrow(/tipo/);
+
+    expect((await api.forgetMemory(a.id)).status).toBe("forgotten");
+    await expect(api.forgetMemory(a.id)).rejects.toThrow(/non è attivo/);
+    expect((await api.memories()).some((m) => m.id === a.id)).toBe(false);
+    expect((await api.memories({ status: "forgotten" })).map((m) => m.id)).toContain(a.id);
+    expect((await api.restoreMemory(a.id)).status).toBe("active");
+    await expect(api.restoreMemory(a.id)).rejects.toThrow(/non è dimenticato/);
+
+    const proposed = (await api.memories({ status: "proposed" }))[0];
+    await expect(api.approveMemory(a.id)).rejects.toThrow(/in attesa/);
+    expect((await api.approveMemory(proposed.id)).status).toBe("active");
+    const guess = await api.createMemory({ text: "Qualcosa di nuovo" });
+    await api.forgetMemory(guess.id);
+    await expect(api.rejectMemory(guess.id)).rejects.toThrow(/in attesa/);
+
+    await api.deleteMemory(a.id);
+    await expect(api.deleteMemory(a.id)).rejects.toThrow(/non trovato/);
+    const { deleted } = await api.deleteAllMemories();
+    expect(deleted).toBeGreaterThan(3);
+    expect(await api.memories({ status: "all" })).toEqual([]);
+  });
+
+  it("runs the Insegnante: saves memories through tool calls and announces each change", async () => {
+    const session = await api.createSession({ agent_id: "teacher" });
+    const before = (await api.memories()).length;
+    const events: { type: string; name?: string }[] = [];
+    const { run_id } = await api.startRun(session.id, "Mi chiamo Giulia e preferisco risposte brevi.");
+    await new Promise<void>((done) => {
+      const stop = api.subscribeRun(run_id, (e) => {
+        events.push(e as { type: string; name?: string });
+        if (e.type === "RUN_FINISHED") {
+          stop();
+          done();
+        }
+      });
+    });
+    expect(events.some((e) => e.type === "CUSTOM" && e.name === "aiw.memory")).toBe(true);
+    expect(events.some((e) => e.type === "TOOL_CALL_START")).toBe(true);
+    expect((await api.memories()).length).toBeGreaterThan(before);
+  });
+
   it("optimizes a prompt in the background and applies a variant only on request, like the engine does", async () => {
     await expect(api.startPromptOptimization("esempio", { agent: "fantasma" })).rejects.toThrow(/non trovato/);
     await expect(api.startPromptOptimization("nessuna", { agent: "operator" })).rejects.toThrow(/non trovata/);
@@ -449,7 +578,7 @@ describe("backend fixes in the demo", () => {
   it("lists the tools of the agent loop as internal, always on, and refuses to switch them (400)", async () => {
     const api = new MockTransport();
     const internal = (await api.tools()).filter((t) => t.source === "internal");
-    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "handoff", "render_ui", "skill", "team_state", "todo"]);
+    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "handoff", "memory_forget", "memory_save", "memory_search", "memory_update", "render_ui", "skill", "team_state", "todo"]);
     expect(internal.every((t) => t.enabled && t.available && t.risk === "read")).toBe(true);
     await expect(api.setToolEnabled("todo", false)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strumento interno") });
     await expect(api.setToolEnabled("nope", false)).rejects.toMatchObject({ status: 404 });

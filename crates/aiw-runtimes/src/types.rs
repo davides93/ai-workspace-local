@@ -168,6 +168,13 @@ pub trait ChatBackend: Send + Sync {
     async fn list_models(&self) -> Result<Vec<String>>;
     /// Streams a chat completion. Implementations must stop promptly when `cancel` fires.
     async fn chat(&self, req: ChatRequest, cancel: CancellationToken) -> Result<DeltaStream>;
+    /// Semantic vectors of `texts`, one per text, in order (`model` is the embedding model the
+    /// server should use). Not every runtime offers it: the default says so, and callers fall
+    /// back to keyword search.
+    async fn embed(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let _ = (model, texts);
+        Err(aiw_core::Error::Unsupported("questo runtime non calcola embedding".into()))
+    }
     /// For in-process engines that depend on something installed separately: why they cannot
     /// run yet (shown in the runtime list).
     fn availability(&self) -> std::result::Result<(), String> {

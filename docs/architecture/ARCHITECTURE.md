@@ -254,6 +254,22 @@ sequenceDiagram
   valido finisce in `RunFinished.result.json`. Lo schema non viene passato ai runtime come `response_format`.
 - **Contesto** (P10): un budget di token per profilo; oltre la soglia i turni più vecchi vengono
   riassunti con il modello attivo o con uno dedicato.
+- **Ruoli dei modelli** (`AgentProfile.roles`, `aiw_agent::roles`): di serie un run usa un solo profilo; con `roles`
+  (`"auto"` oppure `{plan, act, check, summarize}` con id di profilo, anche `auto:*`) il ciclo sceglie il modello a ogni
+  chiamata. `plan` = la prima chiamata e quella dopo un fallimento (gli stessi punti in cui `thinking: auto` si accende;
+  ragionamento acceso, modello più capace); `act` = le chiamate che proseguono dopo risultati riusciti (ragionamento spento,
+  anche un modello più veloce); `check` = un passaggio di verifica prima di dichiarare finito il run, solo se sono girati
+  strumenti che scrivono o agiscono (rischio write/exec/computer): risponde `PASS`/`FAIL` con una frase, su `FAIL` il ciclo
+  prosegue una sola volta con la frase come nota (`aiw.check`), contando contro il budget; `summarize` = compattazione del
+  contesto. La cronologia è una sola ed è nel formato neutro interno (`Msg`: `tool_calls` con id e argomenti JSON), che ogni
+  backend traduce nel template del proprio modello. Con `"auto"` decide l'engine (`adviser::plan_auto_roles`, funzione pura):
+  classi xs/s un solo modello; m il modello dell'agente più il più piccolo modello di chat installato per `summarize`, solo se
+  stanno in memoria insieme (stessa formula `fit_need`); l/xl un modello per `plan` (consigliere `reasoning`) e uno più
+  veloce o diverso per `act`, se stanno insieme; un dispositivo accoppiato di classe superiore può prendere `plan`.
+  Due ruoli che farebbero cambiare modello a un runtime che ne regge uno solo (`Registry::holds_one_model`: sidecar il
+  cui comando nomina il modello, motori in-process) si riducono a un modello solo per quel run
+  (`collapse_single_model_conflicts`): ricaricarlo a ogni cambio sarebbe peggio. Il motivo è nell'evento `aiw.roles`
+  (all'inizio del run); `aiw.model` dice per ogni chiamata ruolo e modello. Senza `roles` nulla di questo compare.
 - **Memoria e skill** (P11): `AGENTS.md` del workspace entra nel system prompt; le skill
   (`SKILL.md` con frontmatter `name`/`description`) sono elencate solo con la descrizione e il
   modello le carica su richiesta con il tool `skill`.
@@ -390,6 +406,41 @@ stesso è aggiornato in `workflow_runs`. All'avvio l'engine riprende i run `runn
 quindi un passo con effetti collaterali dovrebbe poter essere ripetuto), un'approvazione in attesa
 viene richiesta di nuovo, un run il cui workflow non esiste più diventa `failed`. L'audit registra
 `workflow.resume`.
+
+### 5.3 bis Assistente proattivo
+
+`aiw_engine::proactive`. Spento di serie (`proactive.level` = `off` | `propose` | `act_readonly`, chiavi a livello di
+macchina: il workspace non le cambia). Non agisce mai da solo: lascia **proposte** (tabella `proposals`: tipo
+`proposal` | `briefing`, titolo, cosa ha notato, istruzione pronta, origine, agente, stato
+`open|approved|dismissed|expired|done`, scadenza a 7 giorni) e solo l'approvazione avvia un run normale in una sessione
+nuova, con la policy dell'agente, collegando run e proposta.
+
+- **Battito**: fonti di risveglio = intervallo (`proactive.interval_minutes`, 30), ora del riepilogo
+  (`proactive.briefing_time`), promemoria della memoria scaduti e `POST /api/proactive/tick`. Le prime due riusano
+  `aiw_workflow::Scheduler::due` con workflow virtuali (interval, cron); l'orologio è un parametro
+  (`proactive_tick_at`) perché i test lo muovono. Un solo controllo alla volta (`try_lock`), idempotente (chiave di
+  origine per cosa notata: `reminder:<id>`, `files:<cartella>:<ts>`, `workflow_failed:<run>`, `approval:<id>`,
+  `briefing:<data>`). Saltato, con la ragione in `ProactiveStatus.skipped_reason`, a livello `off`, dopo il kill switch
+  (riparte reimpostando il livello), nell'orario di silenzio, a batteria con `only_on_power`, a budget giornaliero
+  finito, con un run in corso.
+- **Filtro**: contesto compatto (workflow falliti dall'ultimo controllo, conferme in attesa, file nuovi nelle
+  `proactive.watch_folders`, fino a 8 voci non ancora proposte); contesto vuoto = nessuna chiamata; una domanda sola,
+  risposta `{"act":true,"item":N}` o `{"act":false}`, al modello più piccolo adatto (ruolo `summarize` dei ruoli
+  automatici o scelta del consigliere). Su un runtime che regge un solo modello (`Registry::holds_one_model`) usa quello
+  già servito (`serving_model`), mai uno diverso. Una risposta non valida o un no non propongono nulla; un promemoria
+  scaduto diventa proposta senza modello.
+- **Run della proposta**: l'agente `proactive:<agente>` derivato dall'agente configurato: modalità plan, sandbox di sola
+  lettura, solo strumenti che leggono (rete solo con `act_readonly`), budget piccolo, schema di uscita
+  `{title, noticed, instruction}`; delle regole di policy restano solo i `deny`, le conferme sono negate da sole (un run
+  proattivo non blocca e non agisce).
+- **Riepilogo del mattino**: una proposta `briefing` al giorno, dai dati (promemoria, proposte aperte, lavori di ieri,
+  file nuovi), senza modello e senza connettori; vuoto = «Niente da segnalare per oggi.», già `done`, senza notifica.
+- **Notifiche**: `notices::NoticeTracker::on_proposals` (le proposte aperte all'avvio non sono notizie; nell'orario di
+  silenzio resta tutto in sospeso e si dice dopo); il guscio decide solo `app.notifications` e la finestra in primo piano.
+- **Connettori locali** (`aiw_tools::connectors`): quattro strumenti incorporati di sola lettura (`calendar_today`, `calendar_upcoming(days)`, `mail_recent(hours)`, `mail_search(query)`), registrati come gli altri (rischio `read`: la policy li tratta come `read_file` e i run delle proposte li possono usare) ma disponibili (`Tool::available`) solo con `connectors.calendar.enabled` / `connectors.mail.enabled`, spenti di serie e a livello di macchina. File e indirizzi vengono da `connectors.*.sources`, mai dagli argomenti del modello; il motore copia le impostazioni nel `ConnectorSettings` condiviso a ogni modifica. Calendario: parser iCalendar compatto (VEVENT, giorno intero, UTC, `TZID` da una tabella interna con regole dell'ora legale UE e USA, `EXDATE`, `RECURRENCE-ID`, RRULE DAILY/WEEKLY/MONTHLY/YEARLY con INTERVAL, COUNT, UNTIL e BYDAY settimanale; il resto mostra solo la prima occorrenza), file, cartelle e sottoscrizioni (scaricate con cache di 10 minuti). Posta: Maildir, `.mbox`, `.eml`, mai scritti né spostati. Il battito li legge in `connector_context`: gli eventi di oggi non finiti e la posta dall'ultimo controllo entrano nel riepilogo (dati, niente modello) e come voci del filtro (`calendar:<data>:<impronta>`, `mail:<data>`). IMAP e gli account online richiedono credenziali e restano lavoro futuro; un server MCP dell'utente funziona accanto agli strumenti incorporati.
+- **Background sul telefono** (`aiw_engine::background`): `Engine::proactive_background_tick(BackgroundRequest{reason, budget_s, on_power})`, esposto da `POST /api/proactive/background-tick`, riusa `proactive_tick_at` con un tetto duro di 25 s (`BackgroundSummary` con notifiche locali da mostrare). Senza modello locale fa le parti senza modello, delega il filtro a un peer accoppiato (`roles::peer_planner`) oppure lo salta (`TickResult.model_skipped`). Un registro statico del motore in esecuzione permette al sistema operativo di svegliare l'app senza runtime Tauri: in quel caso `run_background_blocking` costruisce un motore offline (`EngineOptions.offline`) dai percorsi salvati dal lato nativo (SharedPreferences, UserDefaults). Colla nativa nel plugin `tauri-plugin-aiw-native` (Android WorkManager, iOS BGTaskScheduler e App Intents) e comandi `aiw_background*` della shell; vedi `docs/mobile/BACKGROUND.md`. Non compilata in locale.
+- API: `GET /api/proposals?status=&kind=`, `GET /api/proposals/{id}`, `POST /api/proposals/{id}/approve|dismiss`,
+  `GET /api/proactive/status`, `POST /api/proactive/tick`.
 
 ### 5.4 Valutazione e tracce
 
@@ -606,6 +657,7 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run |
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
+| GET | `/api/proposals` · `/api/proposals/{id}` · POST `…/approve` `…/dismiss` · GET `/api/proactive/status` · POST `/api/proactive/tick` | Assistente proattivo |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
 | PUT/DELETE | `/api/sessions/{id}/messages/{mid}/feedback` · GET `/api/sessions/{id}/feedback` | Feedback sulle risposte |
 | GET/PUT/DELETE | `/api/evals[/{id}]` | Suite di valutazione (PUT: JSON della suite o `{"text": yaml|json}`; i grader `command` non si scrivono via API) |

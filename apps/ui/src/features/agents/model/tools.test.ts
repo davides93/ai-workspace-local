@@ -38,10 +38,10 @@ describe("categories", () => {
 });
 
 describe("catalogue", () => {
-  it("adds the seven internal tools that the backend does not list", () => {
+  it("adds the eleven internal tools that the backend does not list", () => {
     const names = buildCatalog(real).map((t) => t.name);
     for (const n of INTERNAL_NAMES) expect(names).toContain(n);
-    expect(INTERNAL_TOOLS).toHaveLength(7);
+    expect(INTERNAL_TOOLS).toHaveLength(11);
   });
 
   it("does not duplicate internal tools a catalogue (like the demo) already lists", () => {

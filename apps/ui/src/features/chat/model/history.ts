@@ -1,6 +1,6 @@
 import { RUN_ERROR_MESSAGE, type ChatMessage } from "../../../shared/api/types";
 import { A2UI_ACTION_NAME, applyA2ui, describeAction, renderUiToMessages } from "../a2ui";
-import { FORMAT_CHECK, formatCheckText, HANDOFF, handoffText, SELF_CHECK, selfCheckText, type Item, type ToolImage, type ToolItem } from "./items";
+import { CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, handoffText, SELF_CHECK, selfCheckText, type Item, type ToolImage, type ToolItem } from "./items";
 import { runErrorCode } from "./runNotice";
 import { resultStatus } from "./tools";
 
@@ -27,6 +27,9 @@ export function historyToItems(msgs: ChatMessage[], opts: HistoryOptions = {}): 
     } else if (m.role === "user" && m.name === SELF_CHECK) {
       const failed = [...m.content.matchAll(/^- ([\w.-]+):/gm)].map((x) => x[1]);
       items.push({ kind: "note", id: m.id, text: selfCheckText(failed) });
+    } else if (m.role === "user" && m.name === CHECK) {
+      const objection = /problema: ([^\n]+)/.exec(m.content)?.[1];
+      items.push({ kind: "note", id: m.id, text: checkText(false, objection) });
     } else if (m.role === "user" && m.name === FORMAT_CHECK) {
       const errors = [...m.content.matchAll(/^- (.+)$/gm)].map((x) => x[1]);
       items.push({ kind: "note", id: m.id, text: formatCheckText(errors) });

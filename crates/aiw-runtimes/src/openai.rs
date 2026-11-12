@@ -137,6 +137,28 @@ pub fn parse_chunk(v: &Value) -> Vec<ChatDelta> {
     out
 }
 
+/// The vectors of an `/v1/embeddings` answer, in the order of the inputs (`index`), checked: one
+/// non-empty vector per input, all of the same length.
+fn parse_embeddings(v: &Value, expected: usize) -> Result<Vec<Vec<f32>>> {
+    let data = v["data"].as_array().ok_or_else(|| Error::Runtime("risposta embedding senza `data`".into()))?;
+    let mut items: Vec<(u64, Vec<f32>)> = Vec::with_capacity(data.len());
+    for (pos, d) in data.iter().enumerate() {
+        let vec: Vec<f32> = d["embedding"]
+            .as_array()
+            .ok_or_else(|| Error::Runtime("embedding non numerico (formato base64 non supportato)".into()))?
+            .iter()
+            .filter_map(|x| x.as_f64().map(|f| f as f32))
+            .collect();
+        items.push((d["index"].as_u64().unwrap_or(pos as u64), vec));
+    }
+    items.sort_by_key(|(i, _)| *i);
+    let out: Vec<Vec<f32>> = items.into_iter().map(|(_, e)| e).collect();
+    if out.len() != expected || out.iter().any(|e| e.is_empty() || e.len() != out[0].len()) {
+        return Err(Error::Runtime(format!("embedding inattesi: {} vettori per {expected} testi", out.len())));
+    }
+    Ok(out)
+}
+
 /// Incremental Server-Sent-Events line parser (handles frames split across network chunks).
 #[derive(Default)]
 pub struct SseParser {
@@ -173,6 +195,30 @@ impl ChatBackend for OpenAiBackend {
         }
         let v: Value = res.json().await.map_err(|e| Error::Runtime(e.to_string()))?;
         Ok(v["data"].as_array().map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect()).unwrap_or_default())
+    }
+
+    async fn embed(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        let model = self.model_override.as_deref().unwrap_or(model);
+        let res = self
+            .auth(self.http.post(format!("{}/embeddings", self.base)))
+            .timeout(Duration::from_secs(60))
+            .json(&json!({"model": model, "input": texts}))
+            .send()
+            .await
+            .map_err(|e| Error::Runtime(format!("runtime non raggiungibile ({}): {e}", self.base)))?;
+        let status = res.status();
+        if matches!(status.as_u16(), 404 | 405 | 501) {
+            return Err(Error::Unsupported("questo server non offre gli embedding".into()));
+        }
+        if !status.is_success() {
+            let text = res.text().await.unwrap_or_default();
+            return Err(Error::Runtime(format!("{status}: {}", text.chars().take(500).collect::<String>())));
+        }
+        let v: Value = res.json().await.map_err(|e| Error::Runtime(e.to_string()))?;
+        parse_embeddings(&v, texts.len())
     }
 
     async fn chat(&self, mut req: ChatRequest, cancel: CancellationToken) -> Result<DeltaStream> {
@@ -243,6 +289,38 @@ mod tests {
         assert!(p.feed(b"data: {\"a\":").is_empty());
         let out = p.feed(b"1}\n\ndata: [DONE]\n\n");
         assert_eq!(out, vec!["{\"a\":1}".to_string(), "[DONE]".to_string()]);
+    }
+
+    #[test]
+    fn embeddings_answers_are_ordered_and_checked() {
+        let ok = json!({"data": [{"index": 1, "embedding": [0.0, 1.0]}, {"index": 0, "embedding": [1.0, 0.0]}]});
+        assert_eq!(parse_embeddings(&ok, 2).unwrap(), vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        assert!(parse_embeddings(&ok, 3).is_err(), "wrong count");
+        assert!(parse_embeddings(&json!({"data": [{"embedding": [1.0]}, {"embedding": [1.0, 2.0]}]}), 2).is_err(), "ragged");
+        assert!(parse_embeddings(&json!({"data": [{"embedding": "AAAA"}]}), 1).is_err(), "base64");
+        assert!(parse_embeddings(&json!({}), 1).is_err());
+    }
+
+    #[tokio::test]
+    async fn embed_posts_to_v1_embeddings_and_maps_missing_endpoints_to_unsupported() {
+        use axum::{routing::post, Json, Router};
+        let app = Router::new().route(
+            "/v1/embeddings",
+            post(|Json(b): Json<Value>| async move {
+                assert_eq!(b["model"], "m");
+                let n = b["input"].as_array().unwrap().len();
+                Json(json!({"data": (0..n).map(|i| json!({"index": i, "embedding": [i as f64, 1.0]})).collect::<Vec<_>>()}))
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        let b = OpenAiBackend::new(format!("http://{addr}/v1"), None, Duration::from_secs(5));
+        let got = b.embed("m", &["a".into(), "b".into()]).await.unwrap();
+        assert_eq!(got, vec![vec![0.0, 1.0], vec![1.0, 1.0]]);
+        assert!(b.embed("m", &[]).await.unwrap().is_empty());
+        let missing = OpenAiBackend::new(format!("http://{addr}/gone/v1"), None, Duration::from_secs(5));
+        assert!(matches!(missing.embed("m", &["a".into()]).await, Err(Error::Unsupported(_))));
     }
 
     fn backend(style: ThinkingStyle, budget_field: Option<&str>) -> OpenAiBackend {

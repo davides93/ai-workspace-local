@@ -18,7 +18,7 @@ use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use extract::{Json, Path, Query};
 use futures::stream::{self, Stream, StreamExt};
@@ -144,6 +144,12 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/lessons", get(lessons))
         .route("/api/lessons/{id}/approve", post(approve_lesson))
         .route("/api/lessons/{id}/reject", post(reject_lesson))
+        .route("/api/memories", get(memories).post(create_memory).delete(delete_all_memories))
+        .route("/api/memories/{id}", patch(patch_memory).delete(delete_memory))
+        .route("/api/memories/{id}/forget", post(forget_memory))
+        .route("/api/memories/{id}/restore", post(restore_memory))
+        .route("/api/memories/{id}/approve", post(approve_memory))
+        .route("/api/memories/{id}/reject", post(reject_memory))
         .route("/api/sessions/{id}/active-run", get(active_run))
         .route("/api/sessions/{id}/runs", post(start_run))
         .route("/api/sessions/{id}/checkpoints", get(session_checkpoints))
@@ -154,6 +160,13 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/runs/{id}/events.json", get(run_events_json))
         .route("/api/approvals", get(approvals))
         .route("/api/approvals/{id}", post(respond_approval))
+        .route("/api/proposals", get(proposals))
+        .route("/api/proposals/{id}", get(proposal))
+        .route("/api/proposals/{id}/approve", post(approve_proposal))
+        .route("/api/proposals/{id}/dismiss", post(dismiss_proposal))
+        .route("/api/proactive/status", get(proactive_status))
+        .route("/api/proactive/tick", post(proactive_tick))
+        .route("/api/proactive/background-tick", post(proactive_background_tick))
         .route("/api/workflows", get(workflows))
         .route("/api/workflows/runs", get(workflow_runs))
         .route("/api/workflows/{id}", put(save_workflow).delete(delete_workflow))
@@ -609,6 +622,98 @@ async fn approve_lesson(State(s): State<AppState>, Path(id): Path<String>, body:
 }
 async fn reject_lesson(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Lesson> {
     ok(s.engine.reject_lesson(&id)?)
+}
+#[derive(Deserialize)]
+struct ProposalsQuery {
+    /// open | approved | dismissed | expired | done; absent = all.
+    status: Option<String>,
+    /// proposal | briefing; absent = both.
+    kind: Option<String>,
+}
+async fn proposals(State(s): State<AppState>, Query(q): Query<ProposalsQuery>) -> ApiResult<Vec<Proposal>> {
+    ok(s.engine.proposals(q.status.as_deref(), q.kind.as_deref())?)
+}
+async fn proposal(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Proposal> {
+    ok(s.engine.proposal(&id)?)
+}
+/// The body is optional: `{"instruction": "..."}` runs the edited instruction instead of the proposed one.
+async fn approve_proposal(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<ProposalApprove>>) -> ApiResult<Proposal> {
+    ok(s.engine.proposal_approve(&id, body.and_then(|b| b.0.instruction).as_deref()).await?)
+}
+async fn dismiss_proposal(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Proposal> {
+    ok(s.engine.proposal_dismiss(&id)?)
+}
+async fn proactive_status(State(s): State<AppState>) -> ApiResult<ProactiveStatus> {
+    ok(s.engine.proactive_status())
+}
+/// The check woken by the operating system of a phone: the same tick under a hard time budget, answered with a
+/// summary small enough for a local notification. The body is optional (`reason`, `budget_s`, `on_power`).
+async fn proactive_background_tick(State(s): State<AppState>, body: Option<Json<BackgroundRequest>>) -> ApiResult<BackgroundSummary> {
+    ok(s.engine.proactive_background_tick(&body.map(|b| b.0).unwrap_or_default()).await?)
+}
+/// Wakes the assistant once, now (the same gates as the heartbeat apply: off, quiet hours, budget, power).
+async fn proactive_tick(State(s): State<AppState>) -> ApiResult<TickResult> {
+    ok(s.engine.proactive_tick(aiw_engine::proactive::Wake::Manual).await?)
+}
+#[derive(Deserialize)]
+struct MemoriesQuery {
+    /// active | proposed | forgotten | all; absent = active and proposed.
+    status: Option<String>,
+    kind: Option<String>,
+    /// Search text: the answer is ranked by relevance and carries a `score`.
+    q: Option<String>,
+}
+async fn memories(State(s): State<AppState>, Query(q): Query<MemoriesQuery>) -> ApiResult<Value> {
+    let text = q.q.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    let Some(text) = text else {
+        return ok(serde_json::to_value(s.engine.memories(q.status.as_deref(), q.kind.as_deref())?).unwrap_or(Value::Null));
+    };
+    let statuses: Vec<&str> = match q.status.as_deref().filter(|x| !x.is_empty()) {
+        None => vec!["active", "proposed"],
+        Some("all") => vec!["active", "proposed", "forgotten"],
+        Some(x @ ("active" | "proposed" | "forgotten")) => vec![x],
+        Some(x) => return Err(Error::Invalid(format!("stato non valido «{x}»: usa active, proposed, forgotten o all")).into()),
+    };
+    let mut hits = s.engine.memory_search(text, None, &statuses, 50).await?;
+    if let Some(k) = q.kind.as_deref().filter(|k| !k.is_empty()) {
+        hits.retain(|h| h.memory.kind == k);
+    }
+    ok(serde_json::to_value(hits).unwrap_or(Value::Null))
+}
+async fn create_memory(State(s): State<AppState>, Json(b): Json<MemoryCreate>) -> ApiResult<Memory> {
+    ok(s.engine.memory_create(b)?)
+}
+async fn patch_memory(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<MemoryPatch>) -> ApiResult<Memory> {
+    ok(s.engine.memory_update(&id, b)?)
+}
+/// Soft delete: `restore` brings it back.
+async fn forget_memory(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Memory> {
+    ok(s.engine.memory_forget(&id)?)
+}
+async fn restore_memory(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Memory> {
+    ok(s.engine.memory_restore(&id)?)
+}
+async fn approve_memory(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Memory> {
+    ok(s.engine.memory_approve(&id)?)
+}
+async fn reject_memory(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Memory> {
+    ok(s.engine.memory_reject(&id)?)
+}
+async fn delete_memory(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.memory_delete(&id)?;
+    ok(json!({}))
+}
+#[derive(Deserialize)]
+struct DeleteAllMemories {
+    /// Must be `true`: there is no way back.
+    #[serde(default)]
+    confirm: bool,
+}
+async fn delete_all_memories(State(s): State<AppState>, Query(q): Query<DeleteAllMemories>) -> ApiResult<Value> {
+    if !q.confirm {
+        return Err(Error::Invalid("per cancellare tutti i ricordi aggiungi ?confirm=true".into()).into());
+    }
+    ok(json!({"deleted": s.engine.memory_delete_all()?}))
 }
 #[derive(Deserialize, Default)]
 struct ReflectBody {
@@ -1212,9 +1317,13 @@ mod tests_eval;
 #[cfg(test)]
 mod tests_learning;
 #[cfg(test)]
+mod tests_memory;
+#[cfg(test)]
 mod tests_models;
 #[cfg(test)]
 mod tests_optimize;
+#[cfg(test)]
+mod tests_proactive;
 #[cfg(test)]
 mod tests_recommend;
 #[cfg(test)]

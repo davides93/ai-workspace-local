@@ -182,6 +182,15 @@ impl RunHost for EngineHost {
         Ok(if out.final_text.is_empty() { "(nessuna risposta)".into() } else { out.final_text })
     }
 
+    fn memory_enabled(&self) -> bool {
+        // An evaluation run (nobody can answer) must not leave anything in the person's memory.
+        !self.deny_approvals && self.engine.memory_enabled()
+    }
+
+    async fn memory_tool(&self, input: &RunInput, name: &str, args: &Value) -> Result<String> {
+        self.engine.memory_tool(&input.thread_id, &input.agent.id, name, args).await
+    }
+
     fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {
         if agent_id.starts_with(crate::REMOTE_PREFIX) {
             return Err(Error::Denied("la conversazione non può passare a un agente remoto: delegagli il lavoro".into()));

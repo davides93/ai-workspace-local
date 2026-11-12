@@ -473,7 +473,18 @@ export interface AgentProfile {
   budget?: BudgetLimits;
   /** Profiles the router may choose from, one per run, when the setting `routing.bandit` is on. */
   candidate_profiles?: string[];
+  /** Models by role inside one run. Absent: one model (`inference_profile`) for everything. */
+  roles?: AgentRoles;
 }
+
+/** The four jobs a model can have inside one run (plan, act, check, summarize). */
+export type ModelRole = "plan" | "act" | "check" | "summarize";
+
+/** Profile id of each role (an `auto:*` id is allowed); a role left out uses the agent's own profile. */
+export type RoleProfiles = Partial<Record<ModelRole, string>>;
+
+/** `"auto"`: the engine decides from the device class; an object: the profile of each role. */
+export type AgentRoles = "auto" | RoleProfiles;
 
 /** What the bandit router knows about a candidate profile: the rewards (thumbs, evaluation tasks) it earned. */
 export interface RoutingCandidate {
@@ -630,6 +641,61 @@ export interface Lesson {
   created_at: string;
   decided_at?: string;
 }
+
+/** What a memory is about (crates/aiw-engine/src/memory.rs `KINDS`). */
+export type MemoryKind = "about_you" | "preference" | "how_to_work" | "fact" | "reminder";
+/** active: in use. proposed: the assistant guessed it, waiting for the user. forgotten: soft-deleted, can be restored. */
+export type MemoryStatus = "active" | "proposed" | "forgotten";
+
+/** Something the assistant remembers, stored on this device only. */
+export interface Memory {
+  id: string;
+  text: string;
+  kind: MemoryKind;
+  /** `all` (every assistant) or the id of one agent. */
+  scope: string;
+  /** Pinned memories are always in the prompt ("Ricorda sempre"). */
+  pinned: boolean;
+  session_id?: string;
+  created_at: string;
+  updated_at: string;
+  last_used_at?: string;
+  /** When a reminder is due (RFC 3339). */
+  due_at?: string;
+  status: MemoryStatus;
+  has_embedding?: boolean;
+  /** Only in search results: the fused rank score, higher is better. */
+  score?: number;
+}
+
+/** Body of `POST /api/memories`: active at once. */
+export interface MemoryCreate {
+  text: string;
+  kind?: MemoryKind;
+  scope?: string;
+  pinned?: boolean;
+  due_at?: string;
+}
+
+/** Body of `PATCH /api/memories/{id}`: only the given fields change; an empty `due_at` clears the date. */
+export interface MemoryPatch {
+  text?: string;
+  kind?: MemoryKind;
+  scope?: string;
+  pinned?: boolean;
+  due_at?: string;
+}
+
+/** Filters of `GET /api/memories`; no `status` = active and proposed. */
+export interface MemoryQuery {
+  status?: MemoryStatus | "all";
+  kind?: MemoryKind;
+  /** Search text: the answer is ranked by relevance. */
+  q?: string;
+}
+
+/** Longest memory text the engine accepts (characters). */
+export const MAX_MEMORY_CHARS = 1000;
 
 /** Limits of the engine on what the user can edit before approving. */
 export const MAX_LESSON_TITLE_CHARS = 120;
@@ -1135,4 +1201,104 @@ export interface AdapterInfo {
   metrics?: Record<string, unknown>;
   format: "mlx" | "peft" | "gguf";
   job_id?: string;
+}
+
+// ---- proactive assistant (crates/aiw-engine/src/proactive.rs)
+
+export type ProposalKind = "proposal" | "briefing";
+export type ProposalStatus = "open" | "approved" | "dismissed" | "expired" | "done";
+
+/** What the assistant noticed and what it would do. It never acts by itself: approving starts a normal run. */
+export interface Proposal {
+  id: string;
+  kind: ProposalKind;
+  title: string;
+  /** What was noticed, in plain words. */
+  noticed: string;
+  /** What the assistant would do, ready to run (empty for a briefing). */
+  instruction: string;
+  /** `reminder:<id>`, `workflow_failed:<run>`, `files:<folder>:<ts>`, `approval:<id>`, `briefing:<date>`… */
+  source: string;
+  agent_id: string;
+  status: ProposalStatus;
+  created_at: string;
+  expires_at: string;
+  decided_at?: string;
+  /** The run and session an approval started. */
+  run_id?: string;
+  session_id?: string;
+}
+
+export interface ProposalQuery {
+  status?: ProposalStatus;
+  kind?: ProposalKind;
+}
+
+export type ProactiveLevel = "off" | "propose" | "act_readonly";
+
+export interface TickResult {
+  wake: "interval" | "briefing" | "reminder" | "manual";
+  outcome: "proposed" | "nothing" | "skipped";
+  reason?: string;
+  proposals: string[];
+  model_called: boolean;
+  /** Why the model step was left out (no model here and no paired device answering). */
+  model_skipped?: string;
+  /** Name of the paired device that answered the filter instead of a model on this one. */
+  delegated_to?: string;
+  at: string;
+}
+
+/** `POST /api/proactive/background-tick` body: a check woken by the phone's operating system. */
+export interface BackgroundRequest {
+  reason?: "interval" | "briefing" | "shortcut";
+  /** Hard time budget in seconds (default 25). */
+  budget_s?: number;
+  on_power?: boolean;
+}
+
+export interface LocalNotice {
+  title: string;
+  body: string;
+}
+
+/** What a background check did, small enough for a local notification. */
+export interface BackgroundSummary {
+  reason: "interval" | "briefing" | "shortcut";
+  outcome: "proposed" | "nothing" | "skipped";
+  new_proposals: number;
+  briefing?: string;
+  model_step: "ran" | "delegated" | "skipped" | "not_needed";
+  /** Why the model step was skipped, or the device it went to. */
+  model_note?: string;
+  skipped_reason?: string;
+  notification?: LocalNotice;
+  timed_out: boolean;
+  elapsed_ms: number;
+  at: string;
+}
+
+/** The phone side of the background checks (WorkManager, BGTaskScheduler), as the native plugin reports it. */
+export interface BackgroundStatus {
+  platform: "android" | "ios" | "desktop";
+  /** False on the desktop: the app stays alive in the tray instead. */
+  supported: boolean;
+  notifications: "granted" | "denied" | "not_determined" | "unsupported";
+  /** A periodic check is waiting for the system to run it. */
+  scheduled: boolean;
+  /** A sentence about what the system promises (it decides when the checks run). */
+  detail?: string;
+}
+
+export interface ProactiveStatus {
+  level: ProactiveLevel;
+  last_tick?: TickResult;
+  /** Why the last tick could not run (quiet hours, budget, power, kill switch…). */
+  skipped_reason?: string;
+  next_wake?: string;
+  budget_used_minutes: number;
+  budget_minutes: number;
+  open_proposals: number;
+  stopped_by_kill_switch: boolean;
+  on_power?: boolean;
 }

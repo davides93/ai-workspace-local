@@ -16,7 +16,8 @@ import { useModels, useRecommend } from "../models/api";
 import { autoProfileFromAdvice } from "../models/model/adviser";
 import { canReason } from "../../shared/lib/thinking";
 import { useLessons } from "../learning/api";
-import { pendingFor } from "../learning/model/lessons";
+import { RememberCard } from "../learning/components/RememberCard";
+import { memoryPendingFor, pendingFor } from "../learning/model/lessons";
 import { useTeams } from "../teams/api";
 import { teamAsAgent, teamIdOf } from "../teams/model/teams";
 import { useConfig } from "../settings/api";
@@ -108,7 +109,10 @@ export function ChatView() {
   const conv = useConversation(openId, { onGone: gone, thinking: reasons ? thinking : undefined });
   const feedback = useFeedback(openId, conv.items, conv.running);
   // After a thumbs down the agent may have proposed a lesson: point to it.
-  const lessonToReview = pendingFor(useLessons("pending").data, openId);
+  const pendingLessons = useLessons("pending").data;
+  // A memory lesson is a small card in the conversation; a skill lesson still points to the Panoramica.
+  const memoryToConfirm = memoryPendingFor(pendingLessons, openId);
+  const lessonToReview = memoryToConfirm ? undefined : pendingFor(pendingLessons, openId);
   const [input, setInput] = useDraft(openId);
   const [focusTick, setFocusTick] = useState(0);
   const [showSessions, setShowSessions] = useState(false);
@@ -217,6 +221,7 @@ export function ChatView() {
           <ConversationLog
             ref={log} items={conv.items} state={logState} onRetry={listFailed ? () => void sessions.refetch() : conv.reload} busy={conv.running} respondingId={conv.respondingId}
             onRespond={conv.respond} onAction={conv.sendAction} notice={notice} sessionKey={openId} feedback={feedback}
+            footer={memoryToConfirm && !conv.running ? <RememberCard key={memoryToConfirm.id} lesson={memoryToConfirm} /> : undefined}
             empty={<ChatEmpty onPick={(text) => { setInput(text); setFocusTick((n) => n + 1); }} />}
           />
         )}

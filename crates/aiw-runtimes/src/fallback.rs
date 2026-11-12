@@ -32,6 +32,10 @@ impl ChatBackend for FallbackBackend {
         self.primary.list_models().await
     }
 
+    async fn embed(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.primary.embed(model, texts).await
+    }
+
     async fn chat(&self, req: ChatRequest, cancel: CancellationToken) -> Result<DeltaStream> {
         let first_error = match self.primary.chat(req.clone(), cancel.clone()).await {
             Ok(mut stream) => match stream.next().await {

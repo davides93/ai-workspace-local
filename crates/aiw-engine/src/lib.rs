@@ -2,17 +2,21 @@
 
 pub mod a2a_client;
 pub mod adviser;
+pub mod background;
 mod dataset;
 pub mod defaults;
 pub mod eval;
 mod host;
 mod learning;
+pub mod memory;
 mod models;
 pub mod notices;
 pub mod optimize;
 pub mod pairing;
 pub mod peers;
+pub mod proactive;
 pub mod reward;
+mod roles;
 pub mod routing;
 mod secrets;
 pub mod store;
@@ -123,6 +127,8 @@ pub(crate) struct Inner {
     pub resolver: aiw_runtimes::ModelResolver,
     pub models_dir: PathBuf,
     pub tools: Arc<ToolRegistry>,
+    /// What the settings say about the calendar and mail connectors (read by their tools).
+    pub connectors: aiw_tools::connectors::Shared,
     pub browser: Arc<BrowserManager>,
     pub native_stt: RwLock<Option<Arc<dyn voice::NativeStt>>>,
     pub mcp: tokio::sync::Mutex<HashMap<String, Arc<McpClient>>>,
@@ -133,9 +139,13 @@ pub(crate) struct Inner {
     pub session_allow: Mutex<HashMap<String, Arc<Mutex<HashSet<String>>>>>,
     /// Sessions a reflection is being made for (see `learning`).
     pub reflecting: Mutex<HashSet<String>>,
+    /// A background pass that computes memory embeddings is running (see `memory`).
+    pub embedding_busy: std::sync::atomic::AtomicBool,
     pub bus: broadcast::Sender<RunEventMsg>,
     pub workflow_runs: Mutex<Vec<WorkflowRun>>,
     pub scheduler: Mutex<aiw_workflow::Scheduler>,
+    /// The proactive assistant's heartbeat (see `proactive`).
+    pub proactive: proactive::ProactiveRuntime,
     pub token: String,
     pub pairing: Mutex<(String, Instant)>,
     /// Failed-attempt limiter of the pairing endpoint.
@@ -194,7 +204,8 @@ impl Engine {
 
         let tools = Arc::new(ToolRegistry::default());
         let browser = Arc::new(BrowserManager::new(dirs.root.join("browser-profile")));
-        aiw_tools::register_builtins(&tools, browser.clone());
+        let connectors = aiw_tools::connectors::ConnectorSettings::new(Default::default());
+        aiw_tools::register_builtins(&tools, browser.clone(), connectors.clone());
         if let Some(d) = store.get_doc::<Vec<String>>("tool_settings", "disabled")? {
             tools.set_disabled(d);
         }
@@ -251,6 +262,7 @@ impl Engine {
             runtimes,
             models,
             tools,
+            connectors,
             browser,
             native_stt: Default::default(),
             mcp: Default::default(),
@@ -260,9 +272,11 @@ impl Engine {
             approvals: Default::default(),
             session_allow: Default::default(),
             reflecting: Default::default(),
+            embedding_busy: Default::default(),
             bus,
             workflow_runs: Default::default(),
             scheduler: Default::default(),
+            proactive: Default::default(),
             token,
             pairing: Mutex::new((random_digits(6), Instant::now())),
             pair_guard: Default::default(),
@@ -274,6 +288,7 @@ impl Engine {
         if !opts.offline {
             engine.0.runtimes.refresh().await;
         }
+        engine.sync_connectors();
         training_tool::register(&engine);
         engine.seed()?;
         engine.resume_workflows();
@@ -298,6 +313,11 @@ impl Engine {
         }
         if s.list_docs::<AgentProfile>("agent")?.is_empty() {
             for a in defaults::agents() {
+                s.put_doc("agent", &a.id, &a)?;
+            }
+        }
+        for a in defaults::agents().into_iter().filter(|a| defaults::LATE_AGENTS.contains(&a.id.as_str())) {
+            if s.get_doc::<AgentProfile>("agent", &a.id)?.is_none() {
                 s.put_doc("agent", &a.id, &a)?;
             }
         }
@@ -372,6 +392,7 @@ impl Engine {
                     tracing::info!(workflow = %id, "scheduled trigger");
                     let _ = e.run_workflow(&id, Map::new(), "workflow").await;
                 }
+                e.proactive_pass();
                 if tick % 3 == 0 {
                     e.0.runtimes.refresh().await;
                 }
@@ -542,6 +563,7 @@ impl Engine {
         for token in &training {
             token.cancel();
         }
+        self.proactive_killed();
         let sidecars = self.0.runtimes.stop_all().await;
         let browser = self.0.browser.close().await;
         let detail = format!(
@@ -673,6 +695,20 @@ impl Engine {
         let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
         adviser::advise(&self.device(), &local, &self.catalog(), &avail)
     }
+    /// The adviser's answer from the models already known (no disk scan), as used at the start
+    /// of every run.
+    pub(crate) fn live_local_models(&self) -> Vec<LocalModel> {
+        let mut local = self.0.models.read().unwrap().clone();
+        let system = self.available_system_models();
+        local.retain(|m| !system.iter().any(|s| s.id == m.id));
+        local.extend(system);
+        self.local_enrichment(local)
+    }
+    pub(crate) fn live_recommendations(&self) -> aiw_core::api::Recommendations {
+        let local = self.live_local_models();
+        let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
+        adviser::advise(&self.device(), &local, &aiw_models::builtin_catalog(), &avail)
+    }
     /// What `auto:<task>` stands for right now. Looks at the models already known (no disk scan:
     /// this runs at the start of every run) and the runtimes' current state.
     ///
@@ -682,13 +718,7 @@ impl Engine {
     /// conflict the person can fix, like a profile without a model.
     pub fn resolve_auto_profile(&self, task: aiw_core::api::AdviserTask) -> Result<InferenceProfile> {
         use aiw_core::api::AdviserTask;
-        let mut local = self.0.models.read().unwrap().clone();
-        let system = self.available_system_models();
-        local.retain(|m| !system.iter().any(|s| s.id == m.id));
-        local.extend(system);
-        let local = self.local_enrichment(local);
-        let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
-        let rec = adviser::advise(&self.device(), &local, &aiw_models::builtin_catalog(), &avail);
+        let rec = self.live_recommendations();
         if let Some(p) = adviser::auto_profile(task, &rec) {
             return Ok(p);
         }
@@ -755,6 +785,14 @@ impl Engine {
             )));
         }
         routing::check_candidates(self, &a)?;
+        if let Some(AgentRoles::Custom(rp)) = &a.roles {
+            for role in ModelRole::ALL {
+                let Some(id) = rp.get(role) else { continue };
+                if adviser::parse_auto_profile(id).is_none() && self.0.store.get_doc::<InferenceProfile>("profile", id)?.is_none() {
+                    return Err(Error::Invalid(format!("ruoli: il profilo «{id}» del ruolo {} non esiste", role.as_str())));
+                }
+            }
+        }
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
     }
@@ -804,6 +842,9 @@ impl Engine {
     /// other strategies have no model in charge, so they run under a neutral profile that never
     /// narrows the members: the widest mode and sandbox among them.
     pub(crate) fn session_agent(&self, agent_id: &str) -> Result<(AgentProfile, Option<TeamDef>)> {
+        if let Some(base) = agent_id.strip_prefix(proactive::PROACTIVE_PREFIX) {
+            return Ok((self.proactive_agent(base)?, None));
+        }
         let Some(team_id) = agent_id.strip_prefix(TEAM_PREFIX) else { return Ok((self.agent(agent_id)?, None)) };
         let team = self.team(team_id)?;
         let locals: Vec<AgentProfile> = team
@@ -841,6 +882,7 @@ impl Engine {
                     output_schema: None,
                     budget: None,
                     candidate_profiles: vec![],
+                    roles: None,
                 }
             }
         };
@@ -1037,7 +1079,7 @@ impl Engine {
     pub fn create_session_with(&self, agent_id: &str, title: Option<String>, isolation: Option<&str>) -> Result<Session> {
         match agent_id.strip_prefix(TEAM_PREFIX) {
             Some(team_id) => self.team(team_id).map(|_| ())?,
-            None => self.agent(agent_id).map(|_| ())?,
+            None => self.agent(agent_id.strip_prefix(proactive::PROACTIVE_PREFIX).unwrap_or(agent_id)).map(|_| ())?,
         }
         let now = now_rfc3339();
         let mut s = Session {
@@ -1337,6 +1379,8 @@ impl Engine {
             .collect();
         let agent_budget = agent.budget.clone().unwrap_or_default();
         let thinking = self.thinking_for(&profile, None);
+        // Models by role: only for the run the person started, never for a sub-agent.
+        let roles = if depth == 0 { self.resolve_roles(&agent, &profile) } else { None };
         RunInput {
             run_id: run_id.into(),
             thread_id: thread_id.into(),
@@ -1363,6 +1407,7 @@ impl Engine {
             shared: Default::default(),
             root_run: run_id.into(),
             thinking,
+            roles,
         }
     }
 
@@ -1514,6 +1559,15 @@ impl Engine {
         let mut run_input =
             self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
         run_input.thinking = mode;
+        // A proactive run cannot be talked into more than reading: only `deny` rules survive (an `allow` rule
+        // would lift plan mode) and nobody is there to answer a confirmation.
+        let proactive_run = session.agent_id.starts_with(proactive::PROACTIVE_PREFIX);
+        if proactive_run {
+            run_input.policy.rules.retain(|r| r.action == "deny");
+        }
+        // What the assistant remembers: pinned notes and the ones that match this message.
+        let memory = self.memory_prompt(&run_input.agent.id, &run_input.user_input).await;
+        run_input.system_extra.extend(memory);
         if let Some(team) = &team {
             self.apply_team(&mut run_input, team);
         }
@@ -1521,7 +1575,8 @@ impl Engine {
         let rid = run_id.clone();
         let (from_name, from_mode) = (run_input.agent.name.clone(), run_input.policy.mode.clone());
         tokio::spawn(async move {
-            let host = Arc::new(EngineHost::new(engine.clone(), Some(session.id.clone()), None));
+            let host = EngineHost::new(engine.clone(), Some(session.id.clone()), None);
+            let host = Arc::new(if proactive_run { host.denying_approvals() } else { host });
             // What the run produced is stored whatever its outcome: when it was cancelled or failed
             // its files were still written and its commands run, and the next turn must know.
             // (`new_messages[0]` is the user message, stored above.)
@@ -1991,6 +2046,12 @@ impl Engine {
             ));
         }
         self.0.config.set(Layer::parse(layer)?, key, value)?;
+        if key == "proactive.level" {
+            self.proactive_level_set();
+        }
+        if key.starts_with("connectors.") {
+            self.sync_connectors();
+        }
         if key == "workspace.root" {
             if let Some(p) = self.0.config.get_str("workspace.root") {
                 let root = aiw_core::paths::expand_home(&p);
@@ -2350,6 +2411,8 @@ mod tests;
 #[cfg(test)]
 mod tests_auto;
 #[cfg(test)]
+mod tests_background;
+#[cfg(test)]
 mod tests_eval;
 #[cfg(test)]
 mod tests_hardening;
@@ -2358,7 +2421,13 @@ mod tests_inference;
 #[cfg(test)]
 mod tests_learning;
 #[cfg(test)]
+mod tests_memory;
+#[cfg(test)]
 mod tests_optimize;
+#[cfg(test)]
+mod tests_proactive;
+#[cfg(test)]
+mod tests_roles;
 #[cfg(test)]
 mod tests_routing;
 #[cfg(test)]
