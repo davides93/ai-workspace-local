@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AI Workspace Local",
-  "version": "0.5.0-beta.7",
+  "version": "0.5.0-beta.8",
   "identifier": "dev.aiworkspace.local",
   "build": {
     "frontendDist": "../../ui/dist",
@@ -43,15 +43,15 @@
     },
     "android": {
       "minSdkVersion": 26,
-      "versionCode": 5008
+      "versionCode": 5010
     },
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "bundleVersion": "5009"
+      "bundleVersion": "5010"
     },
     "iOS": {
       "minimumSystemVersion": "17.0",
-      "bundleVersion": "5008",
+      "bundleVersion": "5010",
       "frameworks": ["Accelerate"]
     }
   }
