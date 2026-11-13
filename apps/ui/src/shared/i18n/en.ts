@@ -25,6 +25,7 @@ import { mcpEn } from "./messages/en/mcp";
 import { modelsEn } from "./messages/en/models";
 import { navEn } from "./messages/en/nav";
 import { pairingEn } from "./messages/en/pairing";
+import { runtimesEn } from "./messages/en/runtimes";
 import { securityEn } from "./messages/en/security";
 import { settingsEn } from "./messages/en/settings";
 import { shellEn } from "./messages/en/shell";
@@ -50,6 +51,7 @@ export const en: Record<MessageKey, string> = {
   ...modelsEn,
   ...navEn,
   ...pairingEn,
+  ...runtimesEn,
   ...securityEn,
   ...settingsEn,
   ...shellEn,

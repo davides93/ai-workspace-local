@@ -10,6 +10,7 @@ import { RuntimeDrawer } from "./components/RuntimeDrawer";
 import { filterRuntimes, groupByKind, KIND_META, runtimeCounts, type Scope } from "./model/runtimes";
 import "./runtimes.css";
 
+import { t, tNode } from "../../shared/i18n";
 /** `#/runtimes/:runtimeId?` — the runtime catalog by kind; the drawer opens when the URL names a runtime. */
 export function RuntimesView() {
   const rts = useRuntimes({ poll: true });
@@ -31,38 +32,38 @@ export function RuntimesView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Inferenza" title="Runtime"
-        subtitle={rts.data ? `${counts.running} attivi · ${counts.usable} utilizzabili qui · ${counts.total} nel catalogo` : "Motori che eseguono i modelli"}
+        eyebrow={t("nav.group_inference")} title={t("runtimes.runtime")}
+        subtitle={rts.data ? t("runtimes.attivi_utilizzabili_qui_nel_catalogo", { running: counts.running, usable: counts.usable, total: counts.total }) : t("runtimes.motori_che_eseguono_i_modelli")}
         actions={(
           <Button icon="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending} aria-busy={refresh.isPending}>
-            {refresh.isPending ? "Rilevo…" : "Rileva"}
+            {refresh.isPending ? t("runtimes.rilevo") : t("runtimes.rileva")}
           </Button>
         )}
       />
       <div className="row filters rtv-toolbar">
-        <Field label="Cerca" htmlFor="rt-search" className="grow rtv-search">
-          <Input id="rt-search" type="search" placeholder="Nome, produttore, acceleratore o formato" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <Field label={t("runtimes.cerca")} htmlFor="rt-search" className="grow rtv-search">
+          <Input id="rt-search" type="search" placeholder={t("runtimes.nome_produttore_acceleratore_o_formato")} value={query} onChange={(e) => setQuery(e.target.value)} />
         </Field>
         <div className="field">
-          <span className="field-label" id="rt-scope-label">Mostra</span>
+          <span className="field-label" id="rt-scope-label">{t("runtimes.mostra")}</span>
           <Segmented
-            label="Quali runtime mostrare" value={scope} onChange={setScope}
-            options={[{ id: "here", label: "Su questo device" }, { id: "all", label: "Tutto il catalogo" }]}
+            label={t("runtimes.quali_runtime_mostrare")} value={scope} onChange={setScope}
+            options={[{ id: "here", label: t("runtimes.su_questo_device") }, { id: "all", label: t("runtimes.tutto_il_catalogo") }]}
           />
         </div>
       </div>
 
-      <QueryState query={rts} isEmpty={(l) => l.length === 0} empty={<EmptyState icon="chip" title="Nessun runtime nel catalogo" description="Premi Rileva per cercare i runtime installati su questo computer." action={<Button icon="refresh" onClick={() => refresh.mutate()}>Rileva</Button>} />}>
+      <QueryState query={rts} isEmpty={(l) => l.length === 0} empty={<EmptyState icon="chip" title={t("runtimes.nessun_runtime_nel_catalogo")} description={t("runtimes.premi_rileva_per_cercare_i")} action={<Button icon="refresh" onClick={() => refresh.mutate()}>{t("runtimes.rileva")}</Button>} />}>
         {(list) => {
           const groups = groupByKind(filterRuntimes(list, { scope, query }));
           if (groups.length === 0) {
             return (
               <EmptyState
-                icon="search" title="Nessun runtime corrisponde"
-                description={scope === "here" ? "I runtime non supportati da questo device sono nascosti." : "Prova con un altro termine di ricerca."}
+                icon="search" title={t("runtimes.nessun_runtime_corrisponde")}
+                description={scope === "here" ? t("runtimes.i_runtime_non_supportati_da") : t("runtimes.prova_con_un_altro_termine")}
                 action={<>
-                  {scope === "here" && <Button onClick={() => setScope("all")}>Mostra tutto il catalogo</Button>}
-                  {query && <Button variant="ghost" onClick={() => setQuery("")}>Cancella la ricerca</Button>}
+                  {scope === "here" && <Button onClick={() => setScope("all")}>{t("runtimes.mostra_tutto_il_catalogo")}</Button>}
+                  {query && <Button variant="ghost" onClick={() => setQuery("")}>{t("runtimes.cancella_la_ricerca")}</Button>}
                 </>}
               />
             );
@@ -85,15 +86,14 @@ export function RuntimesView() {
       </QueryState>
 
       <p className="faint text-sm rtv-note">
-        <Icon name="info" size={14} /> Ogni runtime è un manifest JSON: per aggiungerne uno basta creare un file in <code>~/.aiw/runtimes/</code>, compare qui con le sue impostazioni.
-      </p>
+        <Icon name="info" size={14} /> {tNode("runtimes.ogni_runtime_e_un_manifest", { code: <code>~/.aiw/runtimes/</code> })}</p>
 
       {runtimeId && opened && (
         <RuntimeDrawer key={opened.id} runtime={opened} models={models.data ?? []} deviceAccels={deviceAccels} onClose={closeDrawer} />
       )}
       {runtimeId && !opened && rts.data && (
-        <Sheet title="Runtime non trovato" onClose={closeDrawer} footer={<Button onClick={closeDrawer}>Torna al catalogo</Button>}>
-          <p>Nessun runtime ha l'id <code>{runtimeId}</code>. Forse il manifest è stato rimosso: premi Rileva per aggiornare l'elenco.</p>
+        <Sheet title={t("runtimes.runtime_non_trovato")} onClose={closeDrawer} footer={<Button onClick={closeDrawer}>{t("runtimes.torna_al_catalogo")}</Button>}>
+          <p>{tNode("runtimes.no_runtime_with_id", { id: <code>{runtimeId}</code> })}</p>
         </Sheet>
       )}
     </Page>

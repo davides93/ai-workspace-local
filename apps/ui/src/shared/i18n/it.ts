@@ -16,6 +16,7 @@ import { mcpIt } from "./messages/it/mcp";
 import { modelsIt } from "./messages/it/models";
 import { navIt } from "./messages/it/nav";
 import { pairingIt } from "./messages/it/pairing";
+import { runtimesIt } from "./messages/it/runtimes";
 import { securityIt } from "./messages/it/security";
 import { settingsIt } from "./messages/it/settings";
 import { shellIt } from "./messages/it/shell";
@@ -41,6 +42,7 @@ export const it = {
   ...modelsIt,
   ...navIt,
   ...pairingIt,
+  ...runtimesIt,
   ...securityIt,
   ...settingsIt,
   ...shellIt,
