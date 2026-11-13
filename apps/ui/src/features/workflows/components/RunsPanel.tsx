@@ -3,7 +3,7 @@ import { formatDateTime, formatDuration, relTime } from "../../../shared/lib/for
 import type { WorkflowRun } from "../../../shared/api/types";
 import { runSeconds } from "../model/triggers";
 
-import { t } from "../../../shared/i18n";
+import { t, tNode } from "../../../shared/i18n";
 /** Number of steps finished out of the total, and the first one that failed. */
 export function runProgress(run: WorkflowRun): { done: number; total: number; failed?: string } {
   return {
@@ -41,7 +41,7 @@ export function RunsPanel({ runs, selectedId, onOpen, onRun, runDisabled }: {
               <StatusPill status={r.status} />
               <span className="run-meta">
                 <span className="mono text-xs">{r.id}</span>
-                {r.parent_run_id && <span className="faint text-xs">sotto-workflow di <span className="mono">{r.parent_run_id}</span></span>}
+                {r.parent_run_id && <span className="faint text-xs">{tNode("workflows.run_parent_inline", { id: <span className="mono">{r.parent_run_id}</span> })}</span>}
                 <span className="faint text-xs" title={formatDateTime(r.started_at)}>{relTime(r.started_at)}{secs !== null ? ` · ${formatDuration(secs)}` : ""}</span>
               </span>
               <span className="run-steps text-xs num">{t("workflows.steps_done", { done: p.done, total: p.total })}{p.failed ? <span className="run-failed">{" "}{t("workflows.non_riuscito", { failed: p.failed })}</span> : null}</span>

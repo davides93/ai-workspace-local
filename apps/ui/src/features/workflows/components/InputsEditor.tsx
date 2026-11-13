@@ -26,7 +26,7 @@ export function InputsEditor({ rows, setRows, issues }: {
                 <Field label={t("workflows.valore_predefinito_dell_input", { number: i + 1 })} htmlFor={`in-${uid}-value`} className="input-value">
                   <Input id={`in-${uid}-value`} mono={r.json} value={r.value} placeholder="~/Download" spellCheck={false} onChange={(e) => patch(uid, { value: e.target.value })} />
                 </Field>
-                <label className="check-inline text-xs input-json" title="Numero, vero/falso, elenco o oggetto: il valore resta JSON invece di diventare testo">
+                <label className="check-inline text-xs input-json" title={t("workflows.input_json_title")}>
                   <input type="checkbox" checked={r.json} onChange={(e) => patch(uid, { json: e.target.checked })} /> {t("workflows.json")}</label>
                 <IconButton aria-label={t("workflows.rimuovi_l_input", { name: r.key || i + 1 })} icon="trash" size={16} onClick={() => setRows((all) => all.filter((x) => x.uid !== uid))} />
                 {mine.map((x) => <p key={x.message} className="field-error input-error" role="alert">{x.message}</p>)}

@@ -146,4 +146,6 @@ export const evalsEn: Record<keyof typeof evalsIt, string> = {
   "evals.verdict_applied": "Variant {number} applied to the agent's prompt.",
   "evals.verdict_none": "No variant beats the current prompt: there is nothing to apply.",
   "evals.verdict_best": "Variant {number} beats the current prompt: you can apply it to the agent.",
+  "evals.blank_suite_name": "New suite",
+  "evals.blank_suite_prompt": "Create note.md containing hello",
 };

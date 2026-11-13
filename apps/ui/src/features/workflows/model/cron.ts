@@ -1,4 +1,4 @@
-import { t as tr } from "../../../shared/i18n";
+import { t as tr, tFields } from "../../../shared/i18n";
 // 5-field cron as the backend reads it (crates/aiw-workflow/src/schedule.rs): `min hour day month weekday`,
 // weekday 0 or 7 = Sunday, 1 = Monday. The backend's `cron` crate requires day-of-month AND weekday to match
 // when both are restricted (unlike Vixie cron, which accepts either). The scheduler evaluates the expression in the
@@ -30,11 +30,11 @@ interface Spec {
 }
 
 const SPECS: Spec[] = [
-  { label: "minuti", min: 0, max: 59, nameBase: 0 },
-  { label: "ore", min: 0, max: 23, nameBase: 0 },
-  { label: "giorno del mese", min: 1, max: 31, nameBase: 1 },
-  { label: "mese", min: 1, max: 12, names: MONTHS, nameBase: 1 },
-  { label: "giorno della settimana", min: 0, max: 7, names: DAYS, nameBase: 0 },
+  tFields({ min: 0, max: 59, nameBase: 0 }, { label: "workflows.cron_field_minutes" }),
+  tFields({ min: 0, max: 23, nameBase: 0 }, { label: "workflows.cron_field_hours" }),
+  tFields({ min: 1, max: 31, nameBase: 1 }, { label: "workflows.cron_field_day_of_month" }),
+  tFields({ min: 1, max: 12, names: MONTHS, nameBase: 1 }, { label: "workflows.cron_field_month" }),
+  tFields({ min: 0, max: 7, names: DAYS, nameBase: 0 }, { label: "workflows.cron_field_day_of_week" }),
 ];
 
 function value(token: string, spec: Spec): number {
@@ -78,11 +78,11 @@ function parseField(text: string, spec: Spec): Set<number> {
   return out;
 }
 
-/** Parses a 5-field expression; the error says which field is wrong, in Italian. */
+/** Parses a 5-field expression; the error says which field is wrong. */
 export function parseCron(expr: string): CronResult {
   const parts = expr.trim().split(/\s+/).filter(Boolean);
   if (parts.length !== 5) {
-    return { ok: false, error: `Servono 5 campi (minuto ora giorno mese giorno-settimana), ce ne sono ${parts.length}.` };
+    return { ok: false, error: tr("workflows.cron_need_5_fields", { count: parts.length }) };
   }
   try {
     const [minute, hour, day, month, weekday] = parts.map((p, i) => parseField(p, SPECS[i]));
@@ -93,7 +93,7 @@ export function parseCron(expr: string): CronResult {
     }
     return { ok: true, fields: { minute, hour, day, month, weekday, raw: parts as CronFields["raw"] } };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Espressione cron non valida." };
+    return { ok: false, error: e instanceof Error ? e.message : tr("workflows.cron_invalid") };
   }
 }
 
@@ -130,27 +130,28 @@ export function nextCronRun(expr: string, after: Date, maxDays = 366 * 5): Date 
   return null;
 }
 
-const DAY_NAMES = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
+const dayNames = (): string[] => [tr("workflows.day_sunday"), tr("workflows.day_monday"), tr("workflows.day_tuesday"), tr("workflows.day_wednesday"), tr("workflows.day_thursday"), tr("workflows.day_friday"), tr("workflows.day_saturday")];
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** Plain-Italian reading of the common shapes (`0 8 * * 1-5` → "Giorni feriali alle 08:00"); null for anything else. */
+/** Plain-language reading of the common shapes (`0 8 * * 1-5` → "Giorni feriali alle 08:00"); null for anything else. */
 export function describeCron(expr: string): string | null {
   const r = parseCron(expr);
   if (!r.ok) return null;
   const [m, h, d, mo, w] = r.fields.raw;
   const fixed = (s: string) => /^\d+$/.test(s);
-  if (m.startsWith("*/") && h === "*" && d === "*" && mo === "*" && w === "*" && /^\d+$/.test(m.slice(2))) return `Ogni ${m.slice(2)} minuti`;
-  if (m === "0" && h.startsWith("*/") && d === "*" && mo === "*" && w === "*" && /^\d+$/.test(h.slice(2))) return `Ogni ${h.slice(2)} ore`;
+  if (m.startsWith("*/") && h === "*" && d === "*" && mo === "*" && w === "*" && /^\d+$/.test(m.slice(2))) return tr("workflows.cron_every_minutes", { n: m.slice(2) });
+  if (m === "0" && h.startsWith("*/") && d === "*" && mo === "*" && w === "*" && /^\d+$/.test(h.slice(2))) return tr("workflows.cron_every_hours", { n: h.slice(2) });
   if (!fixed(m) || !fixed(h) || mo !== "*") return null;
-  const at = `alle ${pad(Number(h))}:${pad(Number(m))}`;
-  if (d === "*" && w === "*") return `Ogni giorno ${at}`;
+  const at = tr("workflows.cron_at", { hour: pad(Number(h)), minute: pad(Number(m)) });
+  const DAY_NAMES = dayNames();
+  if (d === "*" && w === "*") return tr("workflows.cron_every_day", { at });
   if (d === "*") {
     const days = [...r.fields.weekday].sort((a, b) => a - b);
-    if (days.join() === "1,2,3,4,5") return `Giorni feriali ${at}`;
-    if (days.join() === "0,6") return `Sabato e domenica ${at}`;
-    if (days.length === 1) return `Ogni ${DAY_NAMES[days[0]]} ${at}`;
-    return `${days.map((x) => DAY_NAMES[x].slice(0, 3)).join(", ")} ${at}`;
+    if (days.join() === "1,2,3,4,5") return tr("workflows.cron_weekdays", { at });
+    if (days.join() === "0,6") return tr("workflows.cron_weekend", { at });
+    if (days.length === 1) return tr("workflows.cron_every_weekday", { day: DAY_NAMES[days[0]], at });
+    return tr("workflows.cron_days_list", { days: days.map((x) => DAY_NAMES[x].slice(0, 3)).join(", "), at });
   }
-  if (w === "*" && fixed(d)) return `Il ${Number(d)} di ogni mese ${at}`;
+  if (w === "*" && fixed(d)) return tr("workflows.cron_day_of_month", { day: Number(d), at });
   return null;
 }

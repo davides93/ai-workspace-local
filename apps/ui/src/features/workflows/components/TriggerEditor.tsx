@@ -72,7 +72,7 @@ export function TriggerEditor({ trigger, onChange, issues, workflowId, savedSecr
               <Icon name="refresh" size={14} />
               <span>
                 {describeCron(trigger.expr) ?? tr("workflows.pianificazione_personalizzata")}
-                {enabled && next ? <> — prossima esecuzione <b>{formatDateTime(next)}</b></> : null}
+                {enabled && next ? <>{trNode("workflows.next_run_prefix", { when: <b>{formatDateTime(next)}</b> })}</> : null}
                 {!enabled && <span className="muted">{" "}{tr("workflows.il_workflow_e_disattivato_quindi")}</span>}
                 {enabled && !next && <span className="muted">{" "}{tr("workflows.nessuna_esecuzione_prevista")}</span>}
               </span>
@@ -97,7 +97,7 @@ export function TriggerEditor({ trigger, onChange, issues, workflowId, savedSecr
           </div>
           {issue(issues, "amount")?.level === "warn" && <p className="row-warn">{issue(issues, "amount")?.message}</p>}
           <p className="faint text-xs">
-            Il conteggio parte all'avvio del servizio (non prima di {MIN_INTERVAL_S} secondi).
+            {tr("workflows.interval_note", { seconds: MIN_INTERVAL_S })}
             {last && seconds > 0 && enabled && <>{" "}{tr("workflows.ultima_esecuzione", { time: formatDateTime(last) })}</>}
           </p>
         </div>

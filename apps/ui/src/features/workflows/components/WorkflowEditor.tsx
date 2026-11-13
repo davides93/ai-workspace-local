@@ -17,7 +17,7 @@ import { RunDialog } from "./RunDialog";
 import { RunDrawer } from "./RunDrawer";
 import { RunsPanel } from "./RunsPanel";
 
-import { t as tr } from "../../../shared/i18n";
+import { t as tr, tNode as trNode } from "../../../shared/i18n";
 type DetailTab = "editor" | "runs" | "advanced";
 export const NEW_WORKFLOW = "new";
 
@@ -54,7 +54,7 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
     if (!wfs.data) return undefined;
     if (!isNew) return list.find((w) => w.id === workflowId);
     const source = from ? list.find((w) => w.id === from) : undefined;
-    const id = uniqueSlug(slugify(source ? `copia ${source.name}` : "workflow", "workflow"), list.map((w) => w.id));
+    const id = uniqueSlug(slugify(source ? tr("workflows.copy_slug", { name: source.name }) : "workflow", "workflow"), list.map((w) => w.id));
     const plain = source ? copyOf(plainFromDef(source), id, list.map((w) => w.name)) : blankWorkflow(id, { agent: agents.data?.[0]?.id });
     return defFromPlain(plain);
   }, [wfs.data, list, workflowId, isNew, from, agents.data]);
@@ -119,7 +119,7 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
     <div className="stack stack-lg">
       <Panel
         title={<>
-          <Link to="/workflows" className="md-back only-phone" aria-label="Torna ai workflow"><Icon name="back" size={16} /> {tr("workflows.workflow")}</Link>
+          <Link to="/workflows" className="md-back only-phone" aria-label={tr("workflows.back_to_workflows")}><Icon name="back" size={16} /> {tr("workflows.workflow")}</Link>
           <span className="wf-title">{plain.name.trim() || (isNew ? tr("workflows.nuovo_workflow") : tr("workflows.senza_nome"))}</span>
         </>}
         actions={!isNew && <div className="detail-actions">
@@ -129,7 +129,7 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
           </label>
           <Link to={`/workflows/new?from=${encodeURIComponent(saved.id)}`} className="btn"><Icon name="copy" size={15} /> {tr("workflows.duplica")}</Link>
           <Button variant="danger" icon="trash" onClick={() => setConfirmDelete(true)}>{tr("workflows.elimina")}</Button>
-          <Button variant="primary" icon="play" onClick={runNow} disabled={dirty || run.isPending} title={dirty ? "Salva le modifiche prima di eseguire" : undefined}>{tr("workflows.esegui_ora")}</Button>
+          <Button variant="primary" icon="play" onClick={runNow} disabled={dirty || run.isPending} title={dirty ? tr("workflows.save_before_run") : undefined}>{tr("workflows.esegui_ora")}</Button>
         </div>}
       >
         {dirty && !isNew && <p className="faint text-sm mb-3">{tr("workflows.esegui_ora_usa_la_versione")}</p>}
@@ -164,7 +164,7 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
           onCancel={() => { setConfirmDelete(false); del.reset(); }}
           onConfirm={() => del.mutate(saved.id, { onSuccess: () => { setConfirmDelete(false); guard.go("/workflows", { replace: true }); } })}
         >
-          <p>Vuoi eliminare <b>{saved.name}</b>? I suoi trigger smettono di funzionare e l'azione non si può annullare.</p>
+          <p>{trNode("workflows.confirm_delete", { name: <b>{saved.name}</b> })}</p>
         </DecisionDialog>
       )}
     </div>

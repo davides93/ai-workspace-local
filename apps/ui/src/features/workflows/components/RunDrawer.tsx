@@ -16,12 +16,12 @@ export function RunDrawer({ run, workflow, onClose }: { run: WorkflowRun; workfl
     <Drawer title={t("workflows.esecuzione")} subtitle={`${workflow?.name ?? run.workflow_id} · ${run.id}`} onClose={onClose}>
       <div className="run-summary">
         <KeyValue items={[
-          ["Stato", <StatusPill key="s" status={run.status} />],
-          ["Avviata", formatDateTime(run.started_at)],
-          run.parent_run_id ? ["Sotto-workflow di", <span key="p" className="mono">{run.parent_run_id}</span>] : false,
-          run.finished_at ? ["Conclusa", formatDateTime(run.finished_at)] : false,
-          secs !== null && ["Durata", `${formatDuration(secs)}${active ? " finora" : ""}`],
-          ["Passi", `${p.done} di ${p.total} completati`],
+          [t("workflows.run_status"), <StatusPill key="s" status={run.status} />],
+          [t("workflows.run_started"), formatDateTime(run.started_at)],
+          run.parent_run_id ? [t("workflows.run_parent"), <span key="p" className="mono">{run.parent_run_id}</span>] : false,
+          run.finished_at ? [t("workflows.run_finished"), formatDateTime(run.finished_at)] : false,
+          secs !== null && [t("workflows.run_duration"), `${formatDuration(secs)}${active ? t("workflows.run_so_far") : ""}`],
+          [t("workflows.passi"), t("workflows.run_steps_done", { done: p.done, total: p.total })],
         ]} />
         {active && (
           <p className="row text-sm" role="status">

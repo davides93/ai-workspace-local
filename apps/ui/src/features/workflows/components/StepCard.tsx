@@ -12,9 +12,9 @@ function IdField({ uid, index, value, taken, onCommit }: { uid: number; index: n
   const id = text.trim();
   const problem =
     id === value || id === "" && value === "" ? null
-    : id === "" ? "L'identificativo non può essere vuoto."
-    : !STEP_ID.test(id) ? "Solo lettere, cifre, «_» e «-»."
-    : taken.includes(id) ? "Già usato da un altro passo."
+    : id === "" ? t("workflows.id_empty")
+    : !STEP_ID.test(id) ? t("workflows.id_chars")
+    : taken.includes(id) ? t("workflows.id_taken")
     : null;
   return (
     <div className="step-id">

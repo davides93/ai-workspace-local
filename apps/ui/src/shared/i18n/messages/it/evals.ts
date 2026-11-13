@@ -144,4 +144,6 @@ export const evalsIt = {
   "evals.verdict_applied": "Applicata la variante {number} al prompt dell'agente.",
   "evals.verdict_none": "Nessuna variante batte il prompt attuale: non c'è nulla da applicare.",
   "evals.verdict_best": "La variante {number} batte il prompt attuale: puoi applicarla all'agente.",
+  "evals.blank_suite_name": "Nuova suite",
+  "evals.blank_suite_prompt": "Crea note.md con scritto ciao",
 } as const;

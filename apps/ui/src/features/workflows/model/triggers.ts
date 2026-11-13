@@ -1,5 +1,6 @@
 import type { WorkflowRun, WorkflowTrigger } from "../../../shared/api/types";
 import { describeCron, nextCronRun } from "./cron";
+import { t as tr, tFields } from "../../../shared/i18n";
 
 /** The scheduler never fires an interval faster than this (`seconds.max(30)` in schedule.rs). */
 export const MIN_INTERVAL_S = 30;
@@ -19,24 +20,24 @@ export const joinInterval = (amount: number, unit: IntervalUnit): number => Math
 
 export function intervalLabel(seconds: number): string {
   const { amount, unit } = splitInterval(seconds);
-  return `Ogni ${amount} ${unit === "s" ? "s" : unit === "min" ? "min" : amount === 1 ? "ora" : "h"}`;
+  return tr("workflows.every_interval", { amount, unit: unit === "s" ? "s" : unit === "min" ? "min" : amount === 1 ? tr("workflows.unit_hour") : "h" });
 }
 
 export const TRIGGER_KINDS: { kind: WorkflowTrigger["kind"]; label: string; hint: string }[] = [
-  { kind: "manual", label: "Manuale", hint: "Parte solo quando premi «Esegui ora» o lo chiama un altro programma." },
-  { kind: "cron", label: "Pianificato (cron)", hint: "A orari fissi, con la sintassi cron a 5 campi." },
-  { kind: "interval", label: "A intervalli", hint: "Ogni tot minuti o ore, a partire dall'avvio del servizio." },
-  { kind: "file", label: "Quando un file cambia", hint: "Controlla la data di modifica di un file o di una cartella." },
-  { kind: "webhook", label: "Webhook", hint: "Parte quando un servizio esterno chiama l'indirizzo del workflow con il segreto." },
+  tFields({ kind: "manual" as const }, { label: "workflows.trigger_manual", hint: "workflows.trigger_manual_hint" }),
+  tFields({ kind: "cron" as const }, { label: "workflows.trigger_cron", hint: "workflows.trigger_cron_hint" }),
+  tFields({ kind: "interval" as const }, { label: "workflows.trigger_interval", hint: "workflows.trigger_interval_hint" }),
+  tFields({ kind: "file" as const }, { label: "workflows.trigger_file", hint: "workflows.trigger_file_hint" }),
+  tFields({ kind: "webhook" as const }, { label: "workflows.trigger_webhook", hint: "workflows.trigger_webhook_hint" }),
 ];
 
 export function triggerLabel(t: WorkflowTrigger): string {
   switch (t.kind) {
-    case "manual": return "Manuale";
+    case "manual": return tr("workflows.trigger_manual");
     case "interval": return intervalLabel(t.seconds);
-    case "cron": return describeCron(t.expr) ?? `Cron ${t.expr}`;
-    case "file": return `Quando cambia ${t.path}`;
-    case "webhook": return "Webhook";
+    case "cron": return describeCron(t.expr) ?? tr("workflows.cron_label", { expr: t.expr });
+    case "file": return tr("workflows.file_changed", { path: t.path });
+    case "webhook": return tr("workflows.trigger_webhook");
   }
 }
 
@@ -57,20 +58,20 @@ export function summarizeTrigger(t: WorkflowTrigger, opts: { enabled: boolean; l
   const label = triggerLabel(t);
   const now = opts.now ?? new Date();
   if (!opts.enabled) {
-    return { label, note: t.kind === "manual" || t.kind === "webhook" ? undefined : "Disattivato: non parte da solo" };
+    return { label, note: t.kind === "manual" || t.kind === "webhook" ? undefined : tr("workflows.note_disabled") };
   }
   switch (t.kind) {
     case "cron": {
       const next = nextCronRun(t.expr, now);
-      return next ? { label, next } : { label, note: "Nessuna esecuzione prevista" };
+      return next ? { label, next } : { label, note: tr("workflows.note_no_run") };
     }
     case "interval": {
       const every = Math.max(MIN_INTERVAL_S, t.seconds) * 1000;
       const last = opts.lastRun ? new Date(opts.lastRun.started_at).getTime() : Number.NaN;
-      if (Number.isNaN(last)) return { label, note: "Prima esecuzione dopo l'avvio del servizio" };
+      if (Number.isNaN(last)) return { label, note: tr("workflows.note_first_run") };
       let next = last + every;
       if (next <= now.getTime()) next += (Math.floor((now.getTime() - next) / every) + 1) * every;
-      return { label, next: new Date(next), note: "stima dall'ultima esecuzione" };
+      return { label, next: new Date(next), note: tr("workflows.note_estimate") };
     }
     default:
       return { label };

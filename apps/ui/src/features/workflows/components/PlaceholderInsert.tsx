@@ -39,8 +39,8 @@ export function PlaceholderInsert({ targetId, value, onChange, before, inputKeys
         {before.length > 0 && <optgroup label={t("workflows.risultato_come_json_aggiungi_campo")}>{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.json}}`}>{`{{steps.${s.id}.json}}`}</option>)}</optgroup>}
         {before.length > 0 && <optgroup label={t("workflows.errore_di_un_passo_che")}>{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.error}}`}>{`{{steps.${s.id}.error}}`}</option>)}</optgroup>}
         <optgroup label={t("workflows.altro")}>
-          <option value="{{now}}">{"{{now}}"} · data e ora</option>
-          <option value="{{inputs.payload}}">{"{{inputs.payload}}"} · corpo del webhook</option>
+          <option value="{{now}}">{"{{now}}"} · {t("workflows.placeholder_now")}</option>
+          <option value="{{inputs.payload}}">{"{{inputs.payload}}"} · {t("workflows.placeholder_payload")}</option>
         </optgroup>
       </Select>
       {quoted && <span className="faint text-xs">{t("workflows.nel_json_mettilo_tra_virgolette")}</span>}

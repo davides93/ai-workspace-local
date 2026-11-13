@@ -45,7 +45,7 @@ export function EditorTab({ draft, setDraft, issues, catalog, workflowId, savedS
         />
       </FormSection>
 
-      <FormSection id="inputs" title={tr("workflows.input")} hint="Valori predefiniti, citabili con {{inputs.nome}}.">
+      <FormSection id="inputs" title={tr("workflows.input")} hint={tr("workflows.inputs_hint", { example: `{{inputs.${tr("workflows.example_input")}}}` })}>
         <InputsEditor rows={draft.inputs} setRows={(u) => setDraft((d) => ({ ...d, inputs: typeof u === "function" ? u(d.inputs) : u }))} issues={issues} />
       </FormSection>
 

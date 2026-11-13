@@ -66,7 +66,7 @@ export function ToolFields({ step, uid, issues, catalog, before, inputKeys, onCh
           {names.map((x) => <option key={x.name} value={x.name}>{x.name}{x.enabled ? "" : tr("workflows.disattivato")}</option>)}
         </Select>
       </Field>
-      <Field label={tr("workflows.argomenti_json")} htmlFor={`st-${uid}-args`} error={a.error} hint={a.hint ?? (params.length ? <>Parametri: {params.map((p) => <Chip key={p.name} title={p.required ? "Obbligatorio" : "Facoltativo"}>{p.name}{p.required ? "*" : ""}</Chip>)}</> : tr("workflows.un_oggetto_json_puoi_usare"))}>
+      <Field label={tr("workflows.argomenti_json")} htmlFor={`st-${uid}-args`} error={a.error} hint={a.hint ?? (params.length ? <>{trNode("workflows.parameters", { chips: <>{params.map((p) => <Chip key={p.name} title={p.required ? tr("workflows.param_required") : tr("workflows.param_optional")}>{p.name}{p.required ? "*" : ""}</Chip>)}</> })}</> : tr("workflows.un_oggetto_json_puoi_usare"))}>
         <Textarea id={`st-${uid}-args`} rows={4} className="mono" spellCheck={false} value={step.args} onChange={(e) => onChange({ ...step, args: e.target.value })} aria-invalid={!!a.error} />
         <PlaceholderInsert targetId={`st-${uid}-args`} value={step.args} onChange={(v) => onChange({ ...step, args: v })} before={before} inputKeys={inputKeys} quoted />
       </Field>
@@ -146,7 +146,7 @@ export function ForeachFields({ step, uid, issues, before, inputKeys, onChange }
       </Field>
       <InlineJson
         id={`st-${uid}-body`} label={tr("workflows.passo_da_ripetere_json")} value={step.body} rows={7} issues={issues} field="body" onChange={(body) => onChange({ ...step, body })}
-        hint={<>Un passo <code>tool</code>, <code>agent</code> o <code>llm</code>. Usa <code>{"{{item}}"}</code>, <code>{"{{item.campo}}"}</code> e <code>{"{{index}}"}</code>.</>}
+        hint={<>{trNode("workflows.foreach_hint", { tool: <code>tool</code>, agent: <code>agent</code>, llm: <code>llm</code>, item: <code>{"{{item}}"}</code>, itemField: <code>{`{{item.${tr("workflows.example_field")}}}`}</code>, index: <code>{"{{index}}"}</code> })}</>}
       />
     </>
   );
@@ -156,7 +156,7 @@ export function ParallelFields({ step, uid, issues, onChange }: Props<"parallel"
   return (
     <InlineJson
       id={`st-${uid}-steps`} label={tr("workflows.passi_da_eseguire_insieme_json")} value={step.steps} rows={10} issues={issues} field="steps" onChange={(steps) => onChange({ ...step, steps })}
-      hint={<>Un elenco di passi <code>tool</code>, <code>agent</code> o <code>llm</code>. L'output di ognuno è anche <code>{"{{steps.<id>.output}}"}</code>.</>}
+      hint={<>{trNode("workflows.parallel_hint", { tool: <code>tool</code>, agent: <code>agent</code>, llm: <code>llm</code>, output: <code>{"{{steps.<id>.output}}"}</code> })}</>}
     />
   );
 }
@@ -269,7 +269,7 @@ export function OptionsFields({ opts, uid, issues, onChange }: { opts?: StepOpti
         <Field label={tr("workflows.limite_di_tempo_s")} htmlFor={`st-${uid}-timeout`} error={err("timeout_s")} hint={tr("workflows.per_ogni_tentativo_vuoto_nessun")}>
           <Input id={`st-${uid}-timeout`} type="number" min={1} max={OPTION_LIMITS.timeout} value={o.timeout_s ?? ""} onChange={(e) => set({ timeout_s: num(e.target.value) })} aria-invalid={!!err("timeout_s")} />
         </Field>
-        <Field label={tr("workflows.se_il_passo_fallisce")} htmlFor={`st-${uid}-onerror`} hint="Con «prosegui» l'errore è in {{steps.<id>.error}}">
+        <Field label={tr("workflows.se_il_passo_fallisce")} htmlFor={`st-${uid}-onerror`} hint={tr("workflows.on_error_hint", { placeholder: "{{steps.<id>.error}}" })}>
           <Select id={`st-${uid}-onerror`} value={o.on_error ?? "fail"} onChange={(e) => set({ on_error: e.target.value === "continue" ? "continue" : "fail" })}>
             <option value="fail">{tr("workflows.ferma_il_workflow")}</option>
             <option value="continue">{tr("workflows.prosegui_con_i_passi_successivi")}</option>

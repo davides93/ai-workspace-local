@@ -3,9 +3,9 @@ import type { Issue } from "../model/draft";
 
 import { t } from "../../../shared/i18n";
 const where = (i: Issue): string => {
-  if (i.scope === "step") return `Passo ${(i.step ?? 0) + 1}`;
-  if (i.scope === "inputs") return `Input ${(i.step ?? 0) + 1}`;
-  return { meta: "Generale", trigger: "Trigger", steps: "Passi", inputs: "Input" }[i.scope];
+  if (i.scope === "step") return t("workflows.json_step_n", { number: (i.step ?? 0) + 1 });
+  if (i.scope === "inputs") return t("workflows.where_input", { number: (i.step ?? 0) + 1 });
+  return { meta: t("workflows.generale"), trigger: t("workflows.trigger"), steps: t("workflows.passi"), inputs: t("workflows.input") }[i.scope];
 };
 
 /** What is wrong with the workflow: errors block saving, warnings do not. `onGo` brings the step into view. */

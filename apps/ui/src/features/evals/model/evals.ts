@@ -17,8 +17,8 @@ export const pct = (ratio: number): string => `${Math.round(ratio * 100)}%`;
 export function blankSuite(id = "nuova-suite"): EvalSuite {
   return {
     id,
-    name: "Nuova suite",
-    tasks: [{ id: "primo-task", prompt: "Crea note.md con scritto ciao", graders: [{ kind: "file_exists", path: "note.md" }] }],
+    name: t("evals.blank_suite_name"),
+    tasks: [{ id: "primo-task", prompt: t("evals.blank_suite_prompt"), graders: [{ kind: "file_exists", path: "note.md" }] }],
   };
 }
 
