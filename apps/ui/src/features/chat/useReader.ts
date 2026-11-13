@@ -7,6 +7,7 @@ import { playSpeech } from "./voice/playback";
 import { readAloud, type ReaderDeps } from "./voice/reader";
 import { speak as speakSystem, voiceFor } from "./voice/tts";
 
+import { t } from "../../shared/i18n";
 // One reading at a time in the whole app: starting another stops the one that speaks.
 let active: AbortController | null = null;
 
@@ -71,11 +72,11 @@ export function useReader() {
             voice: st?.tts_voice ?? "",
             fallbackLanguage: navigator.language || "it",
             signal: ac.signal,
-            onFallback: (why) => toast(`Voce neurale non disponibile (${why}): leggo con la voce del sistema`),
+            onFallback: (why) => toast(t("chat.voce_neurale_non_disponibile_leggo", { why })),
           },
           deps,
         );
-        if (!heard && !quiet && !ac.signal.aborted) toast("Nessuna voce disponibile su questo dispositivo: installa Piper o una voce di sistema");
+        if (!heard && !quiet && !ac.signal.aborted) toast(t("chat.nessuna_voce_disponibile_su_questo"));
       } finally {
         if (active === ac) active = null;
         if (ours) {

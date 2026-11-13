@@ -13,7 +13,7 @@ import { InlineError } from "./HubError";
 import { SystemPreview } from "./InstalledCard";
 import { UseInProfileDialog } from "./UseInProfileDialog";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 /** Galleria: the models that run on this device, as big cards — download, try, use. */
 export function GalleryTab({ jobs }: { jobs: DownloadProgress[] }) {
   const catalog = useCatalog();
@@ -62,7 +62,7 @@ function GalleryCard({ model: c, job, local, onUse }: { model: CatalogModel; job
           <h3 className="ellipsis" title={c.name}>{c.name}</h3>
           <span className="faint text-xs ellipsis">{c.publisher} · {formatParams(c.params_b)} · {formatContext(c.context_length)}</span>
         </div>
-        {system ? <Pill tone="info" title="Fornito dal sistema operativo">{t("models.di_sistema")}</Pill> : <FitPill fit={c.fit} detail={c.fit_detail} />}
+        {system ? <Pill tone="info" title={tr("models.fornito_dal_sistema_operativo")}>{t("models.di_sistema")}</Pill> : <FitPill fit={c.fit} detail={c.fit_detail} />}
       </header>
       <p className="mh-desc">{c.description}</p>
       {!system && c.fit_detail && <p className="faint text-xs">{c.fit_detail}</p>}
@@ -92,7 +92,7 @@ function GalleryCard({ model: c, job, local, onUse }: { model: CatalogModel; job
             )}
             {local && <Button variant="primary" onClick={() => setPreview(true)}>{t("models.prova")}</Button>}
             {local && <Button icon="link" onClick={() => onUse(local)}>{t("models.usa_nel_profilo")}</Button>}
-            {state === "installed" && !local && <Pill tone="ok"><Icon name="check" size={13} /> {" "}{t("models.installato")}</Pill>}
+            {state === "installed" && !local && <Pill tone="ok"><Icon name="check" size={13} /> {t("models.installato")}</Pill>}
             {system && !local && <span className="faint text-xs">{t("models.non_disponibile_su_questo_dispositivo")}</span>}
           </>
         )}

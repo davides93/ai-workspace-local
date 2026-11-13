@@ -4,7 +4,7 @@ import { emptyRow, isKeptRow, renameRow, type KvRow } from "../lib/kvRows";
 import { Button, IconButton } from "./Button";
 import "./KeyValueEditor.css";
 
-import { t } from "../i18n";
+import { t, t as tr } from "../i18n";
 /**
  * Rows of name/value pairs (environment variables, HTTP headers). A row whose name `isSecret`
  * shows its value masked, with a button to reveal it.
@@ -70,11 +70,11 @@ export function KeyValueEditor({ idPrefix, label, rows, onChange, keyLabel = "No
             />
             <div className="kve-actions">
               {kept && (
-                <Button size="sm" variant="ghost" aria-label={`Cambia il valore ${i + 1}`} onClick={() => { patch(r.id, { value: "" }); setFocusRow(r.id); }}>
+                <Button size="sm" variant="ghost" aria-label={tr("ui.cambia_il_valore", { number: i + 1 })} onClick={() => { patch(r.id, { value: "" }); setFocusRow(r.id); }}>
                   {t("ui.cambia")}</Button>
               )}
               {restorable && mask !== undefined && (
-                <Button size="sm" variant="ghost" aria-label={`Mantieni il valore salvato ${i + 1}`} onClick={() => patch(r.id, { value: mask })}>
+                <Button size="sm" variant="ghost" aria-label={tr("ui.mantieni_il_valore_salvato", { number: i + 1 })} onClick={() => patch(r.id, { value: mask })}>
                   {t("ui.mantieni")}</Button>
               )}
               {secret && !kept && (

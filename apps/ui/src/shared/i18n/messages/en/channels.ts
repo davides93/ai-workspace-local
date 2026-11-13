@@ -48,4 +48,5 @@ export const channelsEn: Record<keyof typeof channelsIt, string> = {
   "channels.nessun_account_aggiungine_uno_per": "No accounts. Add one to let the assistant read the server's mail.",
   "channels.aggiungi_un_account": "Add an account",
   "channels.salva_gli_account": "Save the accounts",
+  "channels.account_di_posta_salvati": "Mail accounts saved",
 };

@@ -44,4 +44,5 @@ export const documentsIt = {
   "documents.cerca": "Cerca",
   "documents.non_ho_trovato_nulla_in": "Non ho trovato nulla in questi documenti.",
   "documents.parte": "parte {part} · {collection_name}",
+  "documents.raccolta_eliminata": "Raccolta eliminata",
 } as const;

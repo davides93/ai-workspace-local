@@ -4,6 +4,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { ApprovalRequest } from "../../shared/api/types";
 
+import { t } from "../../shared/i18n";
 const APPROVALS_POLL_MS = 3_000;
 
 /** Pending confirmations of agents, sub-agents and unattended workflows. */
@@ -19,7 +20,7 @@ export function useRespondApproval(opts: { silent?: boolean } = {}) {
     mutationFn: (v: { request: ApprovalRequest; decision: "allow" | "deny"; remember?: boolean }) =>
       api.respondApproval(v.request.id, v.decision, v.remember),
     onSuccess: (_r, v) => {
-      if (!opts.silent) toast(v.decision === "allow" ? "Consentito" : "Negato");
+      if (!opts.silent) toast(v.decision === "allow" ? t("approvals.consentito") : t("approvals.negato"));
       qc.setQueryData<ApprovalRequest[]>(qk.approvals(), (list) => list?.filter((a) => a.id !== v.request.id));
     },
     // Also after a failure (the request may have been handled elsewhere): the list is the truth.

@@ -4,6 +4,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { McpElicitationAnswer } from "../../shared/api/types";
 
+import { t } from "../../shared/i18n";
 const ELICITATION_POLL_MS = 2_500;
 
 /** The prompts of the connected MCP servers (only asked when `enabled`: developer mode). */
@@ -23,7 +24,7 @@ export function useRespondMcpElicitation() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; answer: McpElicitationAnswer }) => api.respondMcpElicitation(v.id, v.answer),
-    onError: (e) => toast(e instanceof Error ? e.message : "Risposta non inviata", "crit"),
+    onError: (e) => toast(e instanceof Error ? e.message : t("mcp.risposta_non_inviata"), "crit"),
     onSettled: () => void qc.invalidateQueries({ queryKey: qk.mcpElicitations() }),
   });
 }

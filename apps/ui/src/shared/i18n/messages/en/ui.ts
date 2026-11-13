@@ -32,4 +32,6 @@ export const uiEn: Record<keyof typeof uiIt, string> = {
   "ui.non_si_possono_salvare_cosi": "They cannot be saved as they are: fix the errors shown in the form first.",
   "ui.riprova": "Try again",
   "ui.caricamento": "Loading",
+  "ui.cambia_il_valore": "Change the value {number}",
+  "ui.mantieni_il_valore_salvato": "Keep the saved value {number}",
 };

@@ -6,7 +6,7 @@ import { useCancelDownload, useClearDownload, useRetryDownload } from "../api";
 import { DOWNLOAD_STATUS, etaSeconds, filesLabel, formatEta, isActiveJob, jobName, progressRatio, type RetryPlan } from "../model/downloads";
 import { InlineError } from "./HubError";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 export function DownloadStatusPill({ status }: { status: DownloadProgress["status"] }) {
   const s = DOWNLOAD_STATUS[status] ?? { label: status, tone: "neutral" as const, led: "off" as const };
   return (
@@ -72,7 +72,7 @@ export function DownloadCard({ job: d, providerLabel, plan, onSetToken }: {
           </Button>
         )}
         {plan?.kind === "url" && (
-          <Button size="sm" variant="primary" icon="refresh" title="Riapre il modulo con l'indirizzo già inserito" onClick={() => navigate(`/models/discover?provider=url&url=${encodeURIComponent(plan.url)}`)}>
+          <Button size="sm" variant="primary" icon="refresh" title={tr("models.riapre_il_modulo_con_l")} onClick={() => navigate(`/models/discover?provider=url&url=${encodeURIComponent(plan.url)}`)}>
             {t("models.riprova_dal_modulo")}</Button>
         )}
         {d.status === "done" && <Button size="sm" icon="cube" onClick={() => navigate("/models")}>{t("models.vedi_tra_gli_installati")}</Button>}

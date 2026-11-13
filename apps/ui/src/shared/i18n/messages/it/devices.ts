@@ -49,4 +49,7 @@ export const devicesIt = {
   "devices.rimuovi_2": "Rimuovi",
   "devices.classe_del_dispositivo": "Classe del dispositivo",
   "devices.classi_dei_dispositivi": "Classi dei dispositivi",
+  "devices.accoppiato_con_i_suoi_modelli": "Accoppiato con {name}: i suoi modelli e agenti sono disponibili qui",
+  "devices.rimosso": "{name} rimosso",
+  "devices.accoppia_2": "Accoppia {name}",
 } as const;

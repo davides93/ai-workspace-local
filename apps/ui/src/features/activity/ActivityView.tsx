@@ -8,7 +8,7 @@ import { Pager } from "./components/Pager";
 import { auditExport, BACKEND_LIMIT, emptyFilters, facets, filterAudit, isFiltering, newestFirst, paginate, type AuditFilters } from "./model/filter";
 import "./activity.css";
 
-import { t } from "../../shared/i18n";
+import { t, t as tr } from "../../shared/i18n";
 /** Attività: the audit trail with filters, search, pagination and a JSON export of what is on screen. */
 export function ActivityView() {
   const audit = useAudit();
@@ -36,7 +36,7 @@ export function ActivityView() {
       <PageHeader
         eyebrow={t("nav.group_control")} title={t("activity.attivita")}
         subtitle={t("activity.audit_trail_di_ogni_decisione")}
-        actions={<Button icon="download" disabled={filtered.length === 0} onClick={exportJson} title="Scarica le righe filtrate in un file JSON">{t("activity.esporta_json", { p: filtered.length > 0 ? ` (${filtered.length})` : "" })}</Button>}
+        actions={<Button icon="download" disabled={filtered.length === 0} onClick={exportJson} title={tr("activity.scarica_le_righe_filtrate_in")}>{(filtered.length > 0 ? t("activity.esporta_json_count", { count: filtered.length }) : t("activity.esporta_json"))}</Button>}
       />
       <p className={truncated ? "act-note is-warn" : "act-note"} role={truncated ? "status" : undefined}>
         <Icon name="info" size={15} />
@@ -52,7 +52,7 @@ export function ActivityView() {
             <AuditTable
               rows={shown.rows}
               empty={isFiltering(filters) ? (
-                <EmptyState icon="search" title="Nessuna riga corrisponde ai filtri" action={<Button size="sm" onClick={() => change(emptyFilters)}>Azzera i filtri</Button>} />
+                <EmptyState icon="search" title={tr("activity.nessuna_riga_corrisponde_ai_filtri")} action={<Button size="sm" onClick={() => change(emptyFilters)}>{tr("activity.azzera_i_filtri")}</Button>} />
               ) : t("activity.ancora_nessuna_attivita_2")}
             />
             <Pager page={shown} size={size} onPage={setPage} onSize={(n) => { setSize(n); setPage(1); }} />

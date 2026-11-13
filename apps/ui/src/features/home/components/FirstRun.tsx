@@ -33,7 +33,7 @@ function stepBody(id: ChecklistId, c: StepContext, done: boolean): { detail: Rea
     case "runtime": {
       const live = c.runtimes.find((r) => r.status === "running") ?? c.runtimes.find((r) => r.status === "available");
       return {
-        detail: live ? `${live.name}: ${live.status === "running" ? "in esecuzione" : "rilevato, parte al primo uso"}` : "Nessun runtime è pronto: rileva quelli installati o aggiungine uno.",
+        detail: live ? `${live.name}: ${live.status === "running" ? "in esecuzione" : "rilevato, parte al primo uso"}` : t("home.nessun_runtime_e_pronto_rileva"),
         actions: live ? <Link to="/runtimes" className="btn sm ghost">{t("home.vedi_i_runtime")}</Link> : (
           <>
             <Button size="sm" variant="primary" icon="refresh" disabled={c.busy.refresh} onClick={c.refresh}>{t("home.rileva_runtime")}</Button>
@@ -45,17 +45,16 @@ function stepBody(id: ChecklistId, c: StepContext, done: boolean): { detail: Rea
     case "model": {
       if (done) {
         const n = c.models.length;
-        return { detail: `${n} ${n === 1 ? "modello" : "modelli"} sul disco`, actions: <Link to="/models" className="btn sm ghost">{t("home.vedi_i_modelli")}</Link> };
+        return { detail: t("home.model_count", { n }), actions: <Link to="/models" className="btn sm ghost">{t("home.vedi_i_modelli")}</Link> };
       }
       const { rec, job } = c;
-      const where = c.device ? ` per ${c.device.name}` : " per questo dispositivo";
       return {
         detail: job ? (
           <span className="hm-step-progress">
             <span>{t("home.download_di_in_corso", { p: rec?.name ?? job.model_ref, p2: formatPercent(downloadFraction(job.received, job.total)) })}</span>
             <Meter label={t("home.avanzamento_di", { p: rec?.name ?? job.model_ref })} value={job.received} max={job.total} />
           </span>
-        ) : rec ? `Consigliato${where}: ${rec.name} (${formatBytes(rec.size_bytes)}). ${rec.fit_detail}` : "Scegli un modello da scaricare: la compatibilità è calcolata sulla memoria e sugli acceleratori del dispositivo.",
+        ) : rec ? (c.device ? t("home.recommended_for_device", { device: c.device.name, name: rec.name, size: formatBytes(rec.size_bytes), fit_detail: rec.fit_detail }) : t("home.recommended_here", { name: rec.name, size: formatBytes(rec.size_bytes), fit_detail: rec.fit_detail })) : t("home.scegli_un_modello_da_scaricare"),
         actions: job ? <Link to="/models/downloads" className="btn sm">{t("home.vedi_i_download")}</Link> : (
           <>
             {rec && <Button size="sm" variant="primary" icon="download" disabled={c.busy.pull} onClick={() => c.pull(rec.id)}>{t("home.scarica", { name: rec.name })}</Button>}
@@ -67,12 +66,12 @@ function stepBody(id: ChecklistId, c: StepContext, done: boolean): { detail: Rea
     }
     case "profile":
       return {
-        detail: c.profile ? `${c.profile.name}${c.profile.model ? ` · ${c.profile.model}` : " · ancora senza modello"}` : "Un profilo collega un runtime a un modello e ai suoi parametri.",
+        detail: c.profile ? `${c.profile.name}${c.profile.model ? ` · ${c.profile.model}` : " · ancora senza modello"}` : t("home.un_profilo_collega_un_runtime"),
         actions: <Link to="/agents" className="btn sm ghost">{t("home.apri_i_profili")}</Link>,
       };
     case "chat":
       return {
-        detail: "Una conversazione con un agente: gli strumenti chiedono conferma prima di agire.",
+        detail: t("home.una_conversazione_con_un_agente"),
         actions: <Button size="sm" variant="primary" icon="plus" disabled={!c.agentId || c.busy.session} onClick={c.newSession}>{t("home.nuova_sessione")}</Button>,
       };
   }

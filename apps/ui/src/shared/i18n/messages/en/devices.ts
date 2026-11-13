@@ -51,4 +51,7 @@ export const devicesEn: Record<keyof typeof devicesIt, string> = {
   "devices.rimuovi_2": "Remove",
   "devices.classe_del_dispositivo": "Device class",
   "devices.classi_dei_dispositivi": "Device classes",
+  "devices.accoppiato_con_i_suoi_modelli": "Paired with {name}: its models and agents are available here",
+  "devices.rimosso": "{name} removed",
+  "devices.accoppia_2": "Pair {name}",
 };

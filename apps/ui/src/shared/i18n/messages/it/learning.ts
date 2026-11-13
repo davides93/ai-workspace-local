@@ -14,4 +14,5 @@ export const learningIt = {
   "learning.nessuna_lezione_in_attesa_dopo": "Nessuna lezione in attesa. Dopo un pollice giù l'agente può proporre cosa ricordare: lo decidi tu.",
   "learning.vuoi_che_lo_ricordi": "Vuoi che lo ricordi?",
   "learning.conferma": "Conferma",
+  "learning.ho_proposto_una_lezione_la": "Ho proposto una lezione: la trovi nella Panoramica",
 } as const;

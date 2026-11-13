@@ -7,7 +7,7 @@ import {
   TRAINING_TOOL, EVAL_TOOL, isExplicitTool, type PickerTool, type ToolGroup,
 } from "../model/tools";
 
-import { t as tr, tNode as trNode } from "../../../shared/i18n";
+import { t as tr, tNode as trNode, t } from "../../../shared/i18n";
 const RISKS: ToolRisk[] = ["read", "network", "write", "exec", "computer"];
 
 /** Checkbox that can show the "some of them" state. */
@@ -28,7 +28,7 @@ function ToolRow({ tool, checked, locked, onToggle }: { tool: PickerTool; checke
         <span className="tool-main">
           <span className="tool-name mono">{tool.name}</span>
           <Pill tone={risk.tone} title={risk.hint}>{risk.label}</Pill>
-          {tool.disabled && <Chip title="Disattivato per tutti in «Tool, MCP e browser»">{tr("agents.disattivato")}</Chip>}
+          {tool.disabled && <Chip title={t("agents.disattivato_per_tutti_in_tool")}>{tr("agents.disattivato")}</Chip>}
           {tool.unavailable && <Chip title={tool.unavailable}>{tr("agents.non_disponibile")}</Chip>}
         </span>
         <span className="tool-desc">{tool.description}{tool.unavailable ? ` — ${tool.unavailable}` : ""}</span>
@@ -54,7 +54,7 @@ function Group({ group, value, locked, forceOpen, onChange }: { group: ToolGroup
           <span className="faint text-xs num">{picked}/{names.length}</span>
         </button>
         <label className="check-inline text-xs">
-          <Check checked={state === "all"} indeterminate={state === "some"} disabled={locked} label={`Seleziona tutti: ${group.label}`} onChange={(on) => onChange(setGroup(value, names, on))} />
+          <Check checked={state === "all"} indeterminate={state === "some"} disabled={locked} label={t("agents.seleziona_tutti", { label: group.label })} onChange={(on) => onChange(setGroup(value, names, on))} />
           {tr("agents.tutti")}</label>
       </div>
       {shown && (
@@ -103,7 +103,7 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
         </div>
       </div>
 
-      {all && <p className="tool-note text-sm"><Icon name="info" size={14} /> {" "}{tr("agents.con_tutti_i_tool_l")}</p>}
+      {all && <p className="tool-note text-sm"><Icon name="info" size={14} /> {tr("agents.con_tutti_i_tool_l")}</p>}
 
       {training && (
         <label className="row">

@@ -8,7 +8,7 @@ import type { LocalModel } from "../../../shared/api/types";
 import { originInfo } from "../model/origin";
 import { CapabilityChips, ChipRow, FitPill, OriginChip, RuntimeChips, Stat, Stats } from "./common";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 /** One installed model as an instrument module: identity, readouts, fit, runtimes and the three actions. */
 export function InstalledCard({ model: m, onUse, onDelete }: { model: LocalModel; onUse: () => void; onDelete: () => void }) {
   const [preview, setPreview] = useState(false);
@@ -50,10 +50,10 @@ export function InstalledCard({ model: m, onUse, onDelete }: { model: LocalModel
           {details ? t("models.nascondi_percorso") : t("models.mostra_percorso")}
         </Button>}
         {m.removable ? (
-          <Button size="sm" variant="danger" icon="trash" onClick={onDelete} aria-label={`Elimina ${m.name}`}>{t("models.elimina")}</Button>
+          <Button size="sm" variant="danger" icon="trash" onClick={onDelete} aria-label={tr("models.elimina_2", { name: m.name })}>{t("models.elimina")}</Button>
         ) : (
           <span className="mh-readonly faint text-xs" title={origin.description}>
-            <Icon name="lock" size={13} /> {" "}{t("models.sola_lettura_gestito_da", { owner: origin.owner })}
+            <Icon name="lock" size={13} /> {t("models.sola_lettura_gestito_da", { owner: origin.owner })}
           </span>
         )}
       </div>

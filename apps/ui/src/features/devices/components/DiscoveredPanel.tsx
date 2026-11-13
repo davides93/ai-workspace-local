@@ -3,7 +3,7 @@ import { relTime } from "../../../shared/lib/format";
 import { Button, Icon, IconButton, Panel, Pill } from "../../../shared/ui";
 import { isPaired, OS_LABEL } from "../model/mesh";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 /** Devices found on the LAN by mDNS; "Accoppia" fills the address in the form below. */
 export function DiscoveredPanel({ discovered, peers, discoveryOn, refreshing, onRefresh, onChoose, children }: {
   discovered: DiscoveredDevice[];
@@ -28,7 +28,7 @@ export function DiscoveredPanel({ discovered, peers, discoveryOn, refreshing, on
               <b className="ellipsis block">{d.name}</b>
               <div className="faint mono ellipsis text-xs">{OS_LABEL[d.os] ?? d.os} · {d.tier.toUpperCase()} · {d.address} · {relTime(d.last_seen)}</div>
             </div>
-            {isPaired(peers, d) ? <Pill tone="ok">{t("devices.accoppiato")}</Pill> : <Button size="sm" aria-label={`Accoppia ${d.name}`} onClick={() => onChoose(d)}>{t("devices.accoppia")}</Button>}
+            {isPaired(peers, d) ? <Pill tone="ok">{t("devices.accoppiato")}</Pill> : <Button size="sm" aria-label={tr("devices.accoppia_2", { name: d.name })} onClick={() => onChoose(d)}>{t("devices.accoppia")}</Button>}
           </li>
         ))}
         {discovered.length === 0 && (

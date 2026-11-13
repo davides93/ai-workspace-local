@@ -85,4 +85,11 @@ export const settingsIt = {
   "settings.diagnostica_descrizione": "Il rapporto contiene versione, sistema, hardware, runtime, impostazioni con i segreti mascherati e conteggi del database. Mai chat, documenti o posta.",
   "settings.diagnostica_scarica": "Scarica la diagnostica",
   "settings.diagnostica_scaricata": "Diagnostica scaricata",
+  "settings.ripristinato_nello_strato": "«{title}» ripristinato nello strato {layer}",
+  "settings.salvato_nello_strato": "«{title}» salvato nello strato {layer}",
+  "settings.non_disponibile": "non disponibile",
+  "settings.controllo_avviato": "Controllo avviato",
+  "settings.ripristina_nello_strato": "Ripristina {title} nello strato {layer}",
+  "settings.toglie_il_valore_dallo_strato": "Toglie il valore dallo strato {layer}",
+  "settings.questo_strato_non_definisce_un": "Questo strato non definisce un valore",
 } as const;

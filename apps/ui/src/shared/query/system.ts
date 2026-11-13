@@ -4,6 +4,7 @@ import { isUnauthorized } from "../lib/errors";
 import { toast } from "../lib/toast";
 import { qk } from "./keys";
 
+import { t } from "../i18n";
 /** Polling interval of the system snapshot (device, version, pairing code, peers). */
 export const SYSTEM_POLL_MS = 15_000;
 
@@ -35,12 +36,12 @@ export function useKill() {
   return useMutation({
     mutationFn: () => api.kill(),
     onSuccess: () => {
-      toast("Kill switch attivato per run, addestramenti, runtime gestiti e browser");
+      toast(t("lib.kill_switch_attivato_per_run"));
       void qc.invalidateQueries({ queryKey: qk.runtimes.all() });
       void qc.invalidateQueries({ queryKey: qk.sessions.all() });
       void qc.invalidateQueries({ queryKey: qk.approvals() });
       void qc.invalidateQueries({ queryKey: qk.training.all() });
     },
-    onError: (e) => toast(`Kill switch non riuscito: ${String(e instanceof Error ? e.message : e)}`, "crit"),
+    onError: (e) => toast(t("lib.kill_switch_non_riuscito", { error: String(e instanceof Error ? e.message : e) }), "crit"),
   });
 }

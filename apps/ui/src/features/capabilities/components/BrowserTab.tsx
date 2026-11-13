@@ -5,7 +5,7 @@ import { useSetToolsEnabled, useTools } from "../api";
 import { capabilityStatus, isBrowserTool, isComputerTool, type CapabilityStatus } from "../model/tools";
 import { ToolRow } from "./ToolRow";
 
-import { t as tr, tNode as trNode } from "../../../shared/i18n";
+import { t as tr, tNode as trNode, t } from "../../../shared/i18n";
 const STATUS: Record<CapabilityStatus, { label: string; tone: PillTone }> = {
   ready: { label: "Disponibile", tone: "ok" },
   partial: { label: "Parziale", tone: "warn" },
@@ -35,7 +35,7 @@ interface Capability {
 
 function ApprovalMatrix() {
   const columns: Column<(typeof MATRIX)[number]>[] = [
-    { key: "risk", header: "Azione", render: (r) => r.risk },
+    { key: "risk", header: t("capabilities.azione"), render: (r) => r.risk },
     ...MODES.map((m, i) => ({ key: m, header: <span className="mono">{m}</span>, nowrap: true, render: (r: (typeof MATRIX)[number]) => <Pill tone={r.cells[i].tone}>{r.cells[i].label}</Pill> })),
   ];
   return <DataTable label={tr("capabilities.approvazione_per_modalita")} columns={columns} rows={MATRIX} rowKey={(r) => r.risk} />;
@@ -99,7 +99,7 @@ export function BrowserTab() {
               <EmptyState
                 icon="mouse" title={tr("capabilities.le_catture_appaiono_nella_chat")}
                 description={tr("capabilities.mentre_un_run_usa_browser")}
-                action={<Link to="/chat" className="btn"><Icon name="chat" size={14} /> {" "}{tr("capabilities.apri_il_workspace")}</Link>}
+                action={<Link to="/chat" className="btn"><Icon name="chat" size={14} /> {tr("capabilities.apri_il_workspace")}</Link>}
               />
             </Section>
           </>

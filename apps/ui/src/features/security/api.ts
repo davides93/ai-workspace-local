@@ -4,6 +4,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { ApiTokenCreate, HookConfig, PolicyRule } from "../../shared/api/types";
 
+import { t as tr } from "../../shared/i18n";
 /** Tool catalogue (same query as the Capabilities page): names and risks for the rule tester. */
 export function useToolList() {
   const api = useApi();
@@ -34,7 +35,7 @@ export function useSetPolicy() {
     mutationFn: (rules: PolicyRule[]) => api.setPolicy(rules),
     onSuccess: (doc) => {
       qc.setQueryData(qk.policy(), doc);
-      toast("Regole di policy salvate");
+      toast(tr("security.regole_di_policy_salvate"));
     },
   });
 }
@@ -51,7 +52,7 @@ export function useSetHooks() {
     mutationFn: (hooks: HookConfig[]) => api.setHooks(hooks),
     onSuccess: (doc) => {
       qc.setQueryData(qk.hooks(), doc);
-      toast("Hook salvati");
+      toast(tr("security.hook_salvati"));
     },
   });
 }
@@ -76,7 +77,7 @@ export function useRevokeToken() {
   return useMutation({
     mutationFn: (t: { id: string; name: string }) => api.revokeApiToken(t.id),
     onSuccess: (_r, t) => {
-      toast(`«${t.name}» revocato: non funziona più`);
+      toast(tr("security.revocato_non_funziona_piu", { name: t.name }));
       void qc.invalidateQueries({ queryKey: qk.tokens() });
     },
   });

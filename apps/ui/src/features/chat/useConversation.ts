@@ -15,6 +15,7 @@ import { HANDOFF, type ApprovalItem, type Item } from "./model/items";
 import { localAttachments, toUploads, type PendingFile } from "./model/pending";
 import { parseImageEvent, reduce } from "./model/reduce";
 
+import { t } from "../../shared/i18n";
 export type HistoryState = { status: "loading" | "ready" | "error"; error?: unknown; title?: string };
 
 /**
@@ -162,7 +163,7 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
         uploads = await toUploads(files);
       } catch (e) {
         onRejected?.();
-        return void toast(`Non riesco a leggere gli allegati: ${errorMessage(e)}`, "crit");
+        return void toast(t("chat.non_riesco_a_leggere_gli", { error: errorMessage(e) }), "crit");
       }
       // The conversation changed while the files were read.
       if (current.current !== sid) return void onRejected?.();
@@ -177,7 +178,7 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
           setItems((prev) => prev.filter((i) => !(i.kind === "user" && i.id === tempId)));
           onRejected?.();
           if (isNotFound(e) && onGone.current) return void onGone.current(sid);
-          toast(`Impossibile avviare il run: ${errorMessage(e)}`, "crit");
+          toast(t("chat.impossibile_avviare_il_run", { error: errorMessage(e) }), "crit");
         },
       },
     );
@@ -193,7 +194,7 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
         onSuccess: ({ run_id }) => join(run_id, sid),
         onError: (e) => {
           if (isNotFound(e) && onGone.current) return void onGone.current(sid);
-          toast(`Impossibile inviare l'azione: ${errorMessage(e)}`, "crit");
+          toast(t("chat.impossibile_inviare_l_azione", { error: errorMessage(e) }), "crit");
         },
       },
     );

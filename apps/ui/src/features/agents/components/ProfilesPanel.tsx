@@ -7,7 +7,7 @@ import { useAgents, useDeleteProfile, useInstalledModels, useProfiles, useRuntim
 import { agentsUsingProfile } from "../model/agents";
 import { ProfileDialog } from "./ProfileDialog";
 
-import { t, tNode } from "../../../shared/i18n";
+import { t, tNode, t as tr } from "../../../shared/i18n";
 /** Inference profiles: runtime, model and parameters that agents and workflows pick by name. */
 export function ProfilesPanel() {
   const profiles = useProfiles();
@@ -22,18 +22,18 @@ export function ProfilesPanel() {
   const rt = (id: string) => runtimes.data?.find((r) => r.id === id);
 
   const columns: Column<InferenceProfile>[] = [
-    { key: "name", header: "Profilo", render: (p) => <><b>{p.name}</b><div className="faint text-xs">{p.description}</div><div className="mono faint text-xs">{p.id}</div></> },
+    { key: "name", header: tr("agents.profilo"), render: (p) => <><b>{p.name}</b><div className="faint text-xs">{p.description}</div><div className="mono faint text-xs">{p.id}</div></> },
     {
-      key: "runtime", header: "Runtime",
+      key: "runtime", header: tr("agents.runtime_2"),
       render: (p) => <div className="stack stack-sm"><span className="mono">{rt(p.runtime_id)?.name ?? p.runtime_id}</span>{rt(p.runtime_id) && <StatusPill status={rt(p.runtime_id)!.status} />}</div>,
     },
-    { key: "model", header: "Modello", className: "mono", render: (p) => p.model || <Pill tone="warn">{t("agents.da_scegliere")}</Pill> },
+    { key: "model", header: tr("agents.modello"), className: "mono", render: (p) => p.model || <Pill tone="warn">{t("agents.da_scegliere")}</Pill> },
     {
-      key: "params", header: "Parametri", className: "num",
+      key: "params", header: tr("agents.parametri"), className: "num",
       render: (p) => <div className="stack stack-sm"><span>{t("agents.t", { p: p.params.temperature ?? "—" })}</span><span>{t("agents.ctx", { p: formatContext(p.params.context) })}</span><span>{p.params.max_tokens ? t("agents.max", { max_tokens: p.params.max_tokens }) : "—"}</span></div>,
     },
     {
-      key: "used", header: "Usato da",
+      key: "used", header: tr("agents.usato_da"),
       render: (p) => {
         const used = agentsUsingProfile(agents.data ?? [], p.id);
         return used.length ? <div className="chips">{used.map((a) => <Link key={a.id} to={`/agents/${encodeURIComponent(a.id)}`} className="chip">{a.name}</Link>)}</div> : <span className="faint text-xs">{t("agents.nessun_agente_2")}</span>;
@@ -66,7 +66,7 @@ export function ProfilesPanel() {
       >
         {(list) => <DataTable label={t("agents.profili_di_inferenza")} columns={columns} rows={list} rowKey={(p) => p.id} className="profiles-table" />}
       </QueryState>
-      <p className="faint text-sm row"><Icon name="info" size={14} /> {" "}{tNode("agents.scegli_un_modello_disponibile_in", { link: <Link to="/models">{t("agents.modelli")}</Link> })}</p>
+      <p className="faint text-sm row"><Icon name="info" size={14} /> {tNode("agents.scegli_un_modello_disponibile_in", { link: <Link to="/models">{t("agents.modelli")}</Link> })}</p>
 
       {editing !== undefined && runtimes.data && models.data && (
         <ProfileDialog

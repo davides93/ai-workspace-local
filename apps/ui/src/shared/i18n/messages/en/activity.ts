@@ -4,7 +4,7 @@ import type { activityIt } from "../it/activity";
 export const activityEn: Record<keyof typeof activityIt, string> = {
   "activity.attivita": "Activity",
   "activity.audit_trail_di_ogni_decisione": "Audit trail of every policy decision, tool action and system command.",
-  "activity.esporta_json": "Export JSON{p}",
+  "activity.esporta_json": "Export JSON",
   "activity.ultime_voci": "latest {BACKEND_LIMIT} entries",
   "activity.l_elenco_e_al_limite": " The list is at its limit, so some older entries may be missing.",
   "activity.ancora_nessuna_attivita": "No activity yet",
@@ -34,4 +34,7 @@ export const activityEn: Record<keyof typeof activityIt, string> = {
   "activity.pagina_precedente": "Previous page",
   "activity.pagina_di": "Page {page} of {pages}",
   "activity.pagina_successiva": "Next page",
+  "activity.esporta_json_count": "Export JSON ({count})",
+  "activity.scarica_le_righe_filtrate_in": "Download the filtered rows as a JSON file",
+  "activity.nessuna_riga_corrisponde_ai_filtri": "No rows match the filters",
 };

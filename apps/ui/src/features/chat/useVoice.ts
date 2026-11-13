@@ -7,6 +7,7 @@ import { useTranscribe, useVoiceStatus } from "./api";
 import { micSupported, record, voiceError, type Recording } from "./voice/capture";
 import { useReader } from "./useReader";
 
+import { t as tr } from "../../shared/i18n";
 export type Dictation = "off" | "rec" | "busy";
 
 export interface VoiceInput {
@@ -56,7 +57,7 @@ export function useVoice(input: VoiceInput) {
 
   const unavailable = () => {
     if (status.data && !status.data.available) {
-      toast(`Voce non disponibile: ${status.data.detail ?? "nessun motore di trascrizione"}`, "crit");
+      toast(tr("chat.voce_non_disponibile", { p: status.data.detail ?? "nessun motore di trascrizione" }), "crit");
       return true;
     }
     return false;
@@ -92,10 +93,10 @@ export function useVoice(input: VoiceInput) {
       setDictation("rec");
       const wav = await rec.result;
       recording.current = null;
-      if (!wav) return toast("Non ho sentito nulla: riprova più vicino al microfono");
+      if (!wav) return toast(tr("chat.non_ho_sentito_nulla_riprova"));
       setDictation("busy");
       const t = await transcribe.mutateAsync({ wav, language });
-      if (!t.text) return toast("Nessuna parola riconosciuta");
+      if (!t.text) return toast(tr("chat.nessuna_parola_riconosciuta"));
       latest.current.insertText(t.text);
     } catch (e) {
       toast(voiceError(e), "crit");
@@ -120,7 +121,7 @@ export function useVoice(input: VoiceInput) {
       if (stopped()) return;
       if (!wav) {
         stopConvo();
-        return toast("Conversazione a voce in pausa: non ho sentito nulla");
+        return toast(tr("chat.conversazione_a_voce_in_pausa"));
       }
       goto("transcribing");
       const t = await transcribe.mutateAsync({ wav, language });
@@ -136,7 +137,7 @@ export function useVoice(input: VoiceInput) {
 
   const toggleConvo = () => {
     if (convo !== "off") return stopConvo();
-    if (!input.sessionId || !input.ready) return toast("Apri o crea una sessione per parlare con l'agente");
+    if (!input.sessionId || !input.ready) return toast(tr("chat.apri_o_crea_una_sessione"));
     if (unavailable() || input.running) return;
     void listen();
   };

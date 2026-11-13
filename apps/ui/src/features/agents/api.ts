@@ -4,6 +4,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { AgentProfile, InferenceProfile } from "../../shared/api/types";
 
+import { t } from "../../shared/i18n";
 export function useAgents() {
   const api = useApi();
   return useQuery({ queryKey: qk.agents(), queryFn: () => api.agents() });
@@ -21,7 +22,7 @@ export function useResetRouting() {
   return useMutation({
     mutationFn: (id: string) => api.resetAgentRouting(id),
     onSuccess: (_void, id) => {
-      toast("Statistiche del router azzerate");
+      toast(t("agents.statistiche_del_router_azzerate"));
       void qc.invalidateQueries({ queryKey: qk.agentRouting(id) });
     },
   });
@@ -61,7 +62,7 @@ export function useSaveAgent() {
   return useMutation({
     mutationFn: (a: AgentProfile) => api.saveAgent(a),
     onSuccess: (a) => {
-      toast(`Agente "${a.name}" salvato`);
+      toast(t("agents.agente_salvato", { name: a.name }));
       qc.setQueryData<AgentProfile[]>(qk.agents(), (list) => upsert(list, a));
       void qc.invalidateQueries({ queryKey: qk.agents() });
     },
@@ -76,7 +77,7 @@ export function useDeleteAgent() {
     mutationFn: (id: string) => api.deleteAgent(id),
     meta: { handled: true },
     onSuccess: (_void, id) => {
-      toast("Agente eliminato");
+      toast(t("agents.agente_eliminato"));
       qc.setQueryData<AgentProfile[]>(qk.agents(), (list) => list?.filter((a) => a.id !== id));
       void qc.invalidateQueries({ queryKey: qk.agents() });
     },
@@ -89,7 +90,7 @@ export function useSaveProfile() {
   return useMutation({
     mutationFn: (p: InferenceProfile) => api.saveProfile(p),
     onSuccess: (p) => {
-      toast(`Profilo "${p.name}" salvato`);
+      toast(t("agents.profilo_salvato", { name: p.name }));
       qc.setQueryData<InferenceProfile[]>(qk.profiles(), (list) => upsert(list, p));
       void qc.invalidateQueries({ queryKey: qk.profiles() });
     },
@@ -104,7 +105,7 @@ export function useDeleteProfile() {
     mutationFn: (id: string) => api.deleteProfile(id),
     meta: { handled: true },
     onSuccess: (_void, id) => {
-      toast("Profilo eliminato");
+      toast(t("agents.profilo_eliminato"));
       qc.setQueryData<InferenceProfile[]>(qk.profiles(), (list) => list?.filter((p) => p.id !== id));
       void qc.invalidateQueries({ queryKey: qk.profiles() });
     },

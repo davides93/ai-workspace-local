@@ -24,4 +24,10 @@ export const inboxEn: Record<keyof typeof inboxIt, string> = {
   "inbox.modifica": "Edit",
   "inbox.scarta": "Dismiss",
   "inbox.apri_la_chat": "Open the chat",
+  "inbox.ho_cominciato_trovi_il_lavoro": "Started: you'll find the work in the chats",
+  "inbox.non_sono_riuscito_ad_avviarla": "Couldn't start it: {error}",
+  "inbox.non_sono_riuscito_a_scartarla": "Couldn't discard it: {error}",
+  "inbox.ho_trovato_qualcosa_da_proporti": "I found something to suggest",
+  "inbox.niente_di_nuovo": "Nothing new",
+  "inbox.il_controllo_non_e_riuscito": "The check failed: {error}",
 };

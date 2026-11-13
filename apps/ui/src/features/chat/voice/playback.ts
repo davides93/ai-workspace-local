@@ -1,5 +1,6 @@
 import type { Speech } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 /** The WAV of a synthesis, as a Blob. */
 export function speechBlob(s: Speech): Blob {
   const bin = atob(s.audio);
@@ -25,7 +26,7 @@ export function playSpeech(s: Speech, signal: AbortSignal): Promise<void> {
     const onAbort = () => done();
     signal.addEventListener("abort", onAbort, { once: true });
     audio.onended = () => done();
-    audio.onerror = () => done(new Error("il browser non riesce a riprodurre l'audio"));
+    audio.onerror = () => done(new Error(t("chat.il_browser_non_riesce_a")));
     audio.play().catch((e) => done(e));
   });
 }

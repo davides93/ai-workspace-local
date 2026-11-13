@@ -22,4 +22,10 @@ export const inboxIt = {
   "inbox.modifica": "Modifica",
   "inbox.scarta": "Scarta",
   "inbox.apri_la_chat": "Apri la chat",
+  "inbox.ho_cominciato_trovi_il_lavoro": "Ho cominciato: trovi il lavoro nelle chat",
+  "inbox.non_sono_riuscito_ad_avviarla": "Non sono riuscito ad avviarla: {error}",
+  "inbox.non_sono_riuscito_a_scartarla": "Non sono riuscito a scartarla: {error}",
+  "inbox.ho_trovato_qualcosa_da_proporti": "Ho trovato qualcosa da proporti",
+  "inbox.niente_di_nuovo": "Niente di nuovo",
+  "inbox.il_controllo_non_e_riuscito": "Il controllo non è riuscito: {error}",
 } as const;

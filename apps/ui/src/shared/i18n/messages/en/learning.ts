@@ -16,4 +16,5 @@ export const learningEn: Record<keyof typeof learningIt, string> = {
   "learning.nessuna_lezione_in_attesa_dopo": "No lessons waiting. After a thumbs down the agent can propose what to remember: you decide.",
   "learning.vuoi_che_lo_ricordi": "Do you want me to remember it?",
   "learning.conferma": "Confirm",
+  "learning.ho_proposto_una_lezione_la": "I proposed a lesson: you'll find it on Home",
 };

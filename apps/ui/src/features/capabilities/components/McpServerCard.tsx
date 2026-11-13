@@ -5,7 +5,7 @@ import { MCP_SANDBOX_LABEL, serverTarget } from "../model/mcpForm";
 import { serverTools } from "../model/tools";
 import { ToolRow } from "./ToolRow";
 
-import { t as tr } from "../../../shared/i18n";
+import { t as tr, t } from "../../../shared/i18n";
 /** One MCP server: state and error, what it runs, its tools (expandable), switch, edit and remove. */
 export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onEdit, onRemove, onReconnect, onSignIn, onSignOut, onApprove, onIsolate, isolationAvailable, busy }: {
   server: McpServer;
@@ -44,10 +44,10 @@ export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onE
             <b className="cap-mcp-title">{server.name}</b>
             <Pill>{server.transport === "http" ? tr("capabilities.http") : tr("capabilities.stdio")}</Pill>
             {server.transport === "stdio" && (server.sandbox ?? "off") === "off" && (
-              <Pill tone="warn" title="Il server gira con i tuoi permessi, senza isolamento">{tr("capabilities.non_isolato")}</Pill>
+              <Pill tone="warn" title={t("capabilities.il_server_gira_con_i")}>{tr("capabilities.non_isolato")}</Pill>
             )}
             {server.transport === "stdio" && server.sandbox && server.sandbox !== "off" && (
-              <Pill tone="ok" title={`Isolato: ${MCP_SANDBOX_LABEL[server.sandbox]}${server.sandbox_network === false ? ", senza rete" : ""}`}>{tr("capabilities.isolato")}</Pill>
+              <Pill tone="ok" title={(server.sandbox_network === false ? t("capabilities.isolated_no_network", { mode: MCP_SANDBOX_LABEL[server.sandbox] }) : t("capabilities.isolato_2", { mode: MCP_SANDBOX_LABEL[server.sandbox] }))}>{tr("capabilities.isolato")}</Pill>
             )}
           </div>
           <div className="mono faint ellipsis text-xs" title={serverTarget(server)}>{serverTarget(server) || "—"}</div>
@@ -74,7 +74,7 @@ export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onE
             {isolationAvailable ? tr("capabilities.gira_senza_isolamento_con_l") : tr("capabilities.gira_senza_isolamento_su_questo")}
           </span>
           <Button size="sm" disabled={busy || !isolationAvailable} onClick={onIsolate}
-            title={isolationAvailable ? "Passa a «Scrittura nel workspace», con rete" : "Non disponibile su questo sistema"}>{tr("capabilities.isola")}</Button>
+            title={isolationAvailable ? t("capabilities.passa_a_scrittura_nel_workspace") : t("capabilities.non_disponibile_su_questo_sistema")}>{tr("capabilities.isola")}</Button>
         </div>
       )}
       {server.enabled && server.error && (
@@ -84,10 +84,10 @@ export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onE
         <div className="row" role="group" aria-label={tr("capabilities.connessione_di", { name: server.name })}>
           {caps && (
             <Chips label={tr("capabilities.cosa_offre_il_server")}>
-              <Chip title="Strumenti (tools/list)">{tr("capabilities.strumenti", { p: caps.tools ? "" : " · no" })}</Chip>
-              <Chip title="Risorse: due strumenti per elencarle e leggerle">{tr("capabilities.risorse", { p: caps.resources ? "" : " · no" })}</Chip>
-              <Chip title="Prompt: li trovi nel campo del messaggio, in modalità Sviluppatore">{tr("capabilities.prompt", { p: caps.prompts ? "" : " · no" })}</Chip>
-              {server.sampling && <Chip title="Il server può chiedere risposte al modello (con un tetto per esecuzione)">{tr("capabilities.campionamento_attivo")}</Chip>}
+              <Chip title={t("capabilities.strumenti_tools_list")}>{tr("capabilities.strumenti", { p: caps.tools ? "" : " · no" })}</Chip>
+              <Chip title={t("capabilities.risorse_due_strumenti_per_elencarle")}>{tr("capabilities.risorse", { p: caps.resources ? "" : " · no" })}</Chip>
+              <Chip title={t("capabilities.prompt_li_trovi_nel_campo")}>{tr("capabilities.prompt", { p: caps.prompts ? "" : " · no" })}</Chip>
+              {server.sampling && <Chip title={t("capabilities.il_server_puo_chiedere_risposte")}>{tr("capabilities.campionamento_attivo")}</Chip>}
             </Chips>
           )}
           <span className="grow" />
@@ -95,7 +95,7 @@ export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onE
             <Button size="sm" variant="primary" icon="key" disabled={busy} onClick={onSignIn}>{tr("capabilities.accedi")}</Button>
           )}
           {server.transport === "http" && server.signed_in && server.status !== "auth_required" && (
-            <Button size="sm" disabled={busy} onClick={onSignOut} title="Dimentica l'accesso eseguito con OAuth">{tr("capabilities.esci")}</Button>
+            <Button size="sm" disabled={busy} onClick={onSignOut} title={t("capabilities.dimentica_l_accesso_eseguito_con")}>{tr("capabilities.esci")}</Button>
           )}
           {server.status !== "connected" && (
             <Button size="sm" icon="refresh" disabled={busy || server.status === "connecting"} onClick={onReconnect}>{tr("capabilities.riconnetti")}</Button>
@@ -104,8 +104,8 @@ export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onE
       )}
       {(envNames.length > 0 || headerNames.length > 0) && (
         <Chips label={tr("capabilities.variabili_e_header_configurati")}>
-          {envNames.map((n) => <Chip key={`e-${n}`} title="Variabile d'ambiente">{tr("capabilities.env", { n })}</Chip>)}
-          {headerNames.map((n) => <Chip key={`h-${n}`} title="Header HTTP: il valore resta nascosto">{tr("capabilities.header", { n })}</Chip>)}
+          {envNames.map((n) => <Chip key={`e-${n}`} title={t("capabilities.variabile_d_ambiente")}>{tr("capabilities.env", { n })}</Chip>)}
+          {headerNames.map((n) => <Chip key={`h-${n}`} title={t("capabilities.header_http_il_valore_resta")}>{tr("capabilities.header", { n })}</Chip>)}
         </Chips>
       )}
 

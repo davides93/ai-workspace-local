@@ -7,6 +7,7 @@ import type { DownloadProgress, ModelSearchParams, PullRequest } from "../../sha
 import { isActiveJob, type RetryPlan } from "./model/downloads";
 import { shouldRetryHub } from "./model/errors";
 
+import { t } from "../../shared/i18n";
 /** Downloads are polled once a second, but only while a job is waiting, transferring or verifying. */
 export const DOWNLOADS_POLL_MS = 1_000;
 
@@ -72,13 +73,13 @@ export function useDownloadsWatcher() {
     for (const d of data) {
       const before = prev.get(d.id);
       if (d.status === "done" && before !== undefined && before !== "done") {
-        toast(`Download completato: ${d.model_ref || d.model_id}`);
+        toast(t("models.download_completato", { name: d.model_ref || d.model_id }));
         void qc.invalidateQueries({ queryKey: qk.models.installed() });
         void qc.invalidateQueries({ queryKey: qk.models.catalog() });
         void qc.invalidateQueries({ queryKey: qk.models.recommend() });
         void qc.invalidateQueries({ queryKey: qk.models.remoteAll() });
       }
-      if (d.status === "error" && before !== undefined && before !== "error") toast(`Download non riuscito: ${d.error ?? d.model_ref}`, "crit");
+      if (d.status === "error" && before !== undefined && before !== "error") toast(t("models.download_non_riuscito", { reason: d.error ?? d.model_ref }), "crit");
     }
   }, [data, qc]);
 }
@@ -111,7 +112,7 @@ export function useRetryDownload() {
       return created;
     },
     onSuccess: () => {
-      toast("Download riavviato");
+      toast(t("models.download_riavviato"));
       void qc.invalidateQueries({ queryKey: qk.models.downloads() });
     },
   });
@@ -127,7 +128,7 @@ export function useClearFinishedDownloads() {
       return ids.length;
     },
     onSuccess: (n) => {
-      toast(n === 1 ? "Download rimosso dalla lista" : `${n} download rimossi dalla lista`);
+      toast(n === 1 ? t("models.download_rimosso_dalla_lista") : t("models.download_rimossi_dalla_lista", { n }));
     },
     onSettled: () => void qc.invalidateQueries({ queryKey: qk.models.downloads() }),
   });
@@ -157,7 +158,7 @@ export function useDeleteModel() {
   return useMutation({
     mutationFn: (id: string) => api.deleteModel(id),
     onSuccess: () => {
-      toast("Modello eliminato dal disco");
+      toast(t("models.modello_eliminato_dal_disco"));
       void qc.invalidateQueries({ queryKey: qk.models.all() });
     },
   });

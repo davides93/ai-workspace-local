@@ -9,7 +9,7 @@ import { groupLabel, routeLabel, visibleRoutes } from "../navigation";
 import { GROUPS, ROUTES, routeHref } from "../routes";
 import { useUiMode } from "../useUiMode";
 import { splitKeywords, type Command } from "./commands";
-import { t } from "../../shared/i18n";
+import { t, t as tr } from "../../shared/i18n";
 
 /**
  * Sections and actions of the command palette. Called by the shell (which never unmounts), so a
@@ -41,7 +41,7 @@ export function useCommands(): Command[] {
       mode === "simple"
         ? { id: "mode-developer", label: t("shell.mostra_tutte_le_sezioni"), group: "actions" as const, icon: "settings", keywords: splitKeywords(t("shell.cmd_developer_kw")), run: () => setMode("developer") }
         : { id: "mode-simple", label: t("shell.cmd_simple_mode"), group: "actions" as const, icon: "settings", keywords: splitKeywords(t("shell.cmd_simple_kw")), run: () => setMode("simple") },
-      { id: "kill", label: "Kill switch", hint: t("shell.cmd_kill_hint"), group: "actions", icon: "power", keywords: splitKeywords(t("shell.cmd_kill_kw")), run: () => kill.mutate() },
+      { id: "kill", label: tr("shell.kill_switch"), hint: t("shell.cmd_kill_hint"), group: "actions", icon: "power", keywords: splitKeywords(t("shell.cmd_kill_kw")), run: () => kill.mutate() },
       { id: "theme-light", label: t("shell.cmd_theme_light"), group: "actions", icon: "sun", keywords: splitKeywords(t("shell.cmd_theme_kw")), run: () => setTheme("light") },
       { id: "theme-dark", label: t("shell.cmd_theme_dark"), group: "actions", icon: "moon", keywords: splitKeywords(t("shell.cmd_theme_dark_kw")), run: () => setTheme("dark") },
       { id: "theme-system", label: t("shell.cmd_theme_system"), group: "actions", icon: "settings", keywords: splitKeywords(t("shell.cmd_theme_system_kw")), run: () => setTheme("system") },

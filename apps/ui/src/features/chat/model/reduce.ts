@@ -3,6 +3,7 @@ import { applyA2ui, type A2uiMessage } from "../a2ui";
 import { ATTACHMENTS_EVENT, CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, modelLabel, rolesNoteText, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
 import { resultStatus } from "./tools";
 
+import { t } from "../../../shared/i18n";
 type Of<K extends Item["kind"]> = Extract<Item, { kind: K }>;
 
 /** Index of the row of `kind` with this id, searching from the end (the live rows are the last ones). */
@@ -118,9 +119,9 @@ export function reduceRuntime(items: Item[], value: unknown): Item[] {
   const v = (value ?? {}) as RuntimeEvent;
   const name = v.name ?? v.runtime ?? "runtime";
   if (v.fallback?.note) {
-    return [...items, { kind: "note", id: `rt-${items.length}`, text: `${v.fallback.note}.` }, { kind: "route", id: `rr-${items.length}`, label: `Runtime: ${name}`, lines: routeLines(v) }];
+    return [...items, { kind: "note", id: `rt-${items.length}`, text: `${v.fallback.note}.` }, { kind: "route", id: `rr-${items.length}`, label: t("chat.runtime", { name }), lines: routeLines(v) }];
   }
-  return [...items, { kind: "route", id: `rr-${items.length}`, label: `Runtime automatico: ${name}`, lines: routeLines(v) }];
+  return [...items, { kind: "route", id: `rr-${items.length}`, label: t("chat.runtime_automatico", { name }), lines: routeLines(v) }];
 }
 
 function routeLines(v: RuntimeEvent): string[] {

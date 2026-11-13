@@ -12,4 +12,5 @@ export const mcpEn: Record<keyof typeof mcpIt, string> = {
   "mcp.inserisci_nel_messaggio": "Insert into the message",
   "mcp.prompt": "Prompt",
   "mcp.il_testo_viene_inserito_nel": "The text is inserted in the message field: you can edit it before sending.",
+  "mcp.risposta_non_inviata": "Answer not sent",
 };

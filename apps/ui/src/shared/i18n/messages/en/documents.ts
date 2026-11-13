@@ -46,4 +46,5 @@ export const documentsEn: Record<keyof typeof documentsIt, string> = {
   "documents.cerca": "Search",
   "documents.non_ho_trovato_nulla_in": "I found nothing in these documents.",
   "documents.parte": "part {part} · {collection_name}",
+  "documents.raccolta_eliminata": "Collection deleted",
 };

@@ -1,6 +1,7 @@
 import type { McpServer, ToolInfo, ToolRisk } from "../../../shared/api/types";
 import type { PillTone } from "../../../shared/ui";
 
+import { t as tr } from "../../../shared/i18n";
 /** Risk of a tool as label and pill tone; the risk decides when the agent has to ask. */
 export const TOOL_RISK: Record<ToolRisk, { label: string; tone: PillTone; hint: string }> = {
   read: { label: "lettura", tone: "ok", hint: "Legge, non modifica nulla" },
@@ -96,7 +97,7 @@ export function groupTools(tools: ToolInfo[], opts: { query?: string; risk?: Ris
     if (list) groups.push({ id: c.id, title: c.title, hint: c.hint || undefined, tools: list });
   }
   const servers = [...byId.keys()].filter((id) => id.startsWith("mcp:")).sort((a, b) => a.localeCompare(b));
-  for (const id of servers) groups.push({ id, title: `MCP · ${id.slice(4)}`, hint: "Server MCP", tools: byId.get(id)! });
+  for (const id of servers) groups.push({ id, title: tr("capabilities.mcp", { server: id.slice(4) }), hint: tr("capabilities.server_mcp"), tools: byId.get(id)! });
   return groups;
 }
 
@@ -149,6 +150,6 @@ export function capabilityStatus(tools: ToolInfo[]): { status: CapabilityStatus;
   if (usable.length === 0) return { status: "unavailable", reason };
   if (usable.every((t) => !t.enabled)) return { status: "off" };
   if (usable.length < tools.length) return { status: "partial", reason };
-  if (usable.some((t) => !t.enabled)) return { status: "partial", reason: "Alcuni tool sono disattivati" };
+  if (usable.some((t) => !t.enabled)) return { status: "partial", reason: tr("capabilities.alcuni_tool_sono_disattivati") };
   return { status: "ready" };
 }

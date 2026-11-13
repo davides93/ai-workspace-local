@@ -8,7 +8,7 @@ import { FILE_ROLE_LABEL, fileCountLabel } from "../model/variants";
 import { FitPill, RuntimeChips } from "./common";
 import { InlineError } from "./HubError";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 /** One downloadable variant of a remote model: size, fit for this device, files, runtimes and its own download button. */
 export function VariantRow({ variant: v, provider, modelId, modelName, revision, job, showRuntimes, onSetToken }: {
   variant: ModelVariant;
@@ -36,8 +36,8 @@ export function VariantRow({ variant: v, provider, modelId, modelName, revision,
       <div className="mh-variant-head">
         <b className="mono ellipsis" title={v.label}>{v.label}</b>
         <span className="mh-badges">
-          {v.recommended && <Pill tone="run" title="La scelta migliore per questo device">{t("models.consigliata")}</Pill>}
-          {v.installed && <Pill tone="ok"><Icon name="check" size={12} /> {" "}{t("models.installata")}</Pill>}
+          {v.recommended && <Pill tone="run" title={tr("models.la_scelta_migliore_per_questo")}>{t("models.consigliata")}</Pill>}
+          {v.installed && <Pill tone="ok"><Icon name="check" size={12} /> {t("models.installata")}</Pill>}
           <FitPill fit={v.fit} detail={v.fit_detail} />
         </span>
       </div>

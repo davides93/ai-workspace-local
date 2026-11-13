@@ -13,6 +13,7 @@ import { homeIt } from "./messages/it/home";
 import { inboxIt } from "./messages/it/inbox";
 import { integrationsIt } from "./messages/it/integrations";
 import { learningIt } from "./messages/it/learning";
+import { libIt } from "./messages/it/lib";
 import { mcpIt } from "./messages/it/mcp";
 import { modelsIt } from "./messages/it/models";
 import { navIt } from "./messages/it/nav";
@@ -42,6 +43,7 @@ export const it = {
   ...inboxIt,
   ...integrationsIt,
   ...learningIt,
+  ...libIt,
   ...mcpIt,
   ...modelsIt,
   ...navIt,

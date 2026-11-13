@@ -9,7 +9,7 @@ import { etaSeconds, formatEta, progressRatio } from "../model/downloads";
 import { ChipRow, FitPill, RuntimeChips, Stat, Stats } from "./common";
 import { InlineError } from "./HubError";
 
-import { t as tr } from "../../../shared/i18n";
+import { t as tr, t } from "../../../shared/i18n";
 /** Curated entry: what it is, how it fits this device, who can run it, and the one-click download (or why there is none). */
 export function CatalogCard({ model: c, job, onSetToken }: { model: CatalogModel; job?: DownloadProgress; onSetToken: () => void }) {
   const pull = usePullModel({ handled: true });
@@ -26,7 +26,7 @@ export function CatalogCard({ model: c, job, onSetToken }: { model: CatalogModel
           <h3 className="ellipsis" title={c.name}>{c.name}</h3>
           <span className="faint text-xs ellipsis">{c.publisher} · {c.license}</span>
         </div>
-        {state === "system" ? <Pill tone="info" title="Fornito dal sistema operativo">{tr("models.di_sistema")}</Pill> : <FitPill fit={c.fit} detail={c.fit_detail} />}
+        {state === "system" ? <Pill tone="info" title={t("models.fornito_dal_sistema_operativo")}>{tr("models.di_sistema")}</Pill> : <FitPill fit={c.fit} detail={c.fit_detail} />}
       </header>
 
       <p className="mh-desc">{c.description}</p>
@@ -50,7 +50,7 @@ export function CatalogCard({ model: c, job, onSetToken }: { model: CatalogModel
 
       <footer className="mh-card-foot">
         {state === "system" && runtime && <Link to={`/runtimes/${runtime}`} className="btn sm">{tr("models.vedi_il_runtime")}{" "}<Icon name="forward" size={13} /></Link>}
-        {state === "installed" && <Pill tone="ok"><Icon name="check" size={13} /> {" "}{tr("models.installato")}</Pill>}
+        {state === "installed" && <Pill tone="ok"><Icon name="check" size={13} /> {tr("models.installato")}</Pill>}
         {state === "downloading" && job && (
           <div className="grow stack stack-sm">
             <Meter label={tr("models.download_di", { name: c.name })} value={job.received} max={job.total} />

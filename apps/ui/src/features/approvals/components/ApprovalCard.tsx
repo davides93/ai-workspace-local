@@ -8,7 +8,7 @@ import { Button, CodeBlock, Icon, Pill } from "../../../shared/ui";
 import type { ApprovalRequest } from "../../../shared/api/types";
 import "../approvals.css";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 export interface ApprovalCardProps {
   request: ApprovalRequest;
   /** The decision already taken (`true` = allowed). While undefined the card offers the buttons. */
@@ -70,7 +70,7 @@ export function ApprovalCard({ request, resolved, variant = "full", pending, onR
             Consenti{showShortcuts && <kbd aria-hidden="true">A</kbd>}
           </Button>
           {allowRemember && (
-            <Button size={size} disabled={pending} onClick={() => onRespond("allow", true)} title="Non chiedere più conferma per questo tool finché la sessione resta aperta">
+            <Button size={size} disabled={pending} onClick={() => onRespond("allow", true)} title={tr("approvals.non_chiedere_piu_conferma_per")}>
               {t("approvals.consenti_per_la_sessione")}</Button>
           )}
           <Button variant="danger" size={size} disabled={pending} aria-keyshortcuts={showShortcuts ? "N" : undefined} onClick={() => onRespond("deny")}>

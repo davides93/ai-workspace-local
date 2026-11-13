@@ -22,6 +22,7 @@ import { homeEn } from "./messages/en/home";
 import { inboxEn } from "./messages/en/inbox";
 import { integrationsEn } from "./messages/en/integrations";
 import { learningEn } from "./messages/en/learning";
+import { libEn } from "./messages/en/lib";
 import { mcpEn } from "./messages/en/mcp";
 import { modelsEn } from "./messages/en/models";
 import { navEn } from "./messages/en/nav";
@@ -51,6 +52,7 @@ export const en: Record<MessageKey, string> = {
   ...inboxEn,
   ...integrationsEn,
   ...learningEn,
+  ...libEn,
   ...mcpEn,
   ...modelsEn,
   ...navEn,

@@ -9,6 +9,7 @@ import { errorMessage, errorStatus } from "../../../shared/lib/errors";
 import { Vad, rms, type VadOptions } from "./vad";
 import { TARGET_RATE, concat, encodeWav, resample } from "./wav";
 
+import { t as tr } from "../../../shared/i18n";
 export interface Recording {
   /** The trimmed speech as WAV, or null when nothing was said (or it was cancelled). */
   result: Promise<Blob | null>;
@@ -36,7 +37,7 @@ export function micSupported(): boolean {
 }
 
 export async function record(opts: RecordOptions = {}): Promise<Recording> {
-  if (!micSupported()) throw Object.assign(new Error("Microfono non supportato in questa vista"), { name: "NotFoundError" });
+  if (!micSupported()) throw Object.assign(new Error(tr("chat.microfono_non_supportato_in_questa")), { name: "NotFoundError" });
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });

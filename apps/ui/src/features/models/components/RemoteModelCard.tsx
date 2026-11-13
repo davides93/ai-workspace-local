@@ -3,7 +3,7 @@ import { formatCompact, formatParams, relTime } from "../../../shared/lib/format
 import type { RemoteModel } from "../../../shared/api/types";
 import { CapabilityChips, ChipRow } from "./common";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 /** Search result: who publishes it, how popular it is, which formats and capabilities, and the way in to its variants. */
 export function RemoteModelCard({ model: m, onOpen }: { model: RemoteModel; onOpen: () => void }) {
   return (
@@ -14,8 +14,8 @@ export function RemoteModelCard({ model: m, onOpen }: { model: RemoteModel; onOp
           <span className="faint text-xs ellipsis">{m.publisher}{m.license ? ` · ${m.license}` : ""}</span>
         </div>
         {m.gated && (
-          <Pill tone="warn" title="Repository gated: per scaricarlo serve un token con accesso al modello">
-            <Icon name="lock" size={12} /> {" "}{t("models.gated")}</Pill>
+          <Pill tone="warn" title={tr("models.repository_gated_per_scaricarlo_serve_2")}>
+            <Icon name="lock" size={12} /> {t("models.gated")}</Pill>
         )}
       </header>
 
@@ -31,7 +31,7 @@ export function RemoteModelCard({ model: m, onOpen }: { model: RemoteModel; onOp
           {m.params_b !== undefined && <span>{formatParams(m.params_b)}</span>}
           {m.updated_at && <span>{t("models.agg", { p: relTime(m.updated_at) })}</span>}
         </span>
-        <Button size="sm" className="ml-auto" icon="list" aria-label={`Varianti di ${m.name}`} onClick={onOpen}>{t("models.varianti")}</Button>
+        <Button size="sm" className="ml-auto" icon="list" aria-label={tr("models.varianti_di", { name: m.name })} onClick={onOpen}>{t("models.varianti")}</Button>
       </footer>
     </article>
   );

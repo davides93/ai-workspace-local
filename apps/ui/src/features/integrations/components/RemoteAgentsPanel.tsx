@@ -5,7 +5,7 @@ import { errorMessage } from "../../../shared/lib/errors";
 import { useDeleteRemoteAgent, useRemoteAgents, useSaveRemoteAgent } from "../api";
 import { blankRemote, hasToken, normalizeRemote, remoteIdFor, validateRemote } from "../model/remote";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 /**
  * The agents that run elsewhere (another device, an orchestrator, a cloud agent) and speak A2A. Teams and
  * agents delegate to them as `remote:<id>`. Paired devices are listed too, with their pairing token.
@@ -39,7 +39,7 @@ export function RemoteAgentsPanel() {
                   {r.paired ? <Pill tone="neutral">{t("integrations.dispositivo_accoppiato")}</Pill> : (
                     <>
                       {hasToken(r) && <Pill tone="neutral">{t("integrations.token_impostato")}</Pill>}
-                      <Button size="sm" onClick={() => setEditing(r)} aria-label={`Modifica ${r.name}`}>{t("integrations.modifica")}</Button>
+                      <Button size="sm" onClick={() => setEditing(r)} aria-label={tr("integrations.modifica_2", { name: r.name })}>{t("integrations.modifica")}</Button>
                       <Button size="sm" variant="ghost" icon="trash" onClick={() => setDeleting(r)} aria-label={t("integrations.elimina", { name: r.name })} />
                     </>
                   )}

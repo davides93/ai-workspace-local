@@ -2,6 +2,7 @@ import type { ModelProviderInfo, RemoteModel } from "../../../shared/api/types";
 import type { PillTone } from "../../../shared/ui";
 import { PROVIDER_FORMATS } from "./fit";
 
+import { t as tr } from "../../../shared/i18n";
 /** The curated catalog has its own tab, so it is not offered as a discovery source. */
 export function discoverProviders(all: ModelProviderInfo[]): ModelProviderInfo[] {
   return all.filter((p) => p.id !== "catalog");
@@ -57,10 +58,10 @@ export interface AuthBadge {
 
 /** Token state of a provider as a badge: set, optional, required or not used. */
 export function authBadge(p: Pick<ModelProviderInfo, "auth" | "auth_configured">): AuthBadge {
-  if (p.auth === "none") return { label: "Nessun token", tone: "neutral", detail: "Questo provider non richiede un token." };
-  if (p.auth_configured) return { label: "Token impostato", tone: "ok", detail: "Un token è salvato su questo device e viene inviato solo a questo provider." };
-  if (p.auth === "required") return { label: "Token richiesto", tone: "warn", detail: "Senza token questo provider non risponde." };
-  return { label: "Token opzionale", tone: "neutral", detail: "Funziona senza token; serve per i repository gated e per limiti più alti." };
+  if (p.auth === "none") return { label: tr("models.nessun_token"), tone: "neutral", detail: tr("models.questo_provider_non_richiede_un") };
+  if (p.auth_configured) return { label: tr("models.token_impostato"), tone: "ok", detail: tr("models.un_token_e_salvato_su") };
+  if (p.auth === "required") return { label: tr("models.token_richiesto"), tone: "warn", detail: tr("models.senza_token_questo_provider_non") };
+  return { label: tr("models.token_opzionale"), tone: "neutral", detail: tr("models.funziona_senza_token_serve_per") };
 }
 
 /** Token and/or endpoint can be changed from the settings dialog. */

@@ -6,7 +6,7 @@ import {
 } from "../model/config";
 import { SettingControl } from "./SettingControl";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 /** One setting: what it is, which layer wins, and the editor for the layer you are writing to. */
 export function SettingRow({ view, entry, layer, onCommit }: {
   view: ConfigView;
@@ -49,8 +49,8 @@ export function SettingRow({ view, entry, layer, onCommit }: {
         <div className="set-meta">
           <span className="faint text-xs">{own ? t("settings.valore_nello_strato", { p: LAYER_LABEL[layer] }) : t("settings.eredita_da", { p: LAYER_LABEL[winner] })}</span>
           <Button
-            size="sm" variant="ghost" icon="refresh" disabled={!own} aria-label={`Ripristina ${title} nello strato ${LAYER_LABEL[layer]}`}
-            title={own ? `Toglie il valore dallo strato ${LAYER_LABEL[layer]}` : "Questo strato non definisce un valore"} onClick={() => onCommit(key, shortTitle(title), null)}
+            size="sm" variant="ghost" icon="refresh" disabled={!own} aria-label={tr("settings.ripristina_nello_strato", { title, layer: LAYER_LABEL[layer] })}
+            title={own ? tr("settings.toglie_il_valore_dallo_strato", { layer: LAYER_LABEL[layer] }) : tr("settings.questo_strato_non_definisce_un")} onClick={() => onCommit(key, shortTitle(title), null)}
           >
             {t("settings.ripristina")}</Button>
         </div>

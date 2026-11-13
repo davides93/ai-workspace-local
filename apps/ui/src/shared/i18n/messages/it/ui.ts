@@ -30,4 +30,6 @@ export const uiIt = {
   "ui.non_si_possono_salvare_cosi": "Non si possono salvare così come sono: correggi prima gli errori indicati nel modulo.",
   "ui.riprova": "Riprova",
   "ui.caricamento": "Caricamento",
+  "ui.cambia_il_valore": "Cambia il valore {number}",
+  "ui.mantieni_il_valore_salvato": "Mantieni il valore salvato {number}",
 } as const;

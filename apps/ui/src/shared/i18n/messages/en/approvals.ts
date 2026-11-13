@@ -22,4 +22,5 @@ export const approvalsEn: Record<keyof typeof approvalsIt, string> = {
   "approvals.cambia_richiesta": "{kbd}{kbd2} switch request",
   "approvals.esc": "Esc",
   "approvals.chiudi": "{kbd} close",
+  "approvals.non_chiedere_piu_conferma_per": "Don't ask again for this tool while the session stays open",
 };

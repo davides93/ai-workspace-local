@@ -5,6 +5,7 @@
 import type { CommandAnalysis, PolicyAction, PolicyMode, PolicyRule, ToolRisk } from "../../../shared/api/types";
 import { globMatches } from "./glob";
 
+import { t } from "../../../shared/i18n";
 export type DecisionKind = "allow" | "ask" | "deny";
 
 export interface Decision {
@@ -70,7 +71,7 @@ export function evaluate(input: EvaluateInput): Decision {
     ruleMatches(r, tool, subject) || (split !== null && hasPattern(r) && toolMatches(r) && [...split.commands, ...split.also].some((c) => ruleMatches(r, tool, c)));
 
   const denied = rules.findIndex((r) => r.action === "deny" && hits(r));
-  if (denied >= 0) return { kind: "deny", reason: `regola: ${ruleLabel(rules[denied])}`, by: "rule", ruleIndex: denied };
+  if (denied >= 0) return { kind: "deny", reason: t("security.regola", { rule: ruleLabel(rules[denied]) }), by: "rule", ruleIndex: denied };
 
   let allowed = -1;
   if (split === null) {
@@ -82,11 +83,11 @@ export function evaluate(input: EvaluateInput): Decision {
       if (covering.every((i) => i >= 0)) allowed = covering[0];
     }
   }
-  if (allowed >= 0) return { kind: "allow", reason: `regola: ${ruleLabel(rules[allowed])}`, by: "rule", ruleIndex: allowed };
+  if (allowed >= 0) return { kind: "allow", reason: t("security.regola", { rule: ruleLabel(rules[allowed]) }), by: "rule", ruleIndex: allowed };
 
   const asked = rules.findIndex((r) => r.action === "ask" && hits(r));
-  if (asked >= 0) return { kind: "ask", reason: "regola di conferma", by: "rule", ruleIndex: asked };
-  if (sessionAllowed) return { kind: "allow", reason: "già consentito per questa sessione", by: "session" };
+  if (asked >= 0) return { kind: "ask", reason: t("security.regola_di_conferma"), by: "rule", ruleIndex: asked };
+  if (sessionAllowed) return { kind: "allow", reason: t("security.gia_consentito_per_questa_sessione"), by: "session" };
   const allow = (reason: string): Decision => ({ kind: "allow", reason, by: "mode" });
   const partial =
     split !== null && rules.some((r) => r.action === "allow" && toolMatches(r) && hasPattern(r)) && (!split.confident || split.commands.length !== 1);
@@ -97,7 +98,7 @@ export function evaluate(input: EvaluateInput): Decision {
     case "plan":
       return risk === "read" || risk === "network"
         ? allow("modalità piano: lettura consentita")
-        : { kind: "deny", reason: "modalità piano: solo lettura, proponi le modifiche invece di eseguirle", by: "mode" };
+        : { kind: "deny", reason: t("security.modalita_piano_solo_lettura_proponi"), by: "mode" };
     case "auto":
       if (risk === "computer") return ask("azione su mouse e tastiera");
       if (risk === "exec" && !sandboxAvailable) return ask("comando senza sandbox su questo sistema");
@@ -174,16 +175,16 @@ export function checkRules(rules: readonly PolicyRule[], problem: (glob: string)
   const issues: RuleIssue[] = [];
   rules.forEach((r, index) => {
     const tool = r.tool.trim();
-    if (!tool) issues.push({ index, level: "error", message: "Indica il tool a cui si applica la regola." });
+    if (!tool) issues.push({ index, level: "error", message: t("security.indica_il_tool_a_cui") });
     else {
       const p = problem(tool);
-      if (p) issues.push({ index, level: "error", message: `Il tool «${tool}» non è un glob valido (${p}).` });
+      if (p) issues.push({ index, level: "error", message: t("security.il_tool_non_e_un", { tool, error: p }) });
     }
-    if (!ACTIONS.includes(r.action)) issues.push({ index, level: "error", message: `Azione «${String(r.action)}» non valida: usa allow, ask o deny.` });
+    if (!ACTIONS.includes(r.action)) issues.push({ index, level: "error", message: t("security.azione_non_valida_usa_allow", { action: String(r.action) }) });
     const pattern = r.pattern?.trim();
     if (pattern) {
       const p = problem(pattern);
-      if (p) issues.push({ index, level: "error", message: `Il pattern «${pattern}» non è un glob valido (${p}).` });
+      if (p) issues.push({ index, level: "error", message: t("security.il_pattern_non_e_un", { pattern, error: p }) });
     }
   });
   const seen = new Map<string, number>();
@@ -191,7 +192,7 @@ export function checkRules(rules: readonly PolicyRule[], problem: (glob: string)
     const key = `${r.tool}\u0000${r.pattern ?? ""}\u0000${r.action}`;
     const first = seen.get(key);
     if (first === undefined) seen.set(key, index);
-    else issues.push({ index, level: "warn", message: `Uguale alla regola ${first + 1}.` });
+    else issues.push({ index, level: "warn", message: t("security.uguale_alla_regola", { number: first + 1 }) });
   });
   return issues;
 }

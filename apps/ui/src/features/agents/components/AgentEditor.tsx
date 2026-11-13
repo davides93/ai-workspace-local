@@ -18,7 +18,7 @@ import { RoutingSection } from "./RoutingSection";
 import { SecuritySection } from "./SecuritySection";
 import { ToolPicker } from "./ToolPicker";
 
-import { t as tr } from "../../../shared/i18n";
+import { t as tr, t } from "../../../shared/i18n";
 /** The detail of `#/agents/:agentId`: a form in sections (identity, model, tools, response, security). */
 export function AgentEditor({ agentId, from }: { agentId: string; from?: string }) {
   const agents = useAgents();
@@ -95,11 +95,11 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
     <div className="stack stack-lg">
       <Panel
         title={<>
-          <Link to="/agents" className="md-back only-phone" aria-label="Torna agli agenti"><Icon name="back" size={16} /> {" "}{tr("agents.agenti")}</Link>
+          <Link to="/agents" className="md-back only-phone" aria-label={t("agents.torna_agli_agenti")}><Icon name="back" size={16} /> {tr("agents.agenti")}</Link>
           <span className="agent-title">{draft.name.trim() || (isNew ? tr("agents.nuovo_agente") : tr("agents.senza_nome"))}{builtin && <Pill tone="neutral">{tr("agents.integrato")}</Pill>}</span>
         </>}
         actions={!isNew && <div className="detail-actions">
-          <Link to={`/agents/${NEW_AGENT}?from=${encodeURIComponent(agentId)}`} className="btn"><Icon name="copy" size={15} /> {" "}{tr("agents.duplica")}</Link>
+          <Link to={`/agents/${NEW_AGENT}?from=${encodeURIComponent(agentId)}`} className="btn"><Icon name="copy" size={15} /> {tr("agents.duplica")}</Link>
           <Button variant="danger" icon="trash" disabled={builtin} onClick={() => setConfirmDelete(true)} aria-describedby={builtin ? "builtin-note" : undefined}>{tr("agents.elimina")}</Button>
         </div>}
       >

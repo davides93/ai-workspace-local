@@ -87,4 +87,11 @@ export const settingsEn: Record<keyof typeof settingsIt, string> = {
   "settings.diagnostica_descrizione": "The report holds version, system, hardware, runtimes, settings with secrets masked and database counts. Never chats, documents or mail.",
   "settings.diagnostica_scarica": "Download diagnostics",
   "settings.diagnostica_scaricata": "Diagnostics downloaded",
+  "settings.ripristinato_nello_strato": "\"{title}\" restored in the {layer} layer",
+  "settings.salvato_nello_strato": "\"{title}\" saved in the {layer} layer",
+  "settings.non_disponibile": "not available",
+  "settings.controllo_avviato": "Check started",
+  "settings.ripristina_nello_strato": "Restore {title} in the {layer} layer",
+  "settings.toglie_il_valore_dallo_strato": "Removes the value from the {layer} layer",
+  "settings.questo_strato_non_definisce_un": "This layer doesn't define a value",
 };

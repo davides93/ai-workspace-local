@@ -7,7 +7,7 @@ import { Button, Field, Input, QueryState } from "../../../shared/ui";
 import { useMailAccounts, useSetMailAccounts, useTestMailAccount } from "../api";
 import { MAIL_ACCOUNT_LIMIT, accountProblem, emptyAccount, hasStoredPassword, parseFolders } from "../model/channels";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 function AccountForm({ account, onChange, onRemove }: { account: MailAccount; onChange: (a: MailAccount) => void; onRemove: () => void }) {
   const test = useTestMailAccount();
   const [result, setResult] = useState<MailAccountTest | null>(null);
@@ -75,7 +75,7 @@ export function MailAccountsEditor() {
             <div className="row">
               <Button icon="plus" disabled={list.length >= MAIL_ACCOUNT_LIMIT} onClick={() => setDraft([...list, emptyAccount()])}>{t("channels.aggiungi_un_account")}</Button>
               <Button variant="primary" disabled={!dirty || save.isPending || problem !== null} title={problem ?? undefined}
-                onClick={() => { setError(null); save.mutate(list, { onSuccess: (next) => { setDraft(next); toast("Account di posta salvati"); }, onError: (e) => setError(errorMessage(e)) }); }}>
+                onClick={() => { setError(null); save.mutate(list, { onSuccess: (next) => { setDraft(next); toast(tr("channels.account_di_posta_salvati")); }, onError: (e) => setError(errorMessage(e)) }); }}>
                 {t("channels.salva_gli_account")}</Button>
             </div>
           </div>

@@ -10,4 +10,5 @@ export const mcpIt = {
   "mcp.inserisci_nel_messaggio": "Inserisci nel messaggio",
   "mcp.prompt": "Prompt",
   "mcp.il_testo_viene_inserito_nel": "Il testo viene inserito nel campo del messaggio: puoi modificarlo prima di inviarlo.",
+  "mcp.risposta_non_inviata": "Risposta non inviata",
 } as const;

@@ -37,4 +37,6 @@ export const teachIt = {
   "teach.frasi_di_esempio": "Frasi di esempio",
   "teach.scrivi_cosa_devo_ricordare": "Scrivi cosa devo ricordare…",
   "teach.carico_la_conversazione": "Carico la conversazione…",
+  "teach.ho_cancellato_1_ricordo": "Ho cancellato 1 ricordo",
+  "teach.ho_cancellato_ricordi": "Ho cancellato {deleted} ricordi",
 } as const;

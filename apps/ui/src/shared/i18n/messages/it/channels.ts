@@ -46,4 +46,5 @@ export const channelsIt = {
   "channels.nessun_account_aggiungine_uno_per": "Nessun account. Aggiungine uno per far leggere all'assistente la posta del server.",
   "channels.aggiungi_un_account": "Aggiungi un account",
   "channels.salva_gli_account": "Salva gli account",
+  "channels.account_di_posta_salvati": "Account di posta salvati",
 } as const;

@@ -8,6 +8,7 @@ import type { Memory, MemoryPatch, MemoryQuery } from "../../shared/api/types";
 import { useCreateSession, useSessions } from "../chat/api";
 import { activated, forgotten, patched, TEACHER_ID, teachSession, without } from "./model/memories";
 
+import { t } from "../../shared/i18n";
 /** What the assistant remembers. Proposals can arrive while the page is open (the assistant saved them in a chat), so it is refreshed now and then. */
 export function useMemories(query: MemoryQuery = {}) {
   const api = useApi();
@@ -85,7 +86,7 @@ export function useDeleteAllMemories() {
     mutationFn: () => api.deleteAllMemories(),
     meta: { handled: true },
     onSuccess: ({ deleted }) => {
-      toast(deleted === 1 ? "Ho cancellato 1 ricordo" : `Ho cancellato ${deleted} ricordi`);
+      toast(deleted === 1 ? t("teach.ho_cancellato_1_ricordo") : t("teach.ho_cancellato_ricordi", { deleted }));
       void qc.invalidateQueries({ queryKey: qk.memories.all() });
     },
   });
@@ -111,7 +112,7 @@ export function useTeachSession() {
   useEffect(() => {
     if (!ready || found || asked.current || isPending || isError) return;
     asked.current = true;
-    mutate({ agent_id: TEACHER_ID, title: "Insegna", isolation: "none" }, { onError: () => { asked.current = false; } });
+    mutate({ agent_id: TEACHER_ID, title: t("teach.insegna"), isolation: "none" }, { onError: () => { asked.current = false; } });
   }, [ready, found, isPending, isError, mutate]);
   return {
     id: found?.id ?? null,

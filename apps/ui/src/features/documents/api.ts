@@ -7,6 +7,7 @@ import { qk } from "../../shared/query/keys";
 import type { KbCollectionCreate, KbCollectionPatch, KbJob, KbSearchBody } from "../../shared/api/types";
 import { runningJobs, splitBatches } from "./model/kb";
 
+import { t } from "../../shared/i18n";
 export function useKbCollections() {
   const api = useApi();
   return useQuery({ queryKey: qk.kb.collections(), queryFn: () => api.kbCollections() });
@@ -57,7 +58,7 @@ export function useDeleteCollection() {
   return useMutation({
     mutationFn: (id: string) => api.deleteKbCollection(id),
     onSuccess: () => {
-      toast("Raccolta eliminata");
+      toast(t("documents.raccolta_eliminata"));
       void refresh(qc);
       void qc.invalidateQueries({ queryKey: qk.agents() });
     },

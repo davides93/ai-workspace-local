@@ -2,6 +2,7 @@ import type { AgentProfile, CatalogModel, Fit, InferenceProfile, LocalModel, Rec
 import { catalogForChoice, isAutoProfile } from "../../models/model/adviser";
 import { applyModelToProfile, newProfileFor, pickRuntime } from "../../models/model/profile";
 
+import { t } from "../../../shared/i18n";
 export type ChecklistId = "runtime" | "model" | "profile" | "chat";
 
 export interface ChecklistStep {
@@ -41,10 +42,10 @@ export const followsAdviser = (agents: AgentProfile[], defaultAgentId?: unknown)
 /** The four first-run steps, in the order they unlock each other: runtime → model → profile → first session. */
 export function checklist(opts: { runtimes: RuntimeInfo[]; models: LocalModel[]; profiles: InferenceProfile[]; sessions: number }): ChecklistStep[] {
   return [
-    { id: "runtime", label: "Un runtime disponibile", done: opts.runtimes.some(isUsableRuntime) },
-    { id: "model", label: "Un modello adatto a questo dispositivo", done: opts.models.length > 0 },
-    { id: "profile", label: "Un profilo di inferenza", done: opts.profiles.length > 0 },
-    { id: "chat", label: "La prima sessione", done: opts.sessions > 0 },
+    { id: "runtime", label: t("home.un_runtime_disponibile"), done: opts.runtimes.some(isUsableRuntime) },
+    { id: "model", label: t("home.un_modello_adatto_a_questo"), done: opts.models.length > 0 },
+    { id: "profile", label: t("home.un_profilo_di_inferenza"), done: opts.profiles.length > 0 },
+    { id: "chat", label: t("home.la_prima_sessione"), done: opts.sessions > 0 },
   ];
 }
 

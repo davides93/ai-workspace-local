@@ -39,4 +39,6 @@ export const teachEn: Record<keyof typeof teachIt, string> = {
   "teach.frasi_di_esempio": "Example sentences",
   "teach.scrivi_cosa_devo_ricordare": "Write what I should remember…",
   "teach.carico_la_conversazione": "Loading the conversation…",
+  "teach.ho_cancellato_1_ricordo": "Deleted 1 memory",
+  "teach.ho_cancellato_ricordi": "Deleted {deleted} memories",
 };

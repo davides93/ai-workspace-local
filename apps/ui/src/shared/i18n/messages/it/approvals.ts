@@ -20,4 +20,5 @@ export const approvalsIt = {
   "approvals.cambia_richiesta": "{kbd}{kbd2} cambia richiesta",
   "approvals.esc": "Esc",
   "approvals.chiudi": "{kbd} chiudi",
+  "approvals.non_chiedere_piu_conferma_per": "Non chiedere più conferma per questo tool finché la sessione resta aperta",
 } as const;

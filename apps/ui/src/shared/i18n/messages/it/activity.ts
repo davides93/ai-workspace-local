@@ -2,7 +2,7 @@
 export const activityIt = {
   "activity.attivita": "Attività",
   "activity.audit_trail_di_ogni_decisione": "Audit trail di ogni decisione di policy, azione dei tool e comando di sistema.",
-  "activity.esporta_json": "Esporta JSON{p}",
+  "activity.esporta_json": "Esporta JSON",
   "activity.ultime_voci": "ultime {BACKEND_LIMIT} voci",
   "activity.l_elenco_e_al_limite": " L'elenco è al limite, quindi alcune voci più vecchie potrebbero mancare.",
   "activity.ancora_nessuna_attivita": "Ancora nessuna attività",
@@ -32,4 +32,7 @@ export const activityIt = {
   "activity.pagina_precedente": "Pagina precedente",
   "activity.pagina_di": "Pagina {page} di {pages}",
   "activity.pagina_successiva": "Pagina successiva",
+  "activity.scarica_le_righe_filtrate_in": "Scarica le righe filtrate in un file JSON",
+  "activity.nessuna_riga_corrisponde_ai_filtri": "Nessuna riga corrisponde ai filtri",
+  "activity.esporta_json_count": "Esporta JSON ({count})",
 } as const;

@@ -4,6 +4,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import { useSystem } from "../../shared/query/system";
 
+import { t } from "../../shared/i18n";
 const MESH_POLL_MS = 8_000;
 
 export function useMesh() {
@@ -29,7 +30,7 @@ export function usePairPeer() {
   return useMutation({
     mutationFn: (v: { address: string; code: string; fingerprint?: string }) => api.pairPeer(v.address, v.code, v.fingerprint),
     onSuccess: (p) => {
-      toast(`Accoppiato con ${p.name}: i suoi modelli e agenti sono disponibili qui`);
+      toast(t("devices.accoppiato_con_i_suoi_modelli", { name: p.name }));
       void qc.invalidateQueries({ queryKey: qk.mesh() });
       void qc.invalidateQueries({ queryKey: qk.system() });
       void qc.invalidateQueries({ queryKey: qk.runtimes.all() });
@@ -43,7 +44,7 @@ export function useRemovePeer() {
   return useMutation({
     mutationFn: (p: { id: string; name: string }) => api.removePeer(p.id),
     onSuccess: (_r, p) => {
-      toast(`${p.name} rimosso`);
+      toast(t("devices.rimosso", { name: p.name }));
       void qc.invalidateQueries({ queryKey: qk.mesh() });
       void qc.invalidateQueries({ queryKey: qk.system() });
       void qc.invalidateQueries({ queryKey: qk.runtimes.all() });

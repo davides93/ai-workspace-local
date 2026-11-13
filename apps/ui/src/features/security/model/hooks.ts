@@ -3,6 +3,7 @@
 
 import type { HookConfig, HookEvent } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 export interface HookEventInfo {
   id: HookEvent;
   label: string;
@@ -79,16 +80,16 @@ export function checkHooks(hooks: readonly HookConfig[], globProblem: (glob: str
   hooks.forEach((h, index) => {
     const info = hookEvent(h.event);
     if (!info) issues.push({ index, level: "error", message: `Evento «${String(h.event)}» non valido: usa ${HOOK_EVENTS.map((e) => e.id).join(", ")}.` });
-    if (!h.command.trim()) issues.push({ index, level: "error", message: "Scrivi il comando da eseguire." });
+    if (!h.command.trim()) issues.push({ index, level: "error", message: t("security.scrivi_il_comando_da_eseguire") });
     if (!Number.isInteger(h.timeout_s) || h.timeout_s < 1 || h.timeout_s > MAX_TIMEOUT_S) {
-      issues.push({ index, level: "error", message: `Il timeout deve essere tra 1 e ${MAX_TIMEOUT_S} secondi.` });
+      issues.push({ index, level: "error", message: t("security.il_timeout_deve_essere_tra", { max: MAX_TIMEOUT_S }) });
     }
-    if (info && !info.active) issues.push({ index, level: "warn", message: "Il backend non esegue ancora questo evento: l'hook viene salvato ma non partirà." });
+    if (info && !info.active) issues.push({ index, level: "warn", message: t("security.il_backend_non_esegue_ancora") });
     // The filter is sent only for the events that have a tool (see `normalizeHooks`).
     const matcher = info?.tools ? h.matcher?.trim() : "";
     if (matcher) {
       const p = globProblem(matcher);
-      if (p) issues.push({ index, level: "error", message: `Il filtro «${matcher}» non è un glob valido (${p}).` });
+      if (p) issues.push({ index, level: "error", message: t("security.il_filtro_non_e_un", { matcher, error: p }) });
     }
   });
   return issues;

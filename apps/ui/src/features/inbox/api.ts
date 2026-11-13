@@ -5,6 +5,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { ProposalQuery } from "../../shared/api/types";
 
+import { t } from "../../shared/i18n";
 const POLL_MS = 20_000;
 
 /** What the assistant noticed. The heartbeat adds items while the page is open, so it is refreshed now and then. */
@@ -34,8 +35,8 @@ export function useApproveProposal() {
   return useMutation({
     mutationFn: (v: { id: string; instruction?: string }) => api.approveProposal(v.id, v.instruction),
     meta: { handled: true },
-    onSuccess: () => toast("Ho cominciato: trovi il lavoro nelle chat"),
-    onError: (e) => toast(`Non sono riuscito ad avviarla: ${errorMessage(e)}`, "crit"),
+    onSuccess: () => toast(t("inbox.ho_cominciato_trovi_il_lavoro")),
+    onError: (e) => toast(t("inbox.non_sono_riuscito_ad_avviarla", { error: errorMessage(e) }), "crit"),
     onSettled: refresh,
   });
 }
@@ -46,7 +47,7 @@ export function useDismissProposal() {
   return useMutation({
     mutationFn: (id: string) => api.dismissProposal(id),
     meta: { handled: true },
-    onError: (e) => toast(`Non sono riuscito a scartarla: ${errorMessage(e)}`, "crit"),
+    onError: (e) => toast(t("inbox.non_sono_riuscito_a_scartarla", { error: errorMessage(e) }), "crit"),
     onSettled: refresh,
   });
 }
@@ -58,8 +59,8 @@ export function useProactiveTick() {
   return useMutation({
     mutationFn: () => api.proactiveTick(),
     meta: { handled: true },
-    onSuccess: (r) => toast(r.outcome === "proposed" ? "Ho trovato qualcosa da proporti" : r.reason ?? "Niente di nuovo"),
-    onError: (e) => toast(`Il controllo non è riuscito: ${errorMessage(e)}`, "crit"),
+    onSuccess: (r) => toast(r.outcome === "proposed" ? t("inbox.ho_trovato_qualcosa_da_proporti") : r.reason ?? t("inbox.niente_di_nuovo")),
+    onError: (e) => toast(t("inbox.il_controllo_non_e_riuscito", { error: errorMessage(e) }), "crit"),
     onSettled: refresh,
   });
 }
