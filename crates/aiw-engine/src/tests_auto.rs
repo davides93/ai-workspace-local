@@ -1,8 +1,19 @@
 //! `auto:<task>` inference profiles: resolved by the model adviser when a run starts.
 
-use super::tests::{engine, wait_finished};
+use super::tests::wait_finished;
 use super::*;
 use aiw_runtimes::ScriptedBackend;
+
+// Model ranking must not depend on the runner's RAM or GPU memory.
+async fn engine(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, tempfile::TempDir, tempfile::TempDir) {
+    let (e, data, ws) = super::tests::engine(turns).await;
+    let mut device = e.device();
+    device.memory_mb = 64 * 1024;
+    device.available_memory_mb = 48 * 1024;
+    device.accelerators.retain(|a| a.kind == "cpu");
+    e.set_device(device);
+    (e, data, ws)
+}
 
 fn gguf(id: &str, file: &str, size_gb: f64, caps: &[&str]) -> LocalModel {
     serde_json::from_value(json!({

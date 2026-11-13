@@ -9,6 +9,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      upload:
+        description: "Carica negli store (false = solo artefatti firmati)"
+        type: boolean
+        default: true
       ios:
         description: "iOS/iPadOS -> TestFlight"
         type: boolean
@@ -90,7 +94,14 @@ jobs:
           npx tauri ios init --ci
           npx tauri ios build --export-method app-store-connect --ci \
             --config "{\"version\":\"${{ needs.version.outputs.short }}\"}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: apps/desktop/src-tauri/gen/apple/**/*.ipa
+          if-no-files-found: error
+          retention-days: 7
       - name: Carica su TestFlight
+        if: github.event_name == 'push' || inputs.upload
         env:
           KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           ISSUER: ${{ secrets.APPSTORE_API_ISSUER_ID }}
@@ -171,7 +182,7 @@ jobs:
           # lei (l'estrazione in app_data_dir/bin fallisce), solo uno firmato dentro il bundle.
           # Si usa lo stesso helper compilato da build.rs (slice arm64), lo si firma con sandbox +
           # inherit e poi si firma di nuovo l'app, che altrimenti avrebbe il sigillo rotto.
-          helper=$(find ../../target/aarch64-apple-darwin/release/build -path '*tauri-plugin-aiw-native-*/out/aiw-apple-fm' -type f | head -n1)
+          helper=$(find ../../target/aarch64-apple-darwin/release/build -type f -name aiw-apple-fm | head -n1)
           [ -n "$helper" ] || { echo "::error::helper aiw-apple-fm non trovato (build.rs non l'ha compilato?)"; exit 1; }
           cp "$helper" "$app/Contents/MacOS/aiw-apple-fm"
           codesign --force --sign "$APP_SIGN" --entitlements src-tauri/Entitlements.mas-helper.plist "$app/Contents/MacOS/aiw-apple-fm"
@@ -180,7 +191,14 @@ jobs:
           codesign -d --entitlements - "$app/Contents/MacOS/aiw-apple-fm" 2>&1 | grep -E "app-sandbox|inherit"
           xcrun productbuild --sign "$PKG_SIGN" --component "$app" /Applications "$RUNNER_TEMP/AIW.pkg"
           echo "PKG=$RUNNER_TEMP/AIW.pkg" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-store-pkg
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+          retention-days: 7
       - name: Carica su TestFlight
+        if: github.event_name == 'push' || inputs.upload
         env:
           KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           ISSUER: ${{ secrets.APPSTORE_API_ISSUER_ID }}
@@ -235,7 +253,14 @@ jobs:
           jarsigner -verify "$aab"
           echo "AAB=$aab" >> "$GITHUB_ENV"
           rm -f "$RUNNER_TEMP/upload.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-aab
+          path: ${{ env.AAB }}
+          if-no-files-found: error
+          retention-days: 7
       - name: Carica su Google Play
+        if: github.event_name == 'push' || inputs.upload
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
