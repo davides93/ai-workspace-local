@@ -52,7 +52,7 @@ jobs:
 
       # ---------------------------------------------------------------- Android
       - if: matrix.platform == 'android'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with: { distribution: temurin, java-version: 17 }
       - if: matrix.platform == 'android'
         name: Android SDK platform
