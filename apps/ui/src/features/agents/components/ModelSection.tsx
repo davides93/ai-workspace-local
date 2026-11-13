@@ -7,7 +7,7 @@ import { autoChoices, autoSummary, isAutoProfile } from "../../models/model/advi
 import type { AgentProfile, InferenceProfile, RuntimeInfo } from "../../../shared/api/types";
 import type { AgentIssue } from "../model/agents";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 /** Which inference profile the agent runs on, and what that profile means in practice. */
 export function ModelSection({ agent, profiles, runtimes, issues, onChange }: {
   agent: AgentProfile;
@@ -41,10 +41,10 @@ export function ModelSection({ agent, profiles, runtimes, issues, onChange }: {
       {profile && (
         <div className="profile-card">
           <KeyValue items={[
-            ["Runtime", <span key="r" className="row"><span className="mono">{runtime?.name ?? profile.runtime_id}</span>{runtime && <StatusPill status={runtime.status} />}</span>],
-            ["Modello", profile.model ? <span className="mono">{profile.model}</span> : <Pill tone="warn">{t("agents.da_scegliere")}</Pill>],
-            ["Contesto", formatContext(profile.params.context)],
-            ["Temperatura", profile.params.temperature ?? "—"],
+            [tr("agents.runtime_2"), <span key="r" className="row"><span className="mono">{runtime?.name ?? profile.runtime_id}</span>{runtime && <StatusPill status={runtime.status} />}</span>],
+            [tr("agents.modello"), profile.model ? <span className="mono">{profile.model}</span> : <Pill tone="warn">{t("agents.da_scegliere")}</Pill>],
+            [tr("agents.contesto"), formatContext(profile.params.context)],
+            [tr("agents.temperatura"), profile.params.temperature ?? "—"],
           ]} />
           {profile.description && <p className="faint text-sm mt-3">{profile.description}</p>}
         </div>

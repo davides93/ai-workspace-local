@@ -1,11 +1,11 @@
 import { Field, Input } from "../../../shared/ui";
 import type { BudgetLimits } from "../../../shared/api/types";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 const FIELDS: { key: keyof BudgetLimits; id: string; label: string; hint: string }[] = [
-  { key: "max_tokens", id: "ag-budget-tokens", label: "Token", hint: "Prompt e risposta di tutte le chiamate al modello." },
-  { key: "max_turns", id: "ag-budget-turns", label: "Turni del modello", hint: "Contati sul run intero, subagenti compresi." },
-  { key: "max_seconds", id: "ag-budget-seconds", label: "Secondi", hint: "Tempo massimo del run." },
+  { key: "max_tokens", id: "ag-budget-tokens", get label() { return tr("agents.token"); }, get hint() { return tr("agents.prompt_e_risposta_di_tutte"); } },
+  { key: "max_turns", id: "ag-budget-turns", get label() { return tr("agents.turni_del_modello"); }, get hint() { return tr("agents.contati_sul_run_intero_subagenti"); } },
+  { key: "max_seconds", id: "ag-budget-seconds", get label() { return tr("agents.secondi"); }, get hint() { return tr("agents.tempo_massimo_del_run"); } },
 ];
 
 /** What the section edits: an agent profile or a team. */

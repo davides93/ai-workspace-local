@@ -10,6 +10,7 @@
 
 import type { PolicyMode, SandboxMode, ToolInfo, ToolRisk } from "../../../shared/api/types";
 
+import { t as tr } from "../../../shared/i18n";
 export const ALL = "*";
 
 export interface InternalTool {
@@ -19,18 +20,18 @@ export interface InternalTool {
 }
 
 export const INTERNAL_TOOLS: InternalTool[] = [
-  { name: "todo", risk: "read", description: "Pubblica e aggiorna il piano di lavoro: la lista dei passi che vedi nel pannello del run." },
-  { name: "agent", risk: "read", description: "Delega un sotto-compito a un altro agente, con un contesto separato." },
-  { name: "skill", risk: "read", description: "Carica le istruzioni di una skill elencata nel prompt di sistema." },
-  { name: "render_ui", risk: "read", description: "Mostra un'interfaccia interattiva (A2UI) nella chat: moduli, scelte, riepiloghi." },
-  { name: "code", risk: "read", description: "Orchestra più tool con uno script in un solo passo. Ogni chiamata dello script passa da policy, conferme e hook come una diretta." },
-  { name: "handoff", risk: "read", description: "Passa la conversazione a un altro agente: il tuo run termina e prosegue lui con il tuo riassunto." },
-  { name: "team_state", risk: "read", description: "Legge e scrive lo stato condiviso tra gli agenti di un team: serve solo dentro un team." },
-  { name: "memory_save", risk: "read", description: "Salva un ricordo a lungo termine: subito se l'hai chiesto tu, come proposta da confermare se lo ha dedotto l'agente." },
-  { name: "memory_search", risk: "read", description: "Cerca tra i ricordi per parole e per significato." },
-  { name: "memory_update", risk: "read", description: "Corregge un ricordo esistente." },
-  { name: "memory_forget", risk: "read", description: "Dimentica un ricordo: puoi sempre ripristinarlo." },
-  { name: "kb_search", risk: "read", description: "Cerca nei tuoi documenti (le raccolte della pagina Documenti) per parole e per significato." },
+  { name: "todo", risk: "read", get description() { return tr("agents.pubblica_e_aggiorna_il_piano"); } },
+  { name: "agent", risk: "read", get description() { return tr("agents.delega_un_sotto_compito_a"); } },
+  { name: "skill", risk: "read", get description() { return tr("agents.carica_le_istruzioni_di_una"); } },
+  { name: "render_ui", risk: "read", get description() { return tr("agents.mostra_un_interfaccia_interattiva_a2ui"); } },
+  { name: "code", risk: "read", get description() { return tr("agents.orchestra_piu_tool_con_uno"); } },
+  { name: "handoff", risk: "read", get description() { return tr("agents.passa_la_conversazione_a_un"); } },
+  { name: "team_state", risk: "read", get description() { return tr("agents.legge_e_scrive_lo_stato"); } },
+  { name: "memory_save", risk: "read", get description() { return tr("agents.salva_un_ricordo_a_lungo"); } },
+  { name: "memory_search", risk: "read", get description() { return tr("agents.cerca_tra_i_ricordi_per"); } },
+  { name: "memory_update", risk: "read", get description() { return tr("agents.corregge_un_ricordo_esistente"); } },
+  { name: "memory_forget", risk: "read", get description() { return tr("agents.dimentica_un_ricordo_puoi_sempre"); } },
+  { name: "kb_search", risk: "read", get description() { return tr("agents.cerca_nei_tuoi_documenti_le"); } },
 ];
 
 export const INTERNAL_NAMES: ReadonlySet<string> = new Set(INTERNAL_TOOLS.map((t) => t.name));
@@ -72,16 +73,16 @@ export function categoryOf(t: Pick<ToolInfo, "name" | "source" | "server">): Cat
 }
 
 export const CATEGORY_LABEL: Record<Exclude<CategoryId, `mcp:${string}`>, string> = {
-  file: "File e cartelle",
-  shell: "Shell",
-  web: "Web",
-  browser: "Browser",
-  computer: "Computer-use",
-  internal: "Interni",
-  other: "Altri tool",
+  get file() { return tr("agents.cat_files"); },
+  get shell() { return tr("agents.shell"); },
+  get web() { return tr("agents.cat_web"); },
+  get browser() { return tr("agents.browser"); },
+  get computer() { return tr("agents.cat_computer"); },
+  get internal() { return tr("agents.interni"); },
+  get other() { return tr("agents.altri_tool"); },
 };
 
-export const categoryLabel = (c: CategoryId): string => (c.startsWith("mcp:") ? `Server MCP · ${c.slice(4)}` : CATEGORY_LABEL[c as keyof typeof CATEGORY_LABEL]);
+export const categoryLabel = (c: CategoryId): string => (c.startsWith("mcp:") ? tr("agents.server_mcp", { server: c.slice(4) }) : CATEGORY_LABEL[c as keyof typeof CATEGORY_LABEL]);
 
 const ORDER: CategoryId[] = ["file", "shell", "web", "browser", "computer"];
 const rank = (c: CategoryId): number => {
@@ -99,7 +100,7 @@ const rank = (c: CategoryId): number => {
 export function buildCatalog(tools: readonly ToolInfo[]): PickerTool[] {
   const out: PickerTool[] = tools.map((t) => ({
     name: t.name, description: t.description, risk: t.risk, category: categoryOf(t),
-    disabled: isInternal(t) ? false : !t.enabled, unavailable: t.available ? undefined : t.unavailable_reason || "non disponibile",
+    disabled: isInternal(t) ? false : !t.enabled, unavailable: t.available ? undefined : t.unavailable_reason || tr("agents.unavailable_default"),
   }));
   const listed = new Set(out.map((t) => t.name));
   for (const t of INTERNAL_TOOLS) {
@@ -203,9 +204,9 @@ export function blockedTools(tools: readonly string[], catalog: readonly PickerT
   for (const t of catalog) {
     if (!isSelected(tools, t.name)) continue;
     if (mode === "plan" && (t.risk === "write" || t.risk === "exec" || t.risk === "computer")) {
-      out.push({ name: t.name, why: "la modalità Piano nega scritture, comandi e azioni sul computer" });
+      out.push({ name: t.name, why: tr("agents.la_modalita_piano_nega_scritture") });
     } else if (sandbox === "read-only" && (t.name === "write_file" || t.name === "edit_file" || t.name === "move_file")) {
-      out.push({ name: t.name, why: "la sandbox in sola lettura non consente di scrivere" });
+      out.push({ name: t.name, why: tr("agents.la_sandbox_in_sola_lettura") });
     }
   }
   return out;

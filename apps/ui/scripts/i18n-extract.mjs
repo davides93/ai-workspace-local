@@ -205,8 +205,8 @@ for (const file of files) {
     if (/\s/.test(clean)) return !/^[\w.\/:@#~=&?%$<>,|*+-]+(\s[\w.\/:@#~=&?%$<>,|*+-]+)*$/.test(clean) || /[A-Za-zÀ-ÿ]{4,}\s+[A-Za-zÀ-ÿ]{3,}/.test(clean);
     return /^[A-ZÀ-Ù][a-zà-ù]{3,}$/.test(clean);
   }
-  function sweepOk(node, text) {
-    if (!sweepText(text)) return false;
+  function sweepOk(node, text, force) {
+    if (!(force ? worthy(text) && !(skipText && skipText.test(text.trim())) : sweepText(text))) return false;
     for (let p = node.parent; p; p = p.parent) {
       if (ts.isCallExpression(p) || ts.isNewExpression(p)) {
         const callee = p.expression.getText(sf);
@@ -229,7 +229,8 @@ for (const file of files) {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) text = node.text;
     else if (ts.isTemplateExpression(node)) text = node.head.text + node.templateSpans.map((x) => "x" + x.literal.text).join("");
     else return false;
-    if (!sweepOk(node, text)) return false;
+    const parProp = ts.isPropertyAssignment(node.parent) && node.parent.initializer === node && TEXT_PROPS.has(node.parent.name.getText(sf));
+    if (!sweepOk(node, text, parProp)) return false;
     if (ts.isTemplateExpression(node) && node.templateSpans.some((x) => hasWorthyString(x.expression))) {
       moduleLeft.push(`${relative(SRC, file)}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1} template with nested text`);
       return false;
@@ -237,7 +238,7 @@ for (const file of files) {
     const r = convertExpr(node);
     if (r === null) return false;
     const mod = !insideFunction(node);
-    if (!mod) { replace(node, r); return true; }
+    if (!mod) { replace(node, ts.isJsxAttribute(node.parent) ? `{${r}}` : r); return true; }
     const par = node.parent;
     if (ts.isPropertyAssignment(par) && par.initializer === node && (ts.isIdentifier(par.name) || ts.isStringLiteral(par.name))) {
       edits.push({ start: par.getStart(sf), end: par.getEnd(), text: `get ${par.name.getText(sf)}() { return ${r}; }` });

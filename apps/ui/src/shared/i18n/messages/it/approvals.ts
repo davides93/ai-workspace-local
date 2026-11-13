@@ -21,4 +21,8 @@ export const approvalsIt = {
   "approvals.esc": "Esc",
   "approvals.chiudi": "{kbd} chiudi",
   "approvals.non_chiedere_piu_conferma_per": "Non chiedere più conferma per questo tool finché la sessione resta aperta",
+  "approvals.allow": "Consenti",
+  "approvals.deny": "Nega",
+  "approvals.run_label": "Run",
+  "approvals.pending_count": "{n, plural, one {# conferma in attesa} other {# conferme in attesa}}",
 } as const;

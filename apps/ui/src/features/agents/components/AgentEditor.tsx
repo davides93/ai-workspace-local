@@ -18,7 +18,7 @@ import { RoutingSection } from "./RoutingSection";
 import { SecuritySection } from "./SecuritySection";
 import { ToolPicker } from "./ToolPicker";
 
-import { t as tr, t } from "../../../shared/i18n";
+import { t as tr, t, tNode as trNode } from "../../../shared/i18n";
 /** The detail of `#/agents/:agentId`: a form in sections (identity, model, tools, response, security). */
 export function AgentEditor({ agentId, from }: { agentId: string; from?: string }) {
   const agents = useAgents();
@@ -153,7 +153,7 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
           title={tr("agents.elimina_l_agente")} confirmLabel={tr("agents.elimina")} icon="trash" pending={del.isPending} error={del.error}
           onCancel={() => { setConfirmDelete(false); del.reset(); }} onConfirm={remove}
         >
-          <p>Vuoi eliminare <b>{saved.name}</b>? Le sessioni già create con questo agente non potranno più proseguire.</p>
+          <p>{trNode("agents.confirm_delete", { name: <b>{saved.name}</b> })}</p>
           <p className="faint text-sm">{tr("agents.se_un_workflow_lo_usa")}</p>
         </DecisionDialog>
       )}

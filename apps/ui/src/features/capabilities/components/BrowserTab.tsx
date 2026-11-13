@@ -7,22 +7,22 @@ import { ToolRow } from "./ToolRow";
 
 import { t as tr, tNode as trNode, t } from "../../../shared/i18n";
 const STATUS: Record<CapabilityStatus, { label: string; tone: PillTone }> = {
-  ready: { label: "Disponibile", tone: "ok" },
-  partial: { label: "Parziale", tone: "warn" },
-  off: { label: "Disattivato", tone: "neutral" },
-  unavailable: { label: "Non disponibile qui", tone: "crit" },
-  absent: { label: "Non presente in questa build", tone: "neutral" },
+  ready: { get label() { return t("capabilities.disponibile"); }, tone: "ok" },
+  partial: { get label() { return t("capabilities.parziale"); }, tone: "warn" },
+  off: { get label() { return t("capabilities.disattivato"); }, tone: "neutral" },
+  unavailable: { get label() { return t("capabilities.non_disponibile_qui"); }, tone: "crit" },
+  absent: { get label() { return t("capabilities.non_presente_in_questa_build"); }, tone: "neutral" },
 };
 
 /** Approval of each risk class per approval mode, as `aiw-agent::policy` decides it (before the policy rules). */
 const MODES = ["plan", "ask", "auto-edit", "auto", "yolo"] as const;
 type Cell = { label: string; tone: PillTone };
-const ALLOW: Cell = { label: "consentito", tone: "ok" };
-const ASK: Cell = { label: "chiede", tone: "warn" };
-const DENY: Cell = { label: "negato", tone: "crit" };
+const ALLOW: Cell = { get label() { return t("capabilities.consentito"); }, tone: "ok" };
+const ASK: Cell = { get label() { return t("capabilities.chiede"); }, tone: "warn" };
+const DENY: Cell = { get label() { return t("capabilities.negato"); }, tone: "crit" };
 const MATRIX: { risk: string; cells: Cell[] }[] = [
-  { risk: "Lettura e rete (snapshot, screenshot, navigazione)", cells: [ALLOW, ALLOW, ALLOW, ALLOW, ALLOW] },
-  { risk: "Computer-use (clic, digitazione, tasti, scroll)", cells: [DENY, ASK, ASK, ASK, ALLOW] },
+  { get risk() { return t("capabilities.lettura_e_rete_snapshot_screenshot"); }, cells: [ALLOW, ALLOW, ALLOW, ALLOW, ALLOW] },
+  { get risk() { return t("capabilities.computer_use_clic_digitazione_tasti"); }, cells: [DENY, ASK, ASK, ASK, ALLOW] },
 ];
 
 interface Capability {
@@ -52,17 +52,17 @@ export function BrowserTab() {
           {
             id: "browser", title: tr("capabilities.browser_controllato"), icon: "globe", tools: all.filter(isBrowserTool),
             how: [
-              "Avvia un profilo dedicato di Chrome, Edge o Chromium già installato sul computer e lo guida con il Chrome DevTools Protocol (CDP).",
-              "Lo snapshot è testo con gli elementi numerati: funziona anche con modelli senza visione. Lo screenshot serve ai modelli con visione.",
-              "I siti raggiungibili si limitano con «Domini consentiti» nelle Impostazioni; vuoto significa tutti i siti pubblici.",
+              t("capabilities.avvia_un_profilo_dedicato_di"),
+              t("capabilities.lo_snapshot_e_testo_con"),
+              t("capabilities.i_siti_raggiungibili_si_limitano"),
             ],
           },
           {
             id: "computer", title: tr("capabilities.computer_use"), icon: "mouse", tools: all.filter(isComputerTool),
             how: [
-              "Cattura lo schermo principale e invia clic, testo e tasti sintetici alla finestra attiva.",
-              "Le coordinate si riferiscono all'ultimo screenshot, scalato a 1280 px di larghezza al massimo.",
-              "Disponibile solo nelle build desktop con la feature computer-use; le altre elencano i tool come non disponibili.",
+              t("capabilities.cattura_lo_schermo_principale_e"),
+              t("capabilities.le_coordinate_si_riferiscono_all"),
+              t("capabilities.disponibile_solo_nelle_build_desktop"),
             ],
           },
         ];
@@ -78,7 +78,7 @@ export function BrowserTab() {
                       <ul className="cap-how text-sm">{c.how.map((h) => <li key={h}>{h}</li>)}</ul>
                     </div>
                     {c.tools.length === 0 ? (
-                      <p className="cap-empty faint text-sm">Nessun tool <code>{c.id}_*</code> registrato da questo backend.</p>
+                      <p className="cap-empty faint text-sm">{trNode("capabilities.no_tools_registered", { prefix: <code>{c.id}_*</code> })}</p>
                     ) : (
                       <ul className="cap-tools">
                         {c.tools.map((t) => <ToolRow key={t.name} tool={t} onToggle={(enabled) => setEnabled.mutate({ names: [t.name], enabled })} />)}

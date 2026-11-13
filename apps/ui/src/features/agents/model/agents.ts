@@ -7,7 +7,7 @@ import { isAutoProfile } from "../../models/model/adviser";
 import { normalizeRoles } from "./roles";
 import { ALL, normalizeTools } from "./tools";
 
-import { t as tr } from "../../../shared/i18n";
+import { t as tr, t } from "../../../shared/i18n";
 /** Seeded on first run by crates/aiw-engine/src/defaults.rs `agents()`; the backend refuses to delete them (409). */
 export const BUILTIN_AGENT_IDS: readonly string[] = ["operator", "coder", "browser", "desktop", "planner", "teacher"];
 
@@ -43,7 +43,7 @@ export function blankAgent(inferenceProfile: string): AgentProfile {
 
 /** `Copia di Coder`, then `Copia di Coder (2)`… */
 export function copyName(name: string, existing: readonly string[]): string {
-  const base = `Copia di ${name}`;
+  const base = t("agents.copy_of", { name });
   const taken = new Set(existing.map((n) => n.toLowerCase()));
   if (!taken.has(base.toLowerCase())) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base} (${n})`.toLowerCase())) return `${base} (${n})`;
@@ -108,9 +108,9 @@ export function parseSchemaText(text: string): { value?: Record<string, unknown>
   try {
     v = JSON.parse(text);
   } catch (e) {
-    return { error: `JSON non valido: ${(e as Error).message}` };
+    return { error: t("agents.json_non_valido", { message: (e as Error).message }) };
   }
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return { error: "Lo schema deve essere un oggetto JSON, per esempio {\"type\": \"object\"}." };
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return { error: t("agents.schema_object", { example: "{\"type\": \"object\"}" }) };
   return { value: v as Record<string, unknown> };
 }
 

@@ -10,10 +10,10 @@ import {
   type McpDraft, type McpPayload, type McpTransportKind,
 } from "../model/mcpForm";
 
-import { t as tr } from "../../../shared/i18n";
+import { t as tr, t } from "../../../shared/i18n";
 const TRANSPORTS: { id: McpTransportKind; label: string }[] = [
-  { id: "stdio", label: "stdio (comando locale)" },
-  { id: "http", label: "HTTP (server remoto)" },
+  { id: "stdio", get label() { return t("capabilities.stdio_comando_locale"); } },
+  { id: "http", get label() { return t("capabilities.http_server_remoto"); } },
 ];
 
 /** A labelled group of controls (not a single input, so the label is text and not a `<label>`). */
@@ -73,7 +73,7 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
           <Input id="mcp-name" data-autofocus value={draft.name} placeholder={tr("capabilities.filesystem")} aria-invalid={!!shown.name} autoComplete="off" onChange={(e) => patch({ name: e.target.value })} />
         </Field>
         {renamed && (
-          <p className="cap-note cap-note-warn text-sm"><Icon name="alert" size={15} /> {" "}{tr("capabilities.rinominare_cambia_il_prefisso_dei", { p: normalizeName(draft.name) })}</p>
+          <p className="cap-note cap-note-warn text-sm"><Icon name="alert" size={15} /> {tr("capabilities.rinominare_cambia_il_prefisso_dei", { p: normalizeName(draft.name) })}</p>
         )}
 
         <div className="field">
@@ -122,12 +122,12 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
                 <Button size="sm" onClick={() => patch(split)}>{tr("capabilities.dividi")}</Button>
               </p>
             )}
-            <Field label={tr("capabilities.argomenti")} htmlFor="mcp-args" hint="Invio aggiunge un argomento (anche incollando una riga). Le virgolette tengono insieme gli spazi: &quot;~/Mie Cartelle&quot;.">
+            <Field label={tr("capabilities.argomenti")} htmlFor="mcp-args" hint={tr("capabilities.args_hint")}>
               <TagInput id="mcp-args" label={tr("capabilities.argomenti")} value={draft.args} onChange={(args) => patch({ args })} parse={splitShellWords} placeholder={tr("capabilities.y_modelcontextprotocol_server_filesystem_mie")} />
             </Field>
             <GroupField label={tr("capabilities.variabili_d_ambiente")} error={shown.env} hint={tr("capabilities.i_valori_di_chiavi_token")}>
               <KeyValueEditor
-                idPrefix="mcp-env" label={tr("capabilities.variabili_d_ambiente")} rows={draft.env} onChange={(env) => patch({ env })} keyLabel="Variabile" valueLabel="Valore"
+                idPrefix="mcp-env" label={tr("capabilities.variabili_d_ambiente")} rows={draft.env} onChange={(env) => patch({ env })} keyLabel={t("capabilities.variabile")} valueLabel={t("capabilities.valore")}
                 keyPlaceholder="GITHUB_TOKEN" isSecret={isSecretKey} mask={SECRET_MASK} addLabel={tr("capabilities.aggiungi_variabile")} emptyText={tr("capabilities.nessuna_variabile_oltre_a_quelle")}
               />
             </GroupField>
@@ -139,8 +139,8 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
             </Field>
             <GroupField label={tr("capabilities.header_http")} error={shown.headers} hint={tr("capabilities.authorization_e_gli_header_che")}>
               <KeyValueEditor
-                idPrefix="mcp-hdr" label={tr("capabilities.header_http")} rows={draft.headers} onChange={(headers) => patch({ headers })} keyLabel="Header" valueLabel="Valore"
-                keyPlaceholder="Authorization" valuePlaceholder={tr("capabilities.bearer")} isSecret={isSecretKey} mask={SECRET_MASK} addLabel={tr("capabilities.aggiungi_header")} emptyText={tr("capabilities.nessun_header_aggiuntivo")}
+                idPrefix="mcp-hdr" label={tr("capabilities.header_http")} rows={draft.headers} onChange={(headers) => patch({ headers })} keyLabel={t("capabilities.header_2")} valueLabel={t("capabilities.valore")}
+                keyPlaceholder={t("capabilities.authorization")} valuePlaceholder={tr("capabilities.bearer")} isSecret={isSecretKey} mask={SECRET_MASK} addLabel={tr("capabilities.aggiungi_header")} emptyText={tr("capabilities.nessun_header_aggiuntivo")}
               />
             </GroupField>
           </>
@@ -160,7 +160,7 @@ export function McpServerDrawer({ server, others, saving, onSave, onClose }: {
           <Toggle id="mcp-sampling" checked={!!draft.sampling} onChange={(sampling) => patch({ sampling })} label={tr("capabilities.consenti_al_server_di_usare")} />
         </div>
         {draft.sampling && (
-          <p className="cap-note cap-note-warn text-sm"><Icon name="alert" size={15} /> {" "}{tr("capabilities.un_server_che_non_controlli")}</p>
+          <p className="cap-note cap-note-warn text-sm"><Icon name="alert" size={15} /> {tr("capabilities.un_server_che_non_controlli")}</p>
         )}
 
         <div className="row row-between nowrap">

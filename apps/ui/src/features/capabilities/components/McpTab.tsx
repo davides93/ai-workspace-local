@@ -39,7 +39,7 @@ export function McpTab() {
           <Icon name="alert" size={20} />
           <p className="text-sm">
             <b>{t("capabilities.un_server_stdio_e_un_2")}</b> {isolationAvailable ? t("capabilities.i_nuovi_server_partono_isolati") : t("capabilities.su_questo_sistema_l_isolamento")}
-            {" "}Prima di avviare un comando nuovo o modificato ti chiediamo conferma. Aggiungi solo comandi di cui ti fidi; i tool che espongono restano soggetti alla conferma in base al rischio.
+            {" "}{t("capabilities.confirm_before_start")}
           </p>
         </div>
       </div>
@@ -90,7 +90,7 @@ export function McpTab() {
             <Button variant="danger" icon="trash" disabled={remove.isPending} onClick={() => remove.mutate(removing, { onSettled: () => setRemoving(null) })}>{t("capabilities.rimuovi_2")}</Button>
           </>}
         >
-          <p>Vuoi rimuovere <b>{removing.name}</b>? Il server viene scollegato e i suoi {removing.tools.length} tool non saranno più disponibili agli agenti. Potrai aggiungerlo di nuovo.</p>
+          <p>{tNode("capabilities.confirm_remove", { name: <b>{removing.name}</b> }, { count: removing.tools.length })}</p>
         </Dialog>
       )}
     </Section>

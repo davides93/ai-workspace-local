@@ -5,7 +5,7 @@ import type { InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/
 import { isThinkingMode } from "../../../shared/lib/thinking";
 import { slugify, uniqueId } from "./agents";
 
-import { t as tr } from "../../../shared/i18n";
+import { t as tr, t } from "../../../shared/i18n";
 /** A speech model (Whisper to listen, a Piper voice to speak): it serves the voice mode, never a chat profile. */
 export const isSpeechOnly = (capabilities: readonly string[]): boolean => capabilities.length > 0 && capabilities.every((c) => c === "stt" || c === "tts");
 
@@ -28,7 +28,7 @@ export function incompatibility(model: LocalModel | undefined, runtimeId: string
   if (!model) return "";
   const c = model.runtime_compat.find((x) => x.id === runtimeId);
   if (c) return c.available ? "" : c.reason;
-  return model.runtimes.includes(runtimeId) ? "" : "Questo runtime non apre il formato del modello.";
+  return model.runtimes.includes(runtimeId) ? "" : t("agents.questo_runtime_non_apre_il");
 }
 
 /** First model to propose after the runtime changed: the current one when it still fits, else the best compatible one. */

@@ -23,4 +23,8 @@ export const approvalsEn: Record<keyof typeof approvalsIt, string> = {
   "approvals.esc": "Esc",
   "approvals.chiudi": "{kbd} close",
   "approvals.non_chiedere_piu_conferma_per": "Don't ask again for this tool while the session stays open",
+  "approvals.allow": "Allow",
+  "approvals.deny": "Deny",
+  "approvals.run_label": "Run",
+  "approvals.pending_count": "{n, plural, one {# approval pending} other {# approvals pending}}",
 };

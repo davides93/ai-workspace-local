@@ -67,20 +67,20 @@ export function ApprovalCard({ request, resolved, variant = "full", pending, onR
       {!decided && onRespond && (
         <div className="apv-actions">
           <Button variant="primary" size={size} icon="check" disabled={pending} aria-keyshortcuts={showShortcuts ? "A" : undefined} onClick={() => onRespond("allow")}>
-            Consenti{showShortcuts && <kbd aria-hidden="true">A</kbd>}
+            {t("approvals.allow")}{showShortcuts && <kbd aria-hidden="true">A</kbd>}
           </Button>
           {allowRemember && (
             <Button size={size} disabled={pending} onClick={() => onRespond("allow", true)} title={tr("approvals.non_chiedere_piu_conferma_per")}>
               {t("approvals.consenti_per_la_sessione")}</Button>
           )}
           <Button variant="danger" size={size} disabled={pending} aria-keyshortcuts={showShortcuts ? "N" : undefined} onClick={() => onRespond("deny")}>
-            Nega{showShortcuts && <kbd aria-hidden="true">N</kbd>}
+            {t("approvals.deny")}{showShortcuts && <kbd aria-hidden="true">N</kbd>}
           </Button>
         </div>
       )}
       {!compact && (
         <footer className="apv-meta">
-          <span>Run <code>{request.run_id}</code></span>
+          <span>{t("approvals.run_label")} <code>{request.run_id}</code></span>
           {chatPath && <Link to={chatPath} className="apv-link">{t("approvals.apri_la_sessione")}{" "}<Icon name="forward" size={12} /></Link>}
         </footer>
       )}

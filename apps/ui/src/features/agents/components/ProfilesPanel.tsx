@@ -46,8 +46,8 @@ export function ProfilesPanel() {
         return (
           <div className="row nowrap">
             <IconButton aria-label={t("agents.modifica_il_profilo", { name: p.name })} icon="edit" size={16} onClick={() => setEditing(p)} />
-            <IconButton aria-label={used.length ? `Elimina il profilo ${p.name} (usato da ${used.map((a) => a.name).join(", ")})` : t("agents.elimina_il_profilo", { name: p.name })} icon="trash" size={16} disabled={used.length > 0}
-              title={used.length ? `Usato da ${used.map((a) => a.name).join(", ")}: assegna loro un altro profilo` : t("agents.elimina_2", { name: p.name })} onClick={() => setRemoving(p)} />
+            <IconButton aria-label={used.length ? t("agents.delete_profile_used", { name: p.name, agents: used.map((a) => a.name).join(", ") }) : t("agents.elimina_il_profilo", { name: p.name })} icon="trash" size={16} disabled={used.length > 0}
+              title={used.length ? t("agents.profile_used_by", { agents: used.map((a) => a.name).join(", ") }) : t("agents.elimina_2", { name: p.name })} onClick={() => setRemoving(p)} />
           </div>
         );
       },
@@ -81,7 +81,7 @@ export function ProfilesPanel() {
           onCancel={() => { setRemoving(null); del.reset(); }}
           onConfirm={() => del.mutate(removing.id, { onSuccess: () => setRemoving(null) })}
         >
-          <p>Vuoi eliminare il profilo <b>{removing.name}</b>?</p>
+          <p>{tNode("agents.confirm_delete_profile", { name: <b>{removing.name}</b> })}</p>
           <p className="faint text-sm">{t("agents.se_un_workflow_lo_usa_2")}</p>
         </DecisionDialog>
       )}

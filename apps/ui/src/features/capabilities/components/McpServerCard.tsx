@@ -5,7 +5,7 @@ import { MCP_SANDBOX_LABEL, serverTarget } from "../model/mcpForm";
 import { serverTools } from "../model/tools";
 import { ToolRow } from "./ToolRow";
 
-import { t as tr, t } from "../../../shared/i18n";
+import { t as tr, t, tNode as trNode } from "../../../shared/i18n";
 /** One MCP server: state and error, what it runs, its tools (expandable), switch, edit and remove. */
 export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onEdit, onRemove, onReconnect, onSignIn, onSignOut, onApprove, onIsolate, isolationAvailable, busy }: {
   server: McpServer;
@@ -63,7 +63,7 @@ export function McpServerCard({ server, tools, onToggleServer, onToggleTool, onE
         <div className="cap-note cap-note-warn text-sm" role="group" aria-label={tr("capabilities.approvazione_di", { name: server.name })}>
           <Icon name="alert" size={15} />
           <span className="grow">
-            Questo server esegue il comando <code>{server.command_line ?? serverTarget(server)}</code> su questo computer. Non parte finché non lo consenti.
+            {trNode("capabilities.runs_command", { command: <code>{server.command_line ?? serverTarget(server)}</code> })}
           </span>
           <Button size="sm" variant="primary" disabled={busy} onClick={onApprove}>{tr("capabilities.consenti_ed_esegui")}</Button>
         </div>

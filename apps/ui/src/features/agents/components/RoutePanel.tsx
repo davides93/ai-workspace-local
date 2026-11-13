@@ -2,8 +2,8 @@ import { useRoute } from "../../models/api";
 import { formatMb } from "../../../shared/lib/format";
 import type { InferenceProfile } from "../../../shared/api/types";
 
-import { t } from "../../../shared/i18n";
-const OFFLOAD: Record<string, string> = { all: "tutto sull'acceleratore", partial: "diviso tra GPU e RAM", none: "sulla CPU" };
+import { t, t as tr } from "../../../shared/i18n";
+const OFFLOAD: Record<string, string> = { get all() { return tr("agents.tutto_sull_acceleratore"); }, get partial() { return tr("agents.diviso_tra_gpu_e_ram"); }, get none() { return tr("agents.sulla_cpu"); } };
 
 /**
  * «Runtime: Automatico»: what the router would choose now for the model of the profile, with the
@@ -22,7 +22,7 @@ export function RoutePanel({ profile }: { profile: InferenceProfile }) {
       {first ? (
         <p className="route-choice">
           <b>{t("agents.adesso_sceglierebbe", { runtime_name: first.runtime_name })}</b>
-          <span className="field-hint"> {" "}{t("agents.memoria_cache_kv", { reason: first.reason, p: formatMb(first.need_mb), p2: formatMb(first.kv_mb), p3: first.kv_estimated ? ", stimata" : "" })}</span>
+          <span className="field-hint">{" "}{t("agents.memoria_cache_kv", { reason: first.reason, p: formatMb(first.need_mb), p2: formatMb(first.kv_mb), p3: first.kv_estimated ? ", stimata" : "" })}</span>
         </p>
       ) : (
         <p className="field-error" role="alert">{t("agents.nessun_runtime_puo_eseguire_questo")}</p>
