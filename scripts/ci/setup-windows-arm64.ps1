@@ -94,5 +94,8 @@ if ($Step -eq 'tools') {
   if ($env:GITHUB_ENV) {
     Add-Content -Path $env:GITHUB_ENV -Value "CC=$clangCl"
     Add-Content -Path $env:GITHUB_ENV -Value "CXX=$clangCl"
+    # cc-rs does not pass /EHsc to clang-cl, and clang-cl disables C++
+    # exceptions without it: the llama.cpp wrapper uses try/throw.
+    Add-Content -Path $env:GITHUB_ENV -Value "CXXFLAGS=/EHsc"
   }
 }
