@@ -8,6 +8,7 @@ import { useAgents } from "../agents/api";
 import { useRemoteAgents } from "../integrations/api";
 import { localOptions, remoteOptions, type AgentOption } from "./model/teams";
 
+import { t as tr } from "../../shared/i18n";
 export function useTeams() {
   const api = useApi();
   return useQuery({ queryKey: qk.teams(), queryFn: () => api.teams() });
@@ -33,7 +34,7 @@ export function useSaveTeam() {
   return useMutation({
     mutationFn: (t: TeamDef) => api.saveTeam(t),
     onSuccess: (t) => {
-      toast(`Team "${t.name}" salvato`);
+      toast(tr("teams.team_salvato", { name: t.name }));
       qc.setQueryData<TeamDef[]>(qk.teams(), (list) => upsert(list, t));
       void qc.invalidateQueries({ queryKey: qk.teams() });
     },
@@ -48,7 +49,7 @@ export function useDeleteTeam() {
     mutationFn: (id: string) => api.deleteTeam(id),
     meta: { handled: true },
     onSuccess: (_void, id) => {
-      toast("Team eliminato");
+      toast(tr("teams.team_eliminato"));
       qc.setQueryData<TeamDef[]>(qk.teams(), (list) => list?.filter((t) => t.id !== id));
       void qc.invalidateQueries({ queryKey: qk.teams() });
     },

@@ -3,7 +3,7 @@ import type { RuntimeInfo } from "../../../shared/api/types";
 import { cx } from "../../../shared/lib/cx";
 import { Button, Chip, Chips, InlineText, StatusPill } from "../../../shared/ui";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 /** One runtime of the catalog: what it is, where it can run, its state and the main action. */
 export function RuntimeCard({ runtime: r, deviceAccels, busy, error, onAct, onOpen }: {
   runtime: RuntimeInfo;
@@ -43,9 +43,9 @@ export function RuntimeCard({ runtime: r, deviceAccels, busy, error, onAct, onOp
         {active && r.kind === "system" ? (
           <Link to="/models?origin=system" className="btn primary">{t("runtimes.vedi_i_modelli_di_sistema")}</Link>
         ) : active ? (
-          <Button icon="stop" disabled={busy} aria-label={`Ferma ${r.name}`} onClick={() => onAct("stop")}>{t("runtimes.ferma")}</Button>
+          <Button icon="stop" disabled={busy} aria-label={tr("runtimes.ferma_2", { name: r.name })} onClick={() => onAct("stop")}>{t("runtimes.ferma")}</Button>
         ) : r.status === "installable" && r.install_auto ? (
-          <Button variant="primary" icon="download" aria-label={`Installa ${r.name}`} onClick={onOpen}>{t("runtimes.installa")}</Button>
+          <Button variant="primary" icon="download" aria-label={tr("runtimes.installa_2", { name: r.name })} onClick={onOpen}>{t("runtimes.installa")}</Button>
         ) : r.status === "installable" ? (
           <span className="mono faint ellipsis text-xs" title={r.install_hint}>{r.install_hint ?? t("runtimes.installa_dal_sito_del_progetto")}</span>
         ) : !unsupported ? (
@@ -53,7 +53,7 @@ export function RuntimeCard({ runtime: r, deviceAccels, busy, error, onAct, onOp
         ) : (
           <span className="faint text-xs">{t("runtimes.disponibile_su", { platforms: r.platforms.join(", ") })}</span>
         )}
-        <Button variant="ghost" className="ml-auto" icon="settings" aria-label={`Dettagli e impostazioni di ${r.name}`} onClick={onOpen}>{t("runtimes.dettagli")}</Button>
+        <Button variant="ghost" className="ml-auto" icon="settings" aria-label={tr("runtimes.dettagli_e_impostazioni_di", { name: r.name })} onClick={onOpen}>{t("runtimes.dettagli")}</Button>
       </div>
     </article>
   );

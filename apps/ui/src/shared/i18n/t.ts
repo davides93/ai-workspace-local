@@ -103,6 +103,16 @@ export function labelMap<K extends string>(keys: Record<K, MessageKey>): Record<
 }
 
 /**
+ * An object that mixes plain fields and translated ones, safe at module level: `tFields({ tone: "ok" }, { label: "x.key" })`
+ * has `tone` as given and a `label` that is read through `t()` every time, so it follows the active language.
+ */
+export function tFields<B extends object, K extends string>(base: B, keys: Record<K, MessageKey>): B & Record<K, string> {
+  const out = { ...base } as B & Record<K, string>;
+  for (const k of Object.keys(keys) as K[]) Object.defineProperty(out, k, { enumerable: true, get: () => t(keys[k]) });
+  return out;
+}
+
+/**
  * Translates a message that contains inline elements (a bold word, a link, `<code>`): each
  * `{slot}` of the message is replaced by the matching node of `slots`, so the translator can move
  * it to wherever the other language needs it.

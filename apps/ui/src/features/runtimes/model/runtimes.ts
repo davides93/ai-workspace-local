@@ -1,13 +1,14 @@
 import type { Fit, InstallJob, LocalModel, RuntimeInfo, RuntimeKind, SettingsSchema } from "../../../shared/api/types";
+import { t, tFields } from "../../../shared/i18n";
 import type { PillTone } from "../../../shared/ui";
 
 export const KIND_ORDER: RuntimeKind[] = ["sidecar", "embedded", "system", "remote"];
 
 export const KIND_META: Record<RuntimeKind, { title: string; desc: string }> = {
-  sidecar: { title: "Sidecar gestiti", desc: "Processi avviati, monitorati e fermati dall'app; parlano HTTP compatibile OpenAI." },
-  embedded: { title: "Embedded", desc: "Librerie collegate in-process via FFI: nessun processo esterno; sono il default su mobile." },
-  system: { title: "Modelli di sistema", desc: "Modelli già presenti nel sistema operativo, condivisi tra le app." },
-  remote: { title: "Remoti in LAN", desc: "Runtime di altri dispositivi AIW o server compatibili nella tua rete." },
+  sidecar: tFields({}, { title: "runtimes.kind_sidecar", desc: "runtimes.kind_sidecar_desc" }),
+  embedded: tFields({}, { title: "runtimes.kind_embedded", desc: "runtimes.kind_embedded_desc" }),
+  system: tFields({}, { title: "runtimes.kind_system", desc: "runtimes.kind_system_desc" }),
+  remote: tFields({}, { title: "runtimes.kind_remote", desc: "runtimes.kind_remote_desc" }),
 };
 
 export type Scope = "here" | "all";
@@ -38,14 +39,14 @@ export function runtimeCounts(list: RuntimeInfo[]): { running: number; usable: n
 /** How well an installed model fits this device, as label and pill tone. */
 /** How a runtime talks: `none` is an in-process engine with no HTTP API of its own. */
 export function apiLabel(api: RuntimeInfo["api"] | string): string {
-  return api === "none" ? "senza API" : `API ${api}`;
+  return api === "none" ? t("runtimes.api_none") : t("runtimes.api_named", { api });
 }
 
 export const FIT_META: Record<Fit, { label: string; tone: PillTone }> = {
-  great: { label: "Ci sta comodo", tone: "ok" },
-  ok: { label: "Ci sta", tone: "info" },
-  tight: { label: "Al limite", tone: "warn" },
-  no: { label: "Non ci sta", tone: "crit" },
+  great: tFields({ tone: "ok" as const }, { label: "runtimes.fit_great" }),
+  ok: tFields({ tone: "info" as const }, { label: "runtimes.fit_ok" }),
+  tight: tFields({ tone: "warn" as const }, { label: "runtimes.fit_tight" }),
+  no: tFields({ tone: "crit" as const }, { label: "runtimes.fit_no" }),
 };
 
 const FIT_RANK: Record<Fit | "", number> = { great: 0, ok: 1, tight: 2, no: 3, "": 4 };

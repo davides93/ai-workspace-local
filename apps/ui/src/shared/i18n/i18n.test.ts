@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { en } from "./en";
 import { it as itCatalog } from "./it";
 import { forceLocale, localeFromBrowser, resolveLocale } from "./locale";
-import { formatMessage, labelMap, t, tNode } from "./t";
+import { formatMessage, labelMap, t, tFields, tNode } from "./t";
 import { formatBytes, formatDuration, formatNumber, relTime } from "../lib/format";
 
 afterEach(() => forceLocale("it"));
@@ -78,6 +78,13 @@ describe("t()", () => {
     forceLocale("en");
     expect(labels.a).toBe("Language");
     expect(labels.b).toBe("Automatic");
+  });
+  it("tFields keeps plain fields and follows the language for the translated ones", () => {
+    const meta = tFields({ tone: "ok" }, { label: "common.language" });
+    expect(meta).toEqual({ tone: "ok", label: "Lingua" });
+    forceLocale("en");
+    expect(meta.label).toBe("Language");
+    expect(meta.tone).toBe("ok");
   });
   it("tNode puts nodes where the message says", () => {
     const node = tNode("shell.pair_help", { devices: "NODE" }) as { props: { children: unknown[] } };

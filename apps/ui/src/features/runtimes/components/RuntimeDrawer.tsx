@@ -53,12 +53,12 @@ export function RuntimeDrawer({ runtime: r, models, deviceAccels, onClose }: {
     >
       <section className="stack" aria-label={t("runtimes.stato")}>
         <KeyValue items={[
-          ["Stato", <span className="row"><StatusPill status={r.status} />{r.status_detail && r.status !== "installable" && <span className="faint text-xs">{r.status_detail}</span>}</span>],
-          r.endpoint ? ["Endpoint", <span className="mono">{r.endpoint}</span>] : false,
-          ["Capacità", <Chips>{r.capabilities.map((c) => <Chip key={c}>{c}</Chip>)}</Chips>],
-          ["Acceleratori", <Chips>{r.accelerators.map((a) => <Chip key={a} hot={deviceAccels.has(a)}>{a}</Chip>)}</Chips>],
-          r.loaded_models.length > 0 ? ["Caricato", <span className="mono">{r.loaded_models.join(", ")}</span>] : false,
-          r.homepage ? ["Progetto", <a href={r.homepage} target="_blank" rel="noreferrer">{r.homepage.replace(/^https?:\/\//, "")}</a>] : false,
+          [t("runtimes.stato"), <span className="row"><StatusPill status={r.status} />{r.status_detail && r.status !== "installable" && <span className="faint text-xs">{r.status_detail}</span>}</span>],
+          r.endpoint ? [t("runtimes.endpoint"), <span className="mono">{r.endpoint}</span>] : false,
+          [t("runtimes.capacita"), <Chips>{r.capabilities.map((c) => <Chip key={c}>{c}</Chip>)}</Chips>],
+          [t("runtimes.acceleratori"), <Chips>{r.accelerators.map((a) => <Chip key={a} hot={deviceAccels.has(a)}>{a}</Chip>)}</Chips>],
+          r.loaded_models.length > 0 ? [t("runtimes.caricato_label"), <span className="mono">{r.loaded_models.join(", ")}</span>] : false,
+          r.homepage ? [t("runtimes.progetto"), <a href={r.homepage} target="_blank" rel="noreferrer">{r.homepage.replace(/^https?:\/\//, "")}</a>] : false,
         ]} />
         {r.status !== "installable" && r.install_hint && <CopyField label={t("runtimes.installazione")} value={r.install_hint} />}
       </section>
