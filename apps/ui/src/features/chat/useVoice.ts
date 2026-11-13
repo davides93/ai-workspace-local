@@ -5,8 +5,9 @@ import type { ApprovalItem, Item } from "./model/items";
 import { approvalAnnouncement, replyToSpeak, type Convo } from "./model/voiceReply";
 import { useTranscribe, useVoiceStatus } from "./api";
 import { micSupported, record, voiceError, type Recording } from "./voice/capture";
-import { speak, voiceFor } from "./voice/tts";
+import { useReader } from "./useReader";
 
+import { t as tr } from "../../shared/i18n";
 export type Dictation = "off" | "rec" | "busy";
 
 export interface VoiceInput {
@@ -26,13 +27,14 @@ export interface VoiceInput {
 
 /**
  * Voice in the chat: dictation into the message box, and the hands-free conversation (listen →
- * send → read the reply aloud with a local system voice → listen again). Esc, or leaving the
+ * send → read the reply aloud with the neural voice or a local system voice → listen again). Esc, or leaving the
  * session, ends the conversation. Audio capture, speech and the reply text live in `voice/` and
  * `model/voiceReply.ts`; this hook only sequences them.
  */
 export function useVoice(input: VoiceInput) {
   const status = useVoiceStatus();
   const transcribe = useTranscribe();
+  const reader = useReader();
   const [dictation, setDictation] = useState<Dictation>("off");
   const [convo, setConvo] = useState<Convo>("off");
   const [level, setLevel] = useState(0);
@@ -47,8 +49,6 @@ export function useVoice(input: VoiceInput) {
 
   const available = status.data?.available ?? true;
   const language = status.data?.language && status.data.language !== "auto" ? status.data.language : undefined;
-  const langRef = useRef({ language, voice: status.data?.tts_voice ?? "" });
-  langRef.current = { language, voice: status.data?.tts_voice ?? "" };
 
   const goto = useCallback((c: Convo) => {
     convoRef.current = c;
@@ -57,7 +57,7 @@ export function useVoice(input: VoiceInput) {
 
   const unavailable = () => {
     if (status.data && !status.data.available) {
-      toast(`Voce non disponibile: ${status.data.detail ?? "nessun motore di trascrizione"}`, "crit");
+      toast(tr("chat.voce_non_disponibile", { p: status.data.detail ?? "nessun motore di trascrizione" }), "crit");
       return true;
     }
     return false;
@@ -81,12 +81,8 @@ export function useVoice(input: VoiceInput) {
     [stopConvo],
   );
 
-  /** Reads `text` with the preferred local voice, if the system has one. */
-  const say = useCallback(async (text: string, abort?: AbortController) => {
-    const { language: lang, voice } = langRef.current;
-    const v = await voiceFor(lang ?? navigator.language ?? "it", voice);
-    if (text && v) await speak(text, v, abort?.signal);
-  }, []);
+  /** Reads `text` aloud with the engine's neural voice, else the preferred local system voice, if there is one. */
+  const say = useCallback((text: string, abort?: AbortController) => reader.read(text, { own: abort ?? new AbortController(), quiet: true }), [reader.read]);
 
   const dictate = async () => {
     if (dictation === "rec") return recording.current?.stop();
@@ -97,10 +93,10 @@ export function useVoice(input: VoiceInput) {
       setDictation("rec");
       const wav = await rec.result;
       recording.current = null;
-      if (!wav) return toast("Non ho sentito nulla: riprova più vicino al microfono");
+      if (!wav) return toast(tr("chat.non_ho_sentito_nulla_riprova"));
       setDictation("busy");
       const t = await transcribe.mutateAsync({ wav, language });
-      if (!t.text) return toast("Nessuna parola riconosciuta");
+      if (!t.text) return toast(tr("chat.nessuna_parola_riconosciuta"));
       latest.current.insertText(t.text);
     } catch (e) {
       toast(voiceError(e), "crit");
@@ -125,7 +121,7 @@ export function useVoice(input: VoiceInput) {
       if (stopped()) return;
       if (!wav) {
         stopConvo();
-        return toast("Conversazione a voce in pausa: non ho sentito nulla");
+        return toast(tr("chat.conversazione_a_voce_in_pausa"));
       }
       goto("transcribing");
       const t = await transcribe.mutateAsync({ wav, language });
@@ -141,7 +137,7 @@ export function useVoice(input: VoiceInput) {
 
   const toggleConvo = () => {
     if (convo !== "off") return stopConvo();
-    if (!input.sessionId || !input.ready) return toast("Apri o crea una sessione per parlare con l'agente");
+    if (!input.sessionId || !input.ready) return toast(tr("chat.apri_o_crea_una_sessione"));
     if (unavailable() || input.running) return;
     void listen();
   };

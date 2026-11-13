@@ -10,7 +10,9 @@
 //! Only HTTPS is allowed: a plain-HTTP request is refused.
 
 use crate::browser::{
-    page_action, page_action_note, ref_arg, request_verdict, vet_with, wait_args, wait_for_text, BrowserManager, Op, Policy, SNAPSHOT_JS,
+    cap_result, eval_webview_js, num_ref_js, page_action, page_action_note, ref_arg, request_verdict, select_body, select_error,
+    snapshot_format, text_offset, text_snapshot, type_body, vet_with, wait_page, BrowserManager, Format, Op, Policy, WaitSpec, CLICK_BODY,
+    HOVER_EVENTS_BODY, NOT_ON_DEVICE, SNAPSHOT_JS, TEXT_JS,
 };
 use crate::{arg_str, ToolContext, ToolOutput};
 use aiw_core::{Error, Result};
@@ -148,13 +150,22 @@ async fn call_inner(
             let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
             Ok(ToolOutput::text(snapshot_text(&snap)))
         }
-        Op::Snapshot => {
-            let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
-            Ok(ToolOutput::text(snapshot_text(&snap)))
-        }
+        Op::Snapshot => match snapshot_format(&args)? {
+            Format::Elements => {
+                let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
+                Ok(ToolOutput::text(snapshot_text(&snap)))
+            }
+            Format::Text => {
+                let raw = host.blocking(|b| b.eval(TEXT_JS)).await?;
+                Ok(ToolOutput::text(text_snapshot(&snapshot_text(&raw), text_offset(&args))))
+            }
+            Format::Ax => Ok(ToolOutput::error(
+                "L'albero di accessibilità non è disponibile su questo dispositivo: usa format=elements (di serie) o format=text.",
+            )),
+        },
         Op::Click => {
             let r = ref_arg(&args)?;
-            let js = format!("(() => {{ const el = document.querySelector('[data-aiw-ref=\"{r}\"]'); if (!el) return 'missing'; el.scrollIntoView({{block:'center'}}); el.click(); return 'ok'; }})()");
+            let js = num_ref_js(r, CLICK_BODY);
             if host.blocking(move |b| b.eval(&js)).await?.as_str() != Some("ok") {
                 return Ok(ToolOutput::error(format!("Elemento [{r}] non trovato: rifai browser_snapshot")));
             }
@@ -166,7 +177,7 @@ async fn call_inner(
             let r = ref_arg(&args)?;
             let text = arg_str(&args, "text")?.to_string();
             let submit = args.get("submit").and_then(|v| v.as_bool()).unwrap_or(false);
-            let js = type_js(r, &text, submit);
+            let js = num_ref_js(r, &type_body(&text, submit));
             if host.blocking(move |b| b.eval(&js)).await?.as_str() != Some("ok") {
                 return Ok(ToolOutput::error(format!("Campo [{r}] non trovato: rifai browser_snapshot")));
             }
@@ -186,49 +197,77 @@ async fn call_inner(
             Ok(ToolOutput::text(format!("{}\n\n{}", page_action_note(op, &r), snapshot_text(&snap))))
         }
         Op::Wait => {
-            let (ms, text) = wait_args(&args);
-            let note = match text {
-                Some(t) => {
-                    let found = wait_for_text(
+            let w = WaitSpec::parse(&args)?;
+            if w.navigation || w.network_idle || matches!(w.element, Some(crate::browser::RefArg::Ax(_))) {
+                return Ok(ToolOutput::error(
+                    "Su questo dispositivo si può attendere un testo, un selettore o un ref numerico, non la navigazione o la rete.",
+                ));
+            }
+            let note = match w.page_js() {
+                Some(js) => {
+                    let ok = wait_page(
                         |js| {
                             let host = host.clone();
                             async move { host.blocking(move |b| b.eval(&js)).await }
                         },
-                        &t,
-                        ms,
+                        &js,
+                        w.timeout_ms,
                     )
-                    .await;
-                    if found {
-                        format!("Il testo «{t}» è comparso.")
+                    .await?;
+                    if ok {
+                        w.ok_note()
                     } else {
-                        format!("Il testo «{t}» non è comparso entro {ms} ms.")
+                        w.timeout_note()
                     }
                 }
                 None => {
-                    tokio::time::sleep(Duration::from_millis(ms)).await;
-                    format!("Atteso {ms} ms.")
+                    tokio::time::sleep(Duration::from_millis(w.timeout_ms)).await;
+                    format!("Atteso {} ms.", w.timeout_ms)
                 }
             };
             let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
             Ok(ToolOutput::text(format!("{note}\n\n{}", snapshot_text(&snap))))
+        }
+        Op::Select => {
+            let r = ref_arg(&args)?;
+            let option = arg_str(&args, "option")?.to_string();
+            let js = num_ref_js(r, &select_body(&option));
+            let res = host.blocking(move |b| b.eval(&js)).await?;
+            let res = res.as_str().unwrap_or_default().to_string();
+            if let Some(err) = select_error(&crate::browser::RefArg::Num(r), &option, &res) {
+                return Ok(ToolOutput::error(err));
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
+            Ok(ToolOutput::text(format!("Scelto «{}» in [{r}].\n\n{}", res.trim_start_matches("ok:"), snapshot_text(&snap))))
+        }
+        Op::Hover => {
+            let r = ref_arg(&args)?;
+            let js = num_ref_js(r, HOVER_EVENTS_BODY);
+            if host.blocking(move |b| b.eval(&js)).await?.as_str() != Some("ok") {
+                return Ok(ToolOutput::error(format!("Elemento [{r}] non trovato: rifai browser_snapshot")));
+            }
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let snap = host.blocking(|b| b.eval(SNAPSHOT_JS)).await?;
+            Ok(ToolOutput::text(format!("Puntatore sopra [{r}] (eventi del mouse sull'elemento).\n\n{}", snapshot_text(&snap))))
+        }
+        Op::Eval => {
+            let js = eval_webview_js(arg_str(&args, "expression")?);
+            let v = host.blocking(move |b| b.eval(&js)).await?;
+            let out = snapshot_text(&v);
+            Ok(match out.strip_prefix("ERRORE: ") {
+                Some(e) => ToolOutput::error(format!("Errore JavaScript: {e}")),
+                None => ToolOutput::text(cap_result(&out)),
+            })
+        }
+        Op::Tabs | Op::TabNew | Op::TabSelect | Op::TabClose | Op::Upload | Op::Downloads | Op::Console => {
+            Ok(ToolOutput::error(NOT_ON_DEVICE))
         }
         Op::Screenshot => {
             let data = host.blocking(|b| b.screenshot()).await?;
             Ok(ToolOutput { content: "Screenshot della pagina allegato.".into(), images: vec![data], is_error: false })
         }
     }
-}
-
-fn type_js(r: u64, text: &str, submit: bool) -> String {
-    format!(
-        "(() => {{ const el = document.querySelector('[data-aiw-ref=\"{r}\"]'); if (!el) return 'missing'; el.focus();\
-         const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;\
-         const setter = Object.getOwnPropertyDescriptor(proto, 'value'); if (setter && 'value' in el) setter.set.call(el, {text}); else el.textContent = {text};\
-         el.dispatchEvent(new Event('input', {{bubbles:true}})); el.dispatchEvent(new Event('change', {{bubbles:true}}));\
-         if ({submit}) {{ if (el.form && el.form.requestSubmit) el.form.requestSubmit(); else el.dispatchEvent(new KeyboardEvent('keydown', {{key:'Enter', bubbles:true}})); }}\
-         return 'ok'; }})()",
-        text = serde_json::to_string(text).unwrap()
-    )
 }
 
 // ------------------------------------------------------------------ policy proxy
@@ -343,6 +382,8 @@ mod tests {
         landed: Mutex<Option<String>>,
         shown: Mutex<u32>,
         text_shown: std::sync::atomic::AtomicBool,
+        /// When set, every script is answered with this text.
+        forced: Mutex<Option<String>>,
     }
     struct FakeBridge(Arc<Fake>);
     impl WebViewBridge for FakeBridge {
@@ -356,6 +397,9 @@ mod tests {
         }
         fn eval(&self, js: &str) -> Result<Value> {
             self.0.scripts.lock().unwrap().push(js.to_string());
+            if let Some(f) = self.0.forced.lock().unwrap().clone() {
+                return Ok(Value::String(f));
+            }
             Ok(Value::String(if js.contains("el.click()") || js.contains("setter") {
                 "ok".into()
             } else if js.contains(".includes(") {
@@ -471,6 +515,76 @@ mod tests {
         assert!(found.content.contains("è comparso") && !found.content.contains("non è"), "{}", found.content);
         let waited = run(&m, Op::Wait, serde_json::json!({"ms": 100})).await;
         assert!(waited.content.starts_with("Atteso 100 ms"), "{}", waited.content);
+    }
+
+    #[tokio::test]
+    async fn the_new_tools_that_a_phone_can_do_work_and_the_others_say_so() {
+        let fake = Arc::new(Fake::default());
+        let m = Arc::new(manager(&fake, "93.184.216.34"));
+        let tools = crate::browser::tools(m.clone());
+        let tool = |n: &str| tools.iter().find(|t| t.name() == n).unwrap().clone();
+        // Tabs, console, downloads and upload: listed as unavailable with the reason, and a call says it too.
+        for n in [
+            "browser_tabs",
+            "browser_tab_new",
+            "browser_tab_select",
+            "browser_tab_close",
+            "browser_console",
+            "browser_downloads",
+            "browser_upload",
+        ] {
+            let why = tool(n).available().unwrap_err();
+            assert!(why.contains("non disponibile su questo dispositivo"), "{n}: {why}");
+            let out = tool(n).call(serde_json::json!({"index": 1, "ref": 1, "path": "a"}), &ctx()).await.unwrap();
+            assert!(out.is_error && out.content.contains("Non disponibile su questo dispositivo"), "{n}: {}", out.content);
+        }
+        for n in
+            ["browser_navigate", "browser_snapshot", "browser_click", "browser_select", "browser_hover", "browser_wait", "browser_eval"]
+        {
+            assert!(tool(n).available().is_ok(), "{n}");
+        }
+        // Snapshot formats: text works (through the same converter as web_fetch), the accessibility tree does not exist here.
+        *fake.forced.lock().unwrap() =
+            Some(serde_json::json!({"t": "Articolo", "u": "https://e.example/", "h": "<body><p>Testo lungo</p></body>"}).to_string());
+        let text = run(&m, Op::Snapshot, serde_json::json!({"format": "text"})).await;
+        assert!(text.content.starts_with("Titolo: Articolo") && text.content.contains("Testo lungo"), "{}", text.content);
+        *fake.forced.lock().unwrap() = None;
+        let ax = run(&m, Op::Snapshot, serde_json::json!({"format": "ax"})).await;
+        assert!(ax.is_error && ax.content.contains("non è disponibile su questo dispositivo"), "{}", ax.content);
+        assert!(call(&m, m.webview().unwrap(), Op::Snapshot, serde_json::json!({"format": "pdf"}), &ctx()).await.is_err());
+        // Select: by value or text, an unknown option lists the real ones.
+        *fake.forced.lock().unwrap() = Some("ok:Francia".into());
+        let sel = run(&m, Op::Select, serde_json::json!({"ref": 4, "option": "Francia"})).await;
+        assert!(!sel.is_error && sel.content.starts_with("Scelto «Francia» in [4]"), "{}", sel.content);
+        assert!(fake.scripts.lock().unwrap().iter().any(|s| s.contains(r#"data-aiw-ref="4""#) && s.contains(r#"const want = "Francia""#)));
+        *fake.forced.lock().unwrap() = Some("noopt:Italia | Spagna".into());
+        let bad = run(&m, Op::Select, serde_json::json!({"ref": 4, "option": "Marte"})).await;
+        assert!(bad.is_error && bad.content.contains("Italia | Spagna"), "{}", bad.content);
+        // Hover: the events of a hover on the element.
+        *fake.forced.lock().unwrap() = Some("ok".into());
+        let hover = run(&m, Op::Hover, serde_json::json!({"ref": 2})).await;
+        assert!(!hover.is_error && hover.content.starts_with("Puntatore sopra [2]"), "{}", hover.content);
+        assert!(fake.scripts.lock().unwrap().iter().any(|s| s.contains("mouseover") && s.contains(r#"data-aiw-ref="2""#)));
+        // Accessibility refs mean nothing here.
+        assert!(call(&m, m.webview().unwrap(), Op::Click, serde_json::json!({"ref": "e3"}), &ctx()).await.is_err());
+        // Eval: a JSON result, an error, and the cap.
+        *fake.forced.lock().unwrap() = Some("{\"a\":1}".into());
+        assert_eq!(run(&m, Op::Eval, serde_json::json!({"expression": "({a: 1})"})).await.content, "{\"a\":1}");
+        *fake.forced.lock().unwrap() = Some("ERRORE: ReferenceError: x is not defined".into());
+        let err = run(&m, Op::Eval, serde_json::json!({"expression": "x"})).await;
+        assert!(err.is_error && err.content == "Errore JavaScript: ReferenceError: x is not defined", "{}", err.content);
+        *fake.forced.lock().unwrap() = Some("y".repeat(30_000));
+        assert!(run(&m, Op::Eval, serde_json::json!({"expression": "'y'.repeat(30000)"})).await.content.contains("troncato"));
+        *fake.forced.lock().unwrap() = None;
+        // Waits: a selector, text that goes away; navigation and network idle are not possible.
+        *fake.forced.lock().unwrap() = Some("yes".into());
+        let w = run(&m, Op::Wait, serde_json::json!({"selector": "#x", "ms": 1000})).await;
+        assert!(w.content.starts_with("Atteso: «#x» è presente"), "{}", w.content);
+        let gone = run(&m, Op::Wait, serde_json::json!({"text_gone": "Caricamento", "ms": 1000})).await;
+        assert!(gone.content.starts_with("Atteso: il testo «Caricamento» è scomparso"), "{}", gone.content);
+        *fake.forced.lock().unwrap() = None;
+        let nav = run(&m, Op::Wait, serde_json::json!({"navigation": true})).await;
+        assert!(nav.is_error && nav.content.contains("non la navigazione"), "{}", nav.content);
     }
 
     #[tokio::test]

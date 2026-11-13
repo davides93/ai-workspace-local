@@ -104,7 +104,10 @@ async fn one_client_is_limited_before_the_global_limit() {
     }
     assert!(matches!(e.pair_attempt(&code, Some("192.168.1.9")), PairOutcome::Locked { .. }));
     // Another device is not affected and pairs with the right code; the global counter is still low.
-    assert_eq!(e.pair_attempt(&code, Some("192.168.1.10")), PairOutcome::Paired(e.token().to_string()));
+    match e.pair_attempt(&code, Some("192.168.1.10")) {
+        PairOutcome::Paired(token) => assert_ne!(token, e.token(), "a device gets its own token"),
+        other => panic!("expected the pairing, got {other:?}"),
+    }
     assert_ne!(e.pairing_code(), code, "a successful pairing consumes the code");
 }
 

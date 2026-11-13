@@ -1,6 +1,7 @@
 import { Link } from "../../../app/router";
 import { Icon, Panel, Pill, Segmented } from "../../../shared/ui";
 
+import { t, tNode } from "../../../shared/i18n";
 export type Audience = "local" | "lan";
 
 /** Who calls the endpoints, and what that client needs: nothing from this computer, the pairing token from the LAN. */
@@ -12,11 +13,11 @@ export function AccessPanel({ audience, onAudience, lanAddress }: {
 }) {
   return (
     <Panel
-      icon="lock" title="Accesso e sicurezza"
+      icon="lock" title={t("integrations.accesso_e_sicurezza")}
       actions={(
         <Segmented
-          label="Da dove si collega il client" value={audience} onChange={onAudience}
-          options={[{ id: "local", label: "Da questo computer" }, { id: "lan", label: "Da un altro dispositivo" }]}
+          label={t("integrations.da_dove_si_collega_il")} value={audience} onChange={onAudience}
+          options={[{ id: "local", label: t("integrations.da_questo_computer") }, { id: "lan", label: t("integrations.da_un_altro_dispositivo") }]}
         />
       )}
     >
@@ -24,32 +25,27 @@ export function AccessPanel({ audience, onAudience, lanAddress }: {
         {audience === "lan" && !lanAddress && (
           <p className="int-warn text-sm">
             <Icon name="alert" size={15} />
-            <span>Il server ascolta solo su questo computer. Attiva «Accesso dalla LAN» nelle <Link to="/settings">Impostazioni</Link> (o avvia <code>aiw serve --lan</code>): gli esempi qui sotto usano un indirizzo da sostituire.</span>
+            <span>{tNode("integrations.il_server_ascolta_solo_su", { link: <Link to="/settings">{t("integrations.impostazioni")}</Link>, code: <code>{t("integrations.aiw_serve_lan")}</code> })}</span>
           </p>
         )}
         <div className="int-notes">
-          <section className="int-note" aria-label="Da questo computer">
-            <h3><Icon name="device" size={16} /> Da questo computer</h3>
+          <section className="int-note" aria-label={t("integrations.da_questo_computer")}>
+            <h3><Icon name="device" size={16} /> {" "}{t("integrations.da_questo_computer")}</h3>
             <p className="muted text-sm">
-              Script, curl e SDK rispondono senza token. Il server controlla anche <code>Host</code> e <code>Origin</code>: una pagina web di un altro sito che prova a chiamare <code>127.0.0.1</code> riceve 403.
-            </p>
+              {tNode("integrations.script_curl_e_sdk_rispondono", { code: <code>{t("integrations.host")}</code>, code2: <code>{t("integrations.origin")}</code>, code3: <code>127.0.0.1</code> })}</p>
           </section>
-          <section className="int-note" aria-label="Pagine web nel browser">
-            <h3><Icon name="globe" size={16} /> Pagine web nel browser</h3>
+          <section className="int-note" aria-label={t("integrations.pagine_web_nel_browser")}>
+            <h3><Icon name="globe" size={16} /> {" "}{t("integrations.pagine_web_nel_browser")}</h3>
             <p className="muted text-sm">
-              Anche le richieste da localhost passano dal controllo dell'<code>Origin</code> (protegge da CSRF e DNS rebinding). Sono ammessi l'app desktop, <code>localhost</code> e <code>127.0.0.1</code> su qualsiasi porta e l'indirizzo LAN di questo dispositivo.
-              Con il token la richiesta è autorizzata, ma una pagina di un'altra origine non ne legge la risposta (CORS). I webhook accettano ogni origine: il loro segreto è la credenziale.
-            </p>
+              {tNode("integrations.anche_le_richieste_da_localhost", { code: <code>{t("integrations.origin")}</code>, code2: <code>{t("integrations.localhost")}</code>, code3: <code>127.0.0.1</code> })}</p>
           </section>
-          <section className="int-note" aria-label="Da altri dispositivi">
+          <section className="int-note" aria-label={t("integrations.da_altri_dispositivi")}>
             <h3>
-              <Icon name="link" size={16} /> Da altri dispositivi
-              {lanAddress ? <Pill tone="ok">LAN attiva</Pill> : <Pill>solo locale</Pill>}
+              <Icon name="link" size={16} /> {t("integrations.da_altri_dispositivi")}
+              {lanAddress ? <Pill tone="ok">{t("integrations.lan_attiva")}</Pill> : <Pill>{t("integrations.solo_locale")}</Pill>}
             </h3>
             <p className="muted text-sm">
-              Servono l'accesso dalla LAN e il token del pairing, da inviare come <code>Authorization: Bearer</code> oppure <code>x-api-key</code>.
-              Il token si ottiene accoppiando il dispositivo da <Link to="/devices">Dispositivi</Link>.
-            </p>
+              {tNode("integrations.servono_l_accesso_dalla_lan", { code: <code>{t("integrations.authorization_bearer")}</code>, code2: <code>{t("integrations.x_api_key")}</code>, link: <Link to="/devices">{t("integrations.dispositivi")}</Link> })}</p>
           </section>
         </div>
       </div>

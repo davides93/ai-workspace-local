@@ -1,16 +1,18 @@
 import { useSystem } from "../../shared/query/system";
 import { Page, PageHeader, QueryState, PageSkeleton } from "../../shared/ui";
+import { AccessPanel } from "../security/components/AccessPanel";
 import { HardwarePanel } from "./components/HardwarePanel";
 import { MeshSection } from "./components/MeshSection";
 import { TierPanel } from "./components/TierPanel";
 import "./devices.css";
 
+import { t } from "../../shared/i18n";
 /** `#/devices` — this device's hardware profile and the mesh of paired devices. */
 export function DevicesView() {
   const system = useSystem();
   return (
     <Page>
-      <PageHeader eyebrow="Inferenza" title="Dispositivi" subtitle="Il profilo hardware guida la scelta automatica di runtime e modelli; puoi sempre forzarla." />
+      <PageHeader eyebrow={t("nav.group_inference")} title={t("devices.dispositivi")} subtitle={t("devices.il_profilo_hardware_guida_la")} />
       <QueryState query={system} skeleton={<PageSkeleton />}>
         {(info) => (
           <>
@@ -19,6 +21,7 @@ export function DevicesView() {
               <TierPanel tier={info.device.tier} />
             </div>
             <MeshSection />
+            <AccessPanel />
           </>
         )}
       </QueryState>

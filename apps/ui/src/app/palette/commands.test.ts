@@ -3,13 +3,13 @@ import { matchesHotkey } from "../../shared/lib/useHotkey";
 import { normalizeText } from "../../shared/lib/text";
 import { filterCommands, type Command } from "./commands";
 
-const cmd = (id: string, label: string, keywords: string[] = [], group: Command["group"] = "Vai a"): Command => ({ id, label, group, icon: "plus", keywords, run: () => undefined });
+const cmd = (id: string, label: string, keywords: string[] = [], group: Command["group"] = "go"): Command => ({ id, label, group, icon: "plus", keywords, run: () => undefined });
 const commands = [
   cmd("home", "Panoramica", ["home", "dashboard"]),
   cmd("act", "Attività", ["audit", "log"]),
   cmd("models", "Modelli", ["scarica", "download"]),
-  cmd("dl", "Scarica un modello", ["hugging face"], "Azioni"),
-  cmd("kill", "Kill switch", ["stop", "emergenza"], "Azioni"),
+  cmd("dl", "Scarica un modello", ["hugging face"], "actions"),
+  cmd("kill", "Kill switch", ["stop", "emergenza"], "actions"),
 ];
 
 describe("filterCommands", () => {

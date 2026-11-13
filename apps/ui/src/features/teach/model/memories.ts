@@ -1,5 +1,6 @@
 import type { Memory, MemoryKind, MemoryPatch, Session } from "../../../shared/api/types";
 
+import { t as tr, tList } from "../../../shared/i18n";
 // Pure logic of the "Insegna" page: how memories are grouped and named, how the cached lists follow an
 // action before the answer arrives, the export file and which session is the teaching one.
 
@@ -11,22 +12,18 @@ export const KIND_ORDER: readonly MemoryKind[] = ["about_you", "preference", "ho
 
 /** Group names, as the person reads them. */
 export const KIND_LABEL: Record<MemoryKind, string> = {
-  about_you: "Su di te",
-  preference: "Preferenze",
-  how_to_work: "Come lavorare",
-  fact: "Fatti",
-  reminder: "Promemoria",
+  get about_you() { return tr("teach.su_di_te"); },
+  get preference() { return tr("teach.preferenze"); },
+  get how_to_work() { return tr("teach.come_lavorare"); },
+  get fact() { return tr("teach.fatti"); },
+  get reminder() { return tr("teach.promemoria"); },
 };
 
 /** Name of a kind; a kind this version does not know (a newer engine) is shown with the plain "Fatti". */
 export const kindLabel = (kind: string): string => KIND_LABEL[kind as MemoryKind] ?? KIND_LABEL.fact;
 
 /** Three sentences that show what the page is for; a tap sends one. */
-export const EXAMPLES: readonly string[] = [
-  "Mi chiamo Giulia e preferisco che mi dai del tu.",
-  "Rispondi sempre in modo breve, con un elenco puntato.",
-  "Ricordami di rinnovare l'abbonamento del treno entro venerdì.",
-];
+export const EXAMPLES: readonly string[] = tList(["teach.mi_chiamo_giulia_e_preferisco", "teach.rispondi_sempre_in_modo_breve", "teach.ricordami_di_rinnovare_l_abbonamento"]);
 
 export interface MemoryGroup {
   kind: MemoryKind;
@@ -108,9 +105,9 @@ export function dueLabel(due: string | undefined, now: number = Date.now()): str
   // Calendar days in the person's own time zone: «oggi» is until midnight, not the next 24 hours.
   const midnight = (ms: number) => new Date(new Date(ms).setHours(0, 0, 0, 0)).getTime();
   const days = Math.round((midnight(t) - midnight(now)) / 86_400_000);
-  if (days <= 0) return "scade oggi";
-  if (days === 1) return "scade domani";
-  return `scade tra ${days} giorni`;
+  if (days <= 0) return tr("teach.scade_oggi");
+  if (days === 1) return tr("teach.scade_domani");
+  return tr("teach.scade_tra_giorni", { days });
 }
 
 // ---------------------------------------------------------------- export

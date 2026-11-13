@@ -357,7 +357,19 @@ async fn the_proposal_agent_is_never_more_permissive_than_reading() {
     let p = e.proactive_agent("operator").unwrap();
     assert_eq!((p.mode.as_str(), p.sandbox.as_str()), ("plan", "read-only"));
     assert!(p.max_turns <= 6 && p.budget.as_ref().unwrap().max_seconds.unwrap() <= 120);
-    for t in ["write_file", "shell", "edit_file", "agent", "handoff", "browser_click"] {
+    for t in [
+        "write_file",
+        "shell",
+        "edit_file",
+        "agent",
+        "handoff",
+        "browser_click",
+        "browser_eval",
+        "browser_upload",
+        "browser_select",
+        "browser_hover",
+        "browser_tab_close",
+    ] {
         assert!(!p.tools.iter().any(|n| n == t), "{t}");
     }
     assert!(p.tools.iter().any(|t| t == "read_file"));
@@ -366,6 +378,17 @@ async fn the_proposal_agent_is_never_more_permissive_than_reading() {
     let q = e.proactive_agent("operator").unwrap();
     assert!(q.tools.iter().any(|t| t == "web_fetch") || !e.tool_registry().all().iter().any(|t| t.name() == "web_fetch"));
     assert_eq!(q.mode, "plan");
+}
+
+#[tokio::test]
+async fn the_proposal_agent_may_search_the_web_only_at_act_readonly_and_while_search_is_on() {
+    let (e, _b, _d, _w) = rig(vec![]).await;
+    on(&e, "propose");
+    assert!(!e.proactive_agent("operator").unwrap().tools.iter().any(|t| t == "web_search"), "no network at `propose`");
+    on(&e, "act_readonly");
+    assert!(e.proactive_agent("operator").unwrap().tools.iter().any(|t| t == "web_search"));
+    e.set_config("global", "search.provider", json!("off")).unwrap();
+    assert!(!e.proactive_agent("operator").unwrap().tools.iter().any(|t| t == "web_search"), "switched off in the settings");
 }
 
 #[tokio::test]

@@ -880,5 +880,138 @@
    "vision": 0,
    "embeddings": 0
   }
+ },
+ {
+  "id": "piper-it-paola-medium",
+  "name": "Piper · Paola (italiano)",
+  "family": "Piper",
+  "publisher": "Rhasspy (voci: rhasspy/piper-voices)",
+  "description": "Voce femminile italiana, qualità media: naturale e leggera, gira su qualunque CPU.",
+  "params_b": 0.02,
+  "format": "piper",
+  "quant": "medium",
+  "size_bytes": 63201294,
+  "context_length": 0,
+  "capabilities": [
+   "tts"
+  ],
+  "license": "MIT (le singole voci hanno la loro licenza: controlla la scheda del repository)",
+  "source": {
+   "kind": "hf",
+   "repo": "rhasspy/piper-voices",
+   "file": "it/it_IT/paola/medium/it_IT-paola-medium.onnx"
+  },
+  "min_memory_mb": 300,
+  "tags": [
+   "voce",
+   "italiano"
+  ],
+  "suitability": {
+   "chat": 0,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
+ },
+ {
+  "id": "piper-it-riccardo-x-low",
+  "name": "Piper · Riccardo (italiano)",
+  "family": "Piper",
+  "publisher": "Rhasspy (voci: rhasspy/piper-voices)",
+  "description": "Voce maschile italiana, qualità ridotta (x_low): molto piccola e veloce, meno naturale. L'unica voce maschile italiana di Piper.",
+  "params_b": 0.02,
+  "format": "piper",
+  "quant": "x_low",
+  "size_bytes": 28000000,
+  "context_length": 0,
+  "capabilities": [
+   "tts"
+  ],
+  "license": "MIT (le singole voci hanno la loro licenza: controlla la scheda del repository)",
+  "source": {
+   "kind": "hf",
+   "repo": "rhasspy/piper-voices",
+   "file": "it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx"
+  },
+  "min_memory_mb": 300,
+  "tags": [
+   "voce",
+   "italiano",
+   "mobile"
+  ],
+  "suitability": {
+   "chat": 0,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
+ },
+ {
+  "id": "piper-en-lessac-medium",
+  "name": "Piper · Lessac (inglese)",
+  "family": "Piper",
+  "publisher": "Rhasspy (voci: rhasspy/piper-voices)",
+  "description": "Voce inglese americana, qualità media: la più usata, chiara anche con testi lunghi.",
+  "params_b": 0.02,
+  "format": "piper",
+  "quant": "medium",
+  "size_bytes": 63201294,
+  "context_length": 0,
+  "capabilities": [
+   "tts"
+  ],
+  "license": "MIT (le singole voci hanno la loro licenza: controlla la scheda del repository)",
+  "source": {
+   "kind": "hf",
+   "repo": "rhasspy/piper-voices",
+   "file": "en/en_US/lessac/medium/en_US-lessac-medium.onnx"
+  },
+  "min_memory_mb": 300,
+  "tags": [
+   "voce",
+   "inglese"
+  ],
+  "suitability": {
+   "chat": 0,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
+ },
+ {
+  "id": "piper-en-amy-medium",
+  "name": "Piper · Amy (inglese)",
+  "family": "Piper",
+  "publisher": "Rhasspy (voci: rhasspy/piper-voices)",
+  "description": "Voce femminile inglese americana, qualità media.",
+  "params_b": 0.02,
+  "format": "piper",
+  "quant": "medium",
+  "size_bytes": 63201294,
+  "context_length": 0,
+  "capabilities": [
+   "tts"
+  ],
+  "license": "MIT (le singole voci hanno la loro licenza: controlla la scheda del repository)",
+  "source": {
+   "kind": "hf",
+   "repo": "rhasspy/piper-voices",
+   "file": "en/en_US/amy/medium/en_US-amy-medium.onnx"
+  },
+  "min_memory_mb": 300,
+  "tags": [
+   "voce",
+   "inglese"
+  ],
+  "suitability": {
+   "chat": 0,
+   "agent": 0,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  }
  }
 ]

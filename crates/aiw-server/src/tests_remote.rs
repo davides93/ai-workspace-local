@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-async fn device(name: &str, turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, tempfile::TempDir, tempfile::TempDir) {
+pub(crate) async fn device(name: &str, turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine, tempfile::TempDir, tempfile::TempDir) {
     let data = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     let mut dev = Engine::new(EngineOptions {
@@ -47,7 +47,7 @@ async fn device(name: &str, turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Engine
 }
 
 /// Serves `e` on a local port and returns the address.
-async fn serve(e: &Engine) -> String {
+pub(crate) async fn serve(e: &Engine) -> String {
     let app = router(e.clone(), None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -172,7 +172,7 @@ async fn a_paired_device_is_a_remote_agent_and_a_team_member() {
     let (server, _d1, _w1) = device("Server", vec![ScriptedBackend::text_turn("Dal dispositivo")]).await;
     let url = serve(&server).await;
     let (client, _d2, _w2) = device("Client", vec![ScriptedBackend::text_turn("Parte locale")]).await;
-    let peer = client.pair_with_peer(&url, &server.pairing_code()).await.unwrap();
+    let peer = client.pair_with_peer(&url, &server.pairing_code(), None).await.unwrap();
 
     let id = format!("peer-{}", peer.id);
     let listed = client.remote_agents();
@@ -291,4 +291,190 @@ async fn a2a_tasks_survive_in_the_database_and_expire() {
     // A finished task is not cancellable.
     let v = call(json!({"jsonrpc": "2.0", "id": 2, "method": "CancelTask", "params": {"id": tid}})).await;
     assert_eq!(v["error"]["code"], -32002);
+}
+
+// ------------------------------------------------------------------ streaming
+
+/// Reads an SSE response to the end and returns the JSON of every `data:` line.
+async fn sse_events(res: reqwest::Response) -> Vec<Value> {
+    let body = tokio::time::timeout(Duration::from_secs(20), res.text()).await.expect("the stream ends").unwrap();
+    body.lines().filter_map(|l| l.strip_prefix("data:")).filter_map(|d| serde_json::from_str(d.trim()).ok()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_server_streams_status_and_artifact_updates() {
+    let (server, _d, _w) = device("Server", vec![ScriptedBackend::text_turn("Risposta in streaming")]).await;
+    let url = serve(&server).await;
+    let http = reqwest::Client::new();
+    let card: Value = http.get(format!("{url}/.well-known/agent-card.json")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(card["capabilities"]["streaming"], true);
+    let req = |method: &str, text: &str| {
+        http.post(format!("{url}/a2a")).json(&json!({"jsonrpc": "2.0", "id": 1, "method": method,
+            "params": {"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": text}]}}}))
+    };
+    let res = req("SendStreamingMessage", "Ciao").send().await.unwrap();
+    assert!(res.headers()["content-type"].to_str().unwrap().contains("text/event-stream"));
+    let events = sse_events(res).await;
+    // The task first, then updates, the last one is the final status.
+    assert_eq!(events[0]["result"]["task"]["status"]["state"], "TASK_STATE_WORKING");
+    let task_id = events[0]["result"]["task"]["id"].as_str().unwrap().to_string();
+    let last = events.last().unwrap();
+    assert_eq!(last["result"]["statusUpdate"]["status"]["state"], "TASK_STATE_COMPLETED");
+    assert_eq!(last["result"]["statusUpdate"]["taskId"], task_id);
+    let text: String = events.iter().filter_map(|e| e["result"]["artifactUpdate"]["artifact"]["parts"][0]["text"].as_str()).collect();
+    assert_eq!(text, "Risposta in streaming");
+    assert!(events.iter().any(|e| e["result"]["artifactUpdate"]["lastChunk"] == true));
+    // The stored task has the same artifact, and a finished task cannot be subscribed to.
+    let got: Value = http
+        .post(format!("{url}/a2a"))
+        .json(&json!({"jsonrpc": "2.0", "id": 2, "method": "GetTask", "params": {"id": task_id}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(got["result"]["artifacts"][0]["parts"][0]["text"], "Risposta in streaming");
+    let again: Value = http
+        .post(format!("{url}/a2a"))
+        .json(&json!({"jsonrpc": "2.0", "id": 3, "method": "SubscribeToTask", "params": {"id": task_id}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(again["error"]["code"], -32004);
+    let none: Value = http
+        .post(format!("{url}/a2a"))
+        .json(&json!({"jsonrpc": "2.0", "id": 4, "method": "tasks/resubscribe", "params": {"id": "nope"}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(none["error"]["code"], -32001);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_legacy_method_name_streams_with_kinds() {
+    let (server, _d, _w) = device("Server", vec![ScriptedBackend::text_turn("Ok")]).await;
+    let url = serve(&server).await;
+    let res = reqwest::Client::new()
+        .post(format!("{url}/a2a"))
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "message/stream",
+            "params": {"message": {"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": "Ciao"}]}}}))
+        .send()
+        .await
+        .unwrap();
+    let events = sse_events(res).await;
+    assert_eq!(events[0]["result"]["kind"], "task");
+    let last = events.last().unwrap();
+    assert_eq!(
+        (last["result"]["kind"].as_str(), last["result"]["status"]["state"].as_str(), last["result"]["final"].as_bool()),
+        (Some("status-update"), Some("completed"), Some(true))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unknown_agent_is_a_json_rpc_error_not_a_stream() {
+    let (server, _d, _w) = device("Server", vec![]).await;
+    let url = serve(&server).await;
+    let v: Value = reqwest::Client::new()
+        .post(format!("{url}/a2a"))
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "SendStreamingMessage",
+            "params": {"metadata": {"agent": "nope"}, "message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "x"}]}}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["error"]["code"], -32602);
+}
+
+/// A scripted remote agent: its card says whether it streams, and it counts the methods it is called with.
+#[derive(Default)]
+struct FakeA2a {
+    streaming_card: bool,
+    stream_works: bool,
+    calls: std::sync::Mutex<Vec<String>>,
+}
+
+async fn fake_a2a(card_streaming: bool, stream_works: bool) -> (String, Arc<FakeA2a>) {
+    use axum::routing::{get, post};
+    let state = Arc::new(FakeA2a { streaming_card: card_streaming, stream_works, ..Default::default() });
+    async fn card(axum::extract::State(f): axum::extract::State<Arc<FakeA2a>>, headers: axum::http::HeaderMap) -> axum::Json<Value> {
+        let host = headers["host"].to_str().unwrap();
+        axum::Json(json!({"name": "fake", "supportedInterfaces": [{"url": format!("http://{host}/a2a"), "protocolBinding": "JSONRPC"}],
+            "capabilities": {"streaming": f.streaming_card}}))
+    }
+    async fn rpc(axum::extract::State(f): axum::extract::State<Arc<FakeA2a>>, axum::Json(b): axum::Json<Value>) -> Response {
+        let method = b["method"].as_str().unwrap_or("").to_string();
+        f.calls.lock().unwrap().push(method.clone());
+        let done = json!({"id": "t1", "contextId": "c", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [{"artifactId": "a", "parts": [{"text": "risposta"}]}]});
+        match method.as_str() {
+            "SendStreamingMessage" if f.stream_works => {
+                let ev = |r: Value| format!("data: {}\n\n", json!({"jsonrpc": "2.0", "id": b["id"], "result": r}));
+                let body = [
+                    ev(json!({"task": {"id": "t1", "contextId": "c", "status": {"state": "TASK_STATE_WORKING"}, "artifacts": []}})),
+                    ev(json!({"statusUpdate": {"taskId": "t1", "status": {"state": "TASK_STATE_WORKING", "message": {"parts": [{"text": "Strumento in uso: x"}]}}}})),
+                    ev(json!({"artifactUpdate": {"taskId": "t1", "artifact": {"artifactId": "a", "parts": [{"text": "ri"}]}, "append": false}})),
+                    ev(json!({"artifactUpdate": {"taskId": "t1", "artifact": {"artifactId": "a", "parts": [{"text": "sposta"}]}, "append": true, "lastChunk": true}})),
+                    ev(json!({"statusUpdate": {"taskId": "t1", "status": {"state": "TASK_STATE_COMPLETED"}}})),
+                ]
+                .concat();
+                ([("content-type", "text/event-stream")], body).into_response()
+            }
+            "SendStreamingMessage" => (StatusCode::METHOD_NOT_ALLOWED, "no").into_response(),
+            "SendMessage" => axum::Json(json!({"jsonrpc": "2.0", "id": b["id"], "result": {"task": {"id": "t1", "contextId": "c", "status": {"state": "TASK_STATE_WORKING"}}}})).into_response(),
+            "GetTask" => axum::Json(json!({"jsonrpc": "2.0", "id": b["id"], "result": done})).into_response(),
+            _ => axum::Json(json!({"jsonrpc": "2.0", "id": b["id"], "result": done})).into_response(),
+        }
+    }
+    let app = axum::Router::new().route("/.well-known/agent-card.json", get(card)).route("/a2a", post(rpc)).with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), state)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_client_streams_when_the_card_says_so_and_polls_otherwise() {
+    let (client, _d, _w) = device("Client", vec![]).await;
+    let cancel = CancellationToken::new();
+    // Advertised and working: one streaming call, no polling.
+    let (url, fake) = fake_a2a(true, true).await;
+    client.save_remote_agent(remote("s", &url)).unwrap();
+    assert_eq!(client.delegate_remote("remote:s", "x", &cancel, None).await.unwrap(), "risposta");
+    assert_eq!(*fake.calls.lock().unwrap(), vec!["SendStreamingMessage"]);
+    // Not advertised: the plain way.
+    let (url, fake) = fake_a2a(false, true).await;
+    client.save_remote_agent(remote("p", &url)).unwrap();
+    assert_eq!(client.delegate_remote("remote:p", "x", &cancel, None).await.unwrap(), "risposta");
+    assert!(!fake.calls.lock().unwrap().contains(&"SendStreamingMessage".to_string()));
+    assert!(fake.calls.lock().unwrap().contains(&"GetTask".to_string()));
+    // Advertised but refused: falls back to SendMessage + GetTask.
+    let (url, fake) = fake_a2a(true, false).await;
+    client.save_remote_agent(remote("f", &url)).unwrap();
+    assert_eq!(client.delegate_remote("remote:f", "x", &cancel, None).await.unwrap(), "risposta");
+    assert_eq!(fake.calls.lock().unwrap()[..2], ["SendStreamingMessage".to_string(), "SendMessage".to_string()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn remote_progress_reaches_the_trace_of_the_delegating_run() {
+    let (client, _d, _w) = device("Client", vec![]).await;
+    let (url, _fake) = fake_a2a(true, true).await;
+    client.save_remote_agent(remote("s", &url)).unwrap();
+    client.delegate_remote("remote:s", "x", &CancellationToken::new(), Some("run_parent")).await.unwrap();
+    let notes: Vec<String> = client
+        .run_events("run_parent")
+        .into_iter()
+        .filter_map(|e| match e.event.event {
+            aiw_core::events::AgEvent::Custom { name, value } if name == "aiw.remote_progress" => value["note"].as_str().map(String::from),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes, vec!["Strumento in uso: x"]);
 }

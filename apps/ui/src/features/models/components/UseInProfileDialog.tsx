@@ -5,6 +5,7 @@ import type { InferenceProfile, LocalModel } from "../../../shared/api/types";
 import { useProfiles, useSaveProfile } from "../../agents/api";
 import { applyModelToProfile, newProfileFor, pickRuntime, runtimeOptions } from "../model/profile";
 
+import { t, tNode } from "../../../shared/i18n";
 const NEW = "__new__";
 const FORM_ID = "use-in-profile-form";
 
@@ -13,7 +14,7 @@ export function UseInProfileDialog({ model, onClose }: { model: LocalModel; onCl
   const profiles = useProfiles();
   if (!profiles.data) {
     return (
-      <Dialog title="Usa nel profilo" size="md" onClose={onClose} footer={<Button onClick={onClose}>Chiudi</Button>}>
+      <Dialog title={t("models.usa_nel_profilo")} size="md" onClose={onClose} footer={<Button onClick={onClose}>{t("models.chiudi")}</Button>}>
         {profiles.isError ? <ErrorState error={profiles.error} onRetry={() => void profiles.refetch()} /> : <SkeletonLines lines={4} />}
       </Dialog>
     );
@@ -44,11 +45,11 @@ function ProfileDialog({ model, profiles, onClose }: { model: LocalModel; profil
 
   return (
     <Dialog
-      title="Usa nel profilo" size="md" onClose={onClose}
+      title={t("models.usa_nel_profilo")} size="md" onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Annulla</Button>
-          <Button type="submit" form={FORM_ID} variant="primary" icon="check" disabled={!canSave}>{save.isPending ? "Salvo…" : "Usa nel profilo"}</Button>
+          <Button onClick={onClose}>{t("models.annulla")}</Button>
+          <Button type="submit" form={FORM_ID} variant="primary" icon="check" disabled={!canSave}>{save.isPending ? t("models.salvo") : t("models.usa_nel_profilo")}</Button>
         </>
       }
     >
@@ -58,25 +59,25 @@ function ProfileDialog({ model, profiles, onClose }: { model: LocalModel; profil
           <Chips><Chip>.{model.format}</Chip>{model.quant && <Chip>{model.quant}</Chip>}<Chip>{model.id}</Chip></Chips>
         </div>
 
-        <Field label="Profilo di inferenza" htmlFor="uip-profile" hint="Gli agenti che usano questo profilo useranno il modello scelto.">
+        <Field label={t("models.profilo_di_inferenza")} htmlFor="uip-profile" hint={t("models.gli_agenti_che_usano_questo")}>
           <Select id="uip-profile" value={target} data-autofocus onChange={(e) => { setTarget(e.target.value); setRuntimeChoice(null); }}>
-            {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.model === model.id ? " (già in uso)" : ""}</option>)}
-            <option value={NEW}>Nuovo profilo…</option>
+            {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.model === model.id ? t("models.gia_in_uso") : ""}</option>)}
+            <option value={NEW}>{t("models.nuovo_profilo")}</option>
           </Select>
         </Field>
 
         {target === NEW && (
-          <Field label="Nome del nuovo profilo" htmlFor="uip-name" error={nameMissing ? "Dai un nome al profilo." : undefined}>
+          <Field label={t("models.nome_del_nuovo_profilo")} htmlFor="uip-name" error={nameMissing ? t("models.dai_un_nome_al_profilo") : undefined}>
             <Input id="uip-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} aria-invalid={nameMissing ? true : undefined} />
           </Field>
         )}
 
-        <Field label="Runtime" htmlFor="uip-runtime" hint="Solo i runtime pronti su questo device possono essere scelti.">
+        <Field label={t("models.runtime")} htmlFor="uip-runtime" hint={t("models.solo_i_runtime_pronti_su")}>
           <Select id="uip-runtime" value={runtime ?? ""} disabled={noRuntime} onChange={(e) => setRuntimeChoice(e.target.value)}>
-            {runtime === null && <option value="">Nessun runtime disponibile</option>}
+            {runtime === null && <option value="">{t("models.nessun_runtime_disponibile")}</option>}
             {options.map((r) => (
               <option key={r.id} value={r.id} disabled={!r.available}>
-                {r.name}{r.available ? "" : ` · non disponibile${r.reason ? `: ${r.reason}` : ""}`}
+                {r.name}{r.available ? "" : t("models.non_disponibile", { p: r.reason ? `: ${r.reason}` : "" })}
               </option>
             ))}
           </Select>
@@ -84,13 +85,11 @@ function ProfileDialog({ model, profiles, onClose }: { model: LocalModel; profil
 
         {noRuntime && (
           <p className="mh-alert warn" role="alert">
-            Nessun runtime in grado di aprire il formato .{model.format} è pronto su questo device. <Link to="/runtimes">Apri i runtime</Link>.
-          </p>
+            {tNode("models.nessun_runtime_in_grado_di", { link: <Link to="/runtimes">{t("models.apri_i_runtime")}</Link> }, { format: model.format })}</p>
         )}
         {profile && !noRuntime && (
           <p className="faint text-sm">
-            «{profile.name}» passerà da <span className="mono">{profile.model}</span> ({profile.runtime_id}) a <span className="mono">{model.id}</span>
-            {runtime ? ` (${runtime})` : ""}. I parametri di campionamento restano quelli del profilo.
+            {tNode(runtime ? "models.profile_switches_model_runtime" : "models.profile_switches_model", { name: profile.name, from: <span className="mono">{profile.model}</span>, from_runtime: profile.runtime_id, to: <span className="mono">{model.id}</span>, runtime: runtime ?? "" })}
           </p>
         )}
       </form>

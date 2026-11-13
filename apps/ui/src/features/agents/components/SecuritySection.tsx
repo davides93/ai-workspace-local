@@ -4,6 +4,7 @@ import type { PillTone } from "../../../shared/ui";
 import type { PolicyMode, SandboxMode, AgentProfile } from "../../../shared/api/types";
 import { MAX_TURNS_LIMIT, type AgentIssue } from "../model/agents";
 
+import { t } from "../../../shared/i18n";
 interface Choice<T extends string> {
   id: T;
   label: string;
@@ -41,15 +42,15 @@ export function SecuritySection({ agent, issues, onChange }: { agent: AgentProfi
   return (
     <div className="form-grid">
       <ChoiceCards<PolicyMode>
-        legend="Modalità di approvazione" name="ag-mode" value={agent.mode} onChange={(mode) => onChange({ mode })}
+        legend={t("agents.modalita_di_approvazione")} name="ag-mode" value={agent.mode} onChange={(mode) => onChange({ mode })}
         options={APPROVAL_MODES.map((m) => ({ id: m.id, label: m.label, summary: m.summary, detail: m.detail, tone: m.tone }))}
       />
       <ChoiceCards<SandboxMode>
-        legend="Sandbox dei comandi" name="ag-sandbox" value={agent.sandbox} onChange={(sandbox) => onChange({ sandbox })}
+        legend={t("agents.sandbox_dei_comandi")} name="ag-sandbox" value={agent.sandbox} onChange={(sandbox) => onChange({ sandbox })}
         options={SANDBOX_MODES.map((m) => ({ id: m.id, label: m.label, summary: m.summary, tone: m.tone }))}
       />
       {warnings.map((w) => <p key={w.field} className="tool-warn text-sm" role="note"><Icon name="alert" size={14} /> {w.message}</p>)}
-      <Field label="Turni massimi" htmlFor="ag-turns" error={turnsError} hint={`Dopo questo numero di giri tra agente e modello il run si ferma (1–${MAX_TURNS_LIMIT}).`} className="field-narrow">
+      <Field label={t("agents.turni_massimi")} htmlFor="ag-turns" error={turnsError} hint={t("agents.dopo_questo_numero_di_giri", { MAX_TURNS_LIMIT })} className="field-narrow">
         <Input
           id="ag-turns" className="num" type="number" min={1} max={MAX_TURNS_LIMIT} step={1} inputMode="numeric"
           value={Number.isNaN(agent.max_turns) ? "" : agent.max_turns} aria-invalid={!!turnsError}

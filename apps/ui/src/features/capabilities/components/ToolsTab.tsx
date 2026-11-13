@@ -4,6 +4,7 @@ import { useSetToolsEnabled, useTools } from "../api";
 import { countEnabled, groupState, groupTools, isInternalTool, RISK_ORDER, switchableTools, TOOL_RISK, type RiskFilter } from "../model/tools";
 import { ToolRow } from "./ToolRow";
 
+import { t as tr } from "../../../shared/i18n";
 const GROUP_ICON: Record<string, string> = {
   files: "file", shell: "terminal", web: "globe", browser: "globe", computer: "mouse", internal: "agent", other: "tool",
 };
@@ -20,7 +21,7 @@ export function ToolsTab() {
     <QueryState
       query={tools}
       isEmpty={(all) => all.length === 0}
-      empty={<EmptyState icon="tool" title="Nessun tool disponibile" description="Il workspace non ha ancora registrato tool: riavvia il server o aggiungi un server MCP." />}
+      empty={<EmptyState icon="tool" title={tr("capabilities.nessun_tool_disponibile")} description={tr("capabilities.il_workspace_non_ha_ancora")} />}
     >
       {(all) => {
         const groups = groupTools(all, { query, risk });
@@ -29,23 +30,23 @@ export function ToolsTab() {
         return (
           <>
             <div className="row filters">
-              <Field label="Cerca" htmlFor="cap-search" className="grow cap-search">
-                <Input id="cap-search" type="search" placeholder="Nome, descrizione o server" value={query} onChange={(e) => setQuery(e.target.value)} />
+              <Field label={tr("capabilities.cerca")} htmlFor="cap-search" className="grow cap-search">
+                <Input id="cap-search" type="search" placeholder={tr("capabilities.nome_descrizione_o_server")} value={query} onChange={(e) => setQuery(e.target.value)} />
               </Field>
-              <Field label="Rischio" htmlFor="tool-risk">
+              <Field label={tr("capabilities.rischio")} htmlFor="tool-risk">
                 <Select id="tool-risk" value={risk} onChange={(e) => setRisk(e.target.value as RiskFilter)}>
-                  <option value="all">Tutti</option>
+                  <option value="all">{tr("capabilities.tutti")}</option>
                   {RISK_ORDER.map((r) => <option key={r} value={r}>{TOOL_RISK[r].label}</option>)}
                 </Select>
               </Field>
               <p className="muted text-sm cap-summary" aria-live="polite">
-                {countEnabled(switchable)} di {switchable.length} tool attivi{internalCount > 0 ? ` · ${internalCount} interni sempre attivi` : ""}
+                {tr("capabilities.di_tool_attivi", { p: countEnabled(switchable), length: switchable.length, p2: internalCount > 0 ? ` · ${internalCount} interni sempre attivi` : "" })}
               </p>
             </div>
             {groups.length === 0 && (
               <EmptyState
-                icon="search" title="Nessun tool corrisponde" description="Prova con un altro termine o un altro livello di rischio."
-                action={filtered && <Button onClick={() => { setQuery(""); setRisk("all"); }}>Azzera i filtri</Button>}
+                icon="search" title={tr("capabilities.nessun_tool_corrisponde")} description={tr("capabilities.prova_con_un_altro_termine")}
+                action={filtered && <Button onClick={() => { setQuery(""); setRisk("all"); }}>{tr("capabilities.azzera_i_filtri")}</Button>}
               />
             )}
             {groups.map((g) => {
@@ -56,11 +57,11 @@ export function ToolsTab() {
                 <Panel
                   key={g.id} padded={false} icon={icon}
                   title={<>{g.title} <Pill>{internal ? g.tools.length : `${countEnabled(g.tools)}/${g.tools.length}`}</Pill></>}
-                  actions={internal ? <span className="faint text-xs">Sempre attivi</span> : (
+                  actions={internal ? <span className="faint text-xs">{tr("capabilities.sempre_attivi")}</span> : (
                     <span className="row nowrap cap-group-switch">
-                      <span className="faint text-xs">{state === "all" ? "Tutti attivi" : state === "none" ? "Tutti spenti" : "Alcuni attivi"}</span>
+                      <span className="faint text-xs">{state === "all" ? tr("capabilities.tutti_attivi") : state === "none" ? tr("capabilities.tutti_spenti") : tr("capabilities.alcuni_attivi")}</span>
                       <Toggle
-                        label={`Attiva o disattiva tutti i tool di ${g.title}`} checked={state === "all"}
+                        label={tr("capabilities.attiva_o_disattiva_tutti_i", { title: g.title })} checked={state === "all"}
                         onChange={(enabled) => setEnabled.mutate({ names: g.tools.map((t) => t.name), enabled })}
                       />
                     </span>

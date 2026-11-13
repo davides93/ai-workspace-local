@@ -4,6 +4,7 @@ import { CodeBlock } from "./CodeBlock";
 import { parseMarkdown, type Block, type Inline, type ListItem } from "./markdownParse";
 import "./markdown.css";
 
+import { t as tr } from "../i18n";
 function renderInline(nodes: Inline[]): ReactNode[] {
   return nodes.map((n, i) => {
     switch (n.t) {
@@ -32,7 +33,7 @@ function ListItemView({ item, tight }: { item: ListItem; tight: boolean }) {
   if (item.checked === undefined) return <li>{content}</li>;
   return (
     <li className="md-task">
-      <input type="checkbox" checked={item.checked} disabled aria-label={item.checked ? "Completato" : "Da fare"} />
+      <input type="checkbox" checked={item.checked} disabled aria-label={item.checked ? tr("ui.completato") : tr("ui.da_fare")} />
       <div>{content}</div>
     </li>
   );

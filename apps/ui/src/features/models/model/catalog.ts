@@ -2,6 +2,7 @@ import type { CatalogModel, DownloadProgress } from "../../../shared/api/types";
 import { formatBytes } from "../../../shared/lib/format";
 import { isActiveJob } from "./downloads";
 
+import { t } from "../../../shared/i18n";
 /** Entry that points to a whole repository instead of one file (the MLX entry): `source.file` is empty. */
 export function isWholeRepo(c: Pick<CatalogModel, "source">): boolean {
   return c.source.kind === "hf" && c.source.file === "";
@@ -16,7 +17,7 @@ export function catalogSize(c: Pick<CatalogModel, "size_bytes" | "downloadable">
 export function catalogTags(c: CatalogModel): string[] {
   const tags = [`.${c.format}`];
   if (c.quant) tags.push(c.quant);
-  if (isWholeRepo(c)) tags.push("repository intero");
+  if (isWholeRepo(c)) tags.push(t("models.repository_intero"));
   return tags;
 }
 
@@ -43,16 +44,16 @@ export function findCatalogJob(jobs: DownloadProgress[], c: Pick<CatalogModel, "
 
 /** Platform requirement worth saying out loud on the card (MLX runs only on macOS with Apple Silicon). */
 export function platformNote(c: Pick<CatalogModel, "format" | "downloadable">): string | null {
-  if (c.format === "mlx" && c.downloadable) return "Formato MLX: si scarica il repository intero e gira solo su macOS con Apple Silicon.";
+  if (c.format === "mlx" && c.downloadable) return t("models.formato_mlx_si_scarica_il");
   return null;
 }
 
 /** Where a system model comes from, in a sentence. */
 export function systemNote(runtime: string | null): string {
   const where =
-    runtime === "apple-fm" ? "da Apple Intelligence su iPhone e Mac"
-    : runtime === "gemini-nano" ? "da Android (AICore) sui telefoni che lo supportano"
-    : runtime === "phi-silica" ? "da Windows sui PC Copilot+"
-    : "dal sistema operativo";
-  return `Viene fornito ${where}: non si scarica e non occupa spazio nella cartella dei modelli. Compare tra i runtime se questo device lo include.`;
+    runtime === "apple-fm" ? t("models.da_apple_intelligence_su_iphone")
+    : runtime === "gemini-nano" ? t("models.da_android_aicore_sui_telefoni")
+    : runtime === "phi-silica" ? t("models.da_windows_sui_pc_copilot")
+    : t("models.dal_sistema_operativo");
+  return t("models.viene_fornito_non_si_scarica", { where });
 }

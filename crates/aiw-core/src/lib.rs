@@ -14,6 +14,7 @@ pub mod events;
 pub mod ids;
 pub mod paths;
 pub mod schema;
+pub mod tlspin;
 
 pub use error::{Error, Result};
 

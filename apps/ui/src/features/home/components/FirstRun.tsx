@@ -12,6 +12,7 @@ import { useRefreshRuntimes } from "../../runtimes/api";
 import { useConfig } from "../../settings/api";
 import { currentStep, downloadFraction, firstRunModel, type ChecklistId, type ChecklistStep } from "../model/overview";
 
+import { t, t as tr } from "../../../shared/i18n";
 interface StepContext {
   runtimes: RuntimeInfo[];
   models: LocalModel[];
@@ -32,11 +33,11 @@ function stepBody(id: ChecklistId, c: StepContext, done: boolean): { detail: Rea
     case "runtime": {
       const live = c.runtimes.find((r) => r.status === "running") ?? c.runtimes.find((r) => r.status === "available");
       return {
-        detail: live ? `${live.name}: ${live.status === "running" ? "in esecuzione" : "rilevato, parte al primo uso"}` : "Nessun runtime è pronto: rileva quelli installati o aggiungine uno.",
-        actions: live ? <Link to="/runtimes" className="btn sm ghost">Vedi i runtime</Link> : (
+        detail: live ? t(live.status === "running" ? "home.runtime_in_esecuzione_2" : "home.runtime_rilevato_parte_al_primo_uso", { name: live.name }) : t("home.nessun_runtime_e_pronto_rileva"),
+        actions: live ? <Link to="/runtimes" className="btn sm ghost">{t("home.vedi_i_runtime")}</Link> : (
           <>
-            <Button size="sm" variant="primary" icon="refresh" disabled={c.busy.refresh} onClick={c.refresh}>Rileva runtime</Button>
-            <Link to="/runtimes" className="btn sm">Vedi i runtime</Link>
+            <Button size="sm" variant="primary" icon="refresh" disabled={c.busy.refresh} onClick={c.refresh}>{t("home.rileva_runtime")}</Button>
+            <Link to="/runtimes" className="btn sm">{t("home.vedi_i_runtime")}</Link>
           </>
         ),
       };
@@ -44,35 +45,34 @@ function stepBody(id: ChecklistId, c: StepContext, done: boolean): { detail: Rea
     case "model": {
       if (done) {
         const n = c.models.length;
-        return { detail: `${n} ${n === 1 ? "modello" : "modelli"} sul disco`, actions: <Link to="/models" className="btn sm ghost">Vedi i modelli</Link> };
+        return { detail: t("home.model_count", { n }), actions: <Link to="/models" className="btn sm ghost">{t("home.vedi_i_modelli")}</Link> };
       }
       const { rec, job } = c;
-      const where = c.device ? ` per ${c.device.name}` : " per questo dispositivo";
       return {
         detail: job ? (
           <span className="hm-step-progress">
-            <span>Download di {rec?.name ?? job.model_ref} in corso · {formatPercent(downloadFraction(job.received, job.total))}</span>
-            <Meter label={`Avanzamento di ${rec?.name ?? job.model_ref}`} value={job.received} max={job.total} />
+            <span>{t("home.download_di_in_corso", { p: rec?.name ?? job.model_ref, p2: formatPercent(downloadFraction(job.received, job.total)) })}</span>
+            <Meter label={t("home.avanzamento_di", { p: rec?.name ?? job.model_ref })} value={job.received} max={job.total} />
           </span>
-        ) : rec ? `Consigliato${where}: ${rec.name} (${formatBytes(rec.size_bytes)}). ${rec.fit_detail}` : "Scegli un modello da scaricare: la compatibilità è calcolata sulla memoria e sugli acceleratori del dispositivo.",
-        actions: job ? <Link to="/models/downloads" className="btn sm">Vedi i download</Link> : (
+        ) : rec ? (c.device ? t("home.recommended_for_device", { device: c.device.name, name: rec.name, size: formatBytes(rec.size_bytes), fit_detail: rec.fit_detail }) : t("home.recommended_here", { name: rec.name, size: formatBytes(rec.size_bytes), fit_detail: rec.fit_detail })) : t("home.scegli_un_modello_da_scaricare"),
+        actions: job ? <Link to="/models/downloads" className="btn sm">{t("home.vedi_i_download")}</Link> : (
           <>
-            {rec && <Button size="sm" variant="primary" icon="download" disabled={c.busy.pull} onClick={() => c.pull(rec.id)}>Scarica {rec.name}</Button>}
-            <Link to="/models/discover" className={cx("btn sm", !rec && "primary")}>{rec ? "Altri modelli" : "Scopri modelli"}</Link>
-            {rec && <Link to="/models/catalog" className="btn sm ghost">Catalogo</Link>}
+            {rec && <Button size="sm" variant="primary" icon="download" disabled={c.busy.pull} onClick={() => c.pull(rec.id)}>{t("home.scarica", { name: rec.name })}</Button>}
+            <Link to="/models/discover" className={cx("btn sm", !rec && "primary")}>{rec ? t("home.altri_modelli") : t("home.scopri_modelli")}</Link>
+            {rec && <Link to="/models/catalog" className="btn sm ghost">{t("home.catalogo")}</Link>}
           </>
         ),
       };
     }
     case "profile":
       return {
-        detail: c.profile ? `${c.profile.name}${c.profile.model ? ` · ${c.profile.model}` : " · ancora senza modello"}` : "Un profilo collega un runtime a un modello e ai suoi parametri.",
-        actions: <Link to="/agents" className="btn sm ghost">Apri i profili</Link>,
+        detail: c.profile ? (c.profile.model ? `${c.profile.name} · ${c.profile.model}` : t("home.profilo_ancora_senza_modello", { name: c.profile.name })) : t("home.un_profilo_collega_un_runtime"),
+        actions: <Link to="/agents" className="btn sm ghost">{t("home.apri_i_profili")}</Link>,
       };
     case "chat":
       return {
-        detail: "Una conversazione con un agente: gli strumenti chiedono conferma prima di agire.",
-        actions: <Button size="sm" variant="primary" icon="plus" disabled={!c.agentId || c.busy.session} onClick={c.newSession}>Nuova sessione</Button>,
+        detail: t("home.una_conversazione_con_un_agente"),
+        actions: <Button size="sm" variant="primary" icon="plus" disabled={!c.agentId || c.busy.session} onClick={c.newSession}>{t("home.nuova_sessione")}</Button>,
       };
   }
 }
@@ -110,16 +110,16 @@ export function FirstRun({ steps, runtimes, models, profile, device, onDismiss }
   const current = currentStep(steps);
   return (
     <Panel
-      title="Per iniziare" icon="sparkle" className="hm-firstrun"
+      title={t("home.per_iniziare")} icon="sparkle" className="hm-firstrun"
       actions={
         <>
-          <span className="faint text-sm num" aria-label={`${done} passi su ${steps.length} completati`}>{done} di {steps.length}</span>
-          <Button size="sm" variant="ghost" onClick={onDismiss} title="Nasconde questo elenco">Nascondi</Button>
+          <span className="faint text-sm num" aria-label={tr("home.passi_su_completati", { done, length: steps.length })}>{t("home.di", { done, length: steps.length })}</span>
+          <Button size="sm" variant="ghost" onClick={onDismiss} title={tr("home.nasconde_questo_elenco")}>{t("home.nascondi")}</Button>
         </>
       }
     >
       <div className="stack stack-lg">
-        <Meter label="Passi completati" value={done} max={steps.length} tone="ok" />
+        <Meter label={t("home.passi_completati")} value={done} max={steps.length} tone="ok" />
         <ol className="hm-steps">
           {steps.map((s, i) => {
             const { detail, actions } = stepBody(s.id, ctx, s.done);
@@ -127,7 +127,7 @@ export function FirstRun({ steps, runtimes, models, profile, device, onDismiss }
               <li key={s.id} className={cx("hm-step", s.done && "is-done", s.id === current && "is-current")} aria-current={s.id === current ? "step" : undefined}>
                 <span className="hm-step-mark" aria-hidden="true">{s.done ? <Icon name="check" size={14} /> : i + 1}</span>
                 <div className="hm-step-text">
-                  <b><span className="sr-only">{s.done ? "Completato: " : "Da fare: "}</span>{s.label}</b>
+                  <b><span className="sr-only">{s.done ? tr("home.completato") : t("home.da_fare")}</span>{s.label}</b>
                   <span className="hm-step-detail">{detail}</span>
                 </div>
                 <div className="hm-step-actions">{actions}</div>

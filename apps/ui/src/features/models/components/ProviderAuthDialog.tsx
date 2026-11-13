@@ -7,6 +7,7 @@ import { useModelProviders, useSetProviderAuth } from "../api";
 import { authPayload, hasAuthChanges, hostOf, validateEndpoint } from "../model/forms";
 import { authBadge } from "../model/providers";
 
+import { t, tNode } from "../../../shared/i18n";
 const FORM_ID = "provider-auth-form";
 
 /**
@@ -18,7 +19,7 @@ export function ProviderAuthDialog({ providerId, onClose }: { providerId: string
   const info = providers.data?.find((p) => p.id === providerId);
   if (!info) {
     return (
-      <Dialog title="Accesso al provider" size="md" onClose={onClose} footer={<Button onClick={onClose}>Chiudi</Button>}>
+      <Dialog title={t("models.accesso_al_provider")} size="md" onClose={onClose} footer={<Button onClick={onClose}>{t("models.chiudi")}</Button>}>
         {providers.isError ? <ErrorState error={providers.error} onRetry={() => void providers.refetch()} /> : <SkeletonLines lines={3} />}
       </Dialog>
     );
@@ -47,7 +48,7 @@ function AuthDialog({ info, onClose }: { info: ModelProviderInfo; onClose: () =>
       { id: info.id, token: payload.token, endpoint: payload.endpoint },
       {
         onSuccess: () => {
-          toast(payload.token ? `Token di ${info.name} salvato` : "Impostazioni del provider aggiornate");
+          toast(payload.token ? t("models.token_di_salvato", { name: info.name }) : t("models.impostazioni_del_provider_aggiornate"));
           onClose();
         },
       },
@@ -55,18 +56,18 @@ function AuthDialog({ info, onClose }: { info: ModelProviderInfo; onClose: () =>
   };
 
   const removeToken = () =>
-    set.mutate({ id: info.id, token: null }, { onSuccess: () => { toast(`Token di ${info.name} rimosso`); onClose(); } });
+    set.mutate({ id: info.id, token: null }, { onSuccess: () => { toast(t("models.token_di_rimosso", { name: info.name })); onClose(); } });
 
   return (
     <Dialog
-      title={`Accesso a ${info.name}`}
+      title={t("models.accesso_a", { name: info.name })}
       size="md"
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Annulla</Button>
+          <Button onClick={onClose}>{t("models.annulla")}</Button>
           <Button type="submit" form={FORM_ID} variant="primary" icon="check" disabled={!dirty || !!endpointError || set.isPending}>
-            {set.isPending ? "Salvo…" : "Salva"}
+            {set.isPending ? t("models.salvo") : t("models.salva")}
           </Button>
         </>
       }
@@ -77,7 +78,7 @@ function AuthDialog({ info, onClose }: { info: ModelProviderInfo; onClose: () =>
         {usesToken && (
           <div className="stack">
             <div className="row row-between">
-              <label className="field-label" htmlFor="provider-token">Token di accesso</label>
+              <label className="field-label" htmlFor="provider-token">{t("models.token_di_accesso")}</label>
               <Pill tone={badge.tone} title={badge.detail}>
                 {info.auth_configured && <Icon name="key" size={12} />}
                 {badge.label}
@@ -86,17 +87,17 @@ function AuthDialog({ info, onClose }: { info: ModelProviderInfo; onClose: () =>
             <Input
               id="provider-token" type="password" mono autoComplete="off" spellCheck={false} data-autofocus
               value={token} onChange={(e) => setToken(e.target.value)}
-              placeholder={info.auth_configured ? "Lascia vuoto per tenere quello attuale" : "Incolla il token"}
+              placeholder={info.auth_configured ? t("models.lascia_vuoto_per_tenere_quello") : t("models.incolla_il_token")}
               aria-describedby="provider-token-hint"
             />
             <span id="provider-token-hint" className="faint text-xs">
-              {host ? <>Salvato solo su questo device e inviato soltanto a <b>{host}</b>. </> : "Salvato solo su questo device. "}
-              Una volta salvato non viene più mostrato.
-              {info.auth === "optional" && " Serve per i repository gated e per limiti più alti."}
+              {host ? <>{tNode("models.salvato_solo_su_questo_device_e_inviato", { host: <b>{host}</b> })} </> : t("models.salvato_solo_su_questo_device")}
+              {t("models.una_volta_salvato_non_viene_piu")}
+              {info.auth === "optional" && t("models.serve_per_i_repository_gated")}
             </span>
             {info.auth_configured && (
               <div className="row">
-                <Button variant="danger" size="sm" icon="trash" onClick={removeToken} disabled={set.isPending}>Rimuovi il token</Button>
+                <Button variant="danger" size="sm" icon="trash" onClick={removeToken} disabled={set.isPending}>{t("models.rimuovi_il_token")}</Button>
               </div>
             )}
           </div>
@@ -104,24 +105,23 @@ function AuthDialog({ info, onClose }: { info: ModelProviderInfo; onClose: () =>
 
         {usesEndpoint && (
           <Field
-            label="Endpoint o mirror" htmlFor="provider-endpoint" error={endpointError ?? undefined}
-            hint="Indirizzo base del servizio: cambialo per usare un mirror. Il token viene inviato a questo indirizzo."
+            label={t("models.endpoint_o_mirror")} htmlFor="provider-endpoint" error={endpointError ?? undefined}
+            hint={t("models.indirizzo_base_del_servizio_cambialo")}
           >
             <Input
               id="provider-endpoint" type="url" mono inputMode="url" autoComplete="off" spellCheck={false}
-              value={reset ? "" : endpoint} placeholder={reset ? "Verrà usato l'indirizzo predefinito" : "https://…"}
+              value={reset ? "" : endpoint} placeholder={reset ? t("models.verra_usato_l_indirizzo_predefinito") : "https://…"}
               disabled={reset} onChange={(e) => setEndpoint(e.target.value)} aria-invalid={endpointError ? true : undefined}
             />
             <label className="mh-reset">
               <input type="checkbox" checked={reset} onChange={(e) => setReset(e.target.checked)} />
-              Ripristina l'indirizzo predefinito
-            </label>
+              {t("models.ripristina_l_indirizzo_predefinito")}</label>
           </Field>
         )}
 
-        {!usesToken && !usesEndpoint && <p className="muted">Questo provider non ha impostazioni.</p>}
+        {!usesToken && !usesEndpoint && <p className="muted">{t("models.questo_provider_non_ha_impostazioni")}</p>}
         {set.isError && <p className="field-error" role="alert">{errorMessage(set.error)}</p>}
-        {set.isPending && payload.token && <p className="faint text-sm" role="status">Verifico il token con il provider…</p>}
+        {set.isPending && payload.token && <p className="faint text-sm" role="status">{t("models.verifico_il_token_con_il")}</p>}
       </form>
     </Dialog>
   );

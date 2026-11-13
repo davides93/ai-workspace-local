@@ -3,11 +3,16 @@
 
 mod a2a;
 mod anthropic;
+mod backup_api;
 mod extract;
 mod gateway;
+mod kb_api;
 mod mcp_server;
 pub mod mesh;
+mod scopes;
 mod security;
+mod tls;
+mod tokens_api;
 
 use aiw_core::api::*;
 use aiw_core::Error;
@@ -59,34 +64,174 @@ pub struct AppState {
     pub engine: Engine,
 }
 
-/// Is this request coming from this machine (or from the in-process Tauri dispatcher)?
-fn is_local(req: &Request) -> bool {
-    match req.extensions().get::<ConnectInfo<SocketAddr>>() {
-        Some(ConnectInfo(addr)) => addr.ip().to_canonical().is_loopback(),
-        None => true,
-    }
+/// What the authentication middleware decided about a request, for the handlers that need to know.
+#[derive(Clone, Debug)]
+pub(crate) struct AuthContext {
+    /// The token the request carried (`None`: this computer without a token).
+    pub token: Option<aiw_engine::tokens::TokenAuth>,
+    /// May this caller do everything (the owner on this computer or over TLS, or this computer without a token)?
+    pub full: bool,
 }
 
-/// Authentication and CSRF/DNS-rebinding defence (see [`security`]). A request with the API token
-/// always passes; one without it passes only when it comes from this machine and is not a web
-/// page acting on its own (loopback `Host`, allowed `Origin`), or when it is a pairing attempt.
-async fn auth(State(st): State<AppState>, req: Request, next: Next) -> Response {
+/// Is this request coming from this machine (or from the in-process Tauri dispatcher) with full
+/// rights? A token that is not `full` (a paired device's, even over loopback) is not "local": the
+/// routes that make the engine read this computer's files refuse it.
+fn is_local(req: &Request) -> bool {
+    let on_machine = match req.extensions().get::<ConnectInfo<SocketAddr>>() {
+        Some(ConnectInfo(addr)) => addr.ip().to_canonical().is_loopback(),
+        None => true,
+    };
+    on_machine && req.extensions().get::<AuthContext>().is_none_or(|c| c.full)
+}
+
+fn client_ip(req: &Request) -> Option<String> {
+    req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_canonical().to_string())
+}
+
+fn rejection(status: StatusCode, msg: &str) -> Response {
+    (status, Json(json!({ "error": msg }))).into_response()
+}
+
+/// Authentication, authorisation by scope, and CSRF/DNS-rebinding defence (see [`security`] and
+/// [`scopes`]).
+///
+/// * A request that carries a valid token passes the origin rules (a forged request cannot carry
+///   one) and is then held to the token's scopes: the owner token is `full` from this computer or
+///   over TLS, and a paired device's token is `device`.
+/// * A token that was revoked or has expired is refused with 401, wherever the request comes from.
+///   A token that is not one of ours counts as no token (and costs the client address a strike).
+/// * A request without a valid token passes only when it comes from this machine and is not a web
+///   page acting on its own (loopback `Host`, allowed `Origin`), or when it is a pairing attempt.
+async fn auth(State(st): State<AppState>, mut req: Request, next: Next) -> Response {
+    use aiw_engine::tokens::{Scope, TokenCheck, TokenKind};
+    use scopes::Required;
     let path = req.uri().path().to_string();
-    if !security::is_guarded(&path) || security::has_valid_token(&req, st.engine.token()) {
+    if !security::is_guarded(&path) {
         return next.run(req).await;
     }
-    let refusal = match security::peer(&req) {
-        security::Peer::InProcess => None,
-        security::Peer::Loopback => security::check_loopback(&req, &st),
-        // Pairing is how a LAN device gets its token; a web page must still not be able to try codes.
-        security::Peer::Remote if path == "/api/pair" => security::check_origin(&req, &st),
-        security::Peer::Remote => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "serve il token di pairing per l'accesso dalla rete"}))).into_response()
+    let peer = security::peer(&req);
+    let ip = client_ip(&req);
+    let presented = security::presented_tokens(&req);
+
+    // Bad tokens from the network are rate limited per client address (this computer is exempt: whoever
+    // runs code here can read the token file anyway).
+    if !presented.is_empty() && peer == security::Peer::Remote {
+        if let Some(wait) = ip.as_deref().and_then(|ip| st.engine.token_lockout(ip)) {
+            let secs = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+            let mut res = rejection(
+                StatusCode::TOO_MANY_REQUESTS,
+                &format!("troppi token non validi da questo indirizzo: riprova tra {}", human_wait(secs)),
+            );
+            res.headers_mut().insert(axum::http::header::RETRY_AFTER, secs.into());
+            return res;
+        }
+    }
+
+    let mut valid = None;
+    let mut dead: Option<(String, String, bool)> = None;
+    for t in &presented {
+        match st.engine.authenticate_token(t, ip.as_deref()) {
+            TokenCheck::Valid(a) => {
+                valid = Some(a);
+                break;
+            }
+            TokenCheck::Revoked { id, name } => dead = Some((id, name, false)),
+            TokenCheck::Expired { id, name } => dead = Some((id, name, true)),
+            TokenCheck::Unknown => {}
+        }
+    }
+    if valid.is_none() {
+        if let Some((id, name, expired)) = dead {
+            st.engine.audit_token_rejected(
+                &id,
+                &name,
+                if expired { "usato dopo la scadenza" } else { "usato dopo la revoca" },
+                ip.as_deref(),
+            );
+            return rejection(
+                StatusCode::UNAUTHORIZED,
+                if expired {
+                    "il token è scaduto: ne serve uno nuovo"
+                } else {
+                    "il token è stato revocato: accoppia di nuovo il dispositivo o crea un nuovo token"
+                },
+            );
+        }
+        if !presented.is_empty() && peer == security::Peer::Remote {
+            if let Some(ip) = ip.as_deref() {
+                st.engine.token_failure(ip);
+            }
+        }
+    }
+
+    // Who is calling and with which scopes.
+    let tls = security::is_tls(&req);
+    let on_machine = peer != security::Peer::Remote;
+    let (ctx, legacy_owner) = match valid {
+        Some(a) => {
+            // The owner token is the token of this computer. A request from elsewhere that carries it over
+            // plain HTTP is what a device paired before per-device tokens looks like (and what anyone who
+            // sniffed the LAN could send): it gets a paired device's rights, not the owner's.
+            let owner_remote_plain = a.kind == TokenKind::Owner && !on_machine && !tls;
+            let full = a.scopes.contains(&Scope::Full) && !owner_remote_plain;
+            let mut a = a;
+            if owner_remote_plain {
+                a.scopes = vec![Scope::Device];
+            }
+            (AuthContext { token: Some(a), full }, owner_remote_plain)
+        }
+        None => {
+            let refusal = match peer {
+                security::Peer::InProcess => None,
+                security::Peer::Loopback => security::check_loopback(&req, &st),
+                // Pairing is how a LAN device gets its token; a web page must still not be able to try codes.
+                security::Peer::Remote if path == "/api/pair" => security::check_origin(&req, &st),
+                security::Peer::Remote => {
+                    return rejection(StatusCode::UNAUTHORIZED, "serve il token di pairing per l'accesso dalla rete");
+                }
+            };
+            if let Some(refusal) = refusal {
+                return refusal;
+            }
+            (AuthContext { token: None, full: peer != security::Peer::Remote }, false)
         }
     };
-    match refusal {
-        None => next.run(req).await,
-        Some(refusal) => refusal,
+
+    // The route's minimum scope: no entry in the table means `full` only.
+    let needed = scopes::required_scope(req.method().as_str(), &path).unwrap_or(Required::Scope(Scope::Full));
+    let allowed = match needed {
+        Required::Public => true,
+        Required::AnyToken => ctx.token.is_some(),
+        Required::Scope(s) => match &ctx.token {
+            None => ctx.full,
+            Some(a) => (s == Scope::Full && ctx.full) || (s != Scope::Full && a.scopes.iter().any(|h| h.covers(s))),
+        },
+    };
+    if !allowed {
+        let msg = match (&ctx.token, needed) {
+            (None, Required::AnyToken) => "nessun token da lasciare: questa richiesta non ne usa uno",
+            (Some(_), _) if legacy_owner => {
+                "il token di questo computer, usato da un altro dispositivo senza TLS, ha solo i permessi di un dispositivo accoppiato: per questa funzione apri AI Workspace su questo computer, oppure attiva TLS (server.tls) o accoppia di nuovo il dispositivo"
+            }
+            (Some(a), Required::Scope(Scope::Gateway | Scope::A2a | Scope::Mcp)) if a.kind == TokenKind::Gateway => {
+                "questo token di app non ha il permesso per questo servizio: crealo con l'ambito giusto in Sicurezza → Accessi"
+            }
+            _ => "questo token non ha il permesso per questa funzione: serve l'accesso completo di questo computer",
+        };
+        return rejection(StatusCode::FORBIDDEN, msg);
+    }
+
+    // The streams a token opens end when the token is revoked (or expires).
+    let bound = ctx.token.clone().filter(|a| a.kind != TokenKind::Owner);
+    let revocations = bound.as_ref().map(|_| st.engine.token_revocations());
+    req.extensions_mut().insert(ctx);
+    let mut res = next.run(req).await;
+    if legacy_owner {
+        res.headers_mut().insert("x-aiw-notice", axum::http::HeaderValue::from_static("owner-token-over-lan"));
+    }
+    match (bound, revocations) {
+        (Some(a), Some(rx)) => tokens_api::end_with_token(res, st.engine.clone(), a, rx),
+        _ => res,
     }
 }
 
@@ -97,6 +242,16 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/system", get(system))
         .route("/api/kill", post(kill))
         .route("/api/pair", post(pair))
+        .route("/api/auth/token", delete(tokens_api::revoke_self))
+        .route("/api/tokens", get(tokens_api::list).post(tokens_api::create))
+        .route("/api/tokens/{id}", delete(tokens_api::revoke))
+        .route("/api/tokens/{id}/rotate", post(tokens_api::rotate))
+        .route("/api/tls", get(tokens_api::tls_status))
+        .route("/api/tls/ca.pem", get(tokens_api::tls_ca))
+        .route("/api/tls/ca", get(tokens_api::tls_ca_json))
+        .route("/api/backup", post(backup_api::create))
+        .route("/api/backup/inspect", post(backup_api::inspect).layer(DefaultBodyLimit::max(backup_api::INSPECT_BODY_LIMIT)))
+        .route("/api/diagnostics", get(backup_api::diagnostics))
         .route("/api/update", get(update_status))
         .route("/api/update/check", post(update_check))
         .route("/api/update/download", post(update_download))
@@ -112,6 +267,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/model-preview", post(preview_system_model))
         .route("/api/models/catalog", get(catalog))
         .route("/api/recommend", get(recommend))
+        .route("/api/route", get(route_for_model))
         .route("/api/models/providers", get(model_providers))
         .route("/api/models/providers/{id}/auth", put(provider_auth))
         .route("/api/models/search", get(search_models))
@@ -132,18 +288,31 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/teams", get(teams))
         .route("/api/teams/{id}", get(get_team).put(save_team).delete(delete_team))
         .route("/api/policy", get(get_policy).put(put_policy))
+        .route("/api/policy/analyze", post(analyze_policy_command))
         .route("/api/hooks", get(get_hooks).put(put_hooks))
         .route("/api/sessions", get(sessions).post(create_session))
         .route("/api/sessions/{id}", get(get_session).patch(patch_session).delete(delete_session))
         .route("/api/sessions/{id}/worktree", get(worktree_status).delete(worktree_discard))
         .route("/api/sessions/{id}/worktree/apply", post(worktree_apply))
         .route("/api/sessions/{id}/messages", get(messages))
+        .route("/api/sessions/{id}/attachments/{attachment_id}", get(get_attachment))
         .route("/api/sessions/{id}/messages/{mid}/feedback", put(set_feedback).delete(delete_feedback))
         .route("/api/sessions/{id}/feedback", get(session_feedback))
         .route("/api/sessions/{id}/reflect", post(reflect_session))
         .route("/api/lessons", get(lessons))
         .route("/api/lessons/{id}/approve", post(approve_lesson))
         .route("/api/lessons/{id}/reject", post(reject_lesson))
+        .route("/api/kb/status", get(kb_api::status))
+        .route("/api/kb/collections", get(kb_api::collections).post(kb_api::create_collection))
+        .route("/api/kb/collections/{id}", patch(kb_api::patch_collection).delete(kb_api::delete_collection))
+        .route(
+            "/api/kb/collections/{id}/documents",
+            get(kb_api::documents).post(kb_api::add_documents).layer(DefaultBodyLimit::max(RUN_BODY_LIMIT)),
+        )
+        .route("/api/kb/collections/{id}/reindex", post(kb_api::reindex))
+        .route("/api/kb/documents/{id}", delete(kb_api::delete_document))
+        .route("/api/kb/jobs/{id}/cancel", post(kb_api::cancel_job))
+        .route("/api/kb/search", post(kb_api::search))
         .route("/api/memories", get(memories).post(create_memory).delete(delete_all_memories))
         .route("/api/memories/{id}", patch(patch_memory).delete(delete_memory))
         .route("/api/memories/{id}/forget", post(forget_memory))
@@ -151,7 +320,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/memories/{id}/approve", post(approve_memory))
         .route("/api/memories/{id}/reject", post(reject_memory))
         .route("/api/sessions/{id}/active-run", get(active_run))
-        .route("/api/sessions/{id}/runs", post(start_run))
+        .route("/api/sessions/{id}/runs", post(start_run).layer(DefaultBodyLimit::max(RUN_BODY_LIMIT)))
         .route("/api/sessions/{id}/checkpoints", get(session_checkpoints))
         .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/runs/{id}/checkpoint", get(run_checkpoint))
@@ -164,6 +333,13 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/proposals/{id}", get(proposal))
         .route("/api/proposals/{id}/approve", post(approve_proposal))
         .route("/api/proposals/{id}/dismiss", post(dismiss_proposal))
+        .route("/api/channels", get(channels).post(create_channel))
+        .route("/api/channels/{id}", patch(patch_channel).delete(delete_channel))
+        .route("/api/channels/{id}/test", post(test_channel))
+        .route("/api/channels/{id}/pair", post(pair_channel))
+        .route("/api/channels/{id}/status", get(channel_status))
+        .route("/api/connectors/mail/accounts", get(mail_accounts).put(put_mail_accounts))
+        .route("/api/connectors/mail/test", post(test_mail_account))
         .route("/api/proactive/status", get(proactive_status))
         .route("/api/proactive/tick", post(proactive_tick))
         .route("/api/proactive/background-tick", post(proactive_background_tick))
@@ -181,12 +357,23 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         // Voice mode.
         .route("/api/voice", get(voice_status))
         .route("/api/voice/transcribe", post(voice_transcribe).layer(DefaultBodyLimit::max(VOICE_BODY_LIMIT)))
+        .route("/api/voice/speak", post(voice_speak).layer(DefaultBodyLimit::max(SPEECH_BODY_LIMIT)))
         .route("/.well-known/agent-card.json", get(a2a::agent_card))
         .route("/a2a", post(a2a::handle))
         .route("/api/tools", get(tools))
         .route("/api/tools/{name}", put(set_tool))
         .route("/api/mcp/servers", get(mcp_servers).post(save_mcp))
         .route("/api/mcp/servers/{id}", delete(remove_mcp))
+        .route("/api/mcp/servers/{id}/reconnect", post(reconnect_mcp))
+        .route("/api/mcp/servers/{id}/approve", post(approve_mcp))
+        .route("/api/mcp/servers/{id}/oauth/start", post(mcp_oauth_start))
+        .route("/api/mcp/servers/{id}/oauth", delete(mcp_oauth_signout))
+        // The browser comes back here from the authorization server: no token (see `security::is_guarded`).
+        .route("/api/mcp/oauth/callback", get(mcp_oauth_callback))
+        .route("/api/mcp/prompts", get(mcp_prompts))
+        .route("/api/mcp/prompts/get", post(mcp_prompt_get))
+        .route("/api/mcp/elicitations", get(mcp_elicitations))
+        .route("/api/mcp/elicitations/{id}", post(respond_mcp_elicitation))
         .route("/api/config", get(config).put(set_config))
         .route("/api/audit", get(audit))
         .route("/api/traces/export", get(traces_export))
@@ -216,9 +403,11 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/adapters/{id}", get(adapter).delete(delete_adapter))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat_completions))
+        .route("/v1/embeddings", post(gateway::embeddings))
         .route("/v1/messages", post(anthropic::messages))
         .route("/v1/messages/count_tokens", post(anthropic::count_tokens))
         .route("/v1/audio/transcriptions", post(audio_transcriptions).layer(DefaultBodyLimit::max(VOICE_BODY_LIMIT)))
+        .route("/v1/audio/speech", post(audio_speech).layer(DefaultBodyLimit::max(SPEECH_BODY_LIMIT)))
         .route("/mcp", post(mcp_server::handle).get(mcp_server::get_stream).delete(|| async { StatusCode::OK }));
     let mut app = api.method_not_allowed_fallback(method_not_allowed).with_state(st.clone());
     app = match ui_dir.filter(|d| d.join("index.html").exists()) {
@@ -252,8 +441,15 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
 /// Referer.
 async fn hardening_headers(req: Request, next: middleware::Next) -> Response {
     use axum::http::{header, HeaderValue};
+    let tls = security::is_tls(&req);
     let mut res = next.run(req).await;
     let h = res.headers_mut();
+    // Only over TLS: a browser that has seen it will not talk to this address in the clear again (and,
+    // as the header is ignored on a connection with a certificate error, a self-signed certificate that the
+    // browser does not trust cannot lock anybody out).
+    if tls {
+        h.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000"));
+    }
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     h.entry(header::CONTENT_SECURITY_POLICY).or_insert(HeaderValue::from_static("frame-ancestors 'none'"));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
@@ -288,6 +484,11 @@ async fn kill(State(s): State<AppState>) -> ApiResult<Value> {
 #[derive(Deserialize)]
 struct PairBody {
     code: String,
+    /// The pairing device's own id and name (its token is bound to the id and listed under the name).
+    #[serde(default)]
+    device_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 /// Address of the TCP peer; `None` for the in-process dispatcher.
 struct ClientIp(Option<String>);
@@ -296,6 +497,22 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ClientIp {
     type Rejection = Infallible;
     async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
         Ok(ClientIp(parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_canonical().to_string())))
+    }
+}
+
+/// Does the request come from this device (loopback, or the in-process shell)? For the routes that
+/// make the engine read this computer's files.
+struct IsLocal(bool);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for IsLocal {
+    type Rejection = Infallible;
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
+        let on_machine = match parts.extensions.get::<ConnectInfo<SocketAddr>>() {
+            Some(ConnectInfo(addr)) => addr.ip().to_canonical().is_loopback(),
+            None => true,
+        };
+        // A token that is not `full` (a paired device's) is not local even over loopback.
+        Ok(IsLocal(on_machine && parts.extensions.get::<AuthContext>().is_none_or(|c| c.full)))
     }
 }
 
@@ -311,13 +528,15 @@ fn human_wait(secs: u64) -> String {
 }
 
 async fn pair(State(s): State<AppState>, ClientIp(client): ClientIp, Json(b): Json<PairBody>) -> Response {
-    match s.engine.pair_attempt(&b.code, client.as_deref()) {
-        PairOutcome::Paired(token) => Json(json!({"token": token})).into_response(),
-        PairOutcome::Invalid => {
+    match s.engine.pair_attempt_as(&b.code, client.as_deref(), b.device_id.as_deref(), b.name.as_deref()) {
+        (PairOutcome::Paired(token), device_id) => {
+            Json(json!({"token": token, "device_id": device_id, "tls_fingerprint": s.engine.tls_fingerprint()})).into_response()
+        }
+        (PairOutcome::Invalid, _) => {
             tokio::time::sleep(PAIR_FAIL_DELAY).await;
             ApiError(Error::Denied("codice di pairing non valido".into())).into_response()
         }
-        PairOutcome::Locked { retry_after } => {
+        (PairOutcome::Locked { retry_after }, _) => {
             let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
             let body = json!({
                 "error": format!("troppi tentativi di pairing falliti: riprova tra {}", human_wait(secs)),
@@ -404,6 +623,24 @@ async fn catalog(State(s): State<AppState>) -> ApiResult<Vec<CatalogModel>> {
 /// model for this device and the best one to download.
 async fn recommend(State(s): State<AppState>) -> ApiResult<Recommendations> {
     ok(s.engine.recommend())
+}
+
+#[derive(Deserialize)]
+struct RouteQuery {
+    model: String,
+    context: Option<u32>,
+    /// Also consider paired devices and remote servers.
+    #[serde(default)]
+    remote: bool,
+}
+
+/// `GET /api/route?model=…&context=…&remote=…`: the runtimes that can run the model here, best
+/// first, with the reason for each rank and for each exclusion (the runtime router).
+async fn route_for_model(State(s): State<AppState>, Query(q): Query<RouteQuery>) -> ApiResult<aiw_core::api::RouteDecision> {
+    if q.model.trim().is_empty() {
+        return Err(ApiError(Error::Invalid("manca il modello".into())));
+    }
+    ok(s.engine.route(q.model.trim(), q.context, q.remote))
 }
 async fn model_providers(State(s): State<AppState>) -> ApiResult<Vec<ModelProviderInfo>> {
     ok(s.engine.model_providers())
@@ -528,6 +765,9 @@ async fn put_policy(State(s): State<AppState>, Json(v): Json<aiw_engine::PolicyD
     s.engine.set_policy_rules(v.rules)?;
     get_policy(State(s)).await
 }
+async fn analyze_policy_command(State(s): State<AppState>, Json(b): Json<PolicyAnalyzeRequest>) -> ApiResult<CommandAnalysis> {
+    ok(s.engine.analyze_command(&b.command))
+}
 async fn get_hooks(State(s): State<AppState>) -> ApiResult<Value> {
     ok(json!({"hooks": s.engine.hooks()}))
 }
@@ -643,6 +883,38 @@ async fn approve_proposal(State(s): State<AppState>, Path(id): Path<String>, bod
 async fn dismiss_proposal(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Proposal> {
     ok(s.engine.proposal_dismiss(&id)?)
 }
+// ---- channels (Telegram, Slack, email) and the IMAP accounts of the mail connector
+async fn channels(State(s): State<AppState>) -> ApiResult<Vec<ChannelInfo>> {
+    ok(s.engine.channels()?)
+}
+async fn create_channel(State(s): State<AppState>, Json(body): Json<ChannelCreate>) -> ApiResult<ChannelInfo> {
+    ok(s.engine.channel_create(body)?)
+}
+async fn patch_channel(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<ChannelPatch>) -> ApiResult<ChannelInfo> {
+    ok(s.engine.channel_patch(&id, body)?)
+}
+async fn delete_channel(State(s): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    s.engine.channel_delete(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn test_channel(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<ChannelTestResult> {
+    ok(s.engine.channel_test(&id).await?)
+}
+async fn pair_channel(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<ChannelPairing> {
+    ok(s.engine.channel_pair_start(&id)?)
+}
+async fn channel_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<ChannelStatus> {
+    ok(s.engine.channel_status(&id)?)
+}
+async fn mail_accounts(State(s): State<AppState>) -> ApiResult<Vec<MailAccount>> {
+    ok(s.engine.mail_accounts())
+}
+async fn put_mail_accounts(State(s): State<AppState>, Json(body): Json<Vec<MailAccount>>) -> ApiResult<Vec<MailAccount>> {
+    ok(s.engine.set_mail_accounts(body)?)
+}
+async fn test_mail_account(State(s): State<AppState>, Json(body): Json<MailAccount>) -> ApiResult<MailAccountTest> {
+    ok(s.engine.mail_account_test(body).await)
+}
 async fn proactive_status(State(s): State<AppState>) -> ApiResult<ProactiveStatus> {
     ok(s.engine.proactive_status())
 }
@@ -730,15 +1002,24 @@ async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiRes
 }
 #[derive(Deserialize)]
 struct RunBody {
+    #[serde(default)]
     input: String,
     /// a2ui.action when a surface sends a user action
     kind: Option<String>,
     /// Reasoning for this run only (`off` | `auto` | `deep`): wins over the profile's. Absent: the profile's.
     #[serde(default)]
     thinking: Option<aiw_core::api::ThinkingMode>,
+    /// Files attached to the message (`data` is base64). `input` may be empty when there are some.
+    #[serde(default)]
+    attachments: Vec<aiw_core::api::AttachmentUpload>,
 }
+/// Room for the largest allowed attachments (25 MB) as base64 inside JSON, plus the text.
+const RUN_BODY_LIMIT: usize = aiw_core::api::MAX_ATTACHMENTS_TOTAL_BYTES / 3 * 4 + (2 << 20);
 async fn start_run(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<RunBody>) -> ApiResult<Value> {
-    ok(json!({"run_id": s.engine.start_run_opts(&id, b.input, b.kind.as_deref(), b.thinking).await?}))
+    ok(json!({"run_id": s.engine.start_run_attach(&id, b.input, b.kind.as_deref(), b.thinking, b.attachments).await?}))
+}
+async fn get_attachment(State(s): State<AppState>, Path((id, att)): Path<(String, String)>) -> ApiResult<aiw_core::api::AttachmentData> {
+    ok(s.engine.attachment_data(&id, &att)?)
 }
 async fn cancel_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.cancel_run(&id)?;
@@ -862,6 +1143,15 @@ fn server_port(s: &AppState) -> u16 {
     }
 }
 
+/// `https` when the listener of this process speaks TLS.
+fn scheme(s: &AppState) -> &'static str {
+    if s.engine.tls_active() {
+        "https"
+    } else {
+        "http"
+    }
+}
+
 fn lan_enabled(s: &AppState) -> bool {
     match LISTENER.get() {
         Some(&(_, lan)) => lan,
@@ -870,7 +1160,7 @@ fn lan_enabled(s: &AppState) -> bool {
 }
 
 async fn mesh_state(State(s): State<AppState>) -> ApiResult<Value> {
-    let address = mesh::lan_ip().filter(|_| lan_enabled(&s)).map(|ip| format!("http://{ip}:{}", server_port(&s)));
+    let address = mesh::lan_ip().filter(|_| lan_enabled(&s)).map(|ip| format!("{}://{ip}:{}", scheme(&s), server_port(&s)));
     ok(json!({
         "discovery": mesh::discovery_running(),
         "address": address,
@@ -883,9 +1173,12 @@ async fn mesh_state(State(s): State<AppState>) -> ApiResult<Value> {
 struct MeshPair {
     address: String,
     code: String,
+    /// SHA-256 of the other device's certificate (required for an `https://` address).
+    #[serde(default)]
+    fingerprint: Option<String>,
 }
 async fn mesh_pair(State(s): State<AppState>, Json(b): Json<MeshPair>) -> ApiResult<PeerDevice> {
-    ok(s.engine.pair_with_peer(&b.address, &b.code).await?)
+    ok(s.engine.pair_with_peer(&b.address, &b.code, b.fingerprint.as_deref()).await?)
 }
 async fn mesh_remove_peer(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.remove_peer(&id).await?;
@@ -901,8 +1194,12 @@ async fn pairing_qr(State(s): State<AppState>, req: Request) -> ApiResult<Value>
         return Err(ApiError(Error::Invalid("attiva l'accesso dalla LAN (server.lan) per accoppiare altri dispositivi".into())));
     }
     let ip = mesh::lan_ip().ok_or_else(|| ApiError(Error::Unsupported("nessuna interfaccia di rete locale".into())))?;
-    let (url, svg) =
-        mesh::pairing_qr(&format!("http://{ip}:{}", server_port(&s)), &s.engine.pairing_code()).map_err(|e| ApiError(Error::Runtime(e)))?;
+    let (url, svg) = mesh::pairing_qr(
+        &format!("{}://{ip}:{}", scheme(&s), server_port(&s)),
+        &s.engine.pairing_code(),
+        s.engine.tls_fingerprint().as_deref(),
+    )
+    .map_err(|e| ApiError(Error::Runtime(e)))?;
     ok(json!({"url": url, "svg": svg}))
 }
 
@@ -910,6 +1207,9 @@ async fn pairing_qr(State(s): State<AppState>, req: Request) -> ApiResult<Value>
 
 /// Audio cap plus the base64 overhead of the JSON form used over the app's IPC bridge.
 const VOICE_BODY_LIMIT: usize = aiw_engine::voice::MAX_AUDIO_BYTES / 3 * 4 + (1 << 20);
+
+/// The text to read aloud is capped at `MAX_CHARS` characters (up to 4 bytes each) plus the JSON around it.
+const SPEECH_BODY_LIMIT: usize = aiw_engine::tts::MAX_CHARS * 4 + (16 << 10);
 
 async fn voice_status(State(s): State<AppState>) -> ApiResult<VoiceStatus> {
     ok(s.engine.voice_status())
@@ -938,6 +1238,54 @@ async fn voice_transcribe(State(s): State<AppState>, Query(q): Query<VoiceQuery>
         (body.to_vec(), ct, q.language)
     };
     s.engine.transcribe(&audio, &mime, language.as_deref()).await.map(Json).map_err(|e| ApiError(e).into_response())
+}
+
+/// What the speech routes accept: the app's own shape and OpenAI's (`input`, `model`).
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct SpeakBody {
+    #[serde(alias = "input")]
+    text: String,
+    language: Option<String>,
+    voice: Option<String>,
+    speed: Option<f64>,
+    response_format: Option<String>,
+}
+
+impl SpeakBody {
+    fn request(self) -> aiw_engine::tts::SpeakRequest {
+        aiw_engine::tts::SpeakRequest { text: self.text, language: self.language, voice: self.voice, speed: self.speed }
+    }
+}
+
+/// `POST /api/voice/speak`: `{"text", "language"?, "voice"?, "speed"?}` → `{mime, audio (base64
+/// WAV), backend, elapsed_ms}` (JSON because the app's IPC bridge carries JSON only). 422 when no
+/// neural engine is active: the app then reads with the system's voices.
+async fn voice_speak(State(s): State<AppState>, Json(body): Json<SpeakBody>) -> ApiResult<Speech> {
+    use base64::Engine as _;
+    let out = s.engine.speak(body.request(), &tokio_util::sync::CancellationToken::new()).await?;
+    ok(Speech {
+        mime: "audio/wav".into(),
+        audio: base64::engine::general_purpose::STANDARD.encode(&out.wav),
+        backend: out.backend,
+        elapsed_ms: out.elapsed_ms,
+    })
+}
+
+/// `POST /v1/audio/speech` (OpenAI JSON: `model`, `input`, `voice`, `response_format`, `speed`):
+/// other apps and paired devices read text aloud with this device's voice. The answer is a WAV
+/// (`response_format` absent or `wav`). Nothing is forwarded to another device.
+async fn audio_speech(State(s): State<AppState>, Json(body): Json<SpeakBody>) -> Response {
+    if body.response_format.as_deref().is_some_and(|f| !f.eq_ignore_ascii_case("wav")) {
+        return ApiError(Error::Invalid(
+            "formato non supportato: questo dispositivo produce solo audio WAV (response_format: \"wav\")".into(),
+        ))
+        .into_response();
+    }
+    match s.engine.speak(body.request(), &tokio_util::sync::CancellationToken::new()).await {
+        Ok(out) => ([(axum::http::header::CONTENT_TYPE, "audio/wav")], out.wav).into_response(),
+        Err(e) => ApiError(e).into_response(),
+    }
 }
 
 /// 413 in the API's error shape.
@@ -1251,6 +1599,81 @@ async fn remove_mcp(State(s): State<AppState>, Path(id): Path<String>) -> ApiRes
     s.engine.remove_mcp_server(&id).await?;
     ok(json!({}))
 }
+async fn approve_mcp(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<McpApproveRequest>) -> ApiResult<McpServerInfo> {
+    ok(s.engine.approve_mcp_server(&id, &b.hash).await?)
+}
+async fn reconnect_mcp(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<McpServerInfo> {
+    ok(s.engine.reconnect_mcp_server(&id).await?)
+}
+/// Where the browser reaches this engine, for the OAuth redirect address: the `Host` the UI used when
+/// it is a local name, else the default local address (in-process shell).
+fn oauth_base(req: &Request) -> String {
+    let host = req.headers().get("host").and_then(|h| h.to_str().ok()).unwrap_or("");
+    if security::is_loopback_host(host) {
+        format!("http://{host}")
+    } else {
+        "http://127.0.0.1:7777".into()
+    }
+}
+async fn mcp_oauth_start(State(s): State<AppState>, Path(id): Path<String>, req: Request) -> ApiResult<McpOAuthStart> {
+    ok(s.engine.mcp_oauth_start(&id, &oauth_base(&req)).await?)
+}
+async fn mcp_oauth_signout(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    s.engine.mcp_oauth_signout(&id).await?;
+    ok(json!({}))
+}
+fn oauth_page(ok: bool, text: &str) -> Response {
+    let esc = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let title = if ok { "Accesso completato" } else { "Accesso non riuscito" };
+    let status = if ok { StatusCode::OK } else { StatusCode::BAD_REQUEST };
+    (
+        status,
+        [("content-type", "text/html; charset=utf-8")],
+        format!("<!doctype html><meta charset=utf-8><title>{title}</title><body style=\"font-family:sans-serif;margin:3rem\"><h1>{title}</h1><p>{esc}</p></body>"),
+    )
+        .into_response()
+}
+/// `GET /api/mcp/oauth/callback?code=…&state=…`: the return from the authorization server. It needs no API
+/// token (a browser redirect cannot carry one) so it is strictly validated: only from this machine, and only
+/// with a `state` this engine issued a moment ago, used once.
+async fn mcp_oauth_callback(State(s): State<AppState>, req: Request) -> Response {
+    if !is_local(&req) {
+        return oauth_page(false, "Il ritorno dall'accesso è accettato solo da questo dispositivo.");
+    }
+    let query: std::collections::HashMap<String, String> =
+        reqwest::Url::parse(&format!("http://local{}", req.uri())).map(|u| u.query_pairs().into_owned().collect()).unwrap_or_default();
+    match s
+        .engine
+        .mcp_oauth_callback(
+            query.get("state").map(String::as_str),
+            query.get("code").map(String::as_str),
+            query.get("error").map(String::as_str),
+        )
+        .await
+    {
+        Ok(name) => {
+            oauth_page(true, &format!("Hai effettuato l'accesso al server {name}. Puoi chiudere questa scheda e tornare ad AI Workspace."))
+        }
+        Err(e) => oauth_page(false, &e.to_string()),
+    }
+}
+async fn mcp_prompts(State(s): State<AppState>) -> ApiResult<Vec<McpPromptInfo>> {
+    ok(s.engine.mcp_prompts().await)
+}
+async fn mcp_prompt_get(State(s): State<AppState>, Json(b): Json<McpPromptGetRequest>) -> ApiResult<McpPromptResult> {
+    ok(s.engine.mcp_prompt_get(b).await?)
+}
+async fn mcp_elicitations(State(s): State<AppState>) -> ApiResult<Vec<McpElicitation>> {
+    ok(s.engine.mcp_elicitations())
+}
+async fn respond_mcp_elicitation(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<McpElicitationAnswer>,
+) -> ApiResult<Value> {
+    s.engine.respond_mcp_elicitation(&id, b)?;
+    ok(json!({}))
+}
 async fn config(State(s): State<AppState>) -> ApiResult<ConfigView> {
     ok(s.engine.config())
 }
@@ -1293,29 +1716,74 @@ pub async fn dispatch(app: Router, method: &str, path: &str, body: Option<Value>
     }
 }
 
-/// Binds and serves until the process stops. LAN exposure follows `server.lan`.
+/// Binds and serves until the process stops. LAN exposure follows `server.lan`; when the listener is
+/// reachable beyond this computer, `server.tls` decides whether it speaks TLS (see [`tls`]). A TLS
+/// setting that cannot be honoured (missing or wrong files) stops the start: the listener never
+/// falls back to plain HTTP by itself.
 pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>) -> std::io::Result<()> {
     let host = if lan { "0.0.0.0" } else { "127.0.0.1" };
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     let port = listener.local_addr()?.port();
+    let material = if lan {
+        match engine.tls_material() {
+            Ok(m) => m,
+            Err(e) => {
+                engine.tls_listener_failed(lan, port, e.to_string());
+                return Err(std::io::Error::other(format!("TLS non disponibile: {e}")));
+            }
+        }
+    } else {
+        if engine.tls_mode() != aiw_engine::tls::TlsMode::Off {
+            tracing::info!("server.tls ha effetto solo con l'accesso dalla LAN (server.lan): il server resta su 127.0.0.1 in HTTP");
+        }
+        None
+    };
+    let tls_config = match &material {
+        Some(m) => match aiw_engine::tls::server_config(m) {
+            Ok(c) => Some(std::sync::Arc::new(c)),
+            Err(e) => {
+                engine.tls_listener_failed(lan, port, e.to_string());
+                return Err(std::io::Error::other(format!("TLS non disponibile: {e}")));
+            }
+        },
+        None => None,
+    };
     let _ = LISTENER.set((port, lan));
+    engine.tls_listener_started(lan, port, material.as_ref());
     engine.set_local_url(format!("http://127.0.0.1:{port}"));
-    tracing::info!("AI Workspace Local in ascolto su http://{host}:{port} (LAN: {lan})");
+    let scheme = if tls_config.is_some() { "https" } else { "http" };
+    tracing::info!("AI Workspace Local in ascolto su {scheme}://{host}:{port} (LAN: {lan}, TLS: {})", tls_config.is_some());
+    if lan && tls_config.is_none() {
+        tracing::warn!(
+            "l'API è raggiungibile dalla rete in HTTP in chiaro: il token e i dati viaggiano senza cifratura. Attiva server.tls"
+        );
+    }
     if lan {
-        mesh::start(&engine, port);
+        mesh::start(&engine, port, tls_config.is_some());
     }
     let app = router(engine, ui_dir);
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await
+    match tls_config {
+        Some(cfg) => tls::serve(listener, app, cfg).await,
+        None => axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await,
+    }
 }
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_backup;
+#[cfg(test)]
+mod tests_channels;
+#[cfg(test)]
 mod tests_errors;
 #[cfg(test)]
 mod tests_eval;
 #[cfg(test)]
+mod tests_kb;
+#[cfg(test)]
 mod tests_learning;
+#[cfg(test)]
+mod tests_mcp;
 #[cfg(test)]
 mod tests_memory;
 #[cfg(test)]
@@ -1330,6 +1798,10 @@ mod tests_recommend;
 mod tests_remote;
 #[cfg(test)]
 mod tests_security;
+#[cfg(test)]
+mod tests_tls;
+#[cfg(test)]
+mod tests_tokens;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]

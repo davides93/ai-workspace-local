@@ -80,6 +80,56 @@ pub struct VoiceStatus {
     pub tts_voice: String,
     /// Installed speech-to-text models.
     pub models: Vec<String>,
+    /// Reading replies aloud: which engine speaks, with which voices.
+    #[serde(default)]
+    pub tts: TtsStatus,
+}
+
+/// A voice of a neural speech engine.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TtsVoice {
+    pub id: String,
+    pub name: String,
+    /// ISO 639-1 code (`it`, `en`…).
+    pub language: String,
+    /// `piper` | `openai`.
+    pub engine: String,
+}
+
+/// Speech synthesis (reading replies aloud): the engine in use and why, the voices, the limits.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TtsStatus {
+    /// The setting `voice.tts.engine`: `auto` | `system` | `piper` | `openai`.
+    pub setting: String,
+    /// What would speak for the language of the voice settings: `system` (the voices of the
+    /// operating system, spoken by the app), `piper` or `openai`.
+    pub engine: String,
+    /// A neural engine can speak (for at least one language).
+    pub neural: bool,
+    /// Human description, e.g. "Piper · it_IT-paola-medium".
+    pub backend: Option<String>,
+    /// Why a neural engine is not available, or what to do to enable it.
+    pub detail: Option<String>,
+    /// Installed Piper voices, and the voice a server speaks with when one is set.
+    pub voices: Vec<TtsVoice>,
+    /// Languages the neural engine can speak; empty with `any_language` for a server.
+    pub languages: Vec<String>,
+    /// The engine speaks any language (an OpenAI-compatible server).
+    pub any_language: bool,
+    /// Voice chosen for each language (`voice.tts.voice`), as the engine resolves it now.
+    pub picks: std::collections::BTreeMap<String, String>,
+    pub speed: f64,
+    /// Most characters of one request.
+    pub max_chars: usize,
+}
+
+/// Answer of `POST /api/voice/speak`: the audio as base64 (the app's IPC bridge carries JSON only).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Speech {
+    pub mime: String,
+    pub audio: String,
+    pub backend: String,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -149,6 +199,13 @@ pub struct SystemInfo {
     /// Mac App Store build (App Sandbox): see `EngineOptions::sandboxed`.
     #[serde(default)]
     pub sandboxed: bool,
+    /// Sandbox that contains shell commands on this machine (`bwrap`, `sandbox-exec`,
+    /// `windows-low-integrity`), or none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_sandbox: Option<String>,
+    /// MCP stdio servers can be isolated on this machine (not on Windows).
+    #[serde(default)]
+    pub mcp_sandbox: bool,
     pub uptime_s: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_code: Option<String>,
@@ -193,6 +250,13 @@ pub struct RuntimeInfo {
     /// missing when the runtime cannot load them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter_format: Option<String>,
+    /// Tie-break of the runtime router between equally good runtimes (lower = preferred).
+    #[serde(default = "default_route_priority")]
+    pub route_priority: u32,
+}
+
+fn default_route_priority() -> u32 {
+    50
 }
 
 // ---------------------------------------------------------------- models
@@ -529,6 +593,61 @@ pub struct RuntimeCompat {
     pub reason: String,
 }
 
+/// One way of running a model on this device, as ranked by the runtime router (`GET /api/route`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RouteCandidate {
+    /// 1 = the first choice.
+    pub rank: u32,
+    pub runtime_id: String,
+    pub runtime_name: String,
+    /// Model to send to this runtime when it is not the requested one (a system model that falls
+    /// back to a local one); empty = the requested model.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    /// Accelerator used: cpu | metal | cuda | rocm | vulkan…
+    pub accelerator: String,
+    /// How much of the model sits on the accelerator: all | partial | none.
+    pub offload: String,
+    /// Value for the runtime's `gpu_layers` setting (-1 all, 0 none), when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_layers: Option<i32>,
+    /// Context window this candidate would run with (smaller than the one wanted when the memory is short).
+    pub context: u32,
+    /// Memory needed (weights, working buffers and KV cache), in MB.
+    pub need_mb: u64,
+    /// KV cache part of it, in MB.
+    pub kv_mb: u64,
+    /// The KV cache is a rough estimate (the model header does not say its shape).
+    pub kv_estimated: bool,
+    /// Runs on another device.
+    pub remote: bool,
+    /// Already running (or built in): no start-up wait.
+    pub ready: bool,
+    /// Why it has this rank.
+    pub reason: String,
+}
+
+/// A runtime that cannot run the model here, and why.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RouteExclusion {
+    pub runtime_id: String,
+    pub runtime_name: String,
+    pub reason: String,
+}
+
+/// The answer of the runtime router for one model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RouteDecision {
+    pub model: String,
+    /// Context window asked for.
+    pub wanted_context: u32,
+    pub candidates: Vec<RouteCandidate>,
+    pub excluded: Vec<RouteExclusion>,
+    /// Limits of the estimate (no data from the remote device, rough KV cache…).
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
 /// Body of `POST /api/models/pull`: untagged, the first shape that matches wins.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
@@ -593,6 +712,10 @@ pub struct InferenceParams {
     /// has its path in `AdapterInfo.path`). Only runtimes that declare `adapters` accept them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<AdapterRef>,
+    /// With `runtime_id: "auto"`: the router may also choose a paired device or a remote server.
+    /// Off by default: the conversation stays on this device.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_remote: bool,
 }
 
 /// A LoRA adapter on disk: a GGUF file for llama.cpp, a folder for MLX and PEFT.
@@ -649,6 +772,10 @@ pub struct AgentProfile {
     /// `inference_profile` for everything, as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roles: Option<AgentRoles>,
+    /// Ids of the knowledge-base collections this agent can search with `kb_search`. Empty: all
+    /// of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge: Vec<String>,
 }
 
 /// The four jobs a model can have inside one agent run.
@@ -800,6 +927,9 @@ pub struct Session {
     /// Set when the session works in its own git worktree instead of the shared workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeInfo>,
+    /// Set when the conversation comes from a channel: `telegram` | `slack` | `email`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 /// A session isolated in a git worktree on branch `aiw/<id>`: parallel tasks never touch the
@@ -870,7 +1000,61 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Files the person attached to a `user` message (metadata only: the bytes live in the
+    /// attachments folder of the session, see `GET /api/sessions/{id}/attachments/{attachment_id}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<Attachment>>,
     pub created_at: String,
+}
+
+/// Most attachments one message can carry.
+pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 8;
+/// Largest single attachment, in bytes.
+pub const MAX_ATTACHMENT_BYTES: usize = 10 << 20;
+/// Largest total size of the attachments of one message, in bytes.
+pub const MAX_ATTACHMENTS_TOTAL_BYTES: usize = 25 << 20;
+
+/// What an attachment is, decided by the server from the mime type, the extension and the content.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentKind {
+    /// png, jpeg, webp or gif: the model sees it when it has vision.
+    Image,
+    /// UTF-8 text (notes, tables, code…): its content is given to the model.
+    Text,
+    /// A PDF whose text could be extracted: the text is given to the model.
+    Document,
+    /// Anything else: the model only knows it is there and where it is.
+    File,
+}
+
+/// An attachment of a stored message. Never holds the bytes nor an absolute path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Attachment {
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    /// Size in bytes.
+    pub size: u64,
+    pub kind: AttachmentKind,
+}
+
+/// A file sent with a message (`POST /api/sessions/{id}/runs`): `data` is the base64 of the bytes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttachmentUpload {
+    pub name: String,
+    #[serde(default)]
+    pub mime: String,
+    pub data: String,
+}
+
+/// An attachment read back (`GET /api/sessions/{id}/attachments/{attachment_id}`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttachmentData {
+    pub name: String,
+    pub mime: String,
+    /// Base64 of the bytes.
+    pub data: String,
 }
 
 /// Longest note accepted with a rating.
@@ -1104,6 +1288,160 @@ pub struct MemoryHit {
     #[serde(flatten)]
     pub memory: Memory,
     pub score: f64,
+}
+
+// ---------------------------------------------------------------- knowledge base
+
+/// A set of documents the assistant can search (the local knowledge base).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbCollection {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub created_at: String,
+    /// Documents in the collection, whatever their status.
+    #[serde(default)]
+    pub documents: usize,
+    /// Searchable passages (chunks of the documents that are ready).
+    #[serde(default)]
+    pub chunks: usize,
+    /// Passages that also have a vector for the current embedding model.
+    #[serde(default)]
+    pub embedded_chunks: usize,
+}
+
+/// Body of `POST /api/kb/collections`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct KbCollectionCreate {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Body of `PATCH /api/kb/collections/{id}`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct KbCollectionPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// One document of a collection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbDocument {
+    pub id: String,
+    pub collection_id: String,
+    pub name: String,
+    /// Absolute path of the file on this computer, or `caricato` for a file sent from the app.
+    pub source: String,
+    pub mime: String,
+    /// Size in bytes.
+    pub size: u64,
+    pub sha256: String,
+    /// indexing | ready | failed
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Passages the document was split into.
+    pub chunks: usize,
+    /// Passages that have a vector for the current embedding model.
+    #[serde(default)]
+    pub embedded_chunks: usize,
+    pub created_at: String,
+}
+
+/// Body of `POST /api/kb/collections/{id}/documents`: files sent from the app, or a path on this
+/// computer (a file or a folder). Exactly one of the two.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct KbAddBody {
+    #[serde(default)]
+    pub files: Option<Vec<AttachmentUpload>>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// A file that was not added, and why (Italian, for the person).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbSkipped {
+    pub name: String,
+    pub reason: String,
+}
+
+/// Progress and outcome of one indexing job (adding files or a folder, reindexing).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbJob {
+    pub id: String,
+    pub collection_id: String,
+    /// running | done | cancelled
+    pub state: String,
+    /// Files to process.
+    pub total: usize,
+    /// Files processed so far.
+    pub done: usize,
+    pub added: usize,
+    /// Same content already in the collection: nothing done.
+    pub unchanged: usize,
+    /// A changed file at the same path replaced its old document.
+    pub replaced: usize,
+    pub failed: usize,
+    /// Name of the file being processed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+    /// First files that were left out (see `skipped_total`).
+    pub skipped: Vec<KbSkipped>,
+    pub skipped_total: usize,
+}
+
+/// Answer of `POST /api/kb/collections/{id}/documents` and `.../reindex`: the job that does the work.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbAddResult {
+    pub job: KbJob,
+}
+
+/// Answer of `GET /api/kb/status`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbStatus {
+    /// The embedding model that gives search by meaning, when there is one ready to use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_model: Option<String>,
+    /// Running jobs and the most recent finished ones, newest first.
+    pub jobs: Vec<KbJob>,
+}
+
+/// Body of `POST /api/kb/search`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct KbSearchBody {
+    pub query: String,
+    /// Name or id; absent = every collection.
+    #[serde(default)]
+    pub collection: Option<String>,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+}
+
+/// A passage found by a search.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbHit {
+    pub chunk_id: String,
+    pub document_id: String,
+    pub document_name: String,
+    pub collection_id: String,
+    pub collection_name: String,
+    /// Position of the passage in the document, from 1.
+    pub part: usize,
+    pub text: String,
+    /// Fused rank score (higher is better).
+    pub score: f64,
+}
+
+/// Answer of `POST /api/kb/search`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KbSearchResult {
+    pub hits: Vec<KbHit>,
+    /// Was the meaning of the question used too (an embedding model answered)? False = keywords only.
+    pub semantic: bool,
 }
 
 /// Body of `POST /api/memories`.
@@ -1588,21 +1926,153 @@ pub struct McpServerConfig {
     pub headers: Option<Map<String, Value>>,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Lets the server ask the model of the run for completions (`sampling/createMessage`). Off by default.
+    #[serde(default)]
+    pub sampling: bool,
+    /// Client id registered by hand with the authorization server (when it has no dynamic registration).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_client_id: Option<String>,
+    /// Isolation of a `stdio` server: `off` (it runs with the rights of the person, as before),
+    /// `read-only` or `workspace-write` (see `aiw_tools::sandbox`). Servers stored before this field
+    /// existed are `off`; the interface proposes `workspace-write` for new ones.
+    #[serde(default = "sandbox_off")]
+    pub sandbox: String,
+    /// An isolated `stdio` server may use the network (most of them need it).
+    #[serde(default = "yes")]
+    pub sandbox_network: bool,
 }
 
 fn yes() -> bool {
     true
 }
 
+fn sandbox_off() -> String {
+    "off".into()
+}
+
+/// What a connected MCP server offers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct McpCapabilities {
+    pub tools: bool,
+    pub resources: bool,
+    pub prompts: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerInfo {
     #[serde(flatten)]
     pub config: McpServerConfig,
-    /// connected | disconnected | error
+    /// connected | connecting | reconnecting | unreachable | auth_required | disconnected (switched off)
     pub status: String,
     pub tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default)]
+    pub capabilities: McpCapabilities,
+    /// Reconnection attempt in progress (`status: "reconnecting"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+    /// OAuth tokens are stored for this server (their values are never returned).
+    #[serde(default)]
+    pub signed_in: bool,
+    /// A `stdio` server whose command the person has not confirmed yet (or that changed since): it
+    /// does not run until they do (`POST /api/mcp/servers/{id}/approve`).
+    #[serde(default)]
+    pub approval_required: bool,
+    /// Hash to send back to approve exactly what the person was shown (set with `approval_required`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_hash: Option<String>,
+    /// The command line to confirm, as the person reads it (set with `approval_required`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_line: Option<String>,
+}
+
+/// Body of `POST /api/policy/analyze`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyAnalyzeRequest {
+    pub command: String,
+}
+
+/// How the policy reads a shell command line: the simple commands it is made of (see
+/// `aiw_agent::shellparse`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommandAnalysis {
+    /// Commands that run: an `allow` rule applies only if every one of them is allowed.
+    pub commands: Vec<String>,
+    /// Other forms (wrappers, raw text) that only `deny` and `ask` rules look at.
+    pub also: Vec<String>,
+    /// False when part of the line could not be parsed with confidence: no `allow` rule applies.
+    pub confident: bool,
+}
+
+/// Body of `POST /api/mcp/servers/{id}/approve`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpApproveRequest {
+    /// The `approval_hash` of the server as the person saw it: it must still be the current one.
+    pub hash: String,
+}
+
+/// A prompt a connected MCP server offers (`prompts/list`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpPromptInfo {
+    pub server_id: String,
+    pub server: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub arguments: Vec<McpPromptArgument>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpPromptArgument {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// Body of `POST /api/mcp/prompts/get`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPromptGetRequest {
+    pub server_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Map<String, Value>,
+}
+
+/// The prompt of a server, rendered: `text` is what goes into the composer for the person to review.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpPromptResult {
+    #[serde(default)]
+    pub description: String,
+    pub text: String,
+}
+
+/// A question an MCP server asks the person during a run (`elicitation/create`): a flat form.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpElicitation {
+    pub id: String,
+    pub run_id: String,
+    pub server: String,
+    pub message: String,
+    /// Flat JSON schema: an object whose properties are string, number, integer, boolean or a string enum.
+    pub schema: Value,
+}
+
+/// Body of `POST /api/mcp/elicitations/{id}`: `action` is accept | decline | cancel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpElicitationAnswer {
+    pub action: String,
+    #[serde(default)]
+    pub content: Map<String, Value>,
+}
+
+/// Answer of `POST /api/mcp/servers/{id}/oauth/start`: the page the UI opens in the system browser.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpOAuthStart {
+    pub authorization_url: String,
 }
 
 // ---------------------------------------------------------------- config & audit
@@ -1735,10 +2205,20 @@ mod tests {
                 env: None,
                 headers: None,
                 enabled: true,
+                sampling: false,
+                oauth_client_id: None,
+                sandbox: "off".into(),
+                sandbox_network: true,
             },
             status: "connected".into(),
             tools: vec!["read".into()],
             error: None,
+            capabilities: McpCapabilities::default(),
+            attempt: None,
+            signed_in: false,
+            approval_required: false,
+            approval_hash: None,
+            command_line: None,
         };
         let v = serde_json::to_value(info).unwrap();
         assert_eq!(v["name"], "fs");
@@ -1902,4 +2382,240 @@ pub struct ProactiveStatus {
     /// Power state when the platform reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_power: Option<bool>,
+}
+
+// ---------------------------------------------------------------- channels (Telegram, Slack, email)
+
+/// Kinds of channel.
+pub const CHANNEL_KINDS: [&str; 3] = ["telegram", "slack", "email"];
+
+/// A way to talk to the assistant from outside the app. Stored with its secrets; the API shows
+/// [`SECRET_MASK`] in their place (and receiving the mask back on save means "keep what is stored").
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Channel {
+    pub id: String,
+    /// telegram | slack | email
+    pub kind: String,
+    pub name: String,
+    /// Off by default: nothing connects until the person turns a channel on.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The agent that answers.
+    #[serde(default)]
+    pub agent_id: String,
+    /// `read_only` (default: the assistant can answer and read, never write or run commands) or
+    /// `ask` (normal policy; every confirmation is asked in the app and in the channel).
+    #[serde(default)]
+    pub mode: String,
+    /// Who may talk: Telegram user or chat ids, Slack user ids, email addresses. Anyone else is ignored.
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    /// The morning briefing is also sent here.
+    #[serde(default)]
+    pub briefing: bool,
+    /// `bot_token`, `app_token`, `imap_password`, `smtp_password` (by kind).
+    #[serde(default)]
+    pub secrets: std::collections::BTreeMap<String, String>,
+    /// Settings that are not secret (email servers, folder, limits…).
+    #[serde(default)]
+    pub settings: serde_json::Map<String, serde_json::Value>,
+}
+
+/// `state`: `off` | `connecting` | `connected` | `error` | `unavailable`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChannelStatus {
+    pub state: String,
+    /// The reason, in plain words (an error, why it is unavailable, what it is doing).
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// Messages from people who are not on the list: dropped and counted, never answered or shown to a model.
+    #[serde(default)]
+    pub ignored: u64,
+    /// Messages handed to the assistant.
+    #[serde(default)]
+    pub handled: u64,
+    #[serde(default)]
+    pub conversations: u32,
+}
+
+/// What the API returns for a channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChannelInfo {
+    #[serde(flatten)]
+    pub channel: Channel,
+    pub status: ChannelStatus,
+    /// The agent's own mode is `auto` or `yolo` and the channel is in `ask` mode: it runs as `ask`.
+    #[serde(default)]
+    pub downgraded: bool,
+}
+
+/// Body of `POST /api/channels`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChannelCreate {
+    pub kind: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    #[serde(default)]
+    pub secrets: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub settings: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Body of `PATCH /api/channels/{id}`: only what is present changes. A secret sent as [`SECRET_MASK`] is kept,
+/// sent empty it is removed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChannelPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub allowed: Option<Vec<String>>,
+    #[serde(default)]
+    pub briefing: Option<bool>,
+    #[serde(default)]
+    pub secrets: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    pub settings: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// `POST /api/channels/{id}/test`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChannelTestResult {
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// `POST /api/channels/{id}/pair`: the one-time code to send to the Telegram bot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChannelPairing {
+    pub code: String,
+    pub expires_at: String,
+    /// The message to send to the bot, e.g. `/start 123456`.
+    pub command: String,
+}
+
+/// An IMAP account of the mail connector, as the API shows it. The password is a secret: it is shown as
+/// [`SECRET_MASK`] when one is stored.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MailAccount {
+    #[serde(default)]
+    pub id: String,
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    /// Folders to read (empty = INBOX).
+    #[serde(default)]
+    pub folders: Vec<String>,
+}
+
+/// `POST /api/connectors/mail/test`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MailAccountTest {
+    pub ok: bool,
+    pub detail: String,
+    /// Messages of the last seven days, per folder.
+    #[serde(default)]
+    pub folders: Vec<MailFolderCount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MailFolderCount {
+    pub name: String,
+    pub recent: u32,
+}
+
+// ---------------------------------------------------------------- API tokens and TLS
+
+/// An access token as the API lists it: never the secret, only what identifies and dates it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApiTokenInfo {
+    pub id: String,
+    pub name: String,
+    /// `owner` (this computer's own UI and CLI) | `device` (a paired phone or computer) | `gateway` (an app of the person).
+    pub kind: String,
+    /// The paired device the token belongs to (`kind: device`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// First characters of the token, to recognise it in the list.
+    pub prefix: String,
+    /// `full`, `device`, `gateway`, `a2a`, `mcp`.
+    pub scopes: Vec<String>,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_ip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<String>,
+}
+
+/// A token right after it was created or rotated: the only time the secret is shown.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApiTokenCreated {
+    #[serde(flatten)]
+    pub info: ApiTokenInfo,
+    pub token: String,
+}
+
+/// `POST /api/tokens`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApiTokenCreate {
+    pub name: String,
+    /// `gateway` (default) or `device`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Days until the token stops working; absent = it does not expire.
+    #[serde(default)]
+    pub expires_in_days: Option<u32>,
+    /// Extra scopes for a `gateway` token: `a2a`, `mcp`.
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
+}
+
+/// `GET /api/tls`: how this device is served.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TlsStatus {
+    /// What `server.tls` asks for: `off` | `self_signed` | `files`.
+    pub mode: String,
+    /// The listener of this process answers over TLS.
+    pub active: bool,
+    /// The listener is reachable beyond this computer (`server.lan`).
+    pub lan: bool,
+    pub port: u16,
+    /// SHA-256 of the certificate a paired device pins, as `AB:CD:…`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    /// What the fingerprint is the fingerprint of: `ca` | `certificate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint_of: Option<String>,
+    /// Names and addresses the certificate is valid for.
+    #[serde(default)]
+    pub names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// A problem to show the person (missing files, certificate that does not load…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The CA certificate can be downloaded (`GET /api/tls/ca.pem`).
+    pub ca_available: bool,
+    /// Plain HTTP beyond this computer: the warning of the Security page.
+    pub warning: bool,
 }

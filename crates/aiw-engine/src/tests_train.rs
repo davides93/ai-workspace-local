@@ -172,6 +172,7 @@ fn rated_session(e: &Engine, n: usize, rating: Option<i32>, answer: &str) -> Str
         tool_calls: None,
         tool_call_id: None,
         name: None,
+        attachments: None,
         created_at: now_rfc3339(),
     };
     let reply = msg("assistant", answer.to_string());
@@ -471,6 +472,7 @@ fn regenerated_session(e: &Engine, question: &str, good: &str, bad: &str) {
         tool_calls: None,
         tool_call_id: None,
         name: None,
+        attachments: None,
         created_at: now_rfc3339(),
     };
     let (q, down, up) = (msg("user", question), msg("assistant", bad), msg("assistant", good));

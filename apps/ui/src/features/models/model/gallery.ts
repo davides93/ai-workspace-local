@@ -2,7 +2,7 @@ import type { CatalogModel, LocalModel } from "../../../shared/api/types";
 
 /** Models for a phone or tablet: the ones the OS provides plus the catalog entries tagged `mobile`. */
 export function isGalleryModel(c: Pick<CatalogModel, "tags" | "downloadable" | "source" | "format">): boolean {
-  if (c.format === "embeddings" || c.tags.includes("embeddings") || c.format === "ggml") return false;
+  if (c.format === "embeddings" || c.tags.includes("embeddings") || c.format === "ggml" || c.format === "piper") return false;
   if (!c.downloadable) return c.source.kind === "system" && c.source.runtime !== "phi-silica";
   return c.tags.includes("mobile");
 }

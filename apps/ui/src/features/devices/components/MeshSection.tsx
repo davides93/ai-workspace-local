@@ -8,6 +8,7 @@ import { PairForm } from "./PairForm";
 import { PairingCard } from "./PairingCard";
 import { PeersPanel } from "./PeersPanel";
 
+import { t, tNode } from "../../../shared/i18n";
 /** Device mesh: this device's pairing card, devices found on the LAN, pairing by address and the paired devices. */
 export function MeshSection() {
   const system = useSystem().data;
@@ -21,11 +22,9 @@ export function MeshSection() {
   return (
     <Section
       className="section-top"
-      title="Rete di dispositivi"
+      title={t("devices.rete_di_dispositivi")}
       hint={<>
-        Un dispositivo accoppiato presta i suoi modelli (runtime <span className="mono">aiw-peer</span>) e i suoi agenti e strumenti (server MCP):
-        il telefono usa la GPU del PC, il PC delega i task che servono sul telefono. Le altre app parlano con gli agenti via A2A.
-      </>}
+        {tNode("devices.un_dispositivo_accoppiato_presta_i", { span: <span className="mono">{t("devices.aiw_peer")}</span> })}</>}
     >
       <div className="mesh-grid">
         <PairingCard code={system?.pairing_code} address={mesh.data?.address ?? null} discovery={mesh.data?.discovery} />

@@ -9,6 +9,7 @@ import { useAgents, useAgentTools, useDeleteAgent, useProfiles, useRuntimeList, 
 import { blankAgent, duplicateAgent, hasErrors, idForNew, isBuiltinAgent, NEW_AGENT, normalizeAgent, validateAgent } from "../model/agents";
 import { buildCatalog } from "../model/tools";
 import { BudgetSection } from "./BudgetSection";
+import { KnowledgeSection } from "./KnowledgeSection";
 import { IdentitySection } from "./IdentitySection";
 import { ModelSection } from "./ModelSection";
 import { OutputSection } from "./OutputSection";
@@ -17,6 +18,7 @@ import { RoutingSection } from "./RoutingSection";
 import { SecuritySection } from "./SecuritySection";
 import { ToolPicker } from "./ToolPicker";
 
+import { t as tr, t, tNode as trNode } from "../../../shared/i18n";
 /** The detail of `#/agents/:agentId`: a form in sections (identity, model, tools, response, security). */
 export function AgentEditor({ agentId, from }: { agentId: string; from?: string }) {
   const agents = useAgents();
@@ -81,8 +83,8 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
   if (!draft || !saved) {
     return (
       <Panel>
-        <EmptyState icon="agent" title="Agente non trovato" description="Questo agente non esiste (più). Sceglilo dall'elenco o creane uno nuovo."
-          action={<Link to="/agents" className="btn">Torna agli agenti</Link>} />
+        <EmptyState icon="agent" title={tr("agents.agente_non_trovato")} description={tr("agents.questo_agente_non_esiste_piu")}
+          action={<Link to="/agents" className="btn">{tr("agents.torna_agli_agenti")}</Link>} />
       </Panel>
     );
   }
@@ -93,61 +95,66 @@ export function AgentEditor({ agentId, from }: { agentId: string; from?: string 
     <div className="stack stack-lg">
       <Panel
         title={<>
-          <Link to="/agents" className="md-back only-phone" aria-label="Torna agli agenti"><Icon name="back" size={16} /> Agenti</Link>
-          <span className="agent-title">{draft.name.trim() || (isNew ? "Nuovo agente" : "Senza nome")}{builtin && <Pill tone="neutral">integrato</Pill>}</span>
+          <Link to="/agents" className="md-back only-phone" aria-label={t("agents.torna_agli_agenti")}><Icon name="back" size={16} /> {tr("agents.agenti")}</Link>
+          <span className="agent-title">{draft.name.trim() || (isNew ? tr("agents.nuovo_agente") : tr("agents.senza_nome"))}{builtin && <Pill tone="neutral">{tr("agents.integrato")}</Pill>}</span>
         </>}
         actions={!isNew && <div className="detail-actions">
-          <Link to={`/agents/${NEW_AGENT}?from=${encodeURIComponent(agentId)}`} className="btn"><Icon name="copy" size={15} /> Duplica</Link>
-          <Button variant="danger" icon="trash" disabled={builtin} onClick={() => setConfirmDelete(true)} aria-describedby={builtin ? "builtin-note" : undefined}>Elimina</Button>
+          <Link to={`/agents/${NEW_AGENT}?from=${encodeURIComponent(agentId)}`} className="btn"><Icon name="copy" size={15} /> {tr("agents.duplica")}</Link>
+          <Button variant="danger" icon="trash" disabled={builtin} onClick={() => setConfirmDelete(true)} aria-describedby={builtin ? "builtin-note" : undefined}>{tr("agents.elimina")}</Button>
         </div>}
       >
-        {builtin && <p id="builtin-note" className="faint text-sm mb-3">Gli agenti integrati si possono modificare e duplicare, ma non eliminare.</p>}
-        {from && isNew && <p className="faint text-sm mb-3">Copia di un agente esistente: il nuovo agente nasce con le stesse impostazioni.</p>}
+        {builtin && <p id="builtin-note" className="faint text-sm mb-3">{tr("agents.gli_agenti_integrati_si_possono")}</p>}
+        {from && isNew && <p className="faint text-sm mb-3">{tr("agents.copia_di_un_agente_esistente")}</p>}
         <FormSections>
-          <FormSection id="identity" title="Identità" hint="Chi è e come si comporta.">
+          <FormSection id="identity" title={tr("agents.identita")} hint={tr("agents.chi_e_e_come_si")}>
             <IdentitySection agent={draft} issues={shown} onChange={change} isNew={isNew} />
           </FormSection>
-          <FormSection id="model" title="Modello" hint="Quale motore risponde.">
+          <FormSection id="model" title={tr("agents.modello")} hint={tr("agents.quale_motore_risponde")}>
             <ModelSection agent={draft} profiles={profiles.data ?? []} runtimes={runtimes.data ?? []} issues={shown} onChange={change} />
           </FormSection>
           {uiMode === "developer" && (
-            <FormSection id="roles" title="Ruoli dei modelli" hint="Più modelli nello stesso run.">
+            <FormSection id="roles" title={tr("agents.ruoli_dei_modelli")} hint={tr("agents.piu_modelli_nello_stesso_run")}>
               <RolesSection agent={draft} profiles={profiles.data ?? []} onChange={(next) => setDraft(() => next)} />
             </FormSection>
           )}
-          <FormSection id="routing" title="Router" hint="Più profili, scelti da quello che funziona meglio.">
+          <FormSection id="routing" title={tr("agents.router")} hint={tr("agents.piu_profili_scelti_da_quello")}>
             <RoutingSection agent={draft} savedAgent={isNew ? undefined : saved} profiles={profiles.data ?? []} onChange={change} />
           </FormSection>
-          <FormSection id="tools" title="Tool" hint="Cosa può fare oltre a rispondere.">
+          <FormSection id="tools" title={tr("agents.tool")} hint={tr("agents.cosa_puo_fare_oltre_a")}>
             <QueryState query={tools}>
               {() => <ToolPicker value={draft.tools} onChange={(t) => change({ tools: t })} catalog={catalog} mode={draft.mode} sandbox={draft.sandbox} />}
             </QueryState>
           </FormSection>
-          <FormSection id="output" title="Risposta" hint="Il formato della risposta finale.">
+          {uiMode === "developer" && (
+            <FormSection id="knowledge" title={tr("agents.documenti")} hint={tr("agents.le_raccolte_che_puo_consultare")}>
+              <KnowledgeSection agent={draft} onChange={(next) => setDraft(() => next)} />
+            </FormSection>
+          )}
+          <FormSection id="output" title={tr("agents.risposta")} hint={tr("agents.il_formato_della_risposta_finale")}>
             <OutputSection key={`${agentId}|${from ?? ""}|${schemaKey}`} agent={draft} onChange={change} onError={setSchemaError} />
           </FormSection>
-          <FormSection id="budget" title="Budget" hint="Quanto può consumare un run.">
+          <FormSection id="budget" title={tr("agents.budget")} hint={tr("agents.quanto_puo_consumare_un_run")}>
             <BudgetSection agent={draft} issues={shown} onChange={change} />
           </FormSection>
-          <FormSection id="security" title="Sicurezza" hint="Che cosa può fare da solo.">
+          <FormSection id="security" title={tr("agents.sicurezza")} hint={tr("agents.che_cosa_puo_fare_da")}>
             <SecuritySection agent={draft} issues={shown} onChange={change} />
           </FormSection>
         </FormSections>
       </Panel>
 
       <SaveBar
-        dirty={dirty} isNew={isNew} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} blocker="Correggi i campi evidenziati"
-        saveLabel={isNew ? "Crea agente" : "Salva"} onSave={() => void submit()} onDiscard={discard}
+        dirty={dirty} isNew={isNew} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} blocker={tr("agents.correggi_i_campi_evidenziati")}
+        saveLabel={isNew ? tr("agents.crea_agente") : tr("agents.salva")} onSave={() => void submit()} onDiscard={discard}
       />
 
-      <UnsavedChangesDialog guard={guard} subject={`l'agente «${draft.name.trim() || "senza nome"}»`} onSave={submit} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} />
+      <UnsavedChangesDialog guard={guard} subject={tr("agents.l_agente", { p: draft.name.trim() || "senza nome" })} onSave={submit} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} />
       {confirmDelete && (
         <DecisionDialog
-          title="Elimina l'agente" confirmLabel="Elimina" icon="trash" pending={del.isPending} error={del.error}
+          title={tr("agents.elimina_l_agente")} confirmLabel={tr("agents.elimina")} icon="trash" pending={del.isPending} error={del.error}
           onCancel={() => { setConfirmDelete(false); del.reset(); }} onConfirm={remove}
         >
-          <p>Vuoi eliminare <b>{saved.name}</b>? Le sessioni già create con questo agente non potranno più proseguire.</p>
-          <p className="faint text-sm">Se un workflow lo usa ancora, l'eliminazione viene rifiutata e vedrai quali.</p>
+          <p>{trNode("agents.confirm_delete", { name: <b>{saved.name}</b> })}</p>
+          <p className="faint text-sm">{tr("agents.se_un_workflow_lo_usa")}</p>
         </DecisionDialog>
       )}
     </div>

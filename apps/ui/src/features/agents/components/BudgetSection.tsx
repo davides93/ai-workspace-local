@@ -1,10 +1,11 @@
 import { Field, Input } from "../../../shared/ui";
 import type { BudgetLimits } from "../../../shared/api/types";
 
+import { t, t as tr } from "../../../shared/i18n";
 const FIELDS: { key: keyof BudgetLimits; id: string; label: string; hint: string }[] = [
-  { key: "max_tokens", id: "ag-budget-tokens", label: "Token", hint: "Prompt e risposta di tutte le chiamate al modello." },
-  { key: "max_turns", id: "ag-budget-turns", label: "Turni del modello", hint: "Contati sul run intero, subagenti compresi." },
-  { key: "max_seconds", id: "ag-budget-seconds", label: "Secondi", hint: "Tempo massimo del run." },
+  { key: "max_tokens", id: "ag-budget-tokens", get label() { return tr("agents.token"); }, get hint() { return tr("agents.prompt_e_risposta_di_tutte"); } },
+  { key: "max_turns", id: "ag-budget-turns", get label() { return tr("agents.turni_del_modello"); }, get hint() { return tr("agents.contati_sul_run_intero_subagenti"); } },
+  { key: "max_seconds", id: "ag-budget-seconds", get label() { return tr("agents.secondi"); }, get hint() { return tr("agents.tempo_massimo_del_run"); } },
 ];
 
 /** What the section edits: an agent profile or a team. */
@@ -27,12 +28,12 @@ export function BudgetSection({ agent, issues, onChange }: {
   };
   return (
     <div className="form-grid">
-      <p className="faint text-sm">Facoltativo. Quando un limite si esaurisce il run si chiude con un avviso invece di fallire. Un campo vuoto usa il valore delle Impostazioni (o nessun limite).</p>
+      <p className="faint text-sm">{t("agents.facoltativo_quando_un_limite_si")}</p>
       <div className="cols-2">
         {FIELDS.map((f, i) => (
           <Field key={f.key} label={f.label} htmlFor={f.id} hint={f.hint} error={i === 0 ? error : undefined}>
             <Input
-              id={f.id} className="num" type="number" min={1} step={1} inputMode="numeric" placeholder="nessun limite"
+              id={f.id} className="num" type="number" min={1} step={1} inputMode="numeric" placeholder={t("agents.nessun_limite")}
               value={agent.budget?.[f.key] ?? ""} aria-invalid={!!error} onChange={(e) => set(f.key, e.target.value)}
             />
           </Field>

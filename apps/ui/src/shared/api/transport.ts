@@ -1,11 +1,12 @@
+import { t } from "../i18n";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo, ToolInfo,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus, ThinkingMode,
+  PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
 
 /** What the current carrier can do; the UI branches on this instead of sniffing `kind`. */
@@ -63,10 +64,19 @@ export interface Transport {
   /** Hands the verified installer to the operating system. */
   installUpdate(): Promise<UpdateStatus>;
 
+  /** Backup of the data folder as a `.tar.gz` (base64). Restoring is only `aiw backup restore`, with the app closed. */
+  createBackup(includeSecrets: boolean): Promise<BackupFile>;
+  /** Checks a backup (`data` is the file as base64) without restoring it. */
+  inspectBackup(data: string): Promise<BackupInspect>;
+  /** The diagnostics document: system, hardware, runtimes, settings without secrets, database; no chats, documents or mail. */
+  diagnostics(): Promise<Record<string, unknown>>;
+
   models(): Promise<LocalModel[]>;
   catalog(): Promise<CatalogModel[]>;
   /** The model adviser: the best installed and the best to download model for each task. */
   recommend(): Promise<Recommendations>;
+  /** The runtimes that can run `model` here, best first, with the reason for each rank and exclusion. */
+  route(model: string, context?: number, remote?: boolean): Promise<RouteDecision>;
   modelProviders(): Promise<ModelProviderInfo[]>;
   /**
    * `token: null` removes the stored token, `undefined` leaves it as it is; the token never comes back
@@ -143,7 +153,38 @@ export interface Transport {
   deleteMemory(id: string): Promise<void>;
   /** Deletes every memory for good; returns how many. */
   deleteAllMemories(): Promise<{ deleted: number }>;
+  // ---- documents (local knowledge base)
+  kbCollections(): Promise<KbCollection[]>;
+  createKbCollection(body: KbCollectionCreate): Promise<KbCollection>;
+  updateKbCollection(id: string, patch: KbCollectionPatch): Promise<KbCollection>;
+  /** Deletes the collection with its documents and passages. */
+  deleteKbCollection(id: string): Promise<void>;
+  kbDocuments(collectionId: string): Promise<KbDocument[]>;
+  /** Sends files (up to 8, 25 MB in all, per call); the work goes on in the background: see `kbStatus`. */
+  addKbFiles(collectionId: string, files: AttachmentUpload[]): Promise<KbAddResult>;
+  /** A file or folder on this computer (only from this device); the work goes on in the background. */
+  addKbPath(collectionId: string, path: string): Promise<KbAddResult>;
+  /** Reads the files again and computes the vectors again. */
+  reindexKbCollection(collectionId: string): Promise<KbAddResult>;
+  deleteKbDocument(id: string): Promise<void>;
+  kbSearch(body: KbSearchBody): Promise<KbSearchResult>;
+  /** The embedding model in use (absent: keywords only) and the indexing jobs. */
+  kbStatus(): Promise<KbStatus>;
+  cancelKbJob(jobId: string): Promise<void>;
   /** What the proactive assistant noticed, newest first (`status`/`kind` narrow it). */
+  /** Channels to talk to the assistant from outside (Telegram, Slack, email). Secrets come back masked. */
+  channels(): Promise<ChannelInfo[]>;
+  createChannel(body: ChannelCreate): Promise<ChannelInfo>;
+  updateChannel(id: string, patch: ChannelPatch): Promise<ChannelInfo>;
+  deleteChannel(id: string): Promise<void>;
+  testChannel(id: string): Promise<ChannelTestResult>;
+  /** A one-time code (valid ten minutes) to send to the Telegram bot. */
+  pairChannel(id: string): Promise<ChannelPairing>;
+  channelStatus(id: string): Promise<ChannelStatus>;
+  /** IMAP accounts of the mail connector (read-only). */
+  mailAccounts(): Promise<MailAccount[]>;
+  setMailAccounts(accounts: MailAccount[]): Promise<MailAccount[]>;
+  testMailAccount(account: MailAccount): Promise<MailAccountTest>;
   proposals(query?: ProposalQuery): Promise<Proposal[]>;
   /** Approving starts a normal run in a new session; `instruction` replaces the proposed one. */
   approveProposal(id: string, instruction?: string): Promise<Proposal>;
@@ -164,7 +205,10 @@ export interface Transport {
   backgroundCheckNow?(): Promise<BackgroundStatus>;
   /** `kind: "a2ui.action"` when an A2UI surface reports a user action. */
   /** `thinking` is the reasoning of this run only: it wins over the profile's. */
-  startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode): Promise<{ run_id: string }>;
+  /** `attachments`: files sent with the message (the text may be empty when there are some). */
+  startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode, attachments?: AttachmentUpload[]): Promise<{ run_id: string }>;
+  /** An attachment of a stored message (thumbnails, downloads). 404 when it is gone. */
+  getAttachment(sessionId: string, attachmentId: string): Promise<AttachmentData>;
   cancelRun(runId: string): Promise<void>;
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void): () => void;
   activeRun(sessionId: string): Promise<string | null>;
@@ -218,22 +262,48 @@ export interface Transport {
   mcpServers(): Promise<McpServer[]>;
   saveMcpServer(s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }): Promise<McpServer>;
   removeMcpServer(id: string): Promise<void>;
+  /** «Riconnetti»: a new attempt now, with the backoff starting over. */
+  reconnectMcpServer(id: string): Promise<McpServer>;
+  /** «Accedi»: the page of the authorization server, to open in the system browser. */
+  /** Confirms the command of a stdio server (`hash` is the `approval_hash` the person saw). */
+  approveMcpServer(id: string, hash: string): Promise<McpServer>;
+  mcpOAuthStart(id: string): Promise<{ authorization_url: string }>;
+  mcpOAuthSignout(id: string): Promise<void>;
+  /** The prompts of the connected servers. */
+  mcpPrompts(): Promise<McpPromptInfo[]>;
+  mcpPromptGet(serverId: string, name: string, args: Record<string, string>): Promise<McpPromptResult>;
+  /** Questions of MCP servers waiting for the person. */
+  mcpElicitations(): Promise<McpElicitation[]>;
+  respondMcpElicitation(id: string, answer: McpElicitationAnswer): Promise<void>;
 
   policy(): Promise<{ rules: PolicyRule[] }>;
   setPolicy(rules: PolicyRule[]): Promise<{ rules: PolicyRule[] }>;
+  /** How a shell command line is split into simple commands, the way the backend's policy reads it. */
+  analyzeCommand(command: string): Promise<CommandAnalysis>;
   hooks(): Promise<{ hooks: HookConfig[] }>;
   setHooks(hooks: HookConfig[]): Promise<{ hooks: HookConfig[] }>;
 
   mesh(): Promise<MeshState>;
-  pairPeer(address: string, code: string): Promise<PeerDevice>;
+  /** `fingerprint`: SHA-256 of the other device's certificate, required for an https:// address. */
+  pairPeer(address: string, code: string, fingerprint?: string): Promise<PeerDevice>;
   removePeer(id: string): Promise<void>;
   /** Link that pairs a phone in one step (its camera opens the web UI) and its QR as SVG. */
   pairingQr(): Promise<{ url: string; svg: string }>;
+  /** Access tokens (owner only on the server). */
+  apiTokens(): Promise<ApiTokenInfo[]>;
+  createApiToken(req: ApiTokenCreate): Promise<ApiTokenCreated>;
+  revokeApiToken(id: string): Promise<void>;
+  rotateApiToken(id: string): Promise<ApiTokenCreated>;
+  tlsStatus(): Promise<TlsStatus>;
+  /** The authority certificate (self-signed TLS), to install in a browser on another device. */
+  tlsCa(): Promise<{ pem: string }>;
 
   /** Voice mode: the speech-to-text backend that would be used, and the voice settings. */
   voice(): Promise<VoiceStatus>;
   /** Speech to text of a 16 kHz mono WAV recorded by the app; `language` overrides the setting. */
   transcribe(wav: Blob, language?: string): Promise<Transcript>;
+  /** Text to speech with the neural engine (rejects with 422 when the system voices are the ones to use). */
+  speak(req: SpeakRequest, signal?: AbortSignal): Promise<Speech>;
 
   config(): Promise<ConfigView>;
   setConfig(layer: "global" | "device" | "workspace", key: string, value: unknown): Promise<ConfigView>;
@@ -248,6 +318,10 @@ export async function createTransport(): Promise<Transport> {
   const forceMock = typeof __AIW_FORCE_MOCK__ !== "undefined" && __AIW_FORCE_MOCK__;
   if (forceMock || params.get("demo") === "1") {
     const { MockTransport } = await import("./mock");
+    const { applyMockScenario, isMockScenario } = await import("./mock/scenario");
+    // `?scenario=first-run`: a demo that starts empty (used by the end-to-end tests).
+    const scenario = params.get("scenario");
+    if (isMockScenario(scenario)) applyMockScenario(scenario);
     return new MockTransport();
   }
   if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
@@ -288,6 +362,6 @@ export async function createTransport(): Promise<Transport> {
     if ((e as { status?: number }).status === 401) return http;
     // No backend reachable: fall back to the demo so the UI is still explorable.
     const { MockTransport } = await import("./mock");
-    return new MockTransport("Backend non raggiungibile: modalità demo");
+    return new MockTransport(() => t("shell.backend_unreachable_demo"));
   }
 }

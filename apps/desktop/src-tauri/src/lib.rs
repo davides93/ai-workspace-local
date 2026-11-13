@@ -85,6 +85,10 @@ pub fn run() {
                 ..Default::default()
             }))
             .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+            // Telegram, Slack and email channels that the person turned on (on a phone they stay off unless the app is
+            // in the foreground: see `Engine::set_channels_foreground`).
+            // (inside the runtime: the connectors are tasks)
+            tauri::async_runtime::block_on(async { engine.channels_start() });
 
             // Platform-native models (Apple Foundation Models, Gemini Nano, LiteRT-LM) become runtimes.
             let native = app.state::<tauri_plugin_aiw_native::NativeLlm<tauri::Wry>>();

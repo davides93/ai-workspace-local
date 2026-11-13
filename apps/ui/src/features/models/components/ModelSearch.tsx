@@ -9,6 +9,7 @@ import { HubError } from "./HubError";
 import { RemoteModelCard } from "./RemoteModelCard";
 import { VariantsDrawer } from "./VariantsDrawer";
 
+import { t } from "../../../shared/i18n";
 const PAGE_SIZE = 12;
 
 /** Live search on a provider: debounced box, format and sort filters, result cards and "Carica altri". */
@@ -28,26 +29,26 @@ export function ModelSearch({ provider, info, onSetToken }: { provider: string; 
   return (
     <div className="stack stack-lg">
       <div className="mh-toolbar" role="search">
-        <Field label="Cerca modelli" htmlFor="disc-q" className="mh-search">
+        <Field label={t("models.cerca_modelli")} htmlFor="disc-q" className="mh-search">
           <Input
             id="disc-q" type="search" value={text} onChange={(e) => setText(e.target.value)}
-            placeholder={provider === "ollama" ? "qwen3, llama3.2:3b, nome esatto…" : "qwen, gemma, llama, vision…"}
+            placeholder={provider === "ollama" ? t("models.qwen3_llama3_2_3b_nome") : t("models.qwen_gemma_llama_vision")}
           />
         </Field>
-        <Field label="Formato" htmlFor="disc-format">
+        <Field label={t("models.formato")} htmlFor="disc-format">
           <Select id="disc-format" value={format} onChange={(e) => setQuery({ format: e.target.value })}>
-            <option value="">Tutti</option>
+            <option value="">{t("models.tutti")}</option>
             {formats.map((f) => <option key={f} value={f}>.{f}</option>)}
           </Select>
         </Field>
         <div className="field">
-          <span className="field-label">Ordina per</span>
-          <Segmented label="Ordina per" value={sort} onChange={(s) => setQuery({ sort: s === "downloads" ? "" : s })} options={sortOptionsFor(provider)} />
+          <span className="field-label">{t("models.ordina_per")}</span>
+          <Segmented label={t("models.ordina_per")} value={sort} onChange={(s) => setQuery({ sort: s === "downloads" ? "" : s })} options={sortOptionsFor(provider)} />
         </div>
       </div>
 
       {search.isPending && (
-        <div className="mh-grid" role="status" aria-label="Caricamento dei risultati">
+        <div className="mh-grid" role="status" aria-label={t("models.caricamento_dei_risultati")}>
           {Array.from({ length: 6 }, (_, i) => <Skeleton key={i} height={168} className="skeleton-card" />)}
         </div>
       )}
@@ -56,9 +57,9 @@ export function ModelSearch({ provider, info, onSetToken }: { provider: string; 
       )}
       {search.isSuccess && items.length === 0 && (
         <EmptyState
-          icon="search" title={q ? `Nessun risultato per «${q}»` : "Nessun modello da mostrare"}
-          description="Prova un altro termine, un altro formato o un altro provider."
-          action={exact ? <Button icon="list" onClick={() => setOpen(stubModel(provider, exact))}>Apri «{exact}» per nome esatto</Button> : undefined}
+          icon="search" title={q ? t("models.nessun_risultato_per", { q }) : t("models.nessun_modello_da_mostrare")}
+          description={t("models.prova_un_altro_termine_un")}
+          action={exact ? <Button icon="list" onClick={() => setOpen(stubModel(provider, exact))}>{t("models.apri_per_nome_esatto", { exact })}</Button> : undefined}
         />
       )}
 
@@ -68,17 +69,17 @@ export function ModelSearch({ provider, info, onSetToken }: { provider: string; 
             {items.map((m) => <RemoteModelCard key={`${m.provider}/${m.id}`} model={m} onOpen={() => setOpen(m)} />)}
           </div>
           <div className="row mh-more">
-            <span className="faint text-sm" role="status" aria-live="polite">{items.length} {items.length === 1 ? "risultato" : "risultati"}{search.hasNextPage ? " finora" : ""}</span>
+            <span className="faint text-sm" role="status" aria-live="polite">{items.length} {items.length === 1 ? t("models.risultato") : t("models.risultati")}{search.hasNextPage ? t("models.finora") : ""}</span>
             {search.hasNextPage && (
               <Button icon="down" onClick={() => void search.fetchNextPage()} disabled={search.isFetchingNextPage}>
-                {search.isFetchingNextPage ? "Carico…" : "Carica altri"}
+                {search.isFetchingNextPage ? t("models.carico") : t("models.carica_altri")}
               </Button>
             )}
           </div>
-          {search.isFetchNextPageError && <HubError error={search.error} title="Non riesco a caricare altri risultati" onRetry={() => void search.fetchNextPage()} retrying={search.isFetchingNextPage} />}
+          {search.isFetchNextPageError && <HubError error={search.error} title={t("models.non_riesco_a_caricare_altri")} onRetry={() => void search.fetchNextPage()} retrying={search.isFetchingNextPage} />}
           {exact && !items.some((m) => m.id.toLowerCase() === exact.toLowerCase()) && (
             <p className="faint text-sm">
-              Non lo trovi? <Button size="sm" variant="ghost" onClick={() => setOpen(stubModel(provider, exact))}>Apri «{exact}» per nome esatto</Button>
+              {t("models.non_lo_trovi")} <Button size="sm" variant="ghost" onClick={() => setOpen(stubModel(provider, exact))}>{t("models.apri_per_nome_esatto", { exact })}</Button>
             </p>
           )}
         </>

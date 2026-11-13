@@ -5,6 +5,7 @@ use crate::extract::Json;
 use crate::{ApiError, AppState};
 use aiw_runtimes::{ChatDelta, ChatRequest, Msg, ToolSpec};
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures::StreamExt;
@@ -133,4 +134,82 @@ pub async fn chat_completions(State(s): State<AppState>, Json(b): Json<Completio
         message["tool_calls"] = json!(calls.into_values().enumerate().map(|(i, (id, name, args))| json!({"id": if id.is_empty() { format!("call_{i}") } else { id }, "type": "function", "function": {"name": name, "arguments": args}})).collect::<Vec<_>>());
     }
     Ok(Json(json!({"id": id, "object": "chat.completion", "created": chrono::Utc::now().timestamp(), "model": shown_model, "choices": [{"index": 0, "message": message, "finish_reason": finish}], "usage": usage})).into_response())
+}
+
+/// Most texts in one embeddings request, and most characters across all of them.
+const MAX_EMBED_INPUTS: usize = 256;
+const MAX_EMBED_CHARS: usize = 1_000_000;
+
+#[derive(Deserialize)]
+pub struct EmbeddingsBody {
+    #[serde(default)]
+    model: String,
+    input: Value,
+    /// `float` (default) or `base64` (little-endian f32, what the OpenAI Python client asks for).
+    #[serde(default)]
+    encoding_format: Option<String>,
+}
+
+fn invalid(msg: &str) -> ApiError {
+    ApiError(aiw_core::Error::Invalid(msg.into()))
+}
+
+/// The texts of an `input`: a string or a list of strings.
+fn embedding_inputs(input: Value) -> Result<Vec<String>, ApiError> {
+    let texts: Vec<String> = match input {
+        Value::String(s) => vec![s],
+        Value::Array(items) => items
+            .into_iter()
+            .map(|v| match v {
+                Value::String(s) => Ok(s),
+                _ => Err(invalid("`input` deve essere un testo o una lista di testi (i token già calcolati non sono supportati)")),
+            })
+            .collect::<Result<_, _>>()?,
+        _ => return Err(invalid("`input` deve essere un testo o una lista di testi")),
+    };
+    if texts.is_empty() || texts.iter().any(|t| t.is_empty()) {
+        return Err(invalid("`input` non può essere vuoto"));
+    }
+    if texts.len() > MAX_EMBED_INPUTS {
+        return Err(invalid(&format!("al massimo {MAX_EMBED_INPUTS} testi per richiesta")));
+    }
+    if texts.iter().map(|t| t.chars().count()).sum::<usize>() > MAX_EMBED_CHARS {
+        return Err(invalid("i testi sono troppo lunghi: al massimo un milione di caratteri per richiesta"));
+    }
+    Ok(texts)
+}
+
+fn f32_base64(v: &[f32]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+}
+
+/// `POST /v1/embeddings` (OpenAI-compatible). Uses the same embedding model as the memory and the
+/// knowledge base (the adviser's choice on a runtime that is already running); a profile or an
+/// installed embedding model can be named in `model`. It is answered by this device only: like the
+/// chat completions it is never forwarded to a paired device.
+pub async fn embeddings(State(s): State<AppState>, Json(b): Json<EmbeddingsBody>) -> Result<Response, ApiError> {
+    let base64_out = match b.encoding_format.as_deref() {
+        None | Some("float") => false,
+        Some("base64") => true,
+        Some(_) => return Err(invalid("`encoding_format` può essere float o base64")),
+    };
+    let texts = embedding_inputs(b.input)?;
+    let Some((model, vectors)) = s.engine.embed_texts(&b.model, &texts).await? else {
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "Nessun modello di embedding è pronto: scarica un modello di embedding in Modelli e tienilo acceso, poi riprova."})),
+        )
+            .into_response());
+    };
+    let data: Vec<Value> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| json!({"object": "embedding", "index": i, "embedding": if base64_out { json!(f32_base64(v)) } else { json!(v) }}))
+        .collect();
+    // The runtimes do not report token counts for embeddings: an estimate (about 4 characters a token).
+    let tokens: usize = texts.iter().map(|t| t.chars().count().div_ceil(4).max(1)).sum();
+    let shown = if b.model.is_empty() { model } else { b.model };
+    Ok(Json(json!({"object": "list", "data": data, "model": shown, "usage": {"prompt_tokens": tokens, "total_tokens": tokens}}))
+        .into_response())
 }

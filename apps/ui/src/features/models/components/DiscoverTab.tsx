@@ -7,6 +7,7 @@ import { ProviderPicker } from "./ProviderPicker";
 import { useProviderAuthDialog } from "./ProviderAuthDialog";
 import { UrlPullForm } from "./UrlPullForm";
 
+import { t, tNode } from "../../../shared/i18n";
 /** Scopri: pick a provider, then search it live (or paste an address for the direct URL provider). */
 export function DiscoverTab() {
   const providers = useModelProviders();
@@ -22,27 +23,26 @@ export function DiscoverTab() {
         const thin = !!info && !note && !info.homepage && !hasSettings(info);
         return (
           <div className="stack stack-lg">
-            <h2 className="sr-only">Scopri nuovi modelli</h2>
+            <h2 className="sr-only">{t("models.scopri_nuovi_modelli")}</h2>
             <ProviderPicker
               providers={offered} value={provider}
               onChange={(id) => setQuery({ provider: id, q: "", format: "", sort: "", url: "" })}
             />
             {info && (
-              <section className={thin ? "mh-provider-bar thin" : "mh-provider-bar"} aria-label={`Informazioni su ${info.name}`}>
+              <section className={thin ? "mh-provider-bar thin" : "mh-provider-bar"} aria-label={t("models.informazioni_su", { name: info.name })}>
                 <div className="grow stack stack-sm">
                   {/* The cards carry the description on wide screens; on phones they are too small for it. */}
                   <p className="text-sm mh-bar-desc">{info.description}</p>
                   {note && <p className="faint text-sm">{note}</p>}
                   {info.homepage && (
                     <a className="link-more text-sm" href={info.homepage} target="_blank" rel="noreferrer noopener">
-                      Sito di {info.name} <Icon name="external" size={13} />
-                      <span className="sr-only"> (si apre in una nuova scheda)</span>
+                      {tNode("models.sito_di", { el: <Icon name="external" size={13} />, span: <span className="sr-only">{t("models.si_apre_in_una_nuova")}</span> }, { name: info.name })}
                     </a>
                   )}
                 </div>
                 {hasSettings(info) && (
                   <Button size="sm" icon="key" onClick={() => auth.open(info.id)}>
-                    {info.auth !== "none" ? "Token e impostazioni" : "Impostazioni"}
+                    {info.auth !== "none" ? t("models.token_e_impostazioni") : t("models.impostazioni")}
                   </Button>
                 )}
               </section>

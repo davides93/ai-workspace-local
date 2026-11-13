@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { IconButton } from "./Button";
 import { ModalShell } from "./modal";
 
+import { t } from "../i18n";
 /** Centered modal dialog (confirmations, short forms). */
 export function Dialog({ title, onClose, children, footer, size = "md" }: {
   title: string;
@@ -14,7 +15,7 @@ export function Dialog({ title, onClose, children, footer, size = "md" }: {
     <ModalShell variant="dialog" title={title} onClose={onClose} className={`dialog-${size}`}>
       <div className="overlay-head">
         <h2 className="grow">{title}</h2>
-        <IconButton aria-label="Chiudi" icon="close" onClick={onClose} />
+        <IconButton aria-label={t("ui.chiudi")} icon="close" onClick={onClose} />
       </div>
       <div className="overlay-body">{children}</div>
       {footer && <div className="overlay-foot">{footer}</div>}
@@ -37,7 +38,7 @@ export function Drawer({ title, subtitle, onClose, children, footer }: {
           <h2>{title}</h2>
           {subtitle && <div className="muted text-sm">{subtitle}</div>}
         </div>
-        <IconButton aria-label="Chiudi" icon="close" onClick={onClose} />
+        <IconButton aria-label={t("ui.chiudi")} icon="close" onClick={onClose} />
       </div>
       <div className="overlay-body">{children}</div>
       {footer && <div className="overlay-foot">{footer}</div>}
@@ -52,7 +53,7 @@ export function Sheet({ title, onClose, children, footer }: { title: string; onC
       <div className="sheet-grip" aria-hidden="true" />
       <div className="overlay-head">
         <h2 className="grow">{title}</h2>
-        <IconButton aria-label="Chiudi" icon="close" onClick={onClose} />
+        <IconButton aria-label={t("ui.chiudi")} icon="close" onClick={onClose} />
       </div>
       <div className="overlay-body">{children}</div>
       {footer && <div className="overlay-foot overlay-foot-stack">{footer}</div>}

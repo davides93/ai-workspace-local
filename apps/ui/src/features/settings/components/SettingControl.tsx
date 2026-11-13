@@ -3,6 +3,7 @@ import type { FieldSchema } from "../../../shared/api/types";
 import { Input, Select, Toggle, TagInput } from "../../../shared/ui";
 import { parseNumber } from "../model/config";
 
+import { t } from "../../../shared/i18n";
 /** Draft text of an input: follows the saved value whenever that changes (another layer, a reset, a save). */
 function useDraft(shown: string) {
   const [draft, setDraft] = useState(shown);
@@ -16,21 +17,22 @@ function useDraft(shown: string) {
 
 const text = (v: unknown) => (v === undefined || v === null ? "" : String(v));
 
-function TextSetting({ id, value, onCommit }: { id: string; value: unknown; onCommit: (v: unknown) => void }) {
+function TextSetting({ id, field, value, onCommit }: { id: string; field: FieldSchema; value: unknown; onCommit: (v: unknown) => void }) {
   const shown = text(value);
   const [draft, setDraft] = useDraft(shown);
   const dirty = draft !== shown;
   return (
     <>
       <Input
-        id={id} mono value={draft} autoComplete="off" spellCheck={false} onChange={(e) => setDraft(e.target.value)}
+        id={id} mono value={draft} autoComplete={field.secret ? "new-password" : "off"} spellCheck={false} placeholder={field.placeholder}
+        type={field.secret ? "password" : "text"} onChange={(e) => setDraft(e.target.value)}
         onBlur={() => dirty && onCommit(draft)}
         onKeyDown={(e) => {
           if (e.key === "Enter") e.currentTarget.blur();
           else if (e.key === "Escape") setDraft(shown);
         }}
       />
-      {dirty && <span className="hint">Invio per salvare, Esc per annullare</span>}
+      {dirty && <span className="hint">{t("settings.invio_per_salvare_esc_per")}</span>}
     </>
   );
 }
@@ -93,9 +95,9 @@ export function SettingControl({ id, field, value, onCommit, optionLabel = Strin
     return (
       <TagInput
         id={id} label={label} value={Array.isArray(value) ? value.map(String) : []} onChange={onCommit} unique liveSplit
-        placeholder={field.placeholder ?? "scrivi un valore e premi Invio"}
+        placeholder={field.placeholder ?? t("settings.scrivi_un_valore_e_premi")}
       />
     );
   }
-  return <TextSetting id={id} value={value} onCommit={onCommit} />;
+  return <TextSetting id={id} field={field} value={value} onCommit={onCommit} />;
 }

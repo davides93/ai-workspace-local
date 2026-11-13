@@ -1,6 +1,7 @@
 import type { DownloadProgress, ModelVariant, RemoteFile, RuntimeCompat } from "../../../shared/api/types";
 import { isActiveJob } from "./downloads";
 
+import { t } from "../../../shared/i18n";
 /**
  * Recommended variant first, then the rest from the smallest to the largest download
  * (which is also the order of quality for quantizations). Never mutates its input.
@@ -61,8 +62,8 @@ export function summarizeFiles(files: RemoteFile[]): FileSummary {
 /** "1 file", "3 file", "2 file, con mmproj" — the projector of a vision model counts as a file. */
 export function fileCountLabel(files: RemoteFile[]): string {
   const s = summarizeFiles(files);
-  if (s.count === 0) return "nessun file";
-  return `${s.count} file${s.hasMmproj ? ", con mmproj" : ""}`;
+  if (s.count === 0) return t("models.nessun_file");
+  return t(s.hasMmproj ? "models.n_files_mmproj" : "models.n_files", { n: s.count });
 }
 
 export const FILE_ROLE_LABEL: Record<RemoteFile["role"], string> = {

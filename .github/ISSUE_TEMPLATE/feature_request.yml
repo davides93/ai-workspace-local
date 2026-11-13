@@ -1,0 +1,44 @@
+name: Proponi una funzione
+description: Un'idea per migliorare AIW
+title: "[Funzione] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Che problema vuoi risolvere
+      description: Descrivi la situazione, non solo la soluzione.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Cosa proponi
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative che hai considerato
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Runtime e modelli
+        - Agenti e strumenti
+        - Workflow
+        - Interfaccia
+        - Mobile
+        - Sicurezza e privacy
+        - Rilascio e distribuzione
+        - Documentazione
+        - Altro
+  - type: checkboxes
+    id: local
+    attributes:
+      label: Principi del progetto
+      description: AIW è «locale prima di tutto» e sicuro di default.
+      options:
+        - label: La funzione non richiede di mandare dati a un servizio esterno senza un consenso esplicito

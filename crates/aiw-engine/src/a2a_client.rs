@@ -67,6 +67,82 @@ fn answer_of(task: &Value) -> String {
         .unwrap_or_default()
 }
 
+#[derive(PartialEq)]
+enum Flow {
+    Continue,
+    Done,
+}
+
+/// Folds one event of a task stream into `task` (the answer so far). Everything in it comes from the remote
+/// agent: the text kept is capped, and only the answer and the status are read.
+fn apply_stream_event(task: &mut Value, result: &Value, text_len: &mut usize, progress: &(dyn Fn(String) + Sync)) -> Flow {
+    const MAX_TEXT: usize = 2_000_000;
+    let kind = result["kind"].as_str().unwrap_or_default();
+    let (what, payload) = if let Some(t) = result.get("task") {
+        ("task", t)
+    } else if let Some(t) = result.get("statusUpdate") {
+        ("status", t)
+    } else if let Some(t) = result.get("artifactUpdate") {
+        ("artifact", t)
+    } else {
+        match kind {
+            "task" => ("task", result),
+            "status-update" => ("status", result),
+            "artifact-update" => ("artifact", result),
+            _ => return Flow::Continue,
+        }
+    };
+    match what {
+        "task" => {
+            *task = payload.clone();
+            if !task["artifacts"].is_array() {
+                task["artifacts"] = json!([]);
+            }
+        }
+        "status" => {
+            if !task.is_object() {
+                *task = json!({"id": payload["taskId"], "artifacts": []});
+            }
+            task["status"] = payload["status"].clone();
+            let note = parts_text(&payload["status"]["message"]);
+            if !note.is_empty() && !is_final_state(&state_of(task)) {
+                progress(note.chars().take(200).collect());
+            }
+        }
+        _ => {
+            if !task.is_object() {
+                *task = json!({"id": payload["taskId"], "artifacts": []});
+            }
+            let art = &payload["artifact"];
+            let text = parts_text(art);
+            *text_len += text.len();
+            if *text_len > MAX_TEXT {
+                return Flow::Continue;
+            }
+            let id = art["artifactId"].as_str().unwrap_or("risposta").to_string();
+            let list = task["artifacts"].as_array_mut().expect("artifacts is an array");
+            let append = payload["append"].as_bool() == Some(true);
+            match list.iter_mut().find(|a| a["artifactId"].as_str() == Some(id.as_str())) {
+                Some(existing) if append => {
+                    let merged = format!("{}{}", parts_text(existing), text);
+                    existing["parts"] = json!([{"text": merged}]);
+                }
+                Some(existing) => existing["parts"] = json!([{"text": text}]),
+                None => list.push(json!({"artifactId": id, "parts": [{"text": text}]})),
+            }
+        }
+    }
+    if is_final_state(&state_of(task)) {
+        Flow::Done
+    } else {
+        Flow::Continue
+    }
+}
+
+fn is_final_state(state: &str) -> bool {
+    matches!(state, "completed" | "failed" | "rejected" | "canceled" | "cancelled")
+}
+
 impl Engine {
     /// The registered remote agents followed by the paired devices, with their tokens (internal use).
     fn remote_agents_raw(&self) -> Vec<RemoteAgent> {
@@ -184,7 +260,19 @@ impl Engine {
             });
         };
         audit("a2a.delegate", format!("{} ({}) · {short}", remote.name, remote.url));
-        let out = A2aClient::new(&remote, Duration::from_secs(secs))?.run(task, cancel).await;
+        // What the remote agent reports while it works (the tool it uses) goes to the trace of the run that delegated.
+        let progress = |note: String| {
+            if let Some(r) = run_id {
+                self.emit(
+                    r,
+                    aiw_core::events::AgEvent::Custom {
+                        name: "aiw.remote_progress".into(),
+                        value: json!({"agent": remote.name, "note": note}),
+                    },
+                );
+            }
+        };
+        let out = A2aClient::new(&remote, Duration::from_secs(secs))?.run(task, cancel, &progress).await;
         match &out {
             Ok(_) => audit("a2a.result", format!("{}: completato", remote.name)),
             Err(e) => audit("a2a.result", format!("{}: {e}", remote.name)),
@@ -205,11 +293,12 @@ struct A2aClient {
 impl A2aClient {
     fn new(remote: &RemoteAgent, timeout: Duration) -> Result<Self> {
         let base = http_url(&remote.url)?;
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(Error::other)?;
+        let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(30)).redirect(reqwest::redirect::Policy::none());
+        // A paired device served over TLS is verified against the certificate pinned at pairing.
+        if let Some(cfg) = aiw_core::tlspin::client_config_for(base.as_str()) {
+            builder = builder.use_preconfigured_tls(cfg);
+        }
+        let http = builder.build().map_err(Error::other)?;
         Ok(Self { http, card: card_url(&base), base, token: remote.token.clone(), skill: remote.skill.clone(), timeout })
     }
     fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -224,7 +313,7 @@ impl A2aClient {
     }
 
     /// The JSON-RPC endpoint announced by the Agent Card, which must stay on the registered origin.
-    async fn endpoint(&self) -> Result<reqwest::Url> {
+    async fn endpoint(&self) -> Result<(reqwest::Url, bool)> {
         let r = self.authed(self.http.get(self.card.clone())).send().await.map_err(|e| self.err("Agent Card non raggiungibile", e))?;
         if !r.status().is_success() {
             return Err(self.err("Agent Card", format!("risposta {}", r.status())));
@@ -240,7 +329,7 @@ impl A2aClient {
         if !same_origin(&ep, &self.base) {
             return Err(Error::Denied(format!("l'Agent Card di {} indica un altro indirizzo ({ep}): non è un URL registrato", self.base)));
         }
-        Ok(ep)
+        Ok((ep, card["capabilities"]["streaming"].as_bool() == Some(true)))
     }
 
     async fn rpc(&self, ep: &reqwest::Url, method: &str, params: Value) -> Result<Value> {
@@ -259,8 +348,94 @@ impl A2aClient {
         Ok(result.get("task").cloned().unwrap_or(result))
     }
 
-    async fn run(&self, text: &str, cancel: &CancellationToken) -> Result<String> {
-        let ep = tokio::select! { _ = cancel.cancelled() => return Err(Error::Cancelled), r = self.endpoint() => r? };
+    /// `SendStreamingMessage` (0.3: `message/stream`): follows the SSE stream until the task ends. `Ok(None)`
+    /// means the remote did not stream (the caller sends the message again the plain way); `Ok(Some(task))`
+    /// is the task as built from the stream, which is not finished when the stream broke half way (the caller
+    /// then polls `GetTask`).
+    async fn run_streaming(
+        &self,
+        ep: &reqwest::Url,
+        params: &Value,
+        cancel: &CancellationToken,
+        deadline: Instant,
+        progress: &(dyn Fn(String) + Sync),
+    ) -> Result<Option<Value>> {
+        let body = json!({"jsonrpc": "2.0", "id": new_id("rpc"), "method": "SendStreamingMessage", "params": params});
+        let sent = tokio::select! {
+            _ = cancel.cancelled() => return Err(Error::Cancelled),
+            r = self.authed(self.http.post(ep.clone())).header("Accept", "text/event-stream").json(&body).send() => r,
+        };
+        let Ok(mut res) = sent else { return Ok(None) };
+        let status = res.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(Error::Denied(format!("agente remoto {}: accesso rifiutato, controlla il token", self.base)));
+        }
+        let is_sse =
+            res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).is_some_and(|c| c.contains("text/event-stream"));
+        if !status.is_success() || !is_sse {
+            return Ok(None);
+        }
+        let mut parser = aiw_tools::mcp::SseParser::default();
+        let mut task = Value::Null;
+        let mut text_len = 0usize;
+        loop {
+            let chunk = tokio::select! {
+                _ = cancel.cancelled() => {
+                    self.cancel_streamed(ep, &mut res, &mut parser, &mut task, &mut text_len, progress).await;
+                    return Err(Error::Cancelled);
+                }
+                _ = tokio::time::sleep_until(deadline.into()) => {
+                    self.cancel_streamed(ep, &mut res, &mut parser, &mut task, &mut text_len, progress).await;
+                    return Err(self.err("tempo scaduto", format!("nessuna risposta entro {} secondi", self.timeout.as_secs())));
+                }
+                c = res.chunk() => c,
+            };
+            let Ok(Some(chunk)) = chunk else { break };
+            for msg in parser.push(&chunk) {
+                if let Some(e) = msg.get("error") {
+                    return Err(self.err("SendStreamingMessage", e["message"].as_str().unwrap_or("errore")));
+                }
+                if apply_stream_event(&mut task, &msg["result"], &mut text_len, progress) == Flow::Done {
+                    return Ok(Some(task));
+                }
+            }
+        }
+        // Closed without an end: no task at all means the remote does not really stream.
+        Ok(task.is_object().then_some(task))
+    }
+
+    /// Cancels the remote task of a stream that is being abandoned. The task id arrives with the first event of
+    /// the stream: when the caller gives up before that event was read, it is awaited for a few seconds, or the
+    /// remote run would be left running with nobody to stop it.
+    async fn cancel_streamed(
+        &self,
+        ep: &reqwest::Url,
+        res: &mut reqwest::Response,
+        parser: &mut aiw_tools::mcp::SseParser,
+        task: &mut Value,
+        text_len: &mut usize,
+        progress: &(dyn Fn(String) + Sync),
+    ) {
+        if task["id"].as_str().is_none() {
+            let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                while let Ok(Some(chunk)) = res.chunk().await {
+                    for msg in parser.push(&chunk) {
+                        apply_stream_event(task, &msg["result"], text_len, progress);
+                    }
+                    if task["id"].as_str().is_some() {
+                        break;
+                    }
+                }
+            })
+            .await;
+        }
+        if let Some(id) = task["id"].as_str() {
+            let _ = self.rpc(ep, "CancelTask", json!({"id": id})).await;
+        }
+    }
+
+    async fn run(&self, text: &str, cancel: &CancellationToken, progress: &(dyn Fn(String) + Sync)) -> Result<String> {
+        let (ep, streaming) = tokio::select! { _ = cancel.cancelled() => return Err(Error::Cancelled), r = self.endpoint() => r? };
         let mut params = json!({
             "message": {"messageId": new_id("msg"), "role": "ROLE_USER", "parts": [{"text": text}]},
             "configuration": {"blocking": false}
@@ -268,10 +443,15 @@ impl A2aClient {
         if let Some(skill) = &self.skill {
             params["metadata"] = json!({"agent": skill});
         }
-        let mut task =
-            tokio::select! { _ = cancel.cancelled() => return Err(Error::Cancelled), r = self.rpc(&ep, "SendMessage", params) => r? };
-        let id = task["id"].as_str().ok_or_else(|| self.err("SendMessage", "il task non ha un id"))?.to_string();
         let started = Instant::now();
+        let streamed = if streaming { self.run_streaming(&ep, &params, cancel, started + self.timeout, progress).await? } else { None };
+        let mut task = match streamed {
+            Some(t) => t,
+            None => {
+                tokio::select! { _ = cancel.cancelled() => return Err(Error::Cancelled), r = self.rpc(&ep, "SendMessage", params) => r? }
+            }
+        };
+        let id = task["id"].as_str().ok_or_else(|| self.err("SendMessage", "il task non ha un id"))?.to_string();
         let mut delay = Duration::from_millis(400);
         loop {
             match state_of(&task).as_str() {

@@ -1,20 +1,26 @@
 import type { Transport, TransportCapabilities } from "../transport";
 import { ApiError } from "../http";
 import { isSecretName } from "../../lib/secrets";
+import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, guessKind, humanSize } from "../../lib/attachments";
+import { analyzeCommand } from "./analyze";
 import { mockRecommend } from "./recommend";
+import { mockRoute } from "./route";
+import { mockSpeak, mockTtsStatus } from "./voice";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer,
-  MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, TeamDef, Transcript, VoiceStatus, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary,
+  AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
+  ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
+  SearchPage, Session, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
+  ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
 } from "../types";
 import {
-  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, mcp, models, nid, now, policyRules, profiles,
+  agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, maskConfigSecrets, mcp, models, nid, now, policyRules, profiles,
   remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
 import * as mem from "./memories";
+import * as kb from "./kb";
+import * as chan from "./channels";
 import { proactiveState, PROPOSAL_KINDS, PROPOSAL_STATUSES, proposals } from "./proposals";
 import { teacherTurn } from "./teacher";
 import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
@@ -69,10 +75,16 @@ function restoreSecrets(sent: Record<string, unknown> | undefined, stored: Recor
 }
 
 /** `validate_mcp` of the engine, with its messages. */
-function validateMcp(s: { name: string; transport: string; command?: string; url?: string }): void {
+function validateMcp(s: { name: string; transport: string; command?: string; url?: string; sandbox?: string }): void {
   if (!s.name.trim()) throw new ApiError(400, "serve un nome");
   if (s.transport === "stdio") {
     if (!s.command?.trim()) throw new ApiError(400, "un server MCP stdio richiede il comando da avviare");
+    if (s.sandbox !== undefined && !["off", "read-only", "workspace-write"].includes(s.sandbox)) {
+      throw new ApiError(400, `isolamento \`${s.sandbox}\` non valido: usa off, read-only o workspace-write`);
+    }
+    if (s.sandbox && s.sandbox !== "off" && !system.mcp_sandbox) {
+      throw new ApiError(501, "su questo sistema i server MCP non si possono isolare (su Windows non è disponibile, su Linux serve bubblewrap): scegli «Nessuno»");
+    }
   } else if (s.transport === "http") {
     const url = s.url?.trim();
     if (!url) throw new ApiError(400, "un server MCP http richiede l'indirizzo (url)");
@@ -85,6 +97,27 @@ function validateMcp(s: { name: string; transport: string; command?: string; url
   } else {
     throw new ApiError(400, `trasporto MCP \`${s.transport}\` non valido: usa stdio o http`);
   }
+}
+
+/** What the person confirmed for each stdio server: the hash of command, arguments and variable names (the engine's `approval_hash`). */
+const approvedMcp = new Map<string, string>();
+const mcpHash = (m: Pick<McpServer, "transport" | "command" | "args" | "env">) =>
+  JSON.stringify([m.transport, (m.command ?? "").trim(), m.args ?? [], Object.keys(m.env ?? {}).sort()]);
+for (const m of mcp) if (m.transport === "stdio") approvedMcp.set(m.id, mcpHash(m));
+
+const mcpCommandLine = (m: McpServer) => [m.command ?? "", ...(m.args ?? [])].map((w) => (w === "" || /\s/.test(w) ? `"${w}"` : w)).join(" ");
+
+/** A server as the API shows it: secrets masked, and the confirmation the person still owes for a stdio command. */
+function mcpView(m: McpServer): McpServer {
+  const out: McpServer = { ...structuredClone(m), env: maskSecrets(m.env), headers: maskSecrets(m.headers) };
+  if (m.transport === "stdio" && m.enabled && approvedMcp.get(m.id) !== mcpHash(m)) {
+    const line = mcpCommandLine(m);
+    return {
+      ...out, status: "approval_required", approval_required: true, approval_hash: mcpHash(m), command_line: line,
+      error: `Questo server esegue il comando \`${line}\` su questo computer: confermalo per avviarlo`,
+    };
+  }
+  return out;
 }
 
 /** What the demo "hears", one sentence per request. */
@@ -105,7 +138,11 @@ export class MockTransport implements Transport {
   private variantByModel = new Map<string, string>();
   private providerAuth = new Map<string, { configured: boolean; endpoint?: string }>();
 
-  constructor(public readonly notice?: string) {}
+  /** What the demo banner says: a string, or a function when the text must follow the language. */
+  constructor(private readonly noticeSource?: string | (() => string)) {}
+  get notice(): string | undefined {
+    return typeof this.noticeSource === "function" ? this.noticeSource() : this.noticeSource;
+  }
 
   async system() { return structuredClone(system); }
   async kill() {
@@ -146,6 +183,7 @@ export class MockTransport implements Transport {
   async models() { return structuredClone(models); }
   async catalog() { return structuredClone(catalog); }
   async recommend() { return mockRecommend(); }
+  async route(model: string, context?: number, remote?: boolean) { return mockRoute(model, context, remote); }
 
   // ---------------------------------------------------------------- model hub
 
@@ -398,6 +436,8 @@ export class MockTransport implements Transport {
     if (dup) throw new ApiError(400, `il profilo candidato \`${dup}\` è elencato due volte`);
     const missing = (a.candidate_profiles ?? []).find((p) => !profiles.some((x) => x.id === p));
     if (missing) throw new ApiError(400, `il profilo candidato \`${missing}\` non esiste`);
+    const noCollection = (a.knowledge ?? []).find((k) => !kb.collectionExists(k));
+    if (noCollection) throw new ApiError(400, `documenti: la raccolta «${noCollection}» non esiste`);
     const i = agents.findIndex((x) => x.id === a.id);
     if (i >= 0) agents[i] = a; else agents.push(a);
     return a;
@@ -545,6 +585,7 @@ export class MockTransport implements Transport {
     if (i < 0) throw new ApiError(404, `sessione ${id} non trovata`);
     sessions.splice(i, 1);
     this.feedback = this.feedback.filter((f) => f.session_id !== id);
+    for (const k of [...this.attachmentFiles.keys()]) if (k.startsWith(`${id}/`)) this.attachmentFiles.delete(k);
   }
   // 404 for a session that is gone, like the backend (the UI leaves a conversation that was deleted elsewhere).
   async messages(sessionId: string) {
@@ -626,6 +667,37 @@ export class MockTransport implements Transport {
       throw new ApiError(400, e instanceof Error ? e.message : String(e));
     }
   }
+  async channels() { return chan.listChannels(); }
+  async createChannel(body: ChannelCreate) { return chan.createChannel(body); }
+  async updateChannel(id: string, patch: ChannelPatch) { return chan.updateChannel(id, patch); }
+  async deleteChannel(id: string) { chan.deleteChannel(id); }
+  async testChannel(id: string) { return chan.testChannel(id); }
+  async pairChannel(id: string) { return chan.pairChannel(id); }
+  async channelStatus(id: string) { return chan.channelStatus(id); }
+  async mailAccounts() { return chan.listMaskedMailAccounts(); }
+  async setMailAccounts(list: MailAccount[]) { return chan.setMailAccounts(list); }
+  async testMailAccount(a: MailAccount) {
+    if (a.password === SECRET_MASK && !chan.listMailAccounts().some((x) => x.id === a.id && x.password)) return chan.testMailAccount({ ...a, password: "" });
+    return chan.testMailAccount(a.password === SECRET_MASK ? { ...a, password: "demo" } : a);
+  }
+
+  async kbCollections() { return kb.listCollections(); }
+  async createKbCollection(body: KbCollectionCreate) { return kb.createCollection(body); }
+  async updateKbCollection(id: string, patch: KbCollectionPatch) { return kb.updateCollection(id, patch); }
+  async deleteKbCollection(id: string) {
+    kb.deleteCollection(id);
+    // Like the engine: an agent no longer points at a collection that is gone.
+    for (const a of agents) if (a.knowledge?.includes(id)) a.knowledge = a.knowledge.filter((k) => k !== id);
+  }
+  async kbDocuments(collectionId: string) { return kb.listDocuments(collectionId); }
+  async addKbFiles(collectionId: string, files: AttachmentUpload[]) { return kb.addFiles(collectionId, files); }
+  async addKbPath(collectionId: string, path: string) { return kb.addPath(collectionId, path); }
+  async reindexKbCollection(collectionId: string) { return kb.reindex(collectionId); }
+  async deleteKbDocument(id: string) { kb.deleteDocument(id); }
+  async kbSearch(body: KbSearchBody) { return kb.search(body); }
+  async kbStatus() { return kb.status(); }
+  async cancelKbJob(jobId: string) { kb.cancelJob(jobId); }
+
   async memories(query: MemoryQuery = {}) {
     const status = query.status;
     if (status && status !== "all" && !["active", "proposed", "forgotten"].includes(status)) throw new ApiError(400, `stato non valido «${status}»: usa active, proposed, forgotten o all`);
@@ -791,6 +863,20 @@ export class MockTransport implements Transport {
     u.message = "Trascina AI Workspace Local nella cartella Applicazioni, poi riapri l'app.";
     return this.updateStatus();
   }
+  async createBackup(includeSecrets: boolean): Promise<BackupFile> {
+    await sleep(300);
+    const manifest = {
+      format: 1, app: "ai-workspace-local", app_version: this.update.current, schema_version: 6, created_at: new Date().toISOString(), os: "linux", arch: "x86_64",
+      sensitive: includeSecrets, excluded: includeSecrets ? [] : ["chiavi e certificati TLS", "token", "segreti e credenziali", "modelli", "cache e log"], skipped: [], files: [],
+    };
+    return { file_name: "aiw-backup-demo.tar.gz", size: 1024, sensitive: includeSecrets, manifest, data: btoa("demo") };
+  }
+  async inspectBackup(_data: string): Promise<BackupInspect> {
+    throw new ApiError(400, "demo: nessun archivio reale");
+  }
+  async diagnostics(): Promise<Record<string, unknown>> {
+    return { app_version: this.update.current, note: "demo" };
+  }
   private installs = new Map<string, InstallJob>();
   async runtimeInstallPlan(id: string): Promise<InstallPlan> {
     const r = runtimes.find((x) => x.id === id);
@@ -862,17 +948,61 @@ export class MockTransport implements Transport {
   /** Reasoning asked for each run, newest last (tests read it). */
   readonly runThinking: Array<{ runId: string; thinking?: ThinkingMode }> = [];
 
-  async startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode) {
+  /** The bytes of the attachments, kept in memory like the backend keeps them on disk (`session/id`). */
+  private attachmentFiles = new Map<string, AttachmentData>();
+
+  /** The limits of the backend, with its messages (crates/aiw-engine `attachments::prepare`). */
+  private storeAttachments(sessionId: string, uploads: AttachmentUpload[]): Attachment[] {
+    if (uploads.length > MAX_ATTACHMENTS) throw new ApiError(400, `Puoi allegare al massimo ${MAX_ATTACHMENTS} file a un messaggio.`);
+    let total = 0;
+    const sizes = uploads.map((u) => Math.floor((u.data.replace(/=+$/, "").length * 3) / 4));
+    uploads.forEach((u, i) => {
+      if (sizes[i] > MAX_ATTACHMENT_BYTES) throw new ApiError(400, `«${u.name}» è troppo grande: ogni file può pesare al massimo ${MAX_ATTACHMENT_BYTES >> 20} MB.`);
+      total += sizes[i];
+    });
+    if (total > MAX_ATTACHMENTS_TOTAL_BYTES) throw new ApiError(400, `Gli allegati pesano troppo: in totale al massimo ${MAX_ATTACHMENTS_TOTAL_BYTES >> 20} MB per messaggio.`);
+    return uploads.map((u, i) => {
+      const id = nid("att");
+      const name = u.name.split(/[\\/]/).pop()?.trim() || "allegato";
+      const mime = u.mime || "application/octet-stream";
+      this.attachmentFiles.set(`${sessionId}/${id}`, { name, mime, data: u.data });
+      return { id, name, mime, size: sizes[i], kind: guessKind(name, mime) };
+    });
+  }
+
+  async getAttachment(sessionId: string, attachmentId: string): Promise<AttachmentData> {
     if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    const f = this.attachmentFiles.get(`${sessionId}/${attachmentId}`);
+    if (!f) throw new ApiError(404, "allegato non trovato");
+    return structuredClone(f);
+  }
+
+  async startRun(sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode, attachments: AttachmentUpload[] = []) {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    if (!input.trim() && attachments.length === 0) throw new ApiError(400, "messaggio vuoto");
+    const stored = this.storeAttachments(sessionId, attachments);
     const runId = nid("run");
     this.runThinking.push({ runId, thinking });
     const msgs = sessionMessages[sessionId] ?? (sessionMessages[sessionId] = []);
-    msgs.push({ id: nid("m"), role: "user", content: input, name: kind, created_at: now() });
+    msgs.push({ id: nid("m"), role: "user", content: input, name: kind, ...(stored.length > 0 ? { attachments: stored } : {}), created_at: now() });
     const s = sessions.find((x) => x.id === sessionId);
-    if (s && s.title === "Nuova sessione" && !kind) s.title = input.slice(0, 48);
+    if (s && s.title === "Nuova sessione" && !kind) s.title = (input.trim() || stored[0]?.name || "Sessione").slice(0, 48);
     if (kind === "a2ui.action") void this.actionReply(runId, sessionId, input);
+    else if (stored.length > 0) void this.attachmentsReply(runId, sessionId, stored);
     else void this.scriptedRun(runId, sessionId, input);
     return { run_id: runId };
+  }
+
+  /** The demo does not read the files: it only shows that they arrived. */
+  private async attachmentsReply(runId: string, threadId: string, atts: Attachment[]) {
+    await sleep(150);
+    this.emit(runId, { type: "RUN_STARTED", threadId, runId });
+    const list = atts.map((a) => `**${a.name}** (${humanSize(a.size)})`).join(", ");
+    const m = nid("m");
+    this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m, role: "assistant" });
+    await this.streamText(runId, m, `Ho ricevuto ${atts.length === 1 ? "l'allegato" : `${atts.length} allegati`}: ${list}. In modalità demo non li leggo davvero: con un modello collegato li potrei guardare e riassumere.`, "text");
+    this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m });
+    this.emit(runId, { type: "RUN_FINISHED", threadId, runId });
   }
 
   private async actionReply(runId: string, threadId: string, input: string) {
@@ -1261,7 +1391,10 @@ export class MockTransport implements Transport {
       const on = eff[c.switch] === true;
       return { name: c.name, description: c.description, source: "builtin", risk: "read", enabled: true, available: on, unavailable_reason: on ? undefined : "Spento: lo accendi in Impostazioni, «Calendario e posta».", parameters: {} };
     });
-    return structuredClone([...tools, ...connectors]);
+    // The search tool is listed always and available unless the provider setting is `off`.
+    const searchOn = eff["search.provider"] !== "off";
+    const all = tools.map((t): ToolInfo => (t.name === "web_search" ? { ...t, available: searchOn, unavailable_reason: searchOn ? undefined : "La ricerca web è spenta: la accendi in Impostazioni, «Ricerca web»." } : t));
+    return structuredClone([...all, ...connectors]);
   }
   async setToolEnabled(name: string, enabled: boolean) {
     if ((INTERNAL_TOOL_NAMES as readonly string[]).includes(name)) {
@@ -1272,7 +1405,19 @@ export class MockTransport implements Transport {
     t.enabled = enabled;
   }
   async mcpServers() {
-    return structuredClone(mcp).map((m) => ({ ...m, env: maskSecrets(m.env), headers: maskSecrets(m.headers) }));
+    return mcp.map(mcpView);
+  }
+  async approveMcpServer(id: string, hash: string) {
+    const m = mcp.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `server MCP ${id} non trovato`);
+    if (m.transport !== "stdio") throw new ApiError(400, "solo i server MCP stdio eseguono un comando da confermare");
+    if (mcpHash(m) !== hash) throw new ApiError(409, "il comando del server è cambiato: controllalo e conferma di nuovo");
+    approvedMcp.set(m.id, hash);
+    if (m.enabled) {
+      m.status = "connected";
+      m.error = undefined;
+    }
+    return mcpView(m);
   }
   async saveMcpServer(s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }) {
     validateMcp(s);
@@ -1283,10 +1428,60 @@ export class MockTransport implements Transport {
     const srv = {
       id: prev?.id ?? nid("mcp"), status: prev?.status ?? "disconnected", tools: prev?.tools ?? [], error: prev?.error, enabled: true, ...s, name: s.name.trim().replace(/ /g, "_"),
       env: restoreSecrets(s.env, prev?.env), headers: restoreSecrets(s.headers, prev?.headers),
+      sandbox: s.transport === "stdio" ? (s.sandbox ?? prev?.sandbox ?? "off") : "off", sandbox_network: s.sandbox_network ?? prev?.sandbox_network ?? true,
     } as McpServer;
+    // The client cannot approve anything: only `approveMcpServer` does.
+    delete srv.approval_required;
+    delete srv.approval_hash;
+    delete srv.command_line;
     if (i >= 0) mcp[i] = srv;
     else mcp.push(srv);
-    return { ...structuredClone(srv), env: maskSecrets(srv.env), headers: maskSecrets(srv.headers) };
+    return mcpView(srv);
+  }
+  async reconnectMcpServer(id: string) {
+    const m = mcp.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `server MCP ${id} non trovato`);
+    // The demo has no servers to reach: a server that gave up is "connected" again, one that needs the sign-in stays so.
+    if (m.enabled && m.status === "unreachable") {
+      m.status = "connected";
+      m.error = undefined;
+    }
+    return mcpView(m);
+  }
+  async mcpOAuthStart(id: string) {
+    const m = mcp.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `server MCP ${id} non trovato`);
+    if (m.transport !== "http") throw new ApiError(400, "l'accesso OAuth serve solo ai server MCP http");
+    // Demo: signing in completes on the spot, without a browser.
+    m.signed_in = true;
+    m.status = "connected";
+    m.error = undefined;
+    return { authorization_url: "" };
+  }
+  async mcpOAuthSignout(id: string) {
+    const m = mcp.find((x) => x.id === id);
+    if (!m) throw new ApiError(404, `server MCP ${id} non trovato`);
+    m.signed_in = false;
+  }
+  async mcpPrompts(): Promise<McpPromptInfo[]> {
+    return [
+      { server_id: "mcp_gh", server: "github", name: "rivedi_pr", description: "Prepara la revisione di una pull request", arguments: [
+        { name: "numero", description: "Numero della pull request", required: true }, { name: "attenzione", description: "Cosa guardare con più cura", required: false },
+      ] },
+    ];
+  }
+  async mcpPromptGet(serverId: string, name: string, args: Record<string, string>): Promise<McpPromptResult> {
+    if (!mcp.some((m) => m.id === serverId)) throw new ApiError(404, `server MCP ${serverId} non trovato`);
+    if (name !== "rivedi_pr") throw new ApiError(404, "prompt non trovato");
+    if (!args.numero) throw new ApiError(400, "manca l'argomento numero");
+    return { description: "Revisione di una pull request", text: `Rivedi la pull request #${args.numero}.${args.attenzione ? ` Guarda con più cura: ${args.attenzione}.` : ""}` };
+  }
+  /** Demo: nobody asks questions (the live engine does, while an MCP tool is running). */
+  async mcpElicitations(): Promise<McpElicitation[]> {
+    return [];
+  }
+  async respondMcpElicitation(_id: string, _answer: McpElicitationAnswer) {
+    throw new ApiError(404, "richiesta non trovata (forse già gestita)");
   }
   async removeMcpServer(id: string) {
     const i = mcp.findIndex((m) => m.id === id);
@@ -1294,6 +1489,7 @@ export class MockTransport implements Transport {
     mcp.splice(i, 1);
   }
 
+  async analyzeCommand(command: string) { return analyzeCommand(command); }
   async policy() { return { rules: structuredClone(policyRules) }; }
   async setPolicy(rules: PolicyRule[]) {
     policyRules.splice(0, policyRules.length, ...structuredClone(rules));
@@ -1318,9 +1514,12 @@ export class MockTransport implements Transport {
       peers: structuredClone(system.peers),
     };
   }
-  async pairPeer(address: string, code: string) {
+  async pairPeer(address: string, code: string, fingerprint?: string) {
     await sleep(500);
     if (!/^\d{6}$/.test(code)) throw new Error("Il codice è di 6 cifre");
+    if (address.startsWith("https://") && !/^[0-9a-f]{2}([: -]?[0-9a-f]{2}){31}$/i.test((fingerprint ?? "").trim())) {
+      throw new Error("Il dispositivo usa HTTPS: serve l'impronta del suo certificato");
+    }
     const peer = { id: nid("dev"), name: address.includes(".31") ? "Mini PC del soggiorno" : "Nuovo dispositivo", os: "linux" as const, address, status: "online" as const, shared_runtimes: ["llama-server"] };
     system.peers.push(peer);
     return peer;
@@ -1333,13 +1532,69 @@ export class MockTransport implements Transport {
     throw new Error("Il QR richiede il backend: avvia aiw serve --lan");
   }
 
+  private tokenRows: ApiTokenInfo[] = [
+    { id: "tok_owner", name: "Questo computer (app e riga di comando)", kind: "owner", prefix: "aiw_k3Jd9xQ…", scopes: ["full"], created_at: "2026-05-02T09:00:00Z", last_used_at: now() },
+    { id: "tok_tel", name: "Telefono di Anna", kind: "device", device_id: "tel-anna", prefix: "aiw_Zp81LmT…", scopes: ["device"], created_at: "2026-06-01T18:20:00Z", last_used_at: "2026-06-10T08:12:00Z", last_used_ip: "192.168.1.52" },
+  ];
+  private tlsMode: TlsStatus["mode"] = "off";
+  async apiTokens(): Promise<ApiTokenInfo[]> {
+    return structuredClone(this.tokenRows);
+  }
+  private mintToken(name: string, kind: "gateway" | "device", days: number | undefined, scopes: string[], deviceId?: string): ApiTokenCreated {
+    const secret = `aiw_${Array.from({ length: 43 }, () => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"[Math.floor(Math.random() * 64)]).join("")}`;
+    const info: ApiTokenInfo = {
+      id: nid("tok"), name, kind, device_id: deviceId, prefix: `${secret.slice(0, 12)}…`, scopes, created_at: now(),
+      expires_at: days ? new Date(Date.now() + days * 86_400_000).toISOString() : undefined,
+    };
+    this.tokenRows.unshift(info);
+    return { ...info, token: secret };
+  }
+  async createApiToken(req: ApiTokenCreate): Promise<ApiTokenCreated> {
+    if (!req.name.trim()) throw new Error("Dai un nome al token (per esempio l'app che lo userà)");
+    const kind = req.kind ?? "gateway";
+    const created = this.mintToken(req.name.trim(), kind, req.expires_in_days, kind === "device" ? ["device"] : ["gateway", ...(req.scopes ?? [])]);
+    audit.unshift({ id: nid("a"), ts: now(), actor: "system", action: "token_create", detail: `creato il token «${created.name}» (${kind})` });
+    return created;
+  }
+  async revokeApiToken(id: string) {
+    const t = this.tokenRows.find((x) => x.id === id);
+    if (!t) throw new ApiError(404, `token ${id} non trovato`);
+    if (t.kind === "owner") throw new ApiError(403, "il token di questo computer non si revoca dall'API");
+    t.revoked_at ??= now();
+    audit.unshift({ id: nid("a"), ts: now(), actor: "system", action: "token_revoke", detail: `revocato il token «${t.name}»` });
+  }
+  async rotateApiToken(id: string): Promise<ApiTokenCreated> {
+    const t = this.tokenRows.find((x) => x.id === id);
+    if (!t) throw new ApiError(404, `token ${id} non trovato`);
+    if (t.kind === "owner") throw new ApiError(403, "il token di questo computer non si ruota dall'API");
+    if (t.revoked_at) throw new ApiError(409, "il token è già stato revocato: creane uno nuovo");
+    t.revoked_at = now();
+    return this.mintToken(t.name, t.kind as "gateway" | "device", undefined, t.scopes, t.device_id);
+  }
+  async tlsStatus(): Promise<TlsStatus> {
+    const on = this.tlsMode !== "off";
+    return {
+      mode: this.tlsMode, active: on, lan: true, port: 7777, names: on ? ["studio-pc", "localhost", "192.168.1.10"] : [],
+      fingerprint: on ? "3A:9F:C2:11:7B:E4:05:6D:88:AA:10:F3:42:9C:7E:21:B0:5D:E9:34:6A:C7:18:FF:0D:92:41:B6:73:2E:AD:60" : undefined,
+      fingerprint_of: on ? "ca" : undefined, expires_at: on ? "2027-06-20T00:00:00Z" : undefined, ca_available: this.tlsMode === "self_signed", warning: !on,
+    };
+  }
+  async tlsCa(): Promise<{ pem: string }> {
+    return { pem: "-----BEGIN CERTIFICATE-----\n(demo)\n-----END CERTIFICATE-----\n" };
+  }
+
   async voice(): Promise<VoiceStatus> {
     const eff = effective();
     const lang = String(eff["voice.language"] ?? "auto");
     return {
       available: true, runtime: "whisper-server", model: "ggml-large-v3-turbo-q5_0", backend: "whisper.cpp server · ggml-large-v3-turbo-q5_0",
-      detail: null, language: lang === "auto" ? "it" : lang, tts_voice: String(eff["voice.tts_voice"] ?? ""), models: ["ggml-large-v3-turbo-q5_0"],
+      detail: null, language: lang === "auto" ? "it" : lang, tts_voice: String(eff["voice.tts_voice"] ?? ""), models: ["ggml-large-v3-turbo-q5_0"], tts: mockTtsStatus(eff),
     };
+  }
+  /** Demo: a short tone per request (a real engine speaks the text). */
+  async speak(req: SpeakRequest): Promise<Speech> {
+    await sleep(120);
+    return mockSpeak(req, effective());
   }
   /** Demo: a plausible sentence per request (the audio itself stays in the browser). */
   async transcribe(wav: Blob): Promise<Transcript> {
@@ -1349,9 +1604,15 @@ export class MockTransport implements Transport {
     return { text, language: "it", backend: "whisper.cpp server · ggml-large-v3-turbo-q5_0", duration_ms: Math.round(Math.max(0, wav.size - 44) / 32), elapsed_ms: 640 };
   }
 
-  async config() { return { layers: structuredClone(configLayers), effective: effective(), schema: configSchema }; }
+  async config() {
+    // Secrets never leave as they are: the API shows the mask.
+    const layers = structuredClone(configLayers).map((l) => ({ ...l, values: maskConfigSecrets(l.values ?? {}) }));
+    return { layers, effective: maskConfigSecrets(effective()), schema: configSchema };
+  }
   async setConfig(layer: "global" | "device" | "workspace", key: string, value: unknown) {
     const l = configLayers.find((x) => x.name === layer)!;
+    // The mask coming back means "keep what is stored".
+    if (configSchema.properties[key]?.secret && value === SECRET_MASK) return this.config();
     // `null` removes the key from the layer, as the real config does.
     if (value === null) delete l.values[key];
     else l.values[key] = value;

@@ -5,15 +5,16 @@ import { REMOTE_PREFIX, TEAM_PREFIX, type AgentProfile, type RemoteAgent, type T
 import { slugify as slug, uniqueSlug } from "../../../shared/lib/slug";
 import { cleanBudget } from "../../agents/model/agents";
 
+import { t as tr, tFields } from "../../../shared/i18n";
 /** URL segment of a team that does not exist yet (`#/teams/new`); never used as a real id. */
 export const NEW_TEAM = "new";
 /** Most members a team can have. */
 export const MAX_MEMBERS = 8;
 
 export const STRATEGIES: { id: TeamStrategy; label: string; hint: string }[] = [
-  { id: "supervisor", label: "Supervisore", hint: "Un agente scompone il lavoro e lo delega ai membri; i lavori indipendenti girano in parallelo." },
-  { id: "parallel", label: "Parallelo", hint: "Tutti i membri lavorano insieme sulla stessa richiesta; un aggregatore (facoltativo) unisce i risultati." },
-  { id: "pipeline", label: "Catena", hint: "I membri lavorano uno dopo l'altro: ciascuno riceve la richiesta e il risultato del precedente." },
+  tFields({ id: "supervisor" as const }, { label: "teams.strategy_supervisor", hint: "teams.strategy_supervisor_hint" }),
+  tFields({ id: "parallel" as const }, { label: "teams.strategy_parallel", hint: "teams.strategy_parallel_hint" }),
+  tFields({ id: "pipeline" as const }, { label: "teams.strategy_pipeline", hint: "teams.strategy_pipeline_hint" }),
 ];
 
 export const strategyInfo = (id: string) => STRATEGIES.find((s) => s.id === id);
@@ -35,7 +36,7 @@ export function blankTeam(): TeamDef {
 }
 
 const copyName = (name: string, existing: readonly string[]): string => {
-  const base = `Copia di ${name}`;
+  const base = tr("teams.copy_of", { name });
   const taken = new Set(existing.map((n) => n.toLowerCase()));
   if (!taken.has(base.toLowerCase())) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base} (${n})`.toLowerCase())) return `${base} (${n})`;
@@ -84,32 +85,32 @@ export interface TeamContext {
 export function validateTeam(t: TeamDef, ctx: TeamContext): TeamIssue[] {
   const issues: TeamIssue[] = [];
   const name = t.name.trim();
-  if (!name) issues.push({ field: "name", level: "error", message: "Dai un nome al team." });
+  if (!name) issues.push({ field: "name", level: "error", message: tr("teams.dai_un_nome_al_team") });
   else if (ctx.otherNames.some((n) => n.trim().toLowerCase() === name.toLowerCase())) {
-    issues.push({ field: "name", level: "warn", message: "Esiste già un altro team con questo nome." });
+    issues.push({ field: "name", level: "warn", message: tr("teams.esiste_gia_un_altro_team") });
   }
   const loaded = ctx.agentsLoaded ?? ctx.agentIds.length > 0;
   const missing = (id: string) => loaded && !isRemoteAgent(id) && !ctx.agentIds.includes(id);
-  if (t.members.length === 0) issues.push({ field: "members", level: "error", message: "Aggiungi almeno un membro." });
-  if (t.members.length > MAX_MEMBERS) issues.push({ field: "members", level: "error", message: `Un team ha al massimo ${MAX_MEMBERS} membri.` });
+  if (t.members.length === 0) issues.push({ field: "members", level: "error", message: tr("teams.aggiungi_almeno_un_membro") });
+  if (t.members.length > MAX_MEMBERS) issues.push({ field: "members", level: "error", message: tr("teams.un_team_ha_al_massimo", { max: MAX_MEMBERS }) });
   const seen = new Set<string>();
   for (const m of t.members) {
-    if (!m.agent) issues.push({ field: "members", level: "error", message: "Scegli l'agente di ogni membro." });
-    else if (seen.has(m.agent)) issues.push({ field: "members", level: "error", message: `L'agente «${m.agent}» compare più volte.` });
-    else if (missing(m.agent)) issues.push({ field: "members", level: "error", message: `L'agente «${m.agent}» non esiste più: toglilo o sostituiscilo.` });
+    if (!m.agent) issues.push({ field: "members", level: "error", message: tr("teams.scegli_l_agente_di_ogni") });
+    else if (seen.has(m.agent)) issues.push({ field: "members", level: "error", message: tr("teams.l_agente_compare_piu_volte", { agent: m.agent }) });
+    else if (missing(m.agent)) issues.push({ field: "members", level: "error", message: tr("teams.l_agente_non_esiste_piu", { agent: m.agent }) });
     seen.add(m.agent);
   }
   if (t.strategy === "supervisor") {
-    if (!t.supervisor) issues.push({ field: "supervisor", level: "error", message: "Scegli il supervisore." });
-    else if (missing(t.supervisor)) issues.push({ field: "supervisor", level: "error", message: `Il supervisore «${t.supervisor}» non esiste più.` });
-    else if (seen.has(t.supervisor)) issues.push({ field: "supervisor", level: "error", message: "Il supervisore non può essere anche un membro." });
+    if (!t.supervisor) issues.push({ field: "supervisor", level: "error", message: tr("teams.scegli_il_supervisore") });
+    else if (missing(t.supervisor)) issues.push({ field: "supervisor", level: "error", message: tr("teams.il_supervisore_non_esiste_piu", { supervisor: t.supervisor }) });
+    else if (seen.has(t.supervisor)) issues.push({ field: "supervisor", level: "error", message: tr("teams.il_supervisore_non_puo_essere") });
   }
   if (t.strategy === "parallel" && t.aggregator && missing(t.aggregator)) {
-    issues.push({ field: "aggregator", level: "error", message: `L'aggregatore «${t.aggregator}» non esiste più.` });
+    issues.push({ field: "aggregator", level: "error", message: tr("teams.l_aggregatore_non_esiste_piu", { aggregator: t.aggregator }) });
   }
   for (const v of [t.budget?.max_tokens, t.budget?.max_turns, t.budget?.max_seconds]) {
     if (v !== undefined && Number.isFinite(v) && (!Number.isInteger(v) || v < 1)) {
-      issues.push({ field: "budget", level: "error", message: "I limiti del budget sono numeri interi da 1 in su: lascia vuoto il campo per nessun limite." });
+      issues.push({ field: "budget", level: "error", message: tr("teams.i_limiti_del_budget_sono") });
       break;
     }
   }

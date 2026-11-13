@@ -6,6 +6,7 @@ import {
 } from "../model/config";
 import { SettingControl } from "./SettingControl";
 
+import { t, t as tr } from "../../../shared/i18n";
 /** One setting: what it is, which layer wins, and the editor for the layer you are writing to. */
 export function SettingRow({ view, entry, layer, onCommit }: {
   view: ConfigView;
@@ -31,12 +32,12 @@ export function SettingRow({ view, entry, layer, onCommit }: {
         <code className="set-key">{key}</code>
         {hint && <p className="set-hint">{hint}</p>}
         <div className="set-layers">
-          <span className="faint text-xs">Strato vincente</span>
-          <Chip hot={winner !== "defaults"} title={winner === "defaults" ? "Nessuno strato definisce questo valore: vale il default" : `Il valore effettivo viene dallo strato ${LAYER_LABEL[winner]}`}>
+          <span className="faint text-xs">{t("settings.strato_vincente")}</span>
+          <Chip hot={winner !== "defaults"} title={winner === "defaults" ? t("settings.nessuno_strato_definisce_questo_valore") : t("settings.il_valore_effettivo_viene_dallo", { p: LAYER_LABEL[winner] })}>
             {LAYER_LABEL[winner]}
           </Chip>
-          {others.length > 0 && <span className="faint text-xs">anche in</span>}
-          {others.map((l) => <Chip key={l} title={`Lo strato ${LAYER_LABEL[l]} lo definisce ma è sovrascritto`}>{LAYER_LABEL[l]}</Chip>)}
+          {others.length > 0 && <span className="faint text-xs">{t("settings.anche_in")}</span>}
+          {others.map((l) => <Chip key={l} title={t("settings.lo_strato_lo_definisce_ma", { p: LAYER_LABEL[l] })}>{LAYER_LABEL[l]}</Chip>)}
         </div>
       </div>
       <div className="set-edit">
@@ -46,20 +47,19 @@ export function SettingRow({ view, entry, layer, onCommit }: {
           onCommit={(v) => onCommit(key, shortTitle(title), v)} optionLabel={(v) => optionLabel(key, v)}
         />
         <div className="set-meta">
-          <span className="faint text-xs">{own ? `Valore nello strato ${LAYER_LABEL[layer]}` : `Eredita da ${LAYER_LABEL[winner]}`}</span>
+          <span className="faint text-xs">{own ? t("settings.valore_nello_strato", { p: LAYER_LABEL[layer] }) : t("settings.eredita_da", { p: LAYER_LABEL[winner] })}</span>
           <Button
-            size="sm" variant="ghost" icon="refresh" disabled={!own} aria-label={`Ripristina ${title} nello strato ${LAYER_LABEL[layer]}`}
-            title={own ? `Toglie il valore dallo strato ${LAYER_LABEL[layer]}` : "Questo strato non definisce un valore"} onClick={() => onCommit(key, shortTitle(title), null)}
+            size="sm" variant="ghost" icon="refresh" disabled={!own} aria-label={tr("settings.ripristina_nello_strato", { title, layer: LAYER_LABEL[layer] })}
+            title={own ? tr("settings.toglie_il_valore_dallo_strato", { layer: LAYER_LABEL[layer] }) : tr("settings.questo_strato_non_definisce_un")} onClick={() => onCommit(key, shortTitle(title), null)}
           >
-            Ripristina
-          </Button>
+            {t("settings.ripristina")}</Button>
         </div>
         {hiddenBy && (
           <p className="set-warn text-xs">
             <Icon name="alert" size={13} />
             <span>
-              {own ? `Lo strato «${LAYER_LABEL[hiddenBy]}» lo sovrascrive` : `Lo strato «${LAYER_LABEL[hiddenBy]}» definisce già un valore: scrivendo qui non cambia nulla`}
-              {": il valore effettivo resta "}<b>{formatValue(effectiveValue(view, key, field))}</b>.
+              {own ? t("settings.lo_strato_lo_sovrascrive", { p: LAYER_LABEL[hiddenBy] }) : t("settings.lo_strato_definisce_gia_un", { p: LAYER_LABEL[hiddenBy] })}
+              {t("settings.il_valore_effettivo_resta")}<b>{formatValue(effectiveValue(view, key, field))}</b>.
             </span>
           </p>
         )}

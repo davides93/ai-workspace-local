@@ -1,13 +1,14 @@
 import type { McpServer, ToolInfo, ToolRisk } from "../../../shared/api/types";
 import type { PillTone } from "../../../shared/ui";
 
+import { t as tr, t } from "../../../shared/i18n";
 /** Risk of a tool as label and pill tone; the risk decides when the agent has to ask. */
 export const TOOL_RISK: Record<ToolRisk, { label: string; tone: PillTone; hint: string }> = {
-  read: { label: "lettura", tone: "ok", hint: "Legge, non modifica nulla" },
-  write: { label: "scrittura", tone: "warn", hint: "Modifica file nel workspace" },
-  exec: { label: "esecuzione", tone: "crit", hint: "Esegue comandi" },
-  network: { label: "rete", tone: "info", hint: "Accede alla rete" },
-  computer: { label: "computer-use", tone: "crit", hint: "Agisce su browser o desktop come farebbe una persona" },
+  read: { get label() { return t("capabilities.lettura"); }, tone: "ok", get hint() { return t("capabilities.legge_non_modifica_nulla"); } },
+  write: { get label() { return t("capabilities.scrittura"); }, tone: "warn", get hint() { return t("capabilities.modifica_file_nel_workspace"); } },
+  exec: { get label() { return t("capabilities.esecuzione"); }, tone: "crit", get hint() { return t("capabilities.esegue_comandi"); } },
+  network: { get label() { return t("capabilities.rete"); }, tone: "info", get hint() { return t("capabilities.accede_alla_rete"); } },
+  computer: { get label() { return t("capabilities.computer_use_2"); }, tone: "crit", get hint() { return t("capabilities.agisce_su_browser_o_desktop"); } },
 };
 
 export const RISK_ORDER: ToolRisk[] = ["read", "write", "network", "exec", "computer"];
@@ -42,13 +43,13 @@ interface CategoryDef {
 }
 
 const CATEGORIES: CategoryDef[] = [
-  { id: "files", title: "File e cartelle", hint: "Leggere, cercare e modificare i file del workspace" },
-  { id: "shell", title: "Shell", hint: "Comandi nella sandbox" },
-  { id: "web", title: "Web", hint: "Pagine scaricate e convertite in testo" },
-  { id: "browser", title: "Browser controllato", hint: "Chrome o Edge dedicato, via CDP" },
-  { id: "computer", title: "Computer-use", hint: "Schermo, mouse e tastiera" },
-  { id: "internal", title: "Interni", hint: "Del ciclo dell'agente: piano, subagenti, skill, interfacce e codice. Sempre attivi, non si possono spegnere." },
-  { id: "other", title: "Altri tool", hint: "" },
+  { id: "files", get title() { return t("capabilities.file_e_cartelle"); }, get hint() { return t("capabilities.leggere_cercare_e_modificare_i"); } },
+  { id: "shell", get title() { return t("capabilities.shell"); }, get hint() { return t("capabilities.comandi_nella_sandbox"); } },
+  { id: "web", get title() { return t("capabilities.web"); }, get hint() { return t("capabilities.pagine_scaricate_e_convertite_in"); } },
+  { id: "browser", get title() { return t("capabilities.browser_controllato"); }, get hint() { return t("capabilities.chrome_o_edge_dedicato_via"); } },
+  { id: "computer", get title() { return t("capabilities.computer_use"); }, get hint() { return t("capabilities.schermo_mouse_e_tastiera"); } },
+  { id: "internal", get title() { return t("capabilities.interni"); }, get hint() { return t("capabilities.del_ciclo_dell_agente_piano"); } },
+  { id: "other", get title() { return t("capabilities.altri_tool"); }, hint: "" },
 ];
 
 /** Id of the group a tool belongs to: a built-in category, or `mcp:<server>`. */
@@ -59,7 +60,7 @@ export function toolCategory(t: ToolInfo): string {
   if (isComputerTool(t)) return "computer";
   if (FILE_TOOLS.has(t.name)) return "files";
   if (t.name === "shell") return "shell";
-  if (t.name === "web_fetch") return "web";
+  if (t.name === "web_fetch" || t.name === "web_search") return "web";
   return "other";
 }
 
@@ -96,7 +97,7 @@ export function groupTools(tools: ToolInfo[], opts: { query?: string; risk?: Ris
     if (list) groups.push({ id: c.id, title: c.title, hint: c.hint || undefined, tools: list });
   }
   const servers = [...byId.keys()].filter((id) => id.startsWith("mcp:")).sort((a, b) => a.localeCompare(b));
-  for (const id of servers) groups.push({ id, title: `MCP · ${id.slice(4)}`, hint: "Server MCP", tools: byId.get(id)! });
+  for (const id of servers) groups.push({ id, title: tr("capabilities.mcp", { server: id.slice(4) }), hint: tr("capabilities.server_mcp"), tools: byId.get(id)! });
   return groups;
 }
 
@@ -149,6 +150,6 @@ export function capabilityStatus(tools: ToolInfo[]): { status: CapabilityStatus;
   if (usable.length === 0) return { status: "unavailable", reason };
   if (usable.every((t) => !t.enabled)) return { status: "off" };
   if (usable.length < tools.length) return { status: "partial", reason };
-  if (usable.some((t) => !t.enabled)) return { status: "partial", reason: "Alcuni tool sono disattivati" };
+  if (usable.some((t) => !t.enabled)) return { status: "partial", reason: tr("capabilities.alcuni_tool_sono_disattivati") };
   return { status: "ready" };
 }

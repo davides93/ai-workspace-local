@@ -136,6 +136,16 @@ impl RuntimeRegistry {
         &self.os
     }
 
+    /// The executable of a sidecar runtime that is not a server (Piper): the `binary` setting, the
+    /// PATH, then the folders of the app and of the managed environment.
+    pub fn binary_for(&self, id: &str) -> Option<PathBuf> {
+        let m = self.manifest(id).ok()?;
+        if !self.supports(&m) {
+            return None;
+        }
+        find_binary(&m, &self.settings(id).unwrap_or_default(), &self.search_dirs())
+    }
+
     /// Overrides the CPU architecture (defaults to the one this binary was built for); the
     /// engine passes the one reported by the device profile.
     pub fn set_arch(&self, arch: &str) {
@@ -409,6 +419,7 @@ impl RuntimeRegistry {
             install_auto: m.installer_for(&self.os).is_some(),
             homepage: m.homepage.clone(),
             adapter_format: m.adapters.as_ref().map(|a| a.format.clone()),
+            route_priority: m.route_priority,
         })
     }
 

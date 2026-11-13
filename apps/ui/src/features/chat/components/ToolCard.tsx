@@ -6,6 +6,7 @@ import type { ToolItem } from "../model/items";
 import { resultPreview, STATUS_INFO, toolCategory, toolDuration, toolTitle } from "../model/tools";
 import { ImageThumb } from "./ImageThumb";
 
+import { t } from "../../../shared/i18n";
 const CLAMP_LINES = 16;
 const CLAMP_CHARS = 1600;
 
@@ -24,7 +25,7 @@ function ToolSection({ label, text, tone }: { label: string; text: string; tone?
       <pre tabIndex={0} className={cx(tone === "crit" && "is-crit")}><code>{shown}{long && !all ? "\n…" : ""}</code></pre>
       {long && (
         <button type="button" className="ws-section-more" onClick={() => setAll((v) => !v)}>
-          {all ? "Mostra meno" : `Mostra tutto (${lines.length} righe)`}
+          {all ? t("chat.mostra_meno") : t("chat.mostra_tutto_righe", { length: lines.length })}
         </button>
       )}
     </div>
@@ -80,17 +81,17 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolItem }) {
       {tool.images && tool.images.length > 0 && (
         <div className="ws-tool-images">
           {tool.images.map((img, i) => (
-            <ImageThumb key={i} image={img} label={`Schermata prodotta da ${title}${tool.images!.length > 1 ? ` (${i + 1} di ${tool.images!.length})` : ""}`} />
+            <ImageThumb key={i} image={img} label={t("chat.schermata_prodotta_da", { title, p: tool.images!.length > 1 ? ` (${i + 1} di ${tool.images!.length})` : "" })} />
           ))}
         </div>
       )}
       {open && (
         <div id={bodyId} className="ws-tool-body">
-          {tool.args.trim() !== "" && tool.args.trim() !== "{}" && <ToolSection label="Argomenti" text={prettyJson(tool.args)} />}
+          {tool.args.trim() !== "" && tool.args.trim() !== "{}" && <ToolSection label={t("chat.argomenti")} text={prettyJson(tool.args)} />}
           {tool.result !== undefined ? (
-            <ToolSection label="Risultato" text={tool.result} tone={bad ? "crit" : undefined} />
+            <ToolSection label={t("chat.risultato")} text={tool.result} tone={bad ? "crit" : undefined} />
           ) : (
-            <p className="ws-tool-none">{tool.status === "running" ? "In attesa del risultato…" : "Nessun risultato: l'esecuzione si è interrotta prima."}</p>
+            <p className="ws-tool-none">{tool.status === "running" ? t("chat.in_attesa_del_risultato") : t("chat.nessun_risultato_l_esecuzione_si")}</p>
           )}
         </div>
       )}

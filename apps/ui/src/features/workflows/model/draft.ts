@@ -8,6 +8,7 @@ import { parseCron } from "./cron";
 import { approvalTimeoutProblem, cleanOptions, FOREACH_MAX_PARALLEL, hasOptions, inlineJson, innerIds, optionsOf, optionsProblem, parseInline, isKnownTail, placeholders, STEP_ID, stepRef, stepTail, stepTexts, type StepDraft } from "./steps";
 import { joinInterval, MIN_INTERVAL_S, splitInterval, type IntervalUnit } from "./triggers";
 
+import { t as tr } from "../../../shared/i18n";
 export type TriggerDraft =
   | { kind: "manual" }
   | { kind: "interval"; amount: number; unit: IntervalUnit }
@@ -154,7 +155,7 @@ export function blankWorkflow(id: string, d: { agent?: string } = {}): PlainDraf
 
 /** Another workflow's draft as the starting point of a copy. */
 export function copyOf(src: PlainDraft, id: string, existingNames: readonly string[]): PlainDraft {
-  const base = `Copia di ${src.name}`;
+  const base = tr("workflows.copy_of", { name: src.name });
   const taken = new Set(existingNames.map((n) => n.toLowerCase()));
   let name = base;
   for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base} (${n})`;
@@ -192,21 +193,21 @@ export function parseWorkflowJson(text: string, id: string): { ok: true; draft: 
   try {
     v = JSON.parse(text);
   } catch (e) {
-    return { ok: false, error: `JSON non valido: ${e instanceof Error ? e.message : "errore di sintassi"}` };
+    return { ok: false, error: tr("workflows.json_invalid", { error: e instanceof Error ? e.message : tr("workflows.syntax_error") }) };
   }
-  if (!isObj(v)) return { ok: false, error: "La definizione deve essere un oggetto JSON." };
-  if (v.id !== id) return { ok: false, error: `L'id del workflow non si cambia da qui: deve restare «${id}».` };
-  if (!isStr(v.name)) return { ok: false, error: "Manca il nome («name»)." };
+  if (!isObj(v)) return { ok: false, error: tr("workflows.json_not_object") };
+  if (v.id !== id) return { ok: false, error: tr("workflows.json_id_fixed", { id }) };
+  if (!isStr(v.name)) return { ok: false, error: tr("workflows.json_name_missing") };
   const t = v.trigger;
-  if (!isObj(t) || !isStr(t.kind) || !TRIGGERS.includes(t.kind)) return { ok: false, error: `Il trigger deve avere «kind» tra: ${TRIGGERS.join(", ")}.` };
-  if (t.kind === "interval" && typeof t.seconds !== "number") return { ok: false, error: "Il trigger «interval» richiede «seconds» (numero)." };
-  if (t.kind === "cron" && !isStr(t.expr)) return { ok: false, error: "Il trigger «cron» richiede «expr» (testo)." };
-  if (t.kind === "file" && !isStr(t.path)) return { ok: false, error: "Il trigger «file» richiede «path» (testo)." };
-  if (!Array.isArray(v.steps)) return { ok: false, error: "«steps» deve essere un elenco." };
+  if (!isObj(t) || !isStr(t.kind) || !TRIGGERS.includes(t.kind)) return { ok: false, error: tr("workflows.json_trigger_kind", { kinds: TRIGGERS.join(", ") }) };
+  if (t.kind === "interval" && typeof t.seconds !== "number") return { ok: false, error: tr("workflows.json_trigger_interval") };
+  if (t.kind === "cron" && !isStr(t.expr)) return { ok: false, error: tr("workflows.json_trigger_cron") };
+  if (t.kind === "file" && !isStr(t.path)) return { ok: false, error: tr("workflows.json_trigger_file") };
+  if (!Array.isArray(v.steps)) return { ok: false, error: tr("workflows.json_steps_list") };
   for (const [i, s] of v.steps.entries()) {
-    const at = `Passo ${i + 1}`;
-    if (!isObj(s) || !isStr(s.id) || !isStr(s.kind) || !KINDS.includes(s.kind)) return { ok: false, error: `${at}: servono «id» e «kind» tra: ${KINDS.join(", ")}.` };
-    const need = (k: string, ok: boolean) => (ok ? null : `${at} (${s.kind}): campo «${k}» mancante o non valido.`);
+    const at = tr("workflows.json_step_n", { number: i + 1 });
+    if (!isObj(s) || !isStr(s.id) || !isStr(s.kind) || !KINDS.includes(s.kind)) return { ok: false, error: tr("workflows.json_step_need", { at, kinds: KINDS.join(", ") }) };
+    const need = (k: string, ok: boolean) => (ok ? null : tr("workflows.json_step_field", { at, kind: String(s.kind), field: k }));
     const err =
       s.kind === "tool" ? need("tool", isStr(s.tool)) ?? need("args", s.args === undefined || isObj(s.args))
       : s.kind === "agent" ? need("agent", isStr(s.agent)) ?? need("prompt", isStr(s.prompt))
@@ -218,7 +219,7 @@ export function parseWorkflowJson(text: string, id: string): { ok: true; draft: 
       : need("if", isStr(s.if)) ?? need("then", isStrList(s.then)) ?? need("else", s.else === undefined || isStrList(s.else));
     if (err) return { ok: false, error: err };
   }
-  if (v.inputs !== undefined && !isObj(v.inputs)) return { ok: false, error: "«inputs» deve essere un oggetto." };
+  if (v.inputs !== undefined && !isObj(v.inputs)) return { ok: false, error: tr("workflows.json_inputs_object") };
   const def = { ...v, description: isStr(v.description) ? v.description : undefined, enabled: v.enabled === true, inputs: v.inputs ?? {} } as unknown as WorkflowDef;
   return { ok: true, draft: plainFromDef(def) };
 }
@@ -249,7 +250,7 @@ export interface ValidationContext {
 export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
   const out: Issue[] = [];
   const add = (i: Issue) => out.push(i);
-  if (!d.name.trim()) add({ scope: "meta", field: "name", level: "error", message: "Dai un nome al workflow." });
+  if (!d.name.trim()) add({ scope: "meta", field: "name", level: "error", message: tr("workflows.dai_un_nome_al_workflow") });
 
   // Trigger
   const t = d.trigger;
@@ -257,10 +258,10 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
     const r = parseCron(t.expr);
     if (!r.ok) add({ scope: "trigger", field: "expr", level: "error", message: r.error });
   } else if (t.kind === "interval") {
-    if (!Number.isFinite(t.amount) || t.amount <= 0) add({ scope: "trigger", field: "amount", level: "error", message: "Indica un intervallo maggiore di zero." });
-    else if (joinInterval(t.amount, t.unit) < MIN_INTERVAL_S) add({ scope: "trigger", field: "amount", level: "warn", message: `Il servizio non esegue più spesso di ogni ${MIN_INTERVAL_S} secondi: l'intervallo verrà portato a ${MIN_INTERVAL_S} s.` });
+    if (!Number.isFinite(t.amount) || t.amount <= 0) add({ scope: "trigger", field: "amount", level: "error", message: tr("workflows.indica_un_intervallo_maggiore_di") });
+    else if (joinInterval(t.amount, t.unit) < MIN_INTERVAL_S) add({ scope: "trigger", field: "amount", level: "warn", message: tr("workflows.il_servizio_non_esegue_piu", { seconds: MIN_INTERVAL_S }) });
   } else if (t.kind === "file" && !t.path.trim()) {
-    add({ scope: "trigger", field: "path", level: "error", message: "Indica il file o la cartella da controllare." });
+    add({ scope: "trigger", field: "path", level: "error", message: tr("workflows.indica_il_file_o_la") });
   }
 
   // Inputs
@@ -268,29 +269,29 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
   d.inputs.forEach((r, i) => {
     const key = r.key.trim();
     if (!key) return;
-    if (!/^[A-Za-z0-9_-]+$/.test(key)) add({ scope: "inputs", step: i, level: "error", message: `«${key}»: usa solo lettere, cifre, «_» e «-».` });
-    if (keys.has(key)) add({ scope: "inputs", step: i, level: "error", message: `L'input «${key}» è ripetuto.` });
+    if (!/^[A-Za-z0-9_-]+$/.test(key)) add({ scope: "inputs", step: i, level: "error", message: tr("workflows.usa_solo_lettere_cifre_e", { key }) });
+    if (keys.has(key)) add({ scope: "inputs", step: i, level: "error", message: tr("workflows.l_input_e_ripetuto", { key }) });
     keys.set(key, i);
     if (r.json) {
       try {
         JSON.parse(r.value);
       } catch {
-        add({ scope: "inputs", step: i, level: "error", message: `Il valore di «${key}» non è un JSON valido.` });
+        add({ scope: "inputs", step: i, level: "error", message: tr("workflows.il_valore_di_non_e", { key }) });
       }
     }
   });
 
   // Steps
-  if (d.steps.length === 0) add({ scope: "steps", level: "warn", message: "Il workflow non ha passi: non farà nulla." });
+  if (d.steps.length === 0) add({ scope: "steps", level: "warn", message: tr("workflows.il_workflow_non_ha_passi") });
   const index = new Map<string, number>();
   d.steps.forEach((s, i) => {
     for (const inner of innerIds(s)) {
-      if (index.has(inner)) add({ scope: "step", step: i, field: s.kind === "foreach" ? "body" : "steps", level: "error", message: `Identificativo duplicato: «${inner}» è già usato dal passo ${index.get(inner)! + 1}.` });
+      if (index.has(inner)) add({ scope: "step", step: i, field: s.kind === "foreach" ? "body" : "steps", level: "error", message: tr("workflows.identificativo_duplicato_e_gia_usato", { inner, step: index.get(inner)! + 1 }) });
       else index.set(inner, i);
     }
-    if (!s.id.trim()) add({ scope: "step", step: i, field: "id", level: "error", message: "Il passo ha bisogno di un identificativo." });
-    else if (!STEP_ID.test(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: "L'identificativo può contenere solo lettere, cifre, «_» e «-»." });
-    else if (index.has(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: `Identificativo duplicato: «${s.id}» è già usato dal passo ${index.get(s.id)! + 1}.` });
+    if (!s.id.trim()) add({ scope: "step", step: i, field: "id", level: "error", message: tr("workflows.il_passo_ha_bisogno_di") });
+    else if (!STEP_ID.test(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: tr("workflows.l_identificativo_puo_contenere_solo") });
+    else if (index.has(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: tr("workflows.identificativo_duplicato_e_gia_usato_2", { id: s.id, step: index.get(s.id)! + 1 }) });
     if (!index.has(s.id)) index.set(s.id, i);
   });
   d.steps.forEach((s, i) => {
@@ -298,32 +299,32 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
     const w = (field: string, message: string) => add({ scope: "step", step: i, field, level: "warn", message });
     switch (s.kind) {
       case "tool":
-        if (!s.tool.trim()) e("tool", "Scegli il tool da chiamare.");
-        else if (ctx.tools.length > 0 && !ctx.tools.includes(s.tool)) w("tool", `Il tool «${s.tool}» non è nel catalogo: il passo fallirà se non esiste.`);
-        if (parseArgs(s.args) === null) e("args", "Gli argomenti devono essere un oggetto JSON, per esempio {\"path\": \"~/Downloads\"}.");
+        if (!s.tool.trim()) e("tool", tr("workflows.v_pick_tool"));
+        else if (ctx.tools.length > 0 && !ctx.tools.includes(s.tool)) w("tool", tr("workflows.v_tool_unknown", { tool: s.tool }));
+        if (parseArgs(s.args) === null) e("args", tr("workflows.v_args_object", { example: "{\"path\": \"~/Downloads\"}" }));
         break;
       case "agent":
-        if (!s.agent.trim()) e("agent", "Scegli l'agente.");
-        else if (ctx.agents.length > 0 && !ctx.agents.includes(s.agent)) w("agent", `L'agente «${s.agent}» non esiste: il passo fallirà.`);
-        if (!s.prompt.trim()) e("prompt", "Scrivi il compito per l'agente.");
+        if (!s.agent.trim()) e("agent", tr("workflows.v_pick_agent"));
+        else if (ctx.agents.length > 0 && !ctx.agents.includes(s.agent)) w("agent", tr("workflows.v_agent_missing", { agent: s.agent }));
+        if (!s.prompt.trim()) e("prompt", tr("workflows.v_agent_task"));
         break;
       case "team":
-        if (!s.team.trim()) e("team", "Scegli il team.");
-        else if (ctx.teams && ctx.teams.length > 0 && !ctx.teams.includes(s.team)) w("team", `Il team «${s.team}» non esiste: il passo fallirà.`);
-        if (!s.prompt.trim()) e("prompt", "Scrivi il compito per il team.");
+        if (!s.team.trim()) e("team", tr("workflows.v_pick_team"));
+        else if (ctx.teams && ctx.teams.length > 0 && !ctx.teams.includes(s.team)) w("team", tr("workflows.v_team_missing", { team: s.team }));
+        if (!s.prompt.trim()) e("prompt", tr("workflows.v_team_task"));
         break;
       case "llm":
-        if (!s.profile.trim()) e("profile", "Scegli il profilo di inferenza.");
-        else if (ctx.profiles.length > 0 && !ctx.profiles.includes(s.profile)) w("profile", `Il profilo «${s.profile}» non esiste: il passo fallirà.`);
-        if (!s.prompt.trim()) e("prompt", "Scrivi il prompt.");
+        if (!s.profile.trim()) e("profile", tr("workflows.v_pick_profile"));
+        else if (ctx.profiles.length > 0 && !ctx.profiles.includes(s.profile)) w("profile", tr("workflows.v_profile_missing", { profile: s.profile }));
+        if (!s.prompt.trim()) e("prompt", tr("workflows.v_write_prompt"));
         break;
       case "foreach": {
-        if (!s.items.trim()) e("items", "Indica l'elenco da scorrere: un array JSON o un testo con una voce per riga.");
-        if (s.parallel !== undefined && (!Number.isInteger(s.parallel) || s.parallel < 1 || s.parallel > FOREACH_MAX_PARALLEL)) e("parallel", `Le voci in parallelo vanno da 1 a ${FOREACH_MAX_PARALLEL}.`);
+        if (!s.items.trim()) e("items", tr("workflows.v_items_list"));
+        if (s.parallel !== undefined && (!Number.isInteger(s.parallel) || s.parallel < 1 || s.parallel > FOREACH_MAX_PARALLEL)) e("parallel", tr("workflows.v_parallel_range", { max: FOREACH_MAX_PARALLEL }));
         const r = parseInline(s.body, false);
         if (!r.ok) e("body", r.error);
-        else if (r.steps[0].kind === "agent" && ctx.agents.length > 0 && !ctx.agents.includes(r.steps[0].agent)) w("body", `L'agente «${r.steps[0].agent}» non esiste: il passo fallirà.`);
-        else if (r.steps[0].kind === "team" && ctx.teams && ctx.teams.length > 0 && !ctx.teams.includes(r.steps[0].team)) w("body", `Il team «${r.steps[0].team}» non esiste: il passo fallirà.`);
+        else if (r.steps[0].kind === "agent" && ctx.agents.length > 0 && !ctx.agents.includes(r.steps[0].agent)) w("body", tr("workflows.v_agent_missing", { agent: r.steps[0].agent }));
+        else if (r.steps[0].kind === "team" && ctx.teams && ctx.teams.length > 0 && !ctx.teams.includes(r.steps[0].team)) w("body", tr("workflows.v_team_missing", { team: r.steps[0].team }));
         break;
       }
       case "parallel": {
@@ -332,26 +333,26 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
         break;
       }
       case "workflow":
-        if (!s.workflow.trim()) e("workflow", "Scegli il workflow da avviare.");
-        else if (ctx.selfId !== undefined && s.workflow === ctx.selfId) e("workflow", "Un workflow non può avviare se stesso.");
-        else if (ctx.workflows && ctx.workflows.length > 0 && !ctx.workflows.includes(s.workflow)) w("workflow", `Il workflow «${s.workflow}» non esiste: il passo fallirà.`);
-        if (parseArgs(s.inputs) === null) e("inputs", "Gli input devono essere un oggetto JSON, per esempio {\"cartella\": \"{{inputs.folder}}\"}.");
+        if (!s.workflow.trim()) e("workflow", tr("workflows.v_pick_workflow"));
+        else if (ctx.selfId !== undefined && s.workflow === ctx.selfId) e("workflow", tr("workflows.v_workflow_self"));
+        else if (ctx.workflows && ctx.workflows.length > 0 && !ctx.workflows.includes(s.workflow)) w("workflow", tr("workflows.v_workflow_missing", { workflow: s.workflow }));
+        if (parseArgs(s.inputs) === null) e("inputs", tr("workflows.v_inputs_object", { example: "{\"cartella\": \"{{inputs.folder}}\"}" }));
         break;
       case "approval":
-        if (!s.message.trim()) e("message", "Scrivi la domanda da porre.");
+        if (!s.message.trim()) e("message", tr("workflows.v_approval_question"));
         {
           const p = approvalTimeoutProblem(s.timeout_s);
           if (p) e("timeout_s", p);
         }
         break;
       case "condition":
-        if (!s.if.trim()) e("if", "Scrivi l'espressione da valutare.");
+        if (!s.if.trim()) e("if", tr("workflows.v_condition_expr"));
         for (const id of [...s.then, ...s.else]) {
           const at = index.get(id);
-          if (at === undefined) e("then", `La condizione punta a un passo inesistente: «${id}».`);
-          else if (at <= i) w("then", `Il passo «${id}» viene prima della condizione: sarà sempre saltato.`);
+          if (at === undefined) e("then", tr("workflows.v_condition_missing_step", { id }));
+          else if (at <= i) w("then", tr("workflows.v_condition_before", { id }));
         }
-        if (s.then.length === 0 && s.else.length === 0) w("then", "Nessun passo scelto: la condizione non cambia nulla.");
+        if (s.then.length === 0 && s.else.length === 0) w("then", tr("workflows.v_condition_empty"));
         break;
     }
     if (hasOptions(s)) {
@@ -364,16 +365,16 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
         if (p.root === "steps") {
           const ref = stepRef(p.path);
           const at = ref === null ? undefined : index.get(ref);
-          if (at === undefined) w("placeholder", `{{${p.path}}} non corrisponde a nessun passo.`);
-          else if (at >= i) w("placeholder", `{{${p.path}}} legge un passo che non è ancora stato eseguito a questo punto.`);
-          else if (!isKnownTail(stepTail(p.path))) w("placeholder", `{{${p.path}}} non è un segnaposto noto: dopo l'id del passo usa output, error o json.`);
+          if (at === undefined) w("placeholder", tr("workflows.v_ph_no_step", { placeholder: `{{${p.path}}}` }));
+          else if (at >= i) w("placeholder", tr("workflows.v_ph_not_yet", { placeholder: `{{${p.path}}}` }));
+          else if (!isKnownTail(stepTail(p.path))) w("placeholder", tr("workflows.v_ph_tail", { placeholder: `{{${p.path}}}` }));
         } else if (p.root === "inputs") {
           const key = p.path.slice("inputs.".length);
-          if (d.trigger.kind !== "webhook" && key !== "payload" && !keys.has(key)) w("placeholder", `L'input «${key}» non è definito: resterà vuoto.`);
+          if (d.trigger.kind !== "webhook" && key !== "payload" && !keys.has(key)) w("placeholder", tr("workflows.v_ph_input", { key }));
         } else if (s.kind === "foreach" && (p.root === "item" || p.path === "index")) {
           // Bound by the loop.
         } else if (p.path !== "now") {
-          w("placeholder", `{{${p.path}}} non è un segnaposto noto: resterà com'è.`);
+          w("placeholder", tr("workflows.v_ph_unknown", { placeholder: `{{${p.path}}}` }));
         }
       }
     }

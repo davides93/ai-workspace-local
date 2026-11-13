@@ -1,3 +1,4 @@
+import { t as tr } from "../../../shared/i18n";
 // Port of the glob dialect of the Rust crate `globset` (0.4.21) with the options the backend uses:
 // `Glob::new(pattern)` — `*` and `?` also match `/`, `\` escapes, `{a,b}` alternates, `[a-z]` classes,
 // `**` as a whole path component. See crates/aiw-agent/src/policy.rs and hooks.rs.
@@ -64,20 +65,20 @@ class Parser {
           break;
         case "\\": {
           const n = this.bump();
-          if (n === undefined) throw new GlobSyntaxError("il pattern finisce con una barra rovesciata");
+          if (n === undefined) throw new GlobSyntaxError(tr("security.il_pattern_finisce_con_una"));
           this.push({ t: "lit", c: n });
           break;
         }
         default: this.push({ t: "lit", c });
       }
     }
-    if (this.branches.length > 1) throw new GlobSyntaxError("graffa { non chiusa");
+    if (this.branches.length > 1) throw new GlobSyntaxError(tr("security.unclosed_brace"));
     return this.branches[0];
   }
 
   private closeAlt(): void {
     const start = this.altStack.pop();
-    if (start === undefined) throw new GlobSyntaxError("graffa } senza apertura");
+    if (start === undefined) throw new GlobSyntaxError(tr("security.unopened_brace"));
     const branches = this.branches.splice(start);
     this.push({ t: "alt", branches });
   }
@@ -138,11 +139,11 @@ class Parser {
     let inRange = false;
     const extend = (r: [string, string], to: string) => {
       r[1] = to;
-      if (to < r[0]) throw new GlobSyntaxError(`intervallo non valido ${r[0]}-${to}`);
+      if (to < r[0]) throw new GlobSyntaxError(tr("security.intervallo_non_valido", { from: r[0], to }));
     };
     for (;;) {
       const c = this.bump();
-      if (c === undefined) throw new GlobSyntaxError("classe [ non chiusa");
+      if (c === undefined) throw new GlobSyntaxError(tr("security.classe_non_chiusa"));
       if (c === "]") {
         if (first) ranges.push(["]", "]"]);
         else break;
@@ -202,7 +203,7 @@ export function compileGlob(pattern: string): RegExp | GlobSyntaxError {
     const source = tokens.length === 1 && tokens[0].t === "rprefix" ? ".*" : toRegexSource(tokens);
     out = new RegExp(`^${source}$`, "s");
   } catch (e) {
-    out = e instanceof GlobSyntaxError ? e : new GlobSyntaxError("pattern non valido");
+    out = e instanceof GlobSyntaxError ? e : new GlobSyntaxError(tr("security.pattern_non_valido"));
   }
   if (cache.size > 500) cache.clear();
   cache.set(pattern, out);

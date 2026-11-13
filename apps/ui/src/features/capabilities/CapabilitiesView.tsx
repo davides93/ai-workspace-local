@@ -7,6 +7,7 @@ import { ToolsTab } from "./components/ToolsTab";
 import { isBrowserTool, isComputerTool } from "./model/tools";
 import "./capabilities.css";
 
+import { t as tr } from "../../shared/i18n";
 type Tab = "tools" | "mcp" | "browser";
 const TABS: Tab[] = ["tools", "mcp", "browser"];
 
@@ -19,20 +20,20 @@ export function CapabilitiesView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Capacità" title="Tool, MCP e browser"
-        subtitle="Cosa possono fare gli agenti. Il rischio di ogni tool decide quando serve una conferma."
+        eyebrow={tr("nav.group_capabilities")} title={tr("capabilities.tool_mcp_e_browser")}
+        subtitle={tr("capabilities.cosa_possono_fare_gli_agenti")}
       />
       <Tabs
-        idPrefix="cap" label="Capacità" value={tab} onChange={(t) => navigate(t === "tools" ? "/capabilities" : `/capabilities/${t}`)}
+        idPrefix="cap" label={tr("capabilities.capacita")} value={tab} onChange={(t) => navigate(t === "tools" ? "/capabilities" : `/capabilities/${t}`)}
         tabs={[
-          { id: "tools", label: "Tool", count: tools?.length },
-          { id: "mcp", label: "Server MCP", count: servers?.length },
-          { id: "browser", label: "Browser e computer-use", count: tools?.filter((t) => isBrowserTool(t) || isComputerTool(t)).length },
+          { id: "tools", label: tr("capabilities.tool"), count: tools?.length },
+          { id: "mcp", label: tr("capabilities.server_mcp"), count: servers?.length },
+          { id: "browser", label: tr("capabilities.browser_e_computer_use"), count: tools?.filter((t) => isBrowserTool(t) || isComputerTool(t)).length },
         ]}
       />
       <TabPanel idPrefix="cap" id={tab}>
         {tab === "tools" && (
-          <Section title="Tool disponibili" hint="Disattiva un tool per toglierlo a tutti gli agenti.">
+          <Section title={tr("capabilities.tool_disponibili")} hint={tr("capabilities.disattiva_un_tool_per_toglierlo")}>
             <ToolsTab />
           </Section>
         )}

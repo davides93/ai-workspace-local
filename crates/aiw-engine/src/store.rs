@@ -5,7 +5,7 @@ use aiw_core::api::{AuditEntry, ChatMessage, Feedback, Session, WorkflowRun};
 use aiw_core::events::SeqEvent;
 use aiw_core::{Error, Result};
 use aiw_workflow::WorkflowState;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
@@ -21,12 +21,20 @@ pub struct RunRow {
 
 mod memory;
 pub use memory::MemoryFilter;
+mod kb;
+#[cfg(test)]
+mod migration_tests;
 mod proposals;
+mod tokens;
+pub use kb::{KbChunkRow, KbFilter};
+pub use tokens::TokenRow;
 
 pub struct Store {
     conn: Mutex<Connection>,
     /// Whether the bundled SQLite has FTS5 (the memory search falls back to Rust when not).
     fts: bool,
+    /// Same for the knowledge-base passages.
+    kb_fts: bool,
 }
 
 fn db<E: std::fmt::Display>(e: E) -> Error {
@@ -45,8 +53,123 @@ fn feedback_row(r: &rusqlite::Row) -> rusqlite::Result<Feedback> {
     })
 }
 
+/// Version of the database schema that this build reads and writes (`PRAGMA user_version`).
+///
+/// Before this number existed the schema was never stamped (`user_version` 0): every start ran
+/// `CREATE TABLE IF NOT EXISTS` for everything, and the schema only ever grew by new tables. Those
+/// databases are version 0 and go through every step, which is harmless because each step of
+/// 1..=6 is idempotent. **A step added after 6 must be idempotent too** (check that a column is
+/// missing before `ALTER TABLE ... ADD COLUMN`): a database from before the stamp jumps from 0 to
+/// the latest version and finds its old tables already there.
+///
+/// A database stamped with a higher number was written by a newer build: it is refused and not touched.
+pub const SCHEMA_VERSION: i64 = 6;
+
+type Step = fn(&Connection) -> Result<()>;
+
+/// The schema steps in order: `(version, what it adds, how)`. A step runs when the database is below its version.
+/// The history is in `git log -p -- crates/aiw-engine/src/store*`; `migration_tests` rebuilds each stage from it.
+const MIGRATIONS: [(i64, &str, Step); 6] = [
+    (1, "tabelle di base: documenti, sessioni, messaggi, eventi, run, audit, workflow", migrate_v1),
+    (2, "workflow durevoli, feedback, valutazioni e task A2A", migrate_v2),
+    (3, "addestramento e router a bandit", migrate_v3),
+    (4, "memoria (con indice FTS5) e proposte", |c| {
+        memory::migrate(c)?;
+        proposals::migrate(c)
+    }),
+    (5, "basi di conoscenza (con indice FTS5)", |c| kb::migrate(c).map(|_| ())),
+    (6, "token di accesso", tokens::migrate),
+];
+
+fn migrate_v1(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS documents (kind TEXT NOT NULL, id TEXT NOT NULL, json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind, id));
+         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, agent_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_status TEXT);
+         CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, seq INTEGER NOT NULL, json TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, seq);
+         CREATE TABLE IF NOT EXISTS events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY(run_id, seq));
+         CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, session_id TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT);
+         CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, ts TEXT NOT NULL, json TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);",
+    )
+    .map_err(db)
+}
+
+fn migrate_v2(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workflow_state (run_id TEXT PRIMARY KEY, json TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, run_id TEXT, rating INTEGER NOT NULL, note TEXT, created_at TEXT NOT NULL);
+         CREATE UNIQUE INDEX IF NOT EXISTS feedback_message ON feedback(session_id, message_id);
+         CREATE TABLE IF NOT EXISTS eval_runs (id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS a2a_tasks (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, session_id TEXT, json TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS a2a_tasks_context ON a2a_tasks(context_id, updated_at);",
+    )
+    .map_err(db)
+}
+
+fn migrate_v3(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS train_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, trainer TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, json TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS profile_rewards (agent_id TEXT NOT NULL, key TEXT NOT NULL, profile_id TEXT NOT NULL, reward REAL NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(agent_id, key));",
+    )
+    .map_err(db)
+}
+
+fn user_version(conn: &Connection) -> Result<i64> {
+    conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(db)
+}
+
+fn newer_schema_error(found: i64) -> Error {
+    Error::Unsupported(format!(
+        "il database dei dati ha lo schema {found}, scritto da una versione più recente di AI Workspace Local: questa versione conosce fino allo schema {SCHEMA_VERSION}. Il file non è stato modificato: aggiorna l'app, oppure ripristina un backup più vecchio"
+    ))
+}
+
+/// The schema version stamped in a database file, read without writing anything (`0`: a database from before the stamp,
+/// or an empty one). Used before opening, so that a file from a newer build is refused untouched, and by backup and restore.
+///
+/// A database with no write-ahead log has its version in the file header (4 bytes at offset 60), which is read directly:
+/// opening it with SQLite, even read-only, leaves `-wal` and `-shm` files next to it. With a log that holds changes the
+/// header may be behind, and SQLite reads it.
+pub fn schema_version_of(path: &Path) -> Result<i64> {
+    use std::io::Read;
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    let has_log = std::fs::metadata(&wal).map(|m| m.len() > 0).unwrap_or(false);
+    if !has_log {
+        let mut header = [0u8; 100];
+        let mut f = std::fs::File::open(path)?;
+        let n = f.read(&mut header)?;
+        if n == 0 {
+            return Ok(0);
+        }
+        if n == header.len() && header.starts_with(b"SQLite format 3\0") {
+            return Ok(i64::from(u32::from_be_bytes([header[60], header[61], header[62], header[63]])));
+        }
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(db)?;
+    user_version(&conn)
+}
+
+/// Migrates a database file to this build's schema and folds its write-ahead log into it, so that the file stands alone.
+/// Returns the schema version before and after. A file from a newer build is refused untouched, like in [`Store::open`].
+pub fn migrate_file(path: &Path) -> Result<(i64, i64)> {
+    let from = schema_version_of(path)?;
+    let store = Store::open(path)?;
+    store.conn.lock().unwrap().query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).map_err(db)?;
+    Ok((from, store.schema_version()?))
+}
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
+        // A database written by a newer build is refused before a read-write connection exists: opening it
+        // read-write could convert the journal or checkpoint, and the point is to leave it as it is.
+        if path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+            let found = schema_version_of(path)?;
+            if found > SCHEMA_VERSION {
+                return Err(newer_schema_error(found));
+            }
+        }
         let conn = Connection::open(path).map_err(db)?;
         Self::init(conn)
     }
@@ -54,29 +177,48 @@ impl Store {
         Self::init(Connection::open_in_memory().map_err(db)?)
     }
     fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
-             CREATE TABLE IF NOT EXISTS documents (kind TEXT NOT NULL, id TEXT NOT NULL, json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind, id));
-             CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, agent_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_status TEXT);
-             CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, seq INTEGER NOT NULL, json TEXT NOT NULL);
-             CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, seq);
-             CREATE TABLE IF NOT EXISTS events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY(run_id, seq));
-             CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, session_id TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT);
-             CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, ts TEXT NOT NULL, json TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, run_id TEXT, rating INTEGER NOT NULL, note TEXT, created_at TEXT NOT NULL);
-             CREATE UNIQUE INDEX IF NOT EXISTS feedback_message ON feedback(session_id, message_id);
-             CREATE TABLE IF NOT EXISTS eval_runs (id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS train_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, trainer TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, json TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS profile_rewards (agent_id TEXT NOT NULL, key TEXT NOT NULL, profile_id TEXT NOT NULL, reward REAL NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(agent_id, key));
-             CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, started_at TEXT NOT NULL, json TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS workflow_state (run_id TEXT PRIMARY KEY, json TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS a2a_tasks (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, session_id TEXT, json TEXT NOT NULL, updated_at TEXT NOT NULL);
-             CREATE INDEX IF NOT EXISTS a2a_tasks_context ON a2a_tasks(context_id, updated_at);",
-        )
-        .map_err(db)?;
-        let fts = memory::migrate(&conn)?;
-        proposals::migrate(&conn)?;
-        Ok(Self { conn: Mutex::new(conn), fts })
+        let found = user_version(&conn)?;
+        if found > SCHEMA_VERSION {
+            return Err(newer_schema_error(found));
+        }
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").map_err(db)?;
+        // Each step and its stamp are one transaction: a step that fails leaves the database at the previous version.
+        for (version, what, step) in MIGRATIONS {
+            if found >= version {
+                continue;
+            }
+            let tx = conn.unchecked_transaction().map_err(db)?;
+            step(&conn).map_err(|e| Error::Other(format!("migrazione dello schema alla versione {version} ({what}) non riuscita: {e}")))?;
+            conn.execute_batch(&format!("PRAGMA user_version = {version}")).map_err(db)?;
+            tx.commit().map_err(db)?;
+        }
+        // Not part of any step: what runs at every start, and what depends on this build's SQLite.
+        let fts = memory::has_fts(&conn)?;
+        let kb_fts = kb::start(&conn)?;
+        Ok(Self { conn: Mutex::new(conn), fts, kb_fts })
+    }
+
+    /// The schema version of this database (always [`SCHEMA_VERSION`] once it is open).
+    pub fn schema_version(&self) -> Result<i64> {
+        user_version(&self.conn.lock().unwrap())
+    }
+
+    /// Row counts of the tables that hold data (the index shadow tables of FTS5 are left out), by name.
+    pub fn table_counts(&self) -> Result<Vec<(String, u64)>> {
+        let c = self.conn.lock().unwrap();
+        let names: Vec<String> = {
+            let mut st = c
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '*_fts' AND name NOT GLOB '*_fts_*' ORDER BY name")
+                .map_err(db)?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0)).map_err(db)?;
+            rows.collect::<std::result::Result<_, _>>().map_err(db)?
+        };
+        let mut out = Vec::with_capacity(names.len());
+        for n in names {
+            let count: i64 = c.query_row(&format!("SELECT COUNT(*) FROM \"{}\"", n.replace('"', "\"\"")), [], |r| r.get(0)).map_err(db)?;
+            out.push((n, count as u64));
+        }
+        Ok(out)
     }
 
     // ---------------- A2A tasks (served to other agents; they expire)
@@ -212,6 +354,7 @@ impl Store {
                     updated_at: r.get(4)?,
                     last_status: r.get(5)?,
                     worktree: None,
+                    channel: None,
                 })
             })
             .optional()
@@ -233,6 +376,7 @@ impl Store {
                     updated_at: r.get(4)?,
                     last_status: r.get(5)?,
                     worktree: None,
+                    channel: None,
                 })
             })
             .map_err(db)?;
@@ -253,6 +397,7 @@ impl Store {
                     updated_at: r.get(4)?,
                     last_status: r.get(5)?,
                     worktree: None,
+                    channel: None,
                 })
             })
             .map_err(db)?;
@@ -619,6 +764,7 @@ mod tests {
             updated_at: "1".into(),
             last_status: None,
             worktree: None,
+            channel: None,
         };
         s.upsert_session(&ses).unwrap();
         let m = |id: &str| ChatMessage {
@@ -629,6 +775,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            attachments: None,
             created_at: "1".into(),
         };
         s.append_messages("ses", &[m("1"), m("2")]).unwrap();

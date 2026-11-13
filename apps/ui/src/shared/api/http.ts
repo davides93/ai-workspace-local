@@ -1,12 +1,12 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, Feedback, Lesson, LessonStatus, Memory, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  DownloadProgress, InferenceProfile, LocalModel, McpServer, RuntimeInfo, Session, SystemInfo,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig, VoiceStatus, Transcript, InstallJob, InstallPlan, UpdateStatus, ThinkingMode,
+  CommandAnalysis, PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
 
 export class ApiError extends Error {
@@ -41,6 +41,25 @@ export function authBody(token: string | null | undefined, endpoint?: string): {
 }
 
 /** REST + SSE carrier for `aiw serve` (same routes the Tauri shell dispatches in-process). */
+/** Who this browser says it is when it pairs: a stable id (kept in storage) and a readable name, so the host lists and can revoke it. */
+export function browserIdentity(): { device_id?: string; name: string } {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const os = /iPhone|iPad/.test(ua) ? "iPhone/iPad" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "Dispositivo";
+  const browser = /Firefox/.test(ua) ? "Firefox" : /Edg/.test(ua) ? "Edge" : /Chrome/.test(ua) ? "Chrome" : /Safari/.test(ua) ? "Safari" : "browser";
+  const name = `${os} · ${browser}`;
+  const storage = safeStorage();
+  try {
+    let id = storage?.getItem("aiw.deviceId") ?? "";
+    if (!id) {
+      id = `web-${crypto.randomUUID().slice(0, 12)}`;
+      storage?.setItem("aiw.deviceId", id);
+    }
+    return { device_id: id, name };
+  } catch {
+    return { name };
+  }
+}
+
 export class HttpTransport implements Transport {
   readonly kind: "http" | "tauri" = "http";
   readonly capabilities: TransportCapabilities = { demo: false, native: false, pairing: true };
@@ -88,11 +107,16 @@ export class HttpTransport implements Transport {
   updateStatus = () => this.req<UpdateStatus>("GET", "/update");
   checkUpdate = () => this.req<UpdateStatus>("POST", "/update/check", {});
   downloadUpdate = () => this.req<UpdateStatus>("POST", "/update/download", {});
+  createBackup = (includeSecrets: boolean) => this.req<BackupFile>("POST", "/backup", { include_secrets: includeSecrets });
+  inspectBackup = (data: string) => this.req<BackupInspect>("POST", "/backup/inspect", { data });
+  diagnostics = () => this.req<Record<string, unknown>>("GET", "/diagnostics");
   installUpdate = () => this.req<UpdateStatus>("POST", "/update/install", {});
 
   models = () => this.req<LocalModel[]>("GET", "/models");
   catalog = () => this.req<CatalogModel[]>("GET", "/models/catalog");
   recommend = () => this.req<Recommendations>("GET", "/recommend");
+  route = (model: string, context?: number, remote?: boolean) =>
+    this.req<RouteDecision>("GET", `/route?model=${enc(model)}${context ? `&context=${context}` : ""}${remote ? "&remote=true" : ""}`);
   modelProviders = () => this.req<ModelProviderInfo[]>("GET", "/models/providers");
   setProviderAuth = (id: string, token: string | null | undefined, endpoint?: string) =>
     this.req<ModelProviderInfo>("PUT", `/models/providers/${enc(id)}/auth`, authBody(token, endpoint));
@@ -127,9 +151,15 @@ export class HttpTransport implements Transport {
   renameSession = (id: string, title: string) => this.req<Session>("PATCH", `/sessions/${enc(id)}`, { title });
   deleteSession = (id: string) => this.req<void>("DELETE", `/sessions/${enc(id)}`);
   mesh = () => this.req<MeshState>("GET", "/mesh");
-  pairPeer = (address: string, code: string) => this.req<PeerDevice>("POST", "/mesh/pair", { address, code });
+  pairPeer = (address: string, code: string, fingerprint?: string) => this.req<PeerDevice>("POST", "/mesh/pair", { address, code, fingerprint });
   removePeer = (id: string) => this.req<void>("DELETE", `/mesh/peers/${enc(id)}`);
   pairingQr = () => this.req<{ url: string; svg: string }>("GET", "/pairing/qr");
+  apiTokens = () => this.req<ApiTokenInfo[]>("GET", "/tokens");
+  createApiToken = (r: ApiTokenCreate) => this.req<ApiTokenCreated>("POST", "/tokens", r);
+  revokeApiToken = (id: string) => this.req<void>("DELETE", `/tokens/${enc(id)}`);
+  rotateApiToken = (id: string) => this.req<ApiTokenCreated>("POST", `/tokens/${enc(id)}/rotate`, {});
+  tlsStatus = () => this.req<TlsStatus>("GET", "/tls");
+  tlsCa = () => this.req<{ pem: string }>("GET", "/tls/ca");
 
   voice = () => this.req<VoiceStatus>("GET", "/voice");
 
@@ -155,6 +185,9 @@ export class HttpTransport implements Transport {
     return JSON.parse(text) as Transcript;
   }
 
+  /** JSON in, base64 WAV out: the same on the web and over the app's IPC bridge. */
+  speak = (req: SpeakRequest, _signal?: AbortSignal) => this.req<Speech>("POST", "/voice/speak", req);
+
   worktreeStatus = (sessionId: string) => this.req<WorktreeStatus>("GET", `/sessions/${enc(sessionId)}/worktree`);
   worktreeApply = (sessionId: string) => this.req<WorktreeStatus>("POST", `/sessions/${enc(sessionId)}/worktree/apply`);
   worktreeDiscard = (sessionId: string) => this.req<void>("DELETE", `/sessions/${enc(sessionId)}/worktree`);
@@ -164,8 +197,15 @@ export class HttpTransport implements Transport {
     this.req<Feedback>("PUT", `/sessions/${enc(sessionId)}/messages/${enc(messageId)}/feedback`, note ? { rating, note } : { rating });
   deleteFeedback = (sessionId: string, messageId: string) =>
     this.req<void>("DELETE", `/sessions/${enc(sessionId)}/messages/${enc(messageId)}/feedback`);
-  startRun = (sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode) =>
-    this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, { input, ...(kind ? { kind } : {}), ...(thinking ? { thinking } : {}) });
+  startRun = (sessionId: string, input: string, kind?: "a2ui.action", thinking?: ThinkingMode, attachments?: AttachmentUpload[]) =>
+    this.req<{ run_id: string }>("POST", `/sessions/${enc(sessionId)}/runs`, {
+      input,
+      ...(kind ? { kind } : {}),
+      ...(thinking ? { thinking } : {}),
+      ...(attachments?.length ? { attachments } : {}),
+    });
+  getAttachment = (sessionId: string, attachmentId: string) =>
+    this.req<AttachmentData>("GET", `/sessions/${enc(sessionId)}/attachments/${enc(attachmentId)}`);
   sessionCheckpoints = (sessionId: string) => this.req<CheckpointInfo[]>("GET", `/sessions/${enc(sessionId)}/checkpoints`);
   rewindRun = (runId: string) => this.req<RewindResult>("POST", `/runs/${enc(runId)}/rewind`);
   cancelRun = (runId: string) => this.req<void>("POST", `/runs/${enc(runId)}/cancel`);
@@ -257,6 +297,28 @@ export class HttpTransport implements Transport {
   approveMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/approve`, {});
   rejectMemory = (id: string) => this.req<Memory>("POST", `/memories/${enc(id)}/reject`, {});
   deleteMemory = (id: string) => this.req<void>("DELETE", `/memories/${enc(id)}`);
+  kbCollections = () => this.req<KbCollection[]>("GET", "/kb/collections");
+  createKbCollection = (body: KbCollectionCreate) => this.req<KbCollection>("POST", "/kb/collections", body);
+  updateKbCollection = (id: string, patch: KbCollectionPatch) => this.req<KbCollection>("PATCH", `/kb/collections/${enc(id)}`, patch);
+  deleteKbCollection = (id: string) => this.req<void>("DELETE", `/kb/collections/${enc(id)}`);
+  kbDocuments = (collectionId: string) => this.req<KbDocument[]>("GET", `/kb/collections/${enc(collectionId)}/documents`);
+  addKbFiles = (collectionId: string, files: AttachmentUpload[]) => this.req<KbAddResult>("POST", `/kb/collections/${enc(collectionId)}/documents`, { files });
+  addKbPath = (collectionId: string, path: string) => this.req<KbAddResult>("POST", `/kb/collections/${enc(collectionId)}/documents`, { path });
+  reindexKbCollection = (collectionId: string) => this.req<KbAddResult>("POST", `/kb/collections/${enc(collectionId)}/reindex`, {});
+  deleteKbDocument = (id: string) => this.req<void>("DELETE", `/kb/documents/${enc(id)}`);
+  kbSearch = (body: KbSearchBody) => this.req<KbSearchResult>("POST", "/kb/search", body);
+  kbStatus = () => this.req<KbStatus>("GET", "/kb/status");
+  cancelKbJob = (jobId: string) => this.req<void>("POST", `/kb/jobs/${enc(jobId)}/cancel`, {});
+  channels = () => this.req<ChannelInfo[]>("GET", "/channels");
+  createChannel = (body: ChannelCreate) => this.req<ChannelInfo>("POST", "/channels", body);
+  updateChannel = (id: string, patch: ChannelPatch) => this.req<ChannelInfo>("PATCH", `/channels/${enc(id)}`, patch);
+  deleteChannel = (id: string) => this.req<void>("DELETE", `/channels/${enc(id)}`);
+  testChannel = (id: string) => this.req<ChannelTestResult>("POST", `/channels/${enc(id)}/test`, {});
+  pairChannel = (id: string) => this.req<ChannelPairing>("POST", `/channels/${enc(id)}/pair`, {});
+  channelStatus = (id: string) => this.req<ChannelStatus>("GET", `/channels/${enc(id)}/status`);
+  mailAccounts = () => this.req<MailAccount[]>("GET", "/connectors/mail/accounts");
+  setMailAccounts = (accounts: MailAccount[]) => this.req<MailAccount[]>("PUT", "/connectors/mail/accounts", accounts);
+  testMailAccount = (account: MailAccount) => this.req<MailAccountTest>("POST", "/connectors/mail/test", account);
   proposals = (query?: ProposalQuery) => {
     const qs = new URLSearchParams();
     if (query?.status) qs.set("status", query.status);
@@ -300,8 +362,18 @@ export class HttpTransport implements Transport {
   mcpServers = () => this.req<McpServer[]>("GET", "/mcp/servers");
   saveMcpServer = (s: Partial<McpServer> & { name: string; transport: "stdio" | "http" }) => this.req<McpServer>("POST", "/mcp/servers", s);
   removeMcpServer = (id: string) => this.req<void>("DELETE", `/mcp/servers/${enc(id)}`);
+  reconnectMcpServer = (id: string) => this.req<McpServer>("POST", `/mcp/servers/${enc(id)}/reconnect`);
+  approveMcpServer = (id: string, hash: string) => this.req<McpServer>("POST", `/mcp/servers/${enc(id)}/approve`, { hash });
+  mcpOAuthStart = (id: string) => this.req<{ authorization_url: string }>("POST", `/mcp/servers/${enc(id)}/oauth/start`);
+  mcpOAuthSignout = (id: string) => this.req<void>("DELETE", `/mcp/servers/${enc(id)}/oauth`);
+  mcpPrompts = () => this.req<McpPromptInfo[]>("GET", "/mcp/prompts");
+  mcpPromptGet = (serverId: string, name: string, args: Record<string, string>) =>
+    this.req<McpPromptResult>("POST", "/mcp/prompts/get", { server_id: serverId, name, arguments: args });
+  mcpElicitations = () => this.req<McpElicitation[]>("GET", "/mcp/elicitations");
+  respondMcpElicitation = (id: string, answer: McpElicitationAnswer) => this.req<void>("POST", `/mcp/elicitations/${enc(id)}`, answer);
 
   policy = () => this.req<{ rules: PolicyRule[] }>("GET", "/policy");
+  analyzeCommand = (command: string) => this.req<CommandAnalysis>("POST", "/policy/analyze", { command });
   setPolicy = (rules: PolicyRule[]) => this.req<{ rules: PolicyRule[] }>("PUT", "/policy", { rules });
   hooks = () => this.req<{ hooks: HookConfig[] }>("GET", "/hooks");
   setHooks = (hooks: HookConfig[]) => this.req<{ hooks: HookConfig[] }>("PUT", "/hooks", { hooks });
@@ -313,7 +385,7 @@ export class HttpTransport implements Transport {
 
   /** Exchanges the 6-digit pairing code shown on the host device for the API token. */
   async pair(code: string): Promise<void> {
-    const r = await this.req<{ token: string }>("POST", "/pair", { code });
+    const r = await this.req<{ token: string }>("POST", "/pair", { code, ...browserIdentity() });
     this.token = r.token;
     storeToken(safeStorage(), this.origin ?? serverOrigin(this.base, location.href), r.token);
   }

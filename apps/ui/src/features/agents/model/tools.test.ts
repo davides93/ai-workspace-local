@@ -3,7 +3,7 @@ import { agents, tools as mockTools } from "../../../shared/api/mock/fixtures";
 import type { ToolInfo } from "../../../shared/api/types";
 import {
   ALL, INTERNAL_NAMES, INTERNAL_TOOLS, blockedTools, buildCatalog, categoryLabel, categoryOf, expandAll, groupState, groupTools, isAllTools, isSelected,
-  normalizeTools, orphanTools, setAllTools, setGroup, summarizeTools, toggleTool,
+  isExplicitTool, normalizeTools, orphanTools, setAllTools, setGroup, summarizeTools, toggleTool,
 } from "./tools";
 
 const tool = (name: string, over: Partial<ToolInfo> = {}): ToolInfo => ({
@@ -25,6 +25,7 @@ describe("categories", () => {
     expect(categoryOf(tool("grep"))).toBe("file");
     expect(categoryOf(tool("shell"))).toBe("shell");
     expect(categoryOf(tool("web_fetch"))).toBe("web");
+    expect(categoryOf(tool("web_search"))).toBe("web");
     expect(categoryOf(tool("browser_click"))).toBe("browser");
     expect(categoryOf(tool("computer_key"))).toBe("computer");
     expect(categoryOf(tool("todo"))).toBe("internal");
@@ -38,10 +39,10 @@ describe("categories", () => {
 });
 
 describe("catalogue", () => {
-  it("adds the eleven internal tools that the backend does not list", () => {
+  it("adds the twelve internal tools that the backend does not list", () => {
     const names = buildCatalog(real).map((t) => t.name);
     for (const n of INTERNAL_NAMES) expect(names).toContain(n);
-    expect(INTERNAL_TOOLS).toHaveLength(11);
+    expect(INTERNAL_TOOLS).toHaveLength(12);
   });
 
   it("does not duplicate internal tools a catalogue (like the demo) already lists", () => {
@@ -95,6 +96,27 @@ describe("selection", () => {
     expect(isSelected(["read_file"], "write_file")).toBe(false);
     expect(normalizeTools(["*", "read_file"])).toEqual(["*"]);
     expect(normalizeTools(["a", "a", " b ", ""])).toEqual(["a", "b"]);
+  });
+
+  it("keeps page scripts out of a wildcard: browser_eval needs an explicit grant, like training", () => {
+    expect(isExplicitTool("browser_eval")).toBe(true);
+    expect(isExplicitTool("browser_click")).toBe(false);
+    expect(isSelected(["*"], "browser_eval")).toBe(false);
+    expect(isSelected(["*", "browser_eval"], "browser_eval")).toBe(true);
+    expect(isSelected(["*"], "browser_tabs")).toBe(true);
+    expect(normalizeTools(["*", "browser_eval", "read_file", "training_harness"])).toEqual(["*", "training_harness", "browser_eval"]);
+    expect(normalizeTools(["browser_eval", "browser_eval"])).toEqual(["browser_eval"]);
+  });
+
+  it("knows every browser tool of the demo catalogue and groups them under Browser", () => {
+    const browser = mockTools.filter((t) => t.name.startsWith("browser_"));
+    expect(browser.map((t) => t.name)).toEqual(expect.arrayContaining([
+      "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_tabs", "browser_tab_new", "browser_tab_select", "browser_tab_close",
+      "browser_select", "browser_hover", "browser_upload", "browser_downloads", "browser_eval", "browser_console",
+    ]));
+    expect(browser.every((t) => categoryOf(t) === "browser")).toBe(true);
+    expect(browser.find((t) => t.name === "browser_eval")?.risk).toBe("exec");
+    expect(browser.find((t) => t.name === "browser_tabs")?.risk).toBe("read");
   });
 
   it("turning * off keeps every tool, the internal ones included", () => {

@@ -5,6 +5,7 @@ import { qk } from "../../shared/query/keys";
 import type { BackgroundStatus, ConfigView } from "../../shared/api/types";
 import { LAYER_LABEL, type WritableLayer } from "./model/config";
 
+import { t } from "../../shared/i18n";
 export function useConfig() {
   const api = useApi();
   return useQuery({ queryKey: qk.config(), queryFn: () => api.config() });
@@ -23,7 +24,7 @@ export function useSetConfig() {
       qc.setQueryData(qk.config(), view);
       // The voice settings (language, engine, model) change what the chat's microphone uses.
       if (v.key.startsWith("voice.")) void qc.invalidateQueries({ queryKey: qk.voice() });
-      toast(v.value === null ? `«${v.title}» ripristinato nello strato ${LAYER_LABEL[v.layer]}` : `«${v.title}» salvato nello strato ${LAYER_LABEL[v.layer]}`);
+      toast(v.value === null ? t("settings.ripristinato_nello_strato", { title: v.title, layer: LAYER_LABEL[v.layer] }) : t("settings.salvato_nello_strato", { title: v.title, layer: LAYER_LABEL[v.layer] }));
     },
   });
 }
@@ -33,7 +34,7 @@ export function useBackgroundStatus(enabled: boolean) {
   const api = useApi();
   return useQuery({
     queryKey: ["background"] as const,
-    queryFn: () => (api.backgroundStatus ? api.backgroundStatus() : Promise.reject(new Error("non disponibile"))),
+    queryFn: () => (api.backgroundStatus ? api.backgroundStatus() : Promise.reject(new Error(t("settings.non_disponibile")))),
     enabled: enabled && api.backgroundStatus !== undefined,
     retry: false,
   });
@@ -51,7 +52,7 @@ export function useBackgroundActions() {
       onSuccess: (s) => {
         if (s) done(s);
         void qc.invalidateQueries({ queryKey: qk.config() });
-        toast("Controllo avviato");
+        toast(t("settings.controllo_avviato"));
       },
     }),
   };

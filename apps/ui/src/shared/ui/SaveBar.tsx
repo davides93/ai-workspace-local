@@ -4,12 +4,13 @@ import { Button } from "./Button";
 import { Led } from "./Pill";
 import "./SaveBar.css";
 
+import { t, t as tr } from "../i18n";
 /**
  * Sticky action bar of an editable form: says whether there are unsaved changes and offers
  * "Salva" / "Annulla modifiche". It stays at the bottom of the scrolling page so a long form
  * (tools, steps) never hides its own save button.
  */
-export function SaveBar({ dirty, isNew = false, saving, onSave, onDiscard, canSave = true, blocker, saveLabel = "Salva", children, className }: {
+export function SaveBar({ dirty, isNew = false, saving, onSave, onDiscard, canSave = true, blocker, saveLabel = tr("ui.salva"), children, className }: {
   dirty: boolean;
   /** The thing does not exist yet: saving creates it, so it is possible even without edits. */
   isNew?: boolean;
@@ -26,17 +27,17 @@ export function SaveBar({ dirty, isNew = false, saving, onSave, onDiscard, canSa
   className?: string;
 }) {
   const pending = dirty || isNew;
-  const state = dirty && !canSave && blocker ? blocker : isNew && !dirty ? "Non ancora creato" : dirty ? "Modifiche non salvate" : "Tutto salvato";
+  const state = dirty && !canSave && blocker ? blocker : isNew && !dirty ? tr("ui.non_ancora_creato") : dirty ? tr("ui.modifiche_non_salvate") : tr("ui.tutto_salvato");
   return (
-    <div className={cx("savebar", pending && "dirty", className)} role="region" aria-label="Salvataggio">
+    <div className={cx("savebar", pending && "dirty", className)} role="region" aria-label={t("ui.salvataggio")}>
       <div className="savebar-state" role="status">
         <Led tone={pending ? "run" : "off"} small />
         <span>{state}</span>
       </div>
       <div className="savebar-actions">
         {children}
-        <Button variant="ghost" onClick={onDiscard} disabled={!dirty || saving}>Annulla modifiche</Button>
-        <Button variant="primary" onClick={onSave} disabled={!pending || !canSave || saving}>{saving ? "Salvataggio…" : saveLabel}</Button>
+        <Button variant="ghost" onClick={onDiscard} disabled={!dirty || saving}>{t("ui.annulla_modifiche")}</Button>
+        <Button variant="primary" onClick={onSave} disabled={!pending || !canSave || saving}>{saving ? t("ui.salvataggio_2") : saveLabel}</Button>
       </div>
     </div>
   );

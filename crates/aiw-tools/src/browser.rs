@@ -1,31 +1,50 @@
 //! Browser control over the Chrome DevTools Protocol (pattern P18): launches a dedicated
-//! Chrome/Edge/Chromium profile, then exposes navigate / snapshot / click / type / screenshot.
-//! Snapshots are text with numbered references so that text-only local models can browse;
-//! screenshots are returned as images for vision models.
+//! Chrome/Edge/Chromium profile and exposes navigation, snapshots, clicks, typing, forms, tabs,
+//! waits, downloads, the console and (on explicit grant) script evaluation.
+//!
+//! Snapshots are text with references so that text-only local models can browse; screenshots are
+//! returned as images for vision models. Every request of every tab goes through the network
+//! policy (`Fetch.requestPaused`, see `cdp.rs`).
 
-use crate::web::{proxy_applies, system_resolve, vet_url_with};
+mod ax;
+mod cdp;
+#[cfg(test)]
+mod fake;
+#[cfg(test)]
+mod tests;
+
+use crate::web::{html_to_text, proxy_applies, system_resolve, vet_url_with};
 use crate::{arg_str, Risk, Tool, ToolContext, ToolOutput};
 use aiw_core::{Error, Result};
 use async_trait::async_trait;
-use futures::{SinkExt, StreamExt};
+pub(crate) use cdp::RefArg;
+use cdp::{Cdp, SnapFmt, MAX_DOWNLOADS_PER_RUN, MAX_DOWNLOAD_BYTES, MAX_TABS};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
+/// The default snapshot ("elements"). Why this one and not the accessibility tree is the default:
+/// it is one compact block (the controls numbered, then the visible text as running text) that a
+/// small model reads in one go; it works the same on every platform (the phone WebViews have no
+/// accessibility tree to ask for); and it was the format the tools were tried with. The
+/// accessibility tree (`format: "ax"`) is better where the DOM lies about what a control is
+/// (custom widgets, labels given by `aria-labelledby`, states of checkboxes and menus) and its
+/// references stay valid across snapshots, but it costs one line per text node and needs the
+/// model to cope with the roles of the ARIA vocabulary: the model picks it when the elements list
+/// is not enough. Both are capped, and say «troncato» when they are.
 pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
-  const out = []; let n = 0;
+  const out = []; let n = 0, more = false;
   document.querySelectorAll('[data-aiw-ref]').forEach(e => e.removeAttribute('data-aiw-ref'));
   const sel = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[contenteditable=true],summary';
   for (const el of document.querySelectorAll(sel)) {
     const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
     if (r.width < 2 || r.height < 2 || st.visibility === 'hidden' || st.display === 'none' || el.disabled) continue;
-    if (n >= 150) break;
+    if (n >= 150) { more = true; break; }
     n++; el.setAttribute('data-aiw-ref', String(n));
     const off = r.bottom < 0 || r.top > innerHeight ? ' (fuori vista)' : '';
     const tag = el.tagName.toLowerCase();
@@ -39,19 +58,14 @@ pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
     if (type === 'checkbox' || type === 'radio') extra += el.checked ? ' (selezionato)' : '';
     out.push(`[${n}] ${role}${type ? '[' + type + ']' : ''} "${label}"${extra}${off}`);
   }
-  const text = (document.body ? document.body.innerText : '').replace(/\n{3,}/g, '\n\n').slice(0, 6000);
+  if (more) out.push('… elenco troncato: altri elementi non mostrati (scorri con browser_scroll, oppure usa browser_snapshot con format=ax)');
+  const full = (document.body ? document.body.innerText : '').replace(/\n{3,}/g, '\n\n');
+  const text = full.slice(0, 6000) + (full.length > 6000 ? '\n… [testo troncato: per leggerlo tutto usa browser_snapshot con format=text]' : '');
   const se = document.scrollingElement || document.documentElement;
   const total = Math.max(se.scrollHeight, 1), seen = Math.min(100, Math.max(1, Math.round((se.scrollTop + innerHeight) / total * 100)));
   const pos = se.scrollHeight <= innerHeight + 4 ? 'tutta la pagina è in vista' : `vista fino al ${seen}% della pagina (usa browser_scroll per vedere altro)`;
   return `Titolo: ${document.title}\nURL: ${location.href}\nPosizione: ${pos}\n\nElementi interattivi (usa il numero come ref):\n${out.join('\n')}\n\nTesto visibile:\n${text}`;
 })()"#;
-
-struct Cdp {
-    tx: mpsc::UnboundedSender<Message>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
-    events: broadcast::Sender<Value>,
-    next: Arc<AtomicU64>,
-}
 
 /// Network policy of the controlled browser: the context of the tool call that is running (it
 /// changes from call to call) and the resolver used to vet names.
@@ -140,96 +154,6 @@ fn fetch_patterns() -> Value {
     json!({"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
 }
 
-impl Cdp {
-    async fn connect(ws_url: &str, policy: Policy) -> Result<Self> {
-        let (ws, _) = tokio_tungstenite::connect_async(ws_url).await.map_err(|e| Error::Runtime(format!("CDP: {e}")))?;
-        let (mut sink, mut stream) = ws.split();
-        let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> = Default::default();
-        let (events, _) = broadcast::channel(256);
-        tokio::spawn(async move {
-            while let Some(m) = rx.recv().await {
-                if sink.send(m).await.is_err() {
-                    break;
-                }
-            }
-        });
-        let p2 = pending.clone();
-        let ev2 = events.clone();
-        let next = Arc::new(AtomicU64::new(1));
-        let (tx2, next2) = (tx.clone(), next.clone());
-        tokio::spawn(async move {
-            while let Some(Ok(msg)) = stream.next().await {
-                let Ok(text) = msg.into_text() else { continue };
-                let Ok(v) = serde_json::from_str::<Value>(text.as_ref()) else { continue };
-                if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
-                    if let Some(s) = p2.lock().unwrap().remove(&id) {
-                        let _ = s.send(v);
-                    }
-                } else {
-                    // Network policy is enforced here, in the reader itself and not through the
-                    // lossy broadcast channel, so a paused request is never missed. Child targets
-                    // (cross-origin iframes, workers) attach paused: they get the same Fetch
-                    // interception before they run anything.
-                    let session = v["sessionId"].as_str().map(String::from);
-                    match v["method"].as_str() {
-                        Some("Fetch.requestPaused") => {
-                            handle_paused(v["params"].clone(), session, policy.clone(), tx2.clone(), next2.clone());
-                            continue;
-                        }
-                        Some("Target.attachedToTarget") => {
-                            if let Some(sid) = v["params"]["sessionId"].as_str() {
-                                let s = Some(sid);
-                                send_command(&tx2, &next2, s, "Fetch.enable", fetch_patterns());
-                                send_command(
-                                    &tx2,
-                                    &next2,
-                                    s,
-                                    "Target.setAutoAttach",
-                                    json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}),
-                                );
-                                send_command(&tx2, &next2, s, "Runtime.runIfWaitingForDebugger", json!({}));
-                            }
-                            continue;
-                        }
-                        _ => {}
-                    }
-                    let _ = ev2.send(v);
-                }
-            }
-        });
-        Ok(Self { tx, pending, events, next })
-    }
-
-    async fn call(&self, method: &str, params: Value) -> Result<Value> {
-        let id = self.next.fetch_add(1, Ordering::SeqCst);
-        let (s, r) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id, s);
-        let msg = json!({"id": id, "method": method, "params": params}).to_string();
-        self.tx.send(Message::Text(msg.into())).map_err(|_| Error::Runtime("connessione al browser chiusa".into()))?;
-        let v = tokio::time::timeout(Duration::from_secs(30), r)
-            .await
-            .map_err(|_| Error::Runtime(format!("CDP {method}: tempo scaduto")))?
-            .map_err(|_| Error::Runtime("browser chiuso".into()))?;
-        if let Some(e) = v.get("error") {
-            return Err(Error::Runtime(format!("CDP {method}: {e}")));
-        }
-        Ok(v["result"].clone())
-    }
-
-    /// Runs one of *our own* fixed scripts in the controlled page via `Runtime.evaluate`.
-    /// Only two kinds of values are ever interpolated into them: the numeric `ref` (u64) and
-    /// typed text encoded with `serde_json::to_string`, i.e. always as a string literal, never
-    /// as code. Page content cannot reach this function.
-    async fn eval(&self, expr: &str) -> Result<Value> {
-        let r = self.call("Runtime.evaluate", json!({"expression": expr, "returnByValue": true, "awaitPromise": true})).await?;
-        if let Some(ex) = r.get("exceptionDetails") {
-            return Err(Error::Runtime(format!("errore JavaScript: {}", ex["exception"]["description"].as_str().unwrap_or("sconosciuto"))));
-        }
-        Ok(r["result"]["value"].clone())
-    }
-}
-
 struct Session {
     child: Option<tokio::process::Child>,
     cdp: Cdp,
@@ -245,6 +169,9 @@ pub struct BrowserManager {
     webview: Mutex<Option<Arc<crate::webview::WebViewHost>>>,
     /// Extra Chrome command-line flags (tests only).
     extra_args: Vec<String>,
+    /// A browser that is already running (tests: a fake CDP endpoint) instead of launching Chrome.
+    #[cfg(test)]
+    endpoint: Option<String>,
 }
 
 pub fn find_chrome() -> Option<PathBuf> {
@@ -277,7 +204,16 @@ impl BrowserManager {
             resolve: Arc::new(|h, p| Box::pin(system_resolve(h, p))),
             blocked: Default::default(),
         };
-        Self { profile_dir, headless, session: tokio::sync::Mutex::new(None), policy, webview: Mutex::new(None), extra_args: vec![] }
+        Self {
+            profile_dir,
+            headless,
+            session: tokio::sync::Mutex::new(None),
+            policy,
+            webview: Mutex::new(None),
+            extra_args: vec![],
+            #[cfg(test)]
+            endpoint: None,
+        }
     }
 
     /// Hands the tools an in-app WebView (mobile). Replaces Chrome for every later call.
@@ -301,6 +237,10 @@ impl BrowserManager {
         if self.webview().is_some() {
             return Ok(());
         }
+        #[cfg(test)]
+        if self.endpoint.is_some() {
+            return Ok(());
+        }
         if cfg!(any(target_os = "ios", target_os = "android")) {
             return Err("il browser controllato è disponibile su desktop".into());
         }
@@ -308,6 +248,14 @@ impl BrowserManager {
     }
 
     async fn launch(&self) -> Result<Session> {
+        let tmp = self.profile_dir.join("downloads-tmp");
+        let _ = std::fs::remove_dir_all(&tmp);
+        #[cfg(test)]
+        if let Some(ws) = &self.endpoint {
+            let cdp = Cdp::connect(ws, self.policy.clone(), tmp).await?;
+            cdp.init().await?;
+            return Ok(Session { child: None, cdp });
+        }
         let bin = find_chrome().ok_or_else(|| Error::Unsupported("nessun browser Chrome/Edge/Chromium trovato".into()))?;
         std::fs::create_dir_all(&self.profile_dir)?;
         let port_file = self.profile_dir.join("DevToolsActivePort");
@@ -349,37 +297,21 @@ impl BrowserManager {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         let port = port.ok_or_else(|| Error::Runtime("il browser non ha aperto la porta di debug".into()))?;
-        let http = reqwest::Client::new();
-        let list: Value = http
-            .get(format!("http://127.0.0.1:{port}/json/list"))
+        let version: Value = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/json/version"))
             .send()
             .await
             .map_err(Error::other)?
             .json()
             .await
             .map_err(Error::other)?;
-        let page = list.as_array().and_then(|a| a.iter().find(|t| t["type"] == "page").cloned());
-        let ws = match page {
-            Some(p) => p["webSocketDebuggerUrl"].as_str().unwrap_or_default().to_string(),
-            None => {
-                let t: Value = http
-                    .put(format!("http://127.0.0.1:{port}/json/new?about:blank"))
-                    .send()
-                    .await
-                    .map_err(Error::other)?
-                    .json()
-                    .await
-                    .map_err(Error::other)?;
-                t["webSocketDebuggerUrl"].as_str().unwrap_or_default().to_string()
-            }
-        };
-        let cdp = Cdp::connect(&ws, self.policy.clone()).await?;
-        // Network policy per request: every request of the page (and of the targets that attach
-        // to it) is paused until `handle_paused` has vetted its URL.
-        cdp.call("Target.setAutoAttach", json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true})).await?;
-        cdp.call("Fetch.enable", fetch_patterns()).await?;
-        cdp.call("Page.enable", json!({})).await?;
-        cdp.call("Runtime.enable", json!({})).await?;
+        // The connection is made to the browser itself, not to one page: that is what lets the
+        // network policy cover the tabs the site opens (see `cdp.rs`).
+        let ws = version["webSocketDebuggerUrl"]
+            .as_str()
+            .ok_or_else(|| Error::Runtime("il browser non ha indicato l'indirizzo di debug".into()))?;
+        let cdp = Cdp::connect(ws, self.policy.clone(), tmp).await?;
+        cdp.init().await?;
         Ok(Session { child: Some(child), cdp })
     }
 
@@ -391,7 +323,11 @@ impl BrowserManager {
         if guard.is_none() {
             *guard = Some(self.launch().await?);
         }
-        let r = f(&guard.as_ref().unwrap().cdp).await;
+        let cdp = &guard.as_ref().unwrap().cdp;
+        let r = match cdp.ensure_tab().await {
+            Ok(()) => f(cdp).await,
+            Err(e) => Err(e),
+        };
         if let Err(Error::Runtime(m)) = &r {
             if m.contains("chiusa") || m.contains("chiuso") {
                 *guard = None; // relaunch next time
@@ -409,6 +345,15 @@ impl BrowserManager {
         m
     }
 
+    /// Test constructor: talks to an already running (fake) browser endpoint.
+    #[cfg(test)]
+    fn for_endpoint(profile_dir: PathBuf, ws_url: String, resolve: ResolveFn) -> Self {
+        let mut m = Self::new(profile_dir);
+        m.policy.resolve = resolve;
+        m.endpoint = Some(ws_url);
+        m
+    }
+
     /// Closes the controlled browser (kill switch).
     pub async fn close(&self) -> bool {
         if let Some(w) = self.webview() {
@@ -417,7 +362,8 @@ impl BrowserManager {
         }
         let mut guard = self.session.lock().await;
         if let Some(mut s) = guard.take() {
-            let _ = s.cdp.call("Browser.close", json!({})).await;
+            let _ = s.cdp.call_root("Browser.close", json!({})).await;
+            s.cdp.forget_downloads_tmp();
             if let Some(mut c) = s.child.take() {
                 let _ = c.kill().await;
             }
@@ -428,20 +374,17 @@ impl BrowserManager {
 }
 
 pub fn tools(mgr: Arc<BrowserManager>) -> Vec<Arc<dyn Tool>> {
-    vec![
-        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Navigate }),
-        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Snapshot }),
-        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Click }),
-        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Type }),
-        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Scroll }),
-        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Back }),
-        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Press }),
-        Arc::new(BrowserTool { mgr: mgr.clone(), op: Op::Wait }),
-        Arc::new(BrowserTool { mgr, op: Op::Screenshot }),
+    use Op::*;
+    [
+        Navigate, Snapshot, Click, Type, Scroll, Back, Press, Wait, Screenshot, Tabs, TabNew, TabSelect, TabClose, Select, Hover, Upload,
+        Downloads, Eval, Console,
     ]
+    .into_iter()
+    .map(|op| Arc::new(BrowserTool { mgr: mgr.clone(), op }) as Arc<dyn Tool>)
+    .collect()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Op {
     Navigate,
     Snapshot,
@@ -452,15 +395,81 @@ pub(crate) enum Op {
     Back,
     Press,
     Wait,
+    Tabs,
+    TabNew,
+    TabSelect,
+    TabClose,
+    Select,
+    Hover,
+    Upload,
+    Downloads,
+    Eval,
+    Console,
 }
+
+impl Op {
+    /// Whether the in-app WebView of a phone can do it (it has one page, no console feed, no
+    /// downloads and cannot be handed a file).
+    pub(crate) fn on_webview(self) -> bool {
+        !matches!(self, Op::Tabs | Op::TabNew | Op::TabSelect | Op::TabClose | Op::Upload | Op::Downloads | Op::Console)
+    }
+}
+
+pub(crate) const NOT_ON_DEVICE: &str = "Non disponibile su questo dispositivo: il browser integrato ha una sola pagina, senza schede, console, download e caricamento di file.";
+
+// ---------------------------------------------------------------------- shared scripts
 
 /// Keys `browser_press` accepts (anything else is refused before it reaches the page).
 const PRESS_KEYS: &[&str] =
     &["Enter", "Escape", "Tab", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Backspace", "PageDown", "PageUp", "Home", "End"];
 
-/// Page script and settle time (ms) of the actions that only act on the page, shared by the
-/// Chrome and in-app WebView branches. `Ok(None)` for operations that are not of this kind.
-pub(crate) fn page_action(op: Op, args: &Value) -> Result<Option<(String, u64)>> {
+/// Bodies of `function(el) { ... }`, shared by the Chrome and the in-app WebView branches. They
+/// only ever get typed text as a JSON string literal, never as code.
+pub(crate) const CLICK_BODY: &str = "if (!el) return 'missing'; el.scrollIntoView({block:'center'}); el.click(); return 'ok';";
+
+pub(crate) fn type_body(text: &str, submit: bool) -> String {
+    format!(
+        "if (!el) return 'missing'; el.focus();\
+         const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;\
+         const setter = Object.getOwnPropertyDescriptor(proto, 'value'); if (setter && 'value' in el) setter.set.call(el, {text}); else el.textContent = {text};\
+         el.dispatchEvent(new Event('input', {{bubbles:true}})); el.dispatchEvent(new Event('change', {{bubbles:true}}));\
+         if ({submit}) {{ if (el.form && el.form.requestSubmit) el.form.requestSubmit(); else el.dispatchEvent(new KeyboardEvent('keydown', {{key:'Enter', bubbles:true}})); }}\
+         return 'ok';",
+        text = serde_json::to_string(text).unwrap()
+    )
+}
+
+/// Chooses an option of a `<select>`: by value, by text, then by part of the text.
+pub(crate) fn select_body(option: &str) -> String {
+    format!(
+        "if (!el) return 'missing'; if (el.tagName !== 'SELECT') return 'notselect';\
+         const want = {want}; const low = want.toLowerCase(); const opts = [...el.options];\
+         const o = opts.find(x => x.value === want) || opts.find(x => x.text.trim() === want) || opts.find(x => x.text.trim().toLowerCase() === low) || opts.find(x => x.text.toLowerCase().includes(low));\
+         if (!o) return 'noopt:' + opts.slice(0, 20).map(x => x.text.trim()).join(' | ');\
+         if (o.disabled) return 'disabled:' + o.text.trim();\
+         el.value = o.value; o.selected = true;\
+         el.dispatchEvent(new Event('input', {{bubbles:true}})); el.dispatchEvent(new Event('change', {{bubbles:true}}));\
+         return 'ok:' + o.text.trim();",
+        want = serde_json::to_string(option).unwrap()
+    )
+}
+
+/// Chrome: where to move the pointer (the real mouse event is sent with `Input.dispatchMouseEvent`).
+const HOVER_POS_BODY: &str = "if (!el) return 'missing'; el.scrollIntoView({block:'center'}); const r = el.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2};";
+
+/// WebView: no pointer to move, so the events a hover produces are sent to the element (CSS
+/// `:hover` is not triggered).
+pub(crate) const HOVER_EVENTS_BODY: &str = "if (!el) return 'missing'; el.scrollIntoView({block:'center'}); for (const t of ['pointerover', 'mouseover', 'mouseenter', 'mousemove']) el.dispatchEvent(new MouseEvent(t, {bubbles: t !== 'mouseenter', cancelable: true})); return 'ok';";
+
+/// A body run on the element with the numeric `ref` of the elements snapshot.
+pub(crate) fn num_ref_js(n: u64, body: &str) -> String {
+    format!("(function(el) {{ {body} }})(document.querySelector('[data-aiw-ref=\"{n}\"]'))")
+}
+
+/// Body and settle time (ms) of the actions that only act on the page (scroll, back, press):
+/// `function(el)` with `el` the element of the `ref`, if there is one.
+pub(crate) fn page_action_body(op: Op, args: &Value) -> Result<Option<(String, u64)>> {
+    let has_ref = args.get("ref").is_some_and(|v| !v.is_null());
     Ok(match op {
         Op::Scroll => {
             let dir = args.get("direction").and_then(|v| v.as_str()).unwrap_or("down");
@@ -468,40 +477,34 @@ pub(crate) fn page_action(op: Op, args: &Value) -> Result<Option<(String, u64)>>
                 return Err(Error::Invalid("`direction` deve essere up, down, top o bottom".into()));
             }
             let amount = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.8).clamp(0.1, 2.0);
-            let target = match args.get("ref") {
-                Some(_) => format!("document.querySelector('[data-aiw-ref=\"{}\"]')", ref_arg(args)?),
-                None => "null".into(),
-            };
             Some((
                 format!(
-                    "(() => {{ const t = {target}; if (t) {{ t.scrollIntoView({{block:'center'}}); return 'ok'; }}\
-                     const el = document.scrollingElement || document.documentElement; const before = el.scrollTop;\
-                     if ('{dir}' === 'top') el.scrollTo(0, 0); else if ('{dir}' === 'bottom') el.scrollTo(0, el.scrollHeight);\
-                     else el.scrollBy(0, ('{dir}' === 'up' ? -1 : 1) * Math.round(innerHeight * {amount}));\
-                     return el.scrollTop === before ? 'edge' : 'ok'; }})()"
+                    "{}if (el) {{ el.scrollIntoView({{block:'center'}}); return 'ok'; }}\
+                     const sc = document.scrollingElement || document.documentElement; const before = sc.scrollTop;\
+                     if ('{dir}' === 'top') sc.scrollTo(0, 0); else if ('{dir}' === 'bottom') sc.scrollTo(0, sc.scrollHeight);\
+                     else sc.scrollBy(0, ('{dir}' === 'up' ? -1 : 1) * Math.round(innerHeight * {amount}));\
+                     return sc.scrollTop === before ? 'edge' : 'ok';",
+                    if has_ref { "if (!el) return 'missing'; " } else { "" }
                 ),
                 400,
             ))
         }
-        Op::Back => Some(("(() => { if (history.length <= 1) return 'none'; history.back(); return 'ok'; })()".into(), 1200)),
+        Op::Back => Some(("if (history.length <= 1) return 'none'; history.back(); return 'ok';".into(), 1200)),
         Op::Press => {
             let key = arg_str(args, "key")?;
             if !PRESS_KEYS.contains(&key) {
                 return Err(Error::Invalid(format!("tasto non consentito: {key} (consentiti: {})", PRESS_KEYS.join(", "))));
             }
-            let target = match args.get("ref") {
-                Some(_) => format!("document.querySelector('[data-aiw-ref=\"{}\"]')", ref_arg(args)?),
-                None => "(document.activeElement || document.body)".into(),
-            };
             Some((
                 format!(
-                    "(() => {{ const el = {target}; if (!el) return 'missing'; el.focus && el.focus();\
+                    "{} el.focus && el.focus();\
                      const k = '{key}'; const init = {{key: k, bubbles: true, cancelable: true}};\
                      const go = el.dispatchEvent(new KeyboardEvent('keydown', init));\
                      if (k === 'Enter' && go) {{ const tag = el.tagName; if (tag === 'BUTTON' || tag === 'A' || el.getAttribute('role') === 'button') el.click(); else if (el.form && el.form.requestSubmit) el.form.requestSubmit(); }}\
                      if (k === 'PageDown') scrollBy(0, innerHeight * 0.8); if (k === 'PageUp') scrollBy(0, -innerHeight * 0.8);\
                      if (k === 'Home') scrollTo(0, 0); if (k === 'End') scrollTo(0, document.body.scrollHeight);\
-                     el.dispatchEvent(new KeyboardEvent('keyup', init)); return 'ok'; }})()"
+                     el.dispatchEvent(new KeyboardEvent('keyup', init)); return 'ok';",
+                    if has_ref { "if (!el) return 'missing';" } else { "el = document.activeElement || document.body;" }
                 ),
                 if key == "Enter" { 1200 } else { 300 },
             ))
@@ -510,33 +513,14 @@ pub(crate) fn page_action(op: Op, args: &Value) -> Result<Option<(String, u64)>>
     })
 }
 
-/// How long `browser_wait` waits (ms) and the text it waits for, if any.
-pub(crate) fn wait_args(args: &Value) -> (u64, Option<String>) {
-    let ms = args.get("ms").and_then(|v| v.as_u64()).unwrap_or(1500).clamp(100, 10_000);
-    (ms, args.get("text").and_then(|v| v.as_str()).filter(|t| !t.is_empty()).map(String::from))
-}
-
-/// Polls `eval` until the page shows `text` or `ms` passes. Whether it appeared.
-pub(crate) async fn wait_for_text<F, Fut>(eval: F, text: &str, ms: u64) -> bool
-where
-    F: Fn(String) -> Fut,
-    Fut: std::future::Future<Output = Result<Value>>,
-{
-    // The in-app WebViews hand back strings only (a boolean would arrive as ""): answer 'yes'/'no'.
-    let js = format!(
-        "(() => (document.body ? document.body.innerText : '').includes({}) ? 'yes' : 'no')()",
-        serde_json::to_string(text).unwrap()
-    );
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
-    loop {
-        if eval(js.clone()).await.map(|v| v.as_str() == Some("yes")).unwrap_or(false) {
-            return true;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(400)).await;
-    }
+/// Page script and settle time of the same actions for the WebView (numeric refs only).
+pub(crate) fn page_action(op: Op, args: &Value) -> Result<Option<(String, u64)>> {
+    let Some((body, settle)) = page_action_body(op, args)? else { return Ok(None) };
+    let js = match args.get("ref").filter(|v| !v.is_null()) {
+        Some(_) => num_ref_js(ref_arg(args)?, &body),
+        None => format!("(function(el) {{ {body} }})(null)"),
+    };
+    Ok(Some((js, settle)))
 }
 
 /// What the model reads after an action that only acts on the page.
@@ -551,15 +535,641 @@ pub(crate) fn page_action_note(op: Op, result: &str) -> String {
     }
 }
 
+/// The `ref` argument: the number of the elements snapshot or an `eN` of the accessibility one.
+pub(crate) fn parse_ref(args: &Value) -> Result<RefArg> {
+    args.get("ref").and_then(RefArg::parse).ok_or_else(|| {
+        Error::Invalid("argomento `ref` mancante o non valido (il numero dello snapshot, o eN per l'albero di accessibilità)".into())
+    })
+}
+
+/// The `ref` as a number, for the in-app WebView (which has no accessibility tree).
+pub(crate) fn ref_arg(args: &Value) -> Result<u64> {
+    match parse_ref(args)? {
+        RefArg::Num(n) => Ok(n),
+        RefArg::Ax(_) => {
+            Err(Error::Invalid("su questo dispositivo i ref sono i numeri dello snapshot (l'albero di accessibilità non c'è)".into()))
+        }
+    }
+}
+
+/// A plain string schema (some providers refuse type arrays); a number is accepted all the same.
+fn ref_schema() -> Value {
+    json!({"type": "string", "description": "numero [n] dello snapshot (es. \"3\"), oppure [eN] dell'albero di accessibilità (es. \"e5\")"})
+}
+
+// ---------------------------------------------------------------------- snapshot formats
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Format {
+    Elements,
+    Ax,
+    Text,
+}
+
+pub(crate) fn snapshot_format(args: &Value) -> Result<Format> {
+    match args.get("format").and_then(|v| v.as_str()).unwrap_or("elements") {
+        "elements" | "" => Ok(Format::Elements),
+        "ax" => Ok(Format::Ax),
+        "text" => Ok(Format::Text),
+        other => Err(Error::Invalid(format!("`format` non valido: {other} (usa elements, ax o text)"))),
+    }
+}
+
+pub(crate) fn text_offset(args: &Value) -> usize {
+    args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize
+}
+
+/// Script of `format: "text"`: title, address and the HTML of the page (capped), as one JSON string.
+pub(crate) const TEXT_JS: &str = "(() => JSON.stringify({t: document.title, u: location.href, h: (document.documentElement ? document.documentElement.outerHTML : '').slice(0, 3000000)}))()";
+
+/// Characters of readable text returned by one `format: "text"` call.
+const TEXT_PAGE: usize = 12_000;
+
+/// Readable text of a page (the output of `TEXT_JS`, through the same converter as `web_fetch`),
+/// from character `offset`, with a «troncato» note telling how to go on.
+pub(crate) fn text_snapshot(raw: &str, offset: usize) -> String {
+    let v: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+    let html = v["h"].as_str().unwrap_or_default();
+    let (found, text) = html_to_text(html);
+    let title = v["t"].as_str().filter(|t| !t.is_empty()).map(String::from).or(found).unwrap_or_default();
+    let total = text.chars().count();
+    let start = offset.min(total);
+    let slice: String = text.chars().skip(start).take(TEXT_PAGE).collect();
+    let end = start + slice.chars().count();
+    let note = if end < total {
+        format!(
+            "Testo da {start} a {end} di {total} caratteri, troncato: per continuare usa browser_snapshot con format=text e offset={end}."
+        )
+    } else {
+        format!("Testo da {start} a {end} di {total} caratteri (fine della pagina).")
+    };
+    format!("Titolo: {title}\nURL: {}\n{note}\n\n{slice}", v["u"].as_str().unwrap_or_default())
+}
+
+// ---------------------------------------------------------------------- waiting
+
+/// What `browser_wait` waits for. Every condition given must hold at the same time.
+pub(crate) struct WaitSpec {
+    pub timeout_ms: u64,
+    pub text: Option<String>,
+    pub text_gone: Option<String>,
+    pub selector: Option<String>,
+    pub element: Option<RefArg>,
+    pub navigation: bool,
+    pub network_idle: bool,
+}
+
+/// Longest `browser_wait` waits, whatever it is asked.
+pub(crate) const WAIT_MAX_MS: u64 = 30_000;
+
+impl WaitSpec {
+    pub(crate) fn parse(args: &Value) -> Result<Self> {
+        let s = |k: &str| args.get(k).and_then(|v| v.as_str()).filter(|t| !t.is_empty()).map(String::from);
+        let flag = |k: &str| args.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+        let element = match args.get("ref").filter(|v| !v.is_null()) {
+            Some(v) => Some(RefArg::parse(v).ok_or_else(|| Error::Invalid("`ref` non valido: il numero dello snapshot o eN".into()))?),
+            None => None,
+        };
+        let mut w = WaitSpec {
+            timeout_ms: 0,
+            text: s("text"),
+            text_gone: s("text_gone"),
+            selector: s("selector"),
+            element,
+            navigation: flag("navigation"),
+            network_idle: flag("network_idle"),
+        };
+        let default = if w.has_condition() { 10_000 } else { 1500 };
+        w.timeout_ms = args.get("ms").and_then(|v| v.as_u64()).unwrap_or(default).clamp(100, WAIT_MAX_MS);
+        Ok(w)
+    }
+
+    pub(crate) fn has_condition(&self) -> bool {
+        self.text.is_some()
+            || self.text_gone.is_some()
+            || self.selector.is_some()
+            || self.element.is_some()
+            || self.navigation
+            || self.network_idle
+    }
+
+    /// The conditions that only look at the page, as one script answering 'yes', 'no' (strings
+    /// only: the in-app WebViews hand back strings) or 'bad' (a selector that is not valid).
+    /// `None` when there are none. Only text and selectors go in, as JSON string literals.
+    pub(crate) fn page_js(&self) -> Option<String> {
+        let mut conds: Vec<String> = vec![];
+        let lit = |t: &str| serde_json::to_string(t).unwrap();
+        if let Some(t) = &self.text {
+            conds.push(format!("txt.includes({})", lit(t)));
+        }
+        if let Some(t) = &self.text_gone {
+            conds.push(format!("!txt.includes({})", lit(t)));
+        }
+        let mut selectors: Vec<String> = vec![];
+        if let Some(s) = &self.selector {
+            selectors.push(s.clone());
+        }
+        if let Some(RefArg::Num(n)) = &self.element {
+            selectors.push(format!("[data-aiw-ref=\"{n}\"]"));
+        }
+        for s in &selectors {
+            conds.push(format!("vis(document.querySelector({}))", lit(s)));
+        }
+        if conds.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "(() => {{ try {{ const txt = document.body ? document.body.innerText : ''; \
+             const vis = e => {{ if (!e) return false; const r = e.getBoundingClientRect(); const st = getComputedStyle(e); return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none'; }}; \
+             return ({}) ? 'yes' : 'no'; }} catch (e) {{ return 'bad'; }} }})()",
+            conds.join(" && ")
+        ))
+    }
+
+    /// «Il testo «x» è comparso», for each condition.
+    pub(crate) fn done_phrases(&self) -> Vec<String> {
+        let mut v = vec![];
+        if let Some(t) = &self.text {
+            v.push(format!("il testo «{t}» è comparso"));
+        }
+        if let Some(t) = &self.text_gone {
+            v.push(format!("il testo «{t}» è scomparso"));
+        }
+        if let Some(s) = &self.selector {
+            v.push(format!("«{s}» è presente"));
+        }
+        if let Some(r) = &self.element {
+            v.push(format!("[{}] è visibile", r.label()));
+        }
+        if self.navigation {
+            v.push("la pagina ha navigato".into());
+        }
+        if self.network_idle {
+            v.push("la rete è inattiva".into());
+        }
+        v
+    }
+
+    pub(crate) fn failed_phrases(&self) -> Vec<String> {
+        let mut v = vec![];
+        if let Some(t) = &self.text {
+            v.push(format!("il testo «{t}» non è comparso"));
+        }
+        if let Some(t) = &self.text_gone {
+            v.push(format!("il testo «{t}» è ancora presente"));
+        }
+        if let Some(s) = &self.selector {
+            v.push(format!("«{s}» non è presente"));
+        }
+        if let Some(r) = &self.element {
+            v.push(format!("[{}] non è visibile", r.label()));
+        }
+        if self.navigation {
+            v.push("nessuna navigazione".into());
+        }
+        if self.network_idle {
+            v.push("la rete è ancora attiva".into());
+        }
+        v
+    }
+
+    pub(crate) fn ok_note(&self) -> String {
+        format!("Atteso: {}.", self.done_phrases().join(", "))
+    }
+
+    pub(crate) fn timeout_note(&self) -> String {
+        format!("Non soddisfatto entro {} ms: {}.", self.timeout_ms, self.failed_phrases().join(", "))
+    }
+}
+
+/// Polls `eval` until the page script answers 'yes' (`Ok(true)`), `ms` pass (`Ok(false)`) or it
+/// answers 'bad' (an invalid selector).
+pub(crate) async fn wait_page<F, Fut>(eval: F, js: &str, ms: u64) -> Result<bool>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Value>>,
+{
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+    loop {
+        match eval(js.to_string()).await {
+            Ok(v) if v.as_str() == Some("yes") => return Ok(true),
+            Ok(v) if v.as_str() == Some("bad") => return Err(Error::Invalid("selettore CSS non valido".into())),
+            _ => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
+// ---------------------------------------------------------------------- results
+
+const EVAL_CAP: usize = 20_000;
+
+/// A script result as the model reads it: JSON, capped with a «troncato» note.
+pub(crate) fn cap_result(s: &str) -> String {
+    let n = s.chars().count();
+    if n <= EVAL_CAP {
+        return s.to_string();
+    }
+    format!("{}\n… [risultato troncato: {n} caratteri in tutto, mostrati {EVAL_CAP}]", s.chars().take(EVAL_CAP).collect::<String>())
+}
+
+/// Script of `browser_eval` for the in-app WebView (strings only come back from there).
+pub(crate) fn eval_webview_js(expr: &str) -> String {
+    // The expression is the model's, on purpose: this tool runs code in the page.
+    format!("(() => {{ try {{ const v = ({expr}\n); const s = JSON.stringify(v); return s === undefined ? 'undefined' : s; }} catch (e) {{ return 'ERRORE: ' + e; }} }})()")
+}
+
+fn with_notes(cdp: &Cdp, text: String, extra: Vec<String>) -> String {
+    let mut notes = cdp.take_notes();
+    notes.extend(extra);
+    if notes.is_empty() {
+        return text;
+    }
+    format!("{text}\n\nAvvisi:\n{}", notes.iter().map(|n| format!("- {n}")).collect::<Vec<_>>().join("\n"))
+}
+
+fn tabs_list(cdp: &Cdp) -> String {
+    let tabs = cdp.tabs();
+    let mut out = format!("Schede aperte ({} su {MAX_TABS} al massimo):", tabs.len());
+    for t in tabs {
+        let title = if t.title.is_empty() { "(senza titolo)" } else { t.title.as_str() };
+        out.push_str(&format!("\n[{}] «{}» {}{}", t.index, title, t.url, if t.active { " (attiva)" } else { "" }));
+        if t.by_site {
+            out.push_str(" (aperta dal sito)");
+        }
+    }
+    out
+}
+
+/// The snapshot of the active tab in the format that tab last used (elements or accessibility).
+async fn default_snapshot(cdp: &Cdp) -> Result<String> {
+    let body = match cdp.fmt() {
+        SnapFmt::Ax => cdp.ax_snapshot().await?,
+        SnapFmt::Elements => cdp.eval(SNAPSHOT_JS).await?.as_str().unwrap_or_default().to_string(),
+    };
+    Ok(format!("{}{body}", cdp.tab_header()))
+}
+
+/// The end of an action: let the page settle, report downloads, dialogs and new tabs, then the snapshot.
+async fn tail(cdp: &Cdp, head: &str, settle_ms: u64, downloads_before: usize) -> Result<ToolOutput> {
+    if settle_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(settle_ms)).await;
+    }
+    let dl =
+        if cdp.downloads_len() > downloads_before { cdp.downloads_since(downloads_before, Duration::from_secs(20)).await } else { vec![] };
+    let snap = default_snapshot(cdp).await?;
+    let head = std::iter::once(head.to_string()).chain(dl).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n");
+    let head = if head.is_empty() { String::new() } else { format!("{head}\n\n") };
+    Ok(ToolOutput::text(with_notes(cdp, format!("{head}{snap}"), vec![])))
+}
+
+/// Opens `url` in the active tab (already vetted by the caller) and returns what the model reads.
+async fn do_navigate(
+    cdp: &Cdp,
+    url: &str,
+    ctx: &ToolContext,
+    resolve: &ResolveFn,
+    blocked: &Arc<Mutex<Vec<(String, String)>>>,
+) -> Result<ToolOutput> {
+    let (_, loads0) = cdp.tab_loads();
+    let dl0 = cdp.downloads_len();
+    blocked.lock().unwrap().clear();
+    let r = cdp.call("Page.navigate", json!({"url": url})).await?;
+    if let Some(e) = r.get("errorText").and_then(|e| e.as_str()) {
+        // The request policy refused the page itself or one of its redirects.
+        let refused = blocked.lock().unwrap().last().cloned();
+        if let Some((u, why)) = refused {
+            let _ = cdp.call("Page.navigate", json!({"url": "about:blank"})).await;
+            return Ok(ToolOutput::error(format!("Navigazione annullata: {u} non consentito ({why})")));
+        }
+        if e.contains("ERR_ABORTED") {
+            // A link to a file is not a page: the browser turns it into a download.
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            if cdp.downloads_len() > dl0 {
+                let lines = cdp.downloads_since(dl0, Duration::from_secs(30)).await;
+                let failed = lines.iter().all(|l| l.starts_with("Download non riuscito"));
+                let text = with_notes(cdp, format!("{}\n(la pagina aperta non è cambiata)", lines.join("\n")), vec![]);
+                return Ok(if failed { ToolOutput::error(text) } else { ToolOutput::text(text) });
+            }
+        }
+        return Ok(ToolOutput::error(format!("Navigazione fallita: {e}")));
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(20), async {
+        while cdp.tab_loads().1 <= loads0 {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    })
+    .await;
+    // The browser follows redirects on its own, so the page that actually loaded gets the same
+    // network policy as the requested address: when it is not allowed (a public page bouncing to
+    // localhost or the LAN) it is dropped before anything of it reaches the model.
+    let landed = cdp.eval("location.href").await.ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
+    // (about:blank and browser error pages are not network targets.)
+    if landed.starts_with("http://") || landed.starts_with("https://") {
+        if let Err(Error::Denied(why)) = vet_with(&landed, ctx, resolve).await {
+            let _ = cdp.call("Page.navigate", json!({"url": "about:blank"})).await;
+            return Ok(ToolOutput::error(format!("Navigazione annullata: la pagina ha reindirizzato a {landed}, non consentito ({why})")));
+        }
+    }
+    cdp.set_fmt(SnapFmt::Elements);
+    let snap = default_snapshot(cdp).await?;
+    Ok(ToolOutput::text(with_notes(cdp, snap, vec![])))
+}
+
+/// `browser_wait` on Chrome.
+async fn do_wait(cdp: &Cdp, w: &WaitSpec) -> Result<ToolOutput> {
+    if !w.has_condition() {
+        tokio::time::sleep(Duration::from_millis(w.timeout_ms)).await;
+        return tail(cdp, &format!("Atteso {} ms.", w.timeout_ms), 0, cdp.downloads_len()).await;
+    }
+    let js = w.page_js();
+    let (navs0, loads0) = cdp.tab_loads();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(w.timeout_ms);
+    let mut idle_since: Option<tokio::time::Instant> = None;
+    let satisfied = loop {
+        let now = tokio::time::Instant::now();
+        let mut ok = true;
+        if let Some(js) = &js {
+            match cdp.eval(js).await {
+                Ok(v) if v.as_str() == Some("yes") => {}
+                Ok(v) if v.as_str() == Some("bad") => return Ok(ToolOutput::error("Il selettore CSS non è valido.")),
+                _ => ok = false,
+            }
+        }
+        if let (true, Some(RefArg::Ax(_))) = (ok, &w.element) {
+            let body = "if (!el) return 'no'; const r = el.getBoundingClientRect(); const st = getComputedStyle(el); return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none' ? 'yes' : 'no';";
+            ok = cdp.on_ref(w.element.as_ref().unwrap(), body).await.map(|v| v.as_str() == Some("yes")).unwrap_or(false);
+        }
+        if w.navigation {
+            let (n, l) = cdp.tab_loads();
+            ok &= n > navs0 && l > loads0;
+        }
+        if w.network_idle {
+            if cdp.inflight() == 0 {
+                let since = *idle_since.get_or_insert(now);
+                ok &= now.duration_since(since) >= Duration::from_millis(500);
+            } else {
+                idle_since = None;
+                ok = false;
+            }
+        }
+        if ok {
+            break true;
+        }
+        if now >= deadline {
+            break false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    let note = if satisfied { w.ok_note() } else { w.timeout_note() };
+    tail(cdp, &note, 0, cdp.downloads_len()).await
+}
+
 struct BrowserTool {
     mgr: Arc<BrowserManager>,
     op: Op,
 }
 
-pub(crate) fn ref_arg(args: &Value) -> Result<u64> {
-    args.get("ref")
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim_matches(['[', ']']).parse().ok())))
-        .ok_or_else(|| Error::Invalid("argomento `ref` (numero dello snapshot) mancante".into()))
+/// Everything `run_op` needs besides the connection.
+struct OpEnv {
+    args: Value,
+    ctx: ToolContext,
+    /// The address to open, already vetted (navigate and tab_new).
+    url: Option<String>,
+    resolve: ResolveFn,
+    blocked: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+async fn run_op(cdp: &Cdp, op: Op, env: OpEnv) -> Result<ToolOutput> {
+    let OpEnv { args, ctx, url, resolve, blocked } = env;
+    match op {
+        Op::Navigate => do_navigate(cdp, &url.unwrap_or_default(), &ctx, &resolve, &blocked).await,
+        Op::Snapshot => {
+            let text = match snapshot_format(&args)? {
+                Format::Elements => {
+                    cdp.set_fmt(SnapFmt::Elements);
+                    default_snapshot(cdp).await?
+                }
+                Format::Ax => format!("{}{}", cdp.tab_header(), cdp.ax_snapshot().await?),
+                Format::Text => {
+                    let raw = cdp.eval(TEXT_JS).await?;
+                    format!("{}{}", cdp.tab_header(), text_snapshot(raw.as_str().unwrap_or_default(), text_offset(&args)))
+                }
+            };
+            Ok(ToolOutput::text(with_notes(cdp, text, vec![])))
+        }
+        Op::Click => {
+            let r = parse_ref(&args)?;
+            let dl0 = cdp.downloads_len();
+            if cdp.on_ref(&r, CLICK_BODY).await?.as_str() != Some("ok") {
+                return Ok(ToolOutput::error(format!("Elemento [{}] non trovato: rifai browser_snapshot", r.label())));
+            }
+            tail(cdp, &format!("Cliccato [{}].", r.label()), 900, dl0).await
+        }
+        Op::Type => {
+            let r = parse_ref(&args)?;
+            let text = arg_str(&args, "text")?.to_string();
+            let submit = args.get("submit").and_then(|v| v.as_bool()).unwrap_or(false);
+            let dl0 = cdp.downloads_len();
+            if cdp.on_ref(&r, &type_body(&text, submit)).await?.as_str() != Some("ok") {
+                return Ok(ToolOutput::error(format!("Campo [{}] non trovato: rifai browser_snapshot", r.label())));
+            }
+            tail(cdp, &format!("Scritto in [{}].", r.label()), if submit { 1500 } else { 200 }, dl0).await
+        }
+        Op::Scroll | Op::Back | Op::Press => {
+            let Some((body, settle)) = page_action_body(op, &args)? else { unreachable!() };
+            let r = match args.get("ref").filter(|v| !v.is_null()) {
+                Some(_) => Some(parse_ref(&args)?),
+                None => None,
+            };
+            let dl0 = cdp.downloads_len();
+            let res = cdp.run_body(r.as_ref(), &body).await?;
+            let res = res.as_str().unwrap_or_default().to_string();
+            if res == "missing" {
+                return Ok(ToolOutput::error("Elemento non trovato: rifai browser_snapshot"));
+            }
+            tail(cdp, &page_action_note(op, &res), settle, dl0).await
+        }
+        Op::Wait => do_wait(cdp, &WaitSpec::parse(&args)?).await,
+        Op::Screenshot => {
+            let r = cdp.call("Page.captureScreenshot", json!({"format": "png"})).await?;
+            let data = r["data"].as_str().unwrap_or_default();
+            Ok(ToolOutput {
+                content: with_notes(cdp, "Screenshot della pagina allegato.".into(), vec![]),
+                images: vec![format!("data:image/png;base64,{data}")],
+                is_error: false,
+            })
+        }
+        Op::Tabs => {
+            cdp.refresh_tabs().await;
+            Ok(ToolOutput::text(with_notes(cdp, tabs_list(cdp), vec![])))
+        }
+        Op::TabNew => {
+            if cdp.tab_count() >= MAX_TABS {
+                return Ok(ToolOutput::error(format!(
+                    "Ci sono già {MAX_TABS} schede aperte (il massimo): chiudine una con browser_tab_close."
+                )));
+            }
+            cdp.new_tab().await?;
+            let i = cdp.active_index().unwrap_or(0);
+            match url {
+                Some(u) => {
+                    let out = do_navigate(cdp, &u, &ctx, &resolve, &blocked).await?;
+                    Ok(ToolOutput { content: format!("Nuova scheda [{i}].\n\n{}", out.content), ..out })
+                }
+                None => {
+                    Ok(ToolOutput::text(format!("Nuova scheda [{i}] vuota, ora attiva: usa browser_navigate per aprirci un indirizzo.")))
+                }
+            }
+        }
+        Op::TabSelect => {
+            let i = args
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| Error::Invalid("argomento `index` (numero della scheda) mancante".into()))? as usize;
+            cdp.select_tab(i).await?;
+            tail(cdp, &format!("Scheda [{i}] attiva."), 0, cdp.downloads_len()).await
+        }
+        Op::TabClose => {
+            let i = match args.get("index").and_then(|v| v.as_u64()) {
+                Some(i) => i as usize,
+                None => cdp.active_index().ok_or_else(|| Error::Runtime("nessuna scheda attiva".into()))?,
+            };
+            cdp.close_tab(i).await?;
+            cdp.refresh_tabs().await;
+            Ok(ToolOutput::text(with_notes(cdp, format!("Scheda [{i}] chiusa.\n{}", tabs_list(cdp)), vec![])))
+        }
+        Op::Select => {
+            let r = parse_ref(&args)?;
+            let option = arg_str(&args, "option")?.to_string();
+            let dl0 = cdp.downloads_len();
+            let res = cdp.on_ref(&r, &select_body(&option)).await?;
+            let res = res.as_str().unwrap_or_default().to_string();
+            if let Some(err) = select_error(&r, &option, &res) {
+                return Ok(ToolOutput::error(err));
+            }
+            tail(cdp, &format!("Scelto «{}» in [{}].", res.trim_start_matches("ok:"), r.label()), 300, dl0).await
+        }
+        Op::Hover => {
+            let r = parse_ref(&args)?;
+            let pos = cdp.on_ref(&r, HOVER_POS_BODY).await?;
+            let (Some(x), Some(y)) = (pos["x"].as_f64(), pos["y"].as_f64()) else {
+                return Ok(ToolOutput::error(format!("Elemento [{}] non trovato: rifai browser_snapshot", r.label())));
+            };
+            let dl0 = cdp.downloads_len();
+            cdp.call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": x, "y": y})).await?;
+            tail(cdp, &format!("Puntatore sopra [{}].", r.label()), 400, dl0).await
+        }
+        Op::Upload => {
+            let r = parse_ref(&args)?;
+            let path = arg_str(&args, "path")?;
+            // Reading rules of the sandbox: the workspace and the folders the run may read
+            // (skills, the attachments of the session), never anything else on the disk.
+            let abs = ctx.resolve(path, false)?;
+            let meta = std::fs::metadata(&abs).map_err(|_| Error::NotFound(format!("file non trovato: {}", abs.display())))?;
+            if !meta.is_file() {
+                return Ok(ToolOutput::error(format!("{} non è un file.", abs.display())));
+            }
+            if meta.len() > MAX_DOWNLOAD_BYTES {
+                return Ok(ToolOutput::error(format!("Il file è troppo grande da caricare (oltre {} MB).", MAX_DOWNLOAD_BYTES >> 20)));
+            }
+            let check = cdp
+                .on_ref(&r, "if (!el) return 'missing'; return el.tagName === 'INPUT' && el.type === 'file' ? 'ok' : 'notfile';")
+                .await?;
+            match check.as_str() {
+                Some("ok") => {}
+                Some("notfile") => {
+                    return Ok(ToolOutput::error(format!(
+                        "L'elemento [{}] non è un campo di caricamento file (input type=file).",
+                        r.label()
+                    )))
+                }
+                _ => return Ok(ToolOutput::error(format!("Elemento [{}] non trovato: rifai browser_snapshot", r.label()))),
+            }
+            let Some(obj) = cdp.object_for_ref(&r).await? else {
+                return Ok(ToolOutput::error(format!("Elemento [{}] non trovato: rifai browser_snapshot", r.label())));
+            };
+            cdp.call("DOM.setFileInputFiles", json!({"files": [abs.to_string_lossy()], "objectId": obj})).await?;
+            tail(
+                cdp,
+                &format!(
+                    "File «{}» scelto nel campo [{}].",
+                    abs.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                    r.label()
+                ),
+                300,
+                cdp.downloads_len(),
+            )
+            .await
+        }
+        Op::Downloads => {
+            let all = cdp.all_downloads();
+            let body = if all.is_empty() {
+                "Nessun download in questa sessione.".to_string()
+            } else {
+                format!("Download della sessione ({}):\n{}", all.len(), all.join("\n"))
+            };
+            Ok(ToolOutput::text(with_notes(
+                cdp,
+                format!("{body}\nLimiti: {MAX_DOWNLOADS_PER_RUN} per run, {} MB ciascuno.", MAX_DOWNLOAD_BYTES >> 20),
+                vec![],
+            )))
+        }
+        Op::Eval => {
+            let expr = arg_str(&args, "expression")?;
+            let r = cdp
+                .call("Runtime.evaluate", json!({"expression": expr, "returnByValue": true, "awaitPromise": true, "timeout": 10_000}))
+                .await?;
+            if let Some(ex) = r.get("exceptionDetails") {
+                let msg = ex["exception"]["description"].as_str().or(ex["text"].as_str()).unwrap_or("errore sconosciuto");
+                return Ok(ToolOutput::error(with_notes(
+                    cdp,
+                    format!("Errore JavaScript: {}", msg.lines().next().unwrap_or_default()),
+                    vec![],
+                )));
+            }
+            let out = match r["result"].get("value") {
+                Some(v) => cap_result(&v.to_string()),
+                None => r["result"]["description"]
+                    .as_str()
+                    .map(|d| format!("(valore non serializzabile: {d})"))
+                    .unwrap_or_else(|| "undefined".into()),
+            };
+            Ok(ToolOutput::text(with_notes(cdp, out, vec![])))
+        }
+        Op::Console => {
+            let clear = args.get("clear").and_then(|v| v.as_bool()).unwrap_or(false);
+            let lines = cdp.console(clear);
+            let body = if lines.is_empty() {
+                "Nessun errore o avviso recente nella console della scheda.".to_string()
+            } else {
+                format!(
+                    "Console della scheda, ultimi errori e avvisi ({}):\n{}",
+                    lines.len(),
+                    lines.iter().map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n")
+                )
+            };
+            Ok(ToolOutput::text(with_notes(cdp, body, vec![])))
+        }
+    }
+}
+
+/// The message for a failed `browser_select`, `None` when it worked.
+pub(crate) fn select_error(r: &RefArg, option: &str, res: &str) -> Option<String> {
+    let label = r.label();
+    match res {
+        "missing" => Some(format!("Elemento [{label}] non trovato: rifai browser_snapshot")),
+        "notselect" => Some(format!("L'elemento [{label}] non è un menu a tendina (select): per caselle e opzioni usa browser_click.")),
+        _ if res.starts_with("noopt:") => {
+            Some(format!("Nessuna opzione «{option}» in [{label}]. Opzioni: {}", res.trim_start_matches("noopt:")))
+        }
+        _ if res.starts_with("disabled:") => Some(format!("L'opzione «{}» è disabilitata.", res.trim_start_matches("disabled:"))),
+        _ if res.starts_with("ok:") => None,
+        _ => Some(format!("Scelta non riuscita in [{label}].")),
+    }
 }
 
 #[async_trait]
@@ -575,496 +1185,122 @@ impl Tool for BrowserTool {
             Op::Back => "browser_back",
             Op::Press => "browser_press",
             Op::Wait => "browser_wait",
+            Op::Tabs => "browser_tabs",
+            Op::TabNew => "browser_tab_new",
+            Op::TabSelect => "browser_tab_select",
+            Op::TabClose => "browser_tab_close",
+            Op::Select => "browser_select",
+            Op::Hover => "browser_hover",
+            Op::Upload => "browser_upload",
+            Op::Downloads => "browser_downloads",
+            Op::Eval => "browser_eval",
+            Op::Console => "browser_console",
         }
     }
     fn description(&self) -> &str {
         match self.op {
             Op::Navigate => "Apre un URL nel browser controllato e restituisce lo snapshot della pagina.",
-            Op::Snapshot => "Snapshot testuale della pagina: elementi interattivi numerati [n] e testo visibile.",
-            Op::Click => "Clicca l'elemento con il numero `ref` dell'ultimo snapshot.",
+            Op::Snapshot => "Snapshot della pagina. Di serie: elementi interattivi numerati [n] e testo visibile. Con format=ax: albero di accessibilità con ref [eN] stabili (ruolo, nome, valore, stato), utile se i controlli sono ambigui. Con format=text: testo leggibile di articoli lunghi (offset per continuare). Gli elenchi lunghi sono troncati.",
+            Op::Click => "Clicca l'elemento `ref` dell'ultimo snapshot (numero [n] o [eN]); vale anche per caselle e opzioni radio. Se il clic avvia un download lo riporta; se il sito apre una scheda la segnala.",
             Op::Type => "Scrive `text` nel campo `ref`; con submit=true invia il modulo.",
             Op::Screenshot => "Screenshot della pagina (immagine, per modelli con visione).",
             Op::Scroll => "Scorre la pagina (up, down, top, bottom) o porta in vista l'elemento `ref`; restituisce il nuovo snapshot.",
             Op::Back => "Torna alla pagina precedente della cronologia e restituisce lo snapshot.",
             Op::Press => "Preme un tasto (Enter, Escape, Tab, frecce, PageDown…) sull'elemento `ref` o su quello attivo.",
-            Op::Wait => "Aspetta che la pagina cambi: fino a `ms` millisecondi o finché compare `text`; poi restituisce lo snapshot.",
+            Op::Wait => "Aspetta che la pagina cambi, poi restituisce lo snapshot. Senza condizioni attende `ms` millisecondi. Condizioni (tutte quelle indicate devono valere): `text` compare, `text_gone` sparisce, `selector` (CSS) o `ref` visibile, `navigation` (una navigazione completata), `network_idle` (nessuna richiesta in corso). `ms` è il tempo massimo (di serie 10000, al massimo 30000).",
+            Op::Tabs => "Elenca le schede aperte del browser: numero, titolo, indirizzo e quale è attiva (comprese quelle aperte dai siti).",
+            Op::TabNew => "Apre una nuova scheda, vuota o su `url` (controllato come in browser_navigate), e la rende attiva. Al massimo 8 schede.",
+            Op::TabSelect => "Rende attiva la scheda numero `index` (vedi browser_tabs) e ne restituisce lo snapshot.",
+            Op::TabClose => "Chiude la scheda numero `index` (di serie quella attiva).",
+            Op::Select => "Sceglie un'opzione di un menu a tendina (select) `ref`, per valore o per testo (`option`).",
+            Op::Hover => "Porta il puntatore sull'elemento `ref` (menu che si aprono al passaggio, descrizioni) e restituisce lo snapshot.",
+            Op::Upload => "Sceglie un file da caricare nel campo `ref` (input di tipo file). `path` deve stare nel workspace o negli allegati della sessione: il contenuto va al sito.",
+            Op::Downloads => "Elenca i download della sessione (nome, stato, percorso nel workspace). I download vanno in `downloads/<run>/`, solo con il permesso di scrittura; al massimo 10 per run, 200 MB ciascuno.",
+            Op::Eval => "Esegue codice JavaScript nella pagina aperta (`expression`) e restituisce il risultato come JSON (troncato se lungo). Attenzione: è codice eseguito nella pagina, con i suoi cookie e la sua sessione; serve un permesso esplicito.",
+            Op::Console => "Errori e avvisi recenti della console della scheda attiva (anche richieste bloccate o fallite); `clear=true` li svuota.",
         }
     }
     fn parameters(&self) -> Value {
         match self.op {
             Op::Navigate => json!({"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}),
-            Op::Snapshot | Op::Screenshot => json!({"type":"object","properties":{}}),
-            Op::Click => json!({"type":"object","properties":{"ref":{"type":"integer"}},"required":["ref"]}),
+            Op::Snapshot => json!({"type":"object","properties":{
+                "format":{"type":"string","enum":["elements","ax","text"],"description":"elements (di serie), ax (albero di accessibilità) o text (testo leggibile)"},
+                "offset":{"type":"integer","description":"con format=text: carattere da cui riprendere"}}}),
+            Op::Screenshot | Op::Back | Op::Tabs | Op::Downloads => json!({"type":"object","properties":{}}),
+            Op::Click | Op::Hover => json!({"type":"object","properties":{"ref":ref_schema()},"required":["ref"]}),
             Op::Type => {
-                json!({"type":"object","properties":{"ref":{"type":"integer"},"text":{"type":"string"},"submit":{"type":"boolean"}},"required":["ref","text"]})
+                json!({"type":"object","properties":{"ref":ref_schema(),"text":{"type":"string"},"submit":{"type":"boolean"}},"required":["ref","text"]})
             }
             Op::Scroll => {
-                json!({"type":"object","properties":{"direction":{"type":"string","enum":["up","down","top","bottom"]},"amount":{"type":"number","description":"frazione di schermata (0.1-2, default 0.8)"},"ref":{"type":"integer"}}})
+                json!({"type":"object","properties":{"direction":{"type":"string","enum":["up","down","top","bottom"]},"amount":{"type":"number","description":"frazione di schermata (0.1-2, default 0.8)"},"ref":ref_schema()}})
             }
-            Op::Back => json!({"type":"object","properties":{}}),
             Op::Press => {
-                json!({"type":"object","properties":{"key":{"type":"string","enum":PRESS_KEYS},"ref":{"type":"integer"}},"required":["key"]})
+                json!({"type":"object","properties":{"key":{"type":"string","enum":PRESS_KEYS},"ref":ref_schema()},"required":["key"]})
             }
-            Op::Wait => json!({"type":"object","properties":{"ms":{"type":"integer"},"text":{"type":"string"}}}),
+            Op::Wait => json!({"type":"object","properties":{
+                "ms":{"type":"integer","description":"millisecondi: attesa fissa, o tempo massimo se ci sono condizioni (max 30000)"},
+                "text":{"type":"string"},"text_gone":{"type":"string"},"selector":{"type":"string","description":"selettore CSS"},
+                "ref":ref_schema(),"navigation":{"type":"boolean"},"network_idle":{"type":"boolean"}}}),
+            Op::TabNew => json!({"type":"object","properties":{"url":{"type":"string"}}}),
+            Op::TabSelect => {
+                json!({"type":"object","properties":{"index":{"type":"integer","description":"numero della scheda in browser_tabs"}},"required":["index"]})
+            }
+            Op::TabClose => json!({"type":"object","properties":{"index":{"type":"integer"}}}),
+            Op::Select => {
+                json!({"type":"object","properties":{"ref":ref_schema(),"option":{"type":"string","description":"valore o testo dell'opzione"}},"required":["ref","option"]})
+            }
+            Op::Upload => {
+                json!({"type":"object","properties":{"ref":ref_schema(),"path":{"type":"string","description":"file nel workspace o negli allegati"}},"required":["ref","path"]})
+            }
+            Op::Eval => {
+                json!({"type":"object","properties":{"expression":{"type":"string","description":"espressione JavaScript"}},"required":["expression"]})
+            }
+            Op::Console => json!({"type":"object","properties":{"clear":{"type":"boolean"}}}),
         }
     }
     fn risk(&self) -> Risk {
         match self.op {
-            Op::Navigate => Risk::Network,
-            Op::Snapshot | Op::Screenshot | Op::Scroll | Op::Wait => Risk::Read,
-            Op::Click | Op::Type | Op::Back | Op::Press => Risk::Computer,
+            Op::Navigate | Op::TabNew => Risk::Network,
+            Op::Snapshot | Op::Screenshot | Op::Scroll | Op::Wait | Op::Tabs | Op::TabSelect | Op::Downloads | Op::Console => Risk::Read,
+            // Upload hands a local file to a site: a person confirms it like any other action on a page.
+            Op::Click | Op::Type | Op::Back | Op::Press | Op::Select | Op::Hover | Op::Upload | Op::TabClose => Risk::Computer,
+            Op::Eval => Risk::Exec,
         }
     }
+    /// Running code in the page is not covered by a `*` in an agent's tool list.
+    fn explicit_grant(&self) -> bool {
+        self.op == Op::Eval
+    }
+    fn subject(&self, args: &Value) -> Option<String> {
+        let keys: &[&str] = if self.op == Op::Eval { &["expression"] } else { &["path", "url"] };
+        keys.iter().find_map(|k| args.get(*k).and_then(|v| v.as_str()).map(String::from))
+    }
     fn available(&self) -> std::result::Result<(), String> {
+        if self.mgr.webview().is_some() && !self.op.on_webview() {
+            return Err("non disponibile su questo dispositivo (il browser integrato ha una sola pagina)".into());
+        }
         self.mgr.available()
     }
     async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         if let Some(host) = self.mgr.webview() {
+            if !self.op.on_webview() {
+                return Ok(ToolOutput::error(NOT_ON_DEVICE));
+            }
             return crate::webview::call(&self.mgr, host, self.op, args, ctx).await;
         }
-        match self.op {
-            Op::Navigate => {
-                let resolve = self.mgr.policy.resolve.clone();
-                let url = vet_with(arg_str(&args, "url")?, ctx, &resolve).await?.to_string();
-                let policy = ctx.clone();
-                let blocked = self.mgr.policy.blocked.clone();
-                self.mgr
-                    .with(ctx, |cdp| {
-                        Box::pin(async move {
-                            let mut ev = cdp.events.subscribe();
-                            blocked.lock().unwrap().clear();
-                            let r = cdp.call("Page.navigate", json!({"url": url})).await?;
-                            if let Some(e) = r.get("errorText").and_then(|e| e.as_str()) {
-                                // The request policy refused the page itself or one of its redirects.
-                                let refused = blocked.lock().unwrap().last().cloned();
-                                if let Some((u, why)) = refused {
-                                    let _ = cdp.call("Page.navigate", json!({"url": "about:blank"})).await;
-                                    return Ok(ToolOutput::error(format!("Navigazione annullata: {u} non consentito ({why})")));
-                                }
-                                return Ok(ToolOutput::error(format!("Navigazione fallita: {e}")));
-                            }
-                            let _ = tokio::time::timeout(Duration::from_secs(20), async {
-                                while let Ok(v) = ev.recv().await {
-                                    if v["method"] == "Page.loadEventFired" {
-                                        break;
-                                    }
-                                }
-                            })
-                            .await;
-                            // The browser follows redirects on its own, so the page that actually
-                            // loaded gets the same network policy as the requested address: when it
-                            // is not allowed (a public page bouncing to localhost or the LAN) it is
-                            // dropped before anything of it reaches the model.
-                            let landed =
-                                cdp.eval("location.href").await.ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
-                            // (about:blank and browser error pages are not network targets.)
-                            if landed.starts_with("http://") || landed.starts_with("https://") {
-                                if let Err(Error::Denied(why)) = vet_with(&landed, &policy, &resolve).await {
-                                    let _ = cdp.call("Page.navigate", json!({"url": "about:blank"})).await;
-                                    return Ok(ToolOutput::error(format!(
-                                        "Navigazione annullata: la pagina ha reindirizzato a {landed}, non consentito ({why})"
-                                    )));
-                                }
-                            }
-                            let snap = cdp.eval(SNAPSHOT_JS).await?;
-                            Ok(ToolOutput::text(snap.as_str().unwrap_or_default().to_string()))
-                        })
-                    })
-                    .await
-            }
-            Op::Snapshot => {
-                self.mgr
-                    .with(ctx, |cdp| {
-                        Box::pin(async move { Ok(ToolOutput::text(cdp.eval(SNAPSHOT_JS).await?.as_str().unwrap_or_default().to_string())) })
-                    })
-                    .await
-            }
-            Op::Click => {
-                let r = ref_arg(&args)?;
-                self.mgr
-                    .with(ctx, |cdp| {
-                        Box::pin(async move {
-                            let js = format!("(() => {{ const el = document.querySelector('[data-aiw-ref=\"{r}\"]'); if (!el) return 'missing'; el.scrollIntoView({{block:'center'}}); el.click(); return 'ok'; }})()");
-                            if cdp.eval(&js).await?.as_str() != Some("ok") {
-                                return Ok(ToolOutput::error(format!("Elemento [{r}] non trovato: rifai browser_snapshot")));
-                            }
-                            tokio::time::sleep(Duration::from_millis(900)).await;
-                            let snap = cdp.eval(SNAPSHOT_JS).await?;
-                            Ok(ToolOutput::text(format!("Cliccato [{r}].\n\n{}", snap.as_str().unwrap_or_default())))
-                        })
-                    })
-                    .await
-            }
-            Op::Type => {
-                let r = ref_arg(&args)?;
-                let text = arg_str(&args, "text")?.to_string();
-                let submit = args.get("submit").and_then(|v| v.as_bool()).unwrap_or(false);
-                self.mgr
-                    .with(ctx, |cdp| {
-                        Box::pin(async move {
-                            let js = format!(
-                                "(() => {{ const el = document.querySelector('[data-aiw-ref=\"{r}\"]'); if (!el) return 'missing'; el.focus();\
-                                 const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;\
-                                 const setter = Object.getOwnPropertyDescriptor(proto, 'value'); if (setter && 'value' in el) setter.set.call(el, {text}); else el.textContent = {text};\
-                                 el.dispatchEvent(new Event('input', {{bubbles:true}})); el.dispatchEvent(new Event('change', {{bubbles:true}}));\
-                                 if ({submit}) {{ if (el.form && el.form.requestSubmit) el.form.requestSubmit(); else el.dispatchEvent(new KeyboardEvent('keydown', {{key:'Enter', bubbles:true}})); }}\
-                                 return 'ok'; }})()",
-                                text = serde_json::to_string(&text).unwrap()
-                            );
-                            if cdp.eval(&js).await?.as_str() != Some("ok") {
-                                return Ok(ToolOutput::error(format!("Campo [{r}] non trovato: rifai browser_snapshot")));
-                            }
-                            tokio::time::sleep(Duration::from_millis(if submit { 1500 } else { 200 })).await;
-                            let snap = cdp.eval(SNAPSHOT_JS).await?;
-                            Ok(ToolOutput::text(format!("Scritto in [{r}].\n\n{}", snap.as_str().unwrap_or_default())))
-                        })
-                    })
-                    .await
-            }
-            Op::Scroll | Op::Back | Op::Press => {
-                let op = self.op;
-                let Some((js, settle)) = page_action(op, &args)? else { unreachable!() };
-                self.mgr
-                    .with(ctx, |cdp| {
-                        Box::pin(async move {
-                            let r = cdp.eval(&js).await?;
-                            let r = r.as_str().unwrap_or_default().to_string();
-                            if r == "missing" {
-                                return Ok(ToolOutput::error("Elemento non trovato: rifai browser_snapshot"));
-                            }
-                            tokio::time::sleep(Duration::from_millis(settle)).await;
-                            let snap = cdp.eval(SNAPSHOT_JS).await?;
-                            Ok(ToolOutput::text(format!("{}\n\n{}", page_action_note(op, &r), snap.as_str().unwrap_or_default())))
-                        })
-                    })
-                    .await
-            }
-            Op::Wait => {
-                let (ms, text) = wait_args(&args);
-                self.mgr
-                    .with(ctx, |cdp| {
-                        Box::pin(async move {
-                            let note = match text {
-                                Some(t) => {
-                                    let found = wait_for_text(
-                                        |js| {
-                                            let cdp = &cdp;
-                                            async move { cdp.eval(&js).await }
-                                        },
-                                        &t,
-                                        ms,
-                                    )
-                                    .await;
-                                    if found {
-                                        format!("Il testo «{t}» è comparso.")
-                                    } else {
-                                        format!("Il testo «{t}» non è comparso entro {} ms.", ms)
-                                    }
-                                }
-                                None => {
-                                    tokio::time::sleep(Duration::from_millis(ms)).await;
-                                    format!("Atteso {ms} ms.")
-                                }
-                            };
-                            let snap = cdp.eval(SNAPSHOT_JS).await?;
-                            Ok(ToolOutput::text(format!("{note}\n\n{}", snap.as_str().unwrap_or_default())))
-                        })
-                    })
-                    .await
-            }
-            Op::Screenshot => {
-                self.mgr
-                    .with(ctx, |cdp| {
-                        Box::pin(async move {
-                            let r = cdp.call("Page.captureScreenshot", json!({"format": "png"})).await?;
-                            let data = r["data"].as_str().unwrap_or_default();
-                            Ok(ToolOutput {
-                                content: "Screenshot della pagina allegato.".into(),
-                                images: vec![format!("data:image/png;base64,{data}")],
-                                is_error: false,
-                            })
-                        })
-                    })
-                    .await
-            }
+        // The address is vetted before the browser is involved (and before it is launched).
+        let resolve = self.mgr.policy.resolve.clone();
+        let url = match (self.op, args.get("url").and_then(|v| v.as_str()).filter(|u| !u.is_empty())) {
+            (Op::Navigate, _) => Some(vet_with(arg_str(&args, "url")?, ctx, &resolve).await?.to_string()),
+            (Op::TabNew, Some(u)) => Some(vet_with(u, ctx, &resolve).await?.to_string()),
+            _ => None,
+        };
+        let env = OpEnv { args, ctx: ctx.clone(), url, resolve, blocked: self.mgr.policy.blocked.clone() };
+        let op = self.op;
+        // A stopped run ends the call, wherever it is waiting.
+        tokio::select! {
+            r = self.mgr.with(ctx, move |cdp| Box::pin(run_op(cdp, op, env))) => r,
+            _ = ctx.cancel.cancelled() => Ok(ToolOutput::error("Annullato: il run è stato fermato.")),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ctx() -> ToolContext {
-        ToolContext::new("r", std::env::temp_dir())
-    }
-
-    async fn verdict(url: &str, ctx: &ToolContext) -> std::result::Result<(), String> {
-        // No name resolves: only literals and allowlisted/short-circuited cases are decided here.
-        request_verdict(url, ctx, |_: String, _: u16| async { Err::<Vec<IpAddr>, _>(std::io::Error::other("no dns")) }).await
-    }
-
-    #[tokio::test]
-    async fn request_verdicts() {
-        let c = ctx();
-        for u in ["data:text/html,<b>x</b>", "blob:http://a.example/uuid", "about:blank", "DATA:,x"] {
-            assert!(verdict(u, &c).await.is_ok(), "{u}");
-        }
-        for u in [
-            "http://127.0.0.1:9/",
-            "https://[::1]/",
-            "http://169.254.169.254/latest/meta-data/",
-            "http://192.168.1.1/",
-            "http://localhost/",
-            "ws://127.0.0.1:9222/devtools",
-            "wss://10.0.0.1/",
-            "file:///etc/passwd",
-            "ftp://example.org/",
-            "chrome://settings",
-            "javascript:alert(1)",
-            "",
-        ] {
-            assert!(verdict(u, &c).await.is_err(), "{u} must be blocked");
-        }
-        assert!(verdict("http://8.8.8.8/", &c).await.is_ok());
-        assert!(verdict("wss://8.8.8.8/socket", &c).await.is_ok());
-        // A name that resolves to a private address is blocked, one that resolves to a public address passes.
-        let answer =
-            |ip: &'static str| move |_: String, _: u16| async move { Ok::<_, std::io::Error>(vec![ip.parse::<IpAddr>().unwrap()]) };
-        assert!(request_verdict("https://rebind.example/x", &c, answer("127.0.0.1")).await.is_err());
-        assert!(request_verdict("https://rebind.example/x", &c, answer("10.0.0.5")).await.is_err());
-        assert!(request_verdict("https://ok.example/x", &c, answer("93.184.216.34")).await.is_ok());
-        // The allowlist applies to sub-requests too.
-        let mut allow = ctx();
-        allow.allow_domains = vec!["ok.example".into()];
-        assert!(request_verdict("https://cdn.ok.example/a.js", &allow, answer("93.184.216.34")).await.is_ok());
-        let r = request_verdict("https://tracker.example/p.gif", &allow, answer("93.184.216.34")).await;
-        assert!(r.unwrap_err().contains("domini consentiti"));
-        // Allowing the private network lifts the address checks (but data: etc. stay as they are).
-        let mut lan = ctx();
-        lan.allow_private_network = true;
-        assert!(verdict("http://192.168.1.1/", &lan).await.is_ok());
-        assert!(verdict("file:///etc/passwd", &lan).await.is_err());
-    }
-
-    #[test]
-    fn fetch_covers_every_resource_type() {
-        let p = fetch_patterns();
-        let pats = p["patterns"].as_array().unwrap();
-        assert!(pats.iter().any(|x| x["urlPattern"] == "*" && x.get("resourceType").is_none()));
-    }
-
-    /// Spawns a one-shot-per-connection HTTP server; `handler(path)` is the raw response.
-    async fn serve(handler: impl Fn(&str) -> String + Send + Sync + 'static) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let (h, handler) = (hits.clone(), Arc::new(handler));
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut s, _)) = listener.accept().await else { return };
-                let (h, handler) = (h.clone(), handler.clone());
-                tokio::spawn(async move {
-                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                    let mut buf = [0u8; 4096];
-                    let n = s.read(&mut buf).await.unwrap_or(0);
-                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-                    h.fetch_add(1, Ordering::SeqCst);
-                    let _ = s.write_all(handler(&path).as_bytes()).await;
-                });
-            }
-        });
-        (port, hits)
-    }
-
-    fn html(body: &str) -> String {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
-    }
-
-    /// Per-request policy in a real Chrome: a page on a "public" origin (`public.test`, mapped to
-    /// the local server by Chrome's host resolver rules; our resolver says it is public) tries
-    /// sub-requests, a delayed JS redirect, a link click and an iframe towards loopback and towards
-    /// a name that resolves to a private address. None of them may reach the target.
-    /// `cargo test -p aiw-tools browser -- --ignored`.
-    #[tokio::test]
-    #[ignore]
-    async fn subrequests_and_late_redirects_are_blocked() {
-        if find_chrome().is_none() {
-            return;
-        }
-        let (secret_port, secret_hits) = serve(|_| html("<html><title>SEGRETO</title><body>SEGRETO</body></html>")).await;
-        let (port, _) = serve(move |p| match p {
-            "/ok" => html("fine"),
-            "/fetch" => html(&format!(
-                "<html><title>Pubblica</title><body><div id=r>attesa</div><iframe src='http://127.0.0.1:{secret_port}/frame'></iframe><script>
-                 const t = (u) => fetch(u, {{mode:'no-cors'}}).then(() => 'raggiunto', () => 'bloccato');
-                 Promise.all([t('http://127.0.0.1:{secret_port}/x'), t('http://[::1]:{secret_port}/x'), t('http://rebind.test:' + location.port + '/x'), t('/ok')]).then(r => {{
-                   const x = new XMLHttpRequest(); x.open('GET', 'http://127.0.0.1:{secret_port}/xhr');
-                   x.onloadend = () => {{ document.getElementById('r').textContent = 'esito ' + r.join(',') + ' xhr=' + (x.status === 0 ? 'bloccato' : 'raggiunto'); }};
-                   x.send();
-                 }});
-                 </script></body></html>"
-            )),
-            "/delayed" => html(&format!(
-                "<html><title>Ritardo</title><body>pagina pubblica<script>setTimeout(() => {{ location.href = 'http://127.0.0.1:{secret_port}/late'; }}, 400);</script></body></html>"
-            )),
-            "/link" => html(&format!("<html><title>Link</title><body><a href='http://127.0.0.1:{secret_port}/click'>vai</a></body></html>")),
-            _ => html("<html><title>Radice</title><body>radice</body></html>"),
-        })
-        .await;
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("AIW_BROWSER_HEADLESS", "1");
-        let resolve: ResolveFn = Arc::new(|host, _| {
-            Box::pin(async move {
-                match host.as_str() {
-                    "public.test" => Ok(vec!["93.184.216.34".parse().unwrap()]),
-                    "rebind.test" => Ok(vec!["10.0.0.5".parse().unwrap()]),
-                    _ => Err(std::io::Error::other("no dns")),
-                }
-            })
-        });
-        let flags =
-            vec!["--host-resolver-rules=MAP public.test 127.0.0.1, MAP rebind.test 127.0.0.1".to_string(), "--no-proxy-server".to_string()];
-        let mgr = Arc::new(BrowserManager::for_test(dir.path().join("profile"), resolve, flags));
-        let t = tools(mgr.clone());
-        let ctx = ToolContext::new("r", dir.path().to_path_buf());
-        let base = format!("http://public.test:{port}");
-
-        // Sub-requests (fetch, XHR, iframe) to loopback / a private-resolving name are blocked,
-        // the same-origin one goes through.
-        let nav = t[0].call(json!({"url": format!("{base}/fetch")}), &ctx).await.unwrap();
-        assert!(!nav.is_error && nav.content.contains("Titolo: Pubblica"), "{}", nav.content);
-        let mut text = String::new();
-        for _ in 0..40 {
-            text = t[1].call(json!({}), &ctx).await.unwrap().content;
-            if text.contains("esito ") {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-        assert!(text.contains("esito bloccato,bloccato,bloccato,raggiunto xhr=bloccato"), "{text}");
-
-        // A delayed JS redirect to loopback never reaches it.
-        let nav = t[0].call(json!({"url": format!("{base}/delayed")}), &ctx).await.unwrap();
-        assert!(!nav.is_error && nav.content.contains("pagina pubblica"), "{}", nav.content);
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        let after = t[1].call(json!({}), &ctx).await.unwrap().content;
-        assert!(!after.contains("SEGRETO"), "{after}");
-
-        // A click on a link to loopback does not either.
-        t[0].call(json!({"url": format!("{base}/link")}), &ctx).await.unwrap();
-        let clicked = t[2].call(json!({"ref": 1}), &ctx).await.unwrap();
-        assert!(!clicked.content.contains("SEGRETO"), "{}", clicked.content);
-
-        assert_eq!(secret_hits.load(Ordering::SeqCst), 0, "the loopback server must never be contacted");
-        assert!(mgr.close().await);
-    }
-
-    /// Drives a real Chrome/Chromium against a local page. Run with `cargo test -- --ignored`.
-    #[tokio::test]
-    #[ignore]
-    async fn navigate_snapshot_type_click() {
-        if find_chrome().is_none() {
-            return;
-        }
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            loop {
-                let (mut s, _) = listener.accept().await.unwrap();
-                tokio::spawn(async move {
-                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                    let mut buf = [0u8; 4096];
-                    let n = s.read(&mut buf).await.unwrap_or(0);
-                    let req = String::from_utf8_lossy(&buf[..n]);
-                    let body = if req.starts_with("GET /done") {
-                        "<html><head><title>Fatto</title></head><body><h1>Ricerca inviata</h1></body></html>".to_string()
-                    } else {
-                        "<html><head><title>Comune</title></head><body><h1>Orari anagrafe</h1><form action=\"/done\"><input name=\"q\" placeholder=\"Cerca\"><button type=\"submit\">Cerca</button></form><a href=\"/done\">Vai</a></body></html>".to_string()
-                    };
-                    let _ = s
-                        .write_all(
-                            format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                                body.len()
-                            )
-                            .as_bytes(),
-                        )
-                        .await;
-                });
-            }
-        });
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("AIW_BROWSER_HEADLESS", "1");
-        let mgr = Arc::new(BrowserManager::new(dir.path().join("profile")));
-        let t = tools(mgr.clone());
-        let mut ctx = ToolContext::new("r", dir.path().to_path_buf());
-        ctx.allow_private_network = true;
-        let nav = t[0].call(json!({"url": format!("http://{addr}/")}), &ctx).await.unwrap();
-        assert!(nav.content.contains("Titolo: Comune") && nav.content.contains("Orari anagrafe"), "{}", nav.content);
-        assert!(nav.content.contains("[1] input \"Cerca\"") && nav.content.contains("[3] link \"Vai\""), "{}", nav.content);
-        let typed = t[3].call(json!({"ref": 1, "text": "carta d'identità"}), &ctx).await.unwrap();
-        assert!(typed.content.contains("value=\"carta d'identità\""), "{}", typed.content);
-        let clicked = t[2].call(json!({"ref": 3}), &ctx).await.unwrap();
-        assert!(!clicked.is_error, "{}", clicked.content);
-        tokio::time::sleep(Duration::from_millis(800)).await;
-        let snap = t[1].call(json!({}), &ctx).await.unwrap();
-        assert!(snap.content.contains("Ricerca inviata"), "{}", snap.content);
-        let shot = t[4].call(json!({}), &ctx).await.unwrap();
-        assert!(shot.images[0].starts_with("data:image/png;base64,"));
-        assert!(mgr.close().await);
-    }
-
-    /// A page that redirects to an address outside the policy is dropped. Needs a real Chrome:
-    /// `cargo test -p aiw-tools -- --ignored`.
-    #[tokio::test]
-    #[ignore]
-    async fn redirect_off_the_allowlist_is_dropped() {
-        if find_chrome().is_none() {
-            return;
-        }
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            loop {
-                let (mut s, _) = listener.accept().await.unwrap();
-                tokio::spawn(async move {
-                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                    let mut buf = [0u8; 4096];
-                    let n = s.read(&mut buf).await.unwrap_or(0);
-                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let resp = if req.starts_with("GET /bounce") {
-                        format!("HTTP/1.1 302 Found\r\nLocation: http://localhost:{port}/segreto\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                    } else {
-                        let body = "<html><head><title>Pagina</title></head><body>contenuto</body></html>";
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                            body.len()
-                        )
-                    };
-                    let _ = s.write_all(resp.as_bytes()).await;
-                });
-            }
-        });
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("AIW_BROWSER_HEADLESS", "1");
-        let mgr = Arc::new(BrowserManager::new(dir.path().join("profile")));
-        let t = tools(mgr.clone());
-        let mut ctx = ToolContext::new("r", dir.path().to_path_buf());
-        // The server is on loopback: allowed, but only under its numeric name.
-        ctx.allow_private_network = true;
-        ctx.allow_domains = vec!["127.0.0.1".into()];
-        let ok = t[0].call(json!({"url": format!("http://127.0.0.1:{port}/")}), &ctx).await.unwrap();
-        assert!(!ok.is_error && ok.content.contains("contenuto"), "{}", ok.content);
-        let bounced = t[0].call(json!({"url": format!("http://127.0.0.1:{port}/bounce")}), &ctx).await.unwrap();
-        assert!(bounced.is_error && bounced.content.contains("non consentito"), "{}", bounced.content);
-        assert!(!bounced.content.contains("contenuto"), "the page content must not reach the model");
-        let after = t[1].call(json!({}), &ctx).await.unwrap();
-        assert!(after.content.contains("URL: about:blank"), "{}", after.content);
-        assert!(mgr.close().await);
     }
 }

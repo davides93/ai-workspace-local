@@ -28,6 +28,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets
       - run: cargo test
+      # The benchmarks (criterion) compile and run once each in test mode: no timing, no thresholds.
+      # The numbers are measured by hand, see docs/benchmarks.md.
+      - run: cargo test -p aiw-agent -p aiw-engine -p aiw-server --bench shellparse --bench hot_paths --bench server
 
   core-windows:
     name: Core Rust su Windows (test)
@@ -56,9 +59,46 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run build:mockup
+      # The size of both builds stays under the budget in scripts/bundle-budget.json.
+      - run: npm run check:bundle
       # Every route of the mockup at 1440 and 390 px, light and dark: no console errors, no horizontal scroll.
       - run: npx playwright install --with-deps chromium
       - run: npm run test:smoke
+
+  ui-e2e:
+    name: UI (E2E and accessibility)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/ui/package-lock.json
+      - run: npm ci
+      - run: npm run build:mockup
+      - run: npx playwright install --with-deps chromium
+      # The main flows against the mockup (demo transport): first run, chat, documents, approvals, settings, tokens.
+      - run: npm run test:e2e
+        env:
+          PW_NAME: e2e
+      # axe-core on every route, light and dark, 390 and 1440 px; keyboard navigation, dialogs, palette.
+      - run: npm run test:a11y
+        if: ${{ !cancelled() }}
+        env:
+          PW_NAME: a11y
+      # The report is only kept when something failed.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            apps/ui/playwright-report
+            apps/ui/test-results
+          retention-days: 7
 
   desktop-linux:
     name: Tauri shell (Linux compile)

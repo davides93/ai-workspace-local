@@ -4,9 +4,10 @@ import { RISK_META } from "../../../shared/lib/policyModes";
 import type { PolicyMode, SandboxMode, ToolRisk } from "../../../shared/api/types";
 import {
   blockedTools, groupState, groupTools, isAllTools, isSelected, orphanTools, setAllTools, setGroup, summarizeTools, toggleTool,
-  TRAINING_TOOL, type PickerTool, type ToolGroup,
+  TRAINING_TOOL, EVAL_TOOL, isExplicitTool, type PickerTool, type ToolGroup,
 } from "../model/tools";
 
+import { t as tr, tNode as trNode, t } from "../../../shared/i18n";
 const RISKS: ToolRisk[] = ["read", "network", "write", "exec", "computer"];
 
 /** Checkbox that can show the "some of them" state. */
@@ -27,8 +28,8 @@ function ToolRow({ tool, checked, locked, onToggle }: { tool: PickerTool; checke
         <span className="tool-main">
           <span className="tool-name mono">{tool.name}</span>
           <Pill tone={risk.tone} title={risk.hint}>{risk.label}</Pill>
-          {tool.disabled && <Chip title="Disattivato per tutti in «Tool, MCP e browser»">disattivato</Chip>}
-          {tool.unavailable && <Chip title={tool.unavailable}>non disponibile</Chip>}
+          {tool.disabled && <Chip title={t("agents.disattivato_per_tutti_in_tool")}>{tr("agents.disattivato")}</Chip>}
+          {tool.unavailable && <Chip title={tool.unavailable}>{tr("agents.non_disponibile")}</Chip>}
         </span>
         <span className="tool-desc">{tool.description}{tool.unavailable ? ` — ${tool.unavailable}` : ""}</span>
       </label>
@@ -53,9 +54,8 @@ function Group({ group, value, locked, forceOpen, onChange }: { group: ToolGroup
           <span className="faint text-xs num">{picked}/{names.length}</span>
         </button>
         <label className="check-inline text-xs">
-          <Check checked={state === "all"} indeterminate={state === "some"} disabled={locked} label={`Seleziona tutti: ${group.label}`} onChange={(on) => onChange(setGroup(value, names, on))} />
-          Tutti
-        </label>
+          <Check checked={state === "all"} indeterminate={state === "some"} disabled={locked} label={t("agents.seleziona_tutti", { label: group.label })} onChange={(on) => onChange(setGroup(value, names, on))} />
+          {tr("agents.tutti")}</label>
       </div>
       {shown && (
         <ul id={bodyId} className="tool-list">
@@ -80,8 +80,9 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
 }) {
   const [query, setQuery] = useState("");
   const all = isAllTools(value);
-  const ordinaryTools = catalog.filter((tool) => tool.name !== TRAINING_TOOL);
+  const ordinaryTools = catalog.filter((tool) => !isExplicitTool(tool.name));
   const training = catalog.find((tool) => tool.name === TRAINING_TOOL);
+  const pageScripts = catalog.find((tool) => tool.name === EVAL_TOOL);
   const groups = groupTools(ordinaryTools, query);
   const summary = summarizeTools(value, catalog);
   const orphans = all ? [] : orphanTools(value, catalog);
@@ -91,31 +92,39 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
     <div className="tool-picker">
       <div className="tool-top">
         <div className="tool-all">
-          <Toggle id="tools-all" label="Tutti i tool" checked={all} onChange={(on) => onChange([...setAllTools(value.filter((name) => name !== TRAINING_TOOL), on, ordinaryTools), ...value.filter((name) => name === TRAINING_TOOL)])} />
-          <label htmlFor="tools-all"><b>Tutti i tool</b> <span className="muted text-sm">(<code>*</code>) anche quelli aggiunti in futuro, MCP compresi</span></label>
+          <Toggle id="tools-all" label={tr("agents.tutti_i_tool")} checked={all} onChange={(on) => onChange([...setAllTools(value.filter((name) => !isExplicitTool(name)), on, ordinaryTools), ...value.filter(isExplicitTool)])} />
+          <label htmlFor="tools-all"><b>{tr("agents.tutti_i_tool")}</b> <span className="muted text-sm">{trNode("agents.anche_quelli_aggiunti_in_futuro", { code: <code>*</code> })}</span></label>
         </div>
         <div className="tool-summary" role="status">
-          <span className="num"><b>{summary.count}</b> di {summary.total} tool</span>
+          <span className="num">{trNode("agents.tool_selezionati_di_totale", { count: <b>{summary.count}</b>, total: summary.total })}</span>
           <span className="tool-risks">
             {RISKS.filter((r) => summary.byRisk[r]).map((r) => <Pill key={r} tone={RISK_META[r].tone}>{summary.byRisk[r]} {RISK_META[r].label}</Pill>)}
           </span>
         </div>
       </div>
 
-      {all && <p className="tool-note text-sm"><Icon name="info" size={14} /> Con «Tutti i tool» l'agente usa i tool ordinari attivi. Disattiva l'interruttore per sceglierne alcuni: l'elenco parte da tutti, nulla va perso.</p>}
+      {all && <p className="tool-note text-sm"><Icon name="info" size={14} /> {tr("agents.con_tutti_i_tool_l")}</p>}
 
       {training && (
         <label className="row">
-          <Toggle label="Consenti addestramento" checked={value.includes(TRAINING_TOOL)}
+          <Toggle label={tr("agents.consenti_addestramento")} checked={value.includes(TRAINING_TOOL)}
             onChange={(on) => onChange(on ? [...value, TRAINING_TOOL] : value.filter((name) => name !== TRAINING_TOOL))} />
-          <span>Consenti addestramento <span className="muted text-sm">Dataset approvati, job e valutazione.</span></span>
+          <span>{trNode("agents.consenti_addestramento_2", { span: <span className="muted text-sm">{tr("agents.dataset_approvati_job_e_valutazione")}</span> })}</span>
         </label>
       )}
 
-      <Input type="search" aria-label="Cerca un tool" className="input-search" placeholder="Cerca per nome, descrizione o gruppo…" value={query} onChange={(e) => setQuery(e.target.value)} />
+      {pageScripts && (
+        <label className="row">
+          <Toggle label={tr("agents.consenti_codice_nella_pagina")} checked={value.includes(EVAL_TOOL)}
+            onChange={(on) => onChange(on ? [...value, EVAL_TOOL] : value.filter((name) => name !== EVAL_TOOL))} />
+          <span>{trNode("agents.consenti_codice_nella_pagina_2", { span: <span className="muted text-sm">{tr("agents.il_browser_esegue_javascript_scritto")}</span> })}</span>
+        </label>
+      )}
+
+      <Input type="search" aria-label={tr("agents.cerca_un_tool")} className="input-search" placeholder={tr("agents.cerca_per_nome_descrizione_o")} value={query} onChange={(e) => setQuery(e.target.value)} />
 
       {groups.length === 0 ? (
-        <EmptyState icon="search" title="Nessun tool corrisponde" description={`Nessun risultato per «${query}».`} />
+        <EmptyState icon="search" title={tr("agents.nessun_tool_corrisponde")} description={tr("agents.nessun_risultato_per", { query })} />
       ) : (
         <div className="tool-groups">
           {groups.map((g) => <Group key={g.id} group={g} value={value} locked={all} forceOpen={query.trim() !== ""} onChange={onChange} />)}
@@ -123,13 +132,13 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
       )}
 
       {orphans.length > 0 && (
-        <div className="tool-orphans" role="group" aria-label="Tool non più disponibili">
-          <p className="text-sm"><b>Non più nel catalogo</b> <span className="muted">— un server MCP assente (non blocca il salvataggio) o un tool rinominato o inesistente (il backend lo rifiuta: toglilo dall'elenco).</span></p>
+        <div className="tool-orphans" role="group" aria-label={tr("agents.tool_non_piu_disponibili")}>
+          <p className="text-sm"><b>{tr("agents.non_piu_nel_catalogo")}</b> <span className="muted">{tr("agents.un_server_mcp_assente_non")}</span></p>
           <ul className="tool-list">
             {orphans.map((n) => (
               <li key={n} className="tool-row orphan">
                 <span className="tool-name mono">{n}</span>
-                <IconButton aria-label={`Rimuovi ${n} dall'elenco`} icon="close" size={14} onClick={() => onChange(toggleTool(value, n, false))} />
+                <IconButton aria-label={tr("agents.rimuovi_dall_elenco", { n })} icon="close" size={14} onClick={() => onChange(toggleTool(value, n, false))} />
               </li>
             ))}
           </ul>
@@ -138,7 +147,7 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
 
       {blocked.length > 0 && (
         <p className="tool-warn text-sm" role="note">
-          <Icon name="alert" size={14} /> {blocked.length === 1 ? "Un tool selezionato non potrà essere usato" : `${blocked.length} tool selezionati non potranno essere usati`}:
+          <Icon name="alert" size={14} /> {blocked.length === 1 ? tr("agents.un_tool_selezionato_non_potra") : tr("agents.tool_selezionati_non_potranno_essere", { length: blocked.length })}:
           {" "}{blocked.slice(0, 4).map((b) => `${b.name} (${b.why})`).join("; ")}{blocked.length > 4 ? "…" : ""}.
         </p>
       )}

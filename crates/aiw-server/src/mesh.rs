@@ -41,11 +41,11 @@ pub(crate) fn host_label(name: &str) -> String {
 
 /// Starts announcing and browsing (once per process). Failures (no multicast) only disable
 /// discovery: pairing by address keeps working.
-pub fn start(engine: &Engine, port: u16) {
+pub fn start(engine: &Engine, port: u16, tls: bool) {
     if MESH.get().is_some() {
         return;
     }
-    match create(engine, port) {
+    match create(engine, port, tls) {
         Ok(m) => {
             let _ = MESH.set(m);
         }
@@ -53,11 +53,19 @@ pub fn start(engine: &Engine, port: u16) {
     }
 }
 
-fn create(engine: &Engine, port: u16) -> Result<Mesh, String> {
+fn create(engine: &Engine, port: u16, tls: bool) -> Result<Mesh, String> {
     let d = engine.device();
     let daemon = ServiceDaemon::new().map_err(|e| e.to_string())?;
     let host = format!("{}.local.", host_label(&d.name));
-    let props = [("id", d.id.as_str()), ("os", d.os.as_str()), ("tier", d.tier.as_str()), ("ver", aiw_core::VERSION), ("a2a", "/a2a")];
+    let props = [
+        ("id", d.id.as_str()),
+        ("os", d.os.as_str()),
+        ("tier", d.tier.as_str()),
+        ("ver", aiw_core::VERSION),
+        ("a2a", "/a2a"),
+        // The address scheme of the API: announced, not trusted (the fingerprint comes with the pairing, not from here).
+        ("tls", if tls { "1" } else { "0" }),
+    ];
     let info = ServiceInfo::new(SERVICE, &d.name, &host, (), port, &props[..]).map_err(|e| e.to_string())?.enable_addr_auto();
     daemon.register(info).map_err(|e| e.to_string())?;
     let events = daemon.browse(SERVICE).map_err(|e| e.to_string())?;
@@ -102,7 +110,7 @@ fn from_resolved(info: &ResolvedService) -> Option<Discovered> {
         os: info.get_property_val_str("os").unwrap_or_default().to_string(),
         tier: info.get_property_val_str("tier").unwrap_or_default().to_string(),
         version: info.get_property_val_str("ver").unwrap_or_default().to_string(),
-        address: format!("http://{ip}:{}", info.get_port()),
+        address: format!("{}://{ip}:{}", if info.get_property_val_str("tls") == Some("1") { "https" } else { "http" }, info.get_port()),
         last_seen: chrono::Utc::now().to_rfc3339(),
     })
 }
@@ -124,8 +132,14 @@ pub fn lan_ip() -> Option<IpAddr> {
 }
 
 /// Link that pairs a phone in one step (its camera opens the web UI with the code) and its QR.
-pub fn pairing_qr(base: &str, code: &str) -> Result<(String, String), String> {
-    let url = format!("{base}/?pair={code}");
+///
+/// Over TLS the link also carries the SHA-256 fingerprint of the certificate (`&fp=`): the app that scans it pins
+/// that certificate. A browser ignores it, and cannot pin (the person installs the CA instead).
+pub fn pairing_qr(base: &str, code: &str, fingerprint: Option<&str>) -> Result<(String, String), String> {
+    let url = match fingerprint {
+        Some(fp) => format!("{base}/?pair={code}&fp={fp}"),
+        None => format!("{base}/?pair={code}"),
+    };
     let qr = qrcode::QrCode::new(url.as_bytes()).map_err(|e| e.to_string())?;
     let svg = qr.render::<qrcode::render::svg::Color>().min_dimensions(220, 220).quiet_zone(true).build();
     Ok((url, svg))
@@ -137,10 +151,13 @@ mod tests {
 
     #[test]
     fn qr_encodes_the_pairing_link() {
-        let (url, svg) = pairing_qr("http://192.168.1.10:7777", "123456").unwrap();
+        let (url, svg) = pairing_qr("http://192.168.1.10:7777", "123456", None).unwrap();
         assert_eq!(url, "http://192.168.1.10:7777/?pair=123456");
         assert!(svg.starts_with("<?xml") && svg.contains("<svg") && svg.contains("<path"), "{}", &svg[..80]);
         assert_eq!(host_label("Studio PC (2)"), "studio-pc--2");
+        let fp = "ab".repeat(32);
+        let (url, _) = pairing_qr("https://192.168.1.10:7777", "123456", Some(&fp)).unwrap();
+        assert_eq!(url, format!("https://192.168.1.10:7777/?pair=123456&fp={fp}"));
     }
 
     #[test]

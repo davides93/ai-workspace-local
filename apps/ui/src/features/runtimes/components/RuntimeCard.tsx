@@ -3,6 +3,7 @@ import type { RuntimeInfo } from "../../../shared/api/types";
 import { cx } from "../../../shared/lib/cx";
 import { Button, Chip, Chips, InlineText, StatusPill } from "../../../shared/ui";
 
+import { t, t as tr } from "../../../shared/i18n";
 /** One runtime of the catalog: what it is, where it can run, its state and the main action. */
 export function RuntimeCard({ runtime: r, deviceAccels, busy, error, onAct, onOpen }: {
   runtime: RuntimeInfo;
@@ -32,27 +33,27 @@ export function RuntimeCard({ runtime: r, deviceAccels, busy, error, onAct, onOp
         )}
       </div>
       <p className="rt-desc"><InlineText text={r.description} /></p>
-      <Chips label="Acceleratori e formati">
-        {r.accelerators.map((a) => <Chip key={a} hot={deviceAccels.has(a)} title={deviceAccels.has(a) ? "Presente su questo device" : undefined}>{a}</Chip>)}
+      <Chips label={t("runtimes.acceleratori_e_formati")}>
+        {r.accelerators.map((a) => <Chip key={a} hot={deviceAccels.has(a)} title={deviceAccels.has(a) ? t("runtimes.presente_su_questo_device") : undefined}>{a}</Chip>)}
         {r.formats.map((f) => <Chip key={f}>.{f}</Chip>)}
       </Chips>
-      {r.loaded_models.length > 0 && <div className="mono faint ellipsis text-xs" title={r.loaded_models.join(", ")}>caricato: {r.loaded_models.join(", ")}</div>}
+      {r.loaded_models.length > 0 && <div className="mono faint ellipsis text-xs" title={r.loaded_models.join(", ")}>{t("runtimes.caricato", { models: r.loaded_models.join(", ") })}</div>}
       {error && <p role="alert" className="crit-text text-sm">{error}</p>}
       <div className="rt-foot">
         {active && r.kind === "system" ? (
-          <Link to="/models?origin=system" className="btn primary">Vedi i modelli di sistema</Link>
+          <Link to="/models?origin=system" className="btn primary">{t("runtimes.vedi_i_modelli_di_sistema")}</Link>
         ) : active ? (
-          <Button icon="stop" disabled={busy} aria-label={`Ferma ${r.name}`} onClick={() => onAct("stop")}>Ferma</Button>
+          <Button icon="stop" disabled={busy} aria-label={tr("runtimes.ferma_2", { name: r.name })} onClick={() => onAct("stop")}>{t("runtimes.ferma")}</Button>
         ) : r.status === "installable" && r.install_auto ? (
-          <Button variant="primary" icon="download" aria-label={`Installa ${r.name}`} onClick={onOpen}>Installa</Button>
+          <Button variant="primary" icon="download" aria-label={tr("runtimes.installa_2", { name: r.name })} onClick={onOpen}>{t("runtimes.installa")}</Button>
         ) : r.status === "installable" ? (
-          <span className="mono faint ellipsis text-xs" title={r.install_hint}>{r.install_hint ?? "installa dal sito del progetto"}</span>
+          <span className="mono faint ellipsis text-xs" title={r.install_hint}>{r.install_hint ?? t("runtimes.installa_dal_sito_del_progetto")}</span>
         ) : !unsupported ? (
-          <Button variant="primary" icon="play" disabled={busy} aria-label={`Avvia ${r.name}`} onClick={() => onAct("start")}>{busy ? "Avvio…" : "Avvia"}</Button>
+          <Button variant="primary" icon="play" disabled={busy} aria-label={t("runtimes.avvia", { name: r.name })} onClick={() => onAct("start")}>{busy ? t("runtimes.avvio") : t("runtimes.avvia_2")}</Button>
         ) : (
-          <span className="faint text-xs">Disponibile su: {r.platforms.join(", ")}</span>
+          <span className="faint text-xs">{t("runtimes.disponibile_su", { platforms: r.platforms.join(", ") })}</span>
         )}
-        <Button variant="ghost" className="ml-auto" icon="settings" aria-label={`Dettagli e impostazioni di ${r.name}`} onClick={onOpen}>Dettagli</Button>
+        <Button variant="ghost" className="ml-auto" icon="settings" aria-label={tr("runtimes.dettagli_e_impostazioni_di", { name: r.name })} onClick={onOpen}>{t("runtimes.dettagli")}</Button>
       </div>
     </article>
   );

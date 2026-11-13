@@ -40,6 +40,10 @@ export interface SystemInfo {
   workspace_root: string;
   /** Mac App Store build (App Sandbox): no external programs, the agents work in the app's own folder. */
   sandboxed?: boolean;
+  /** Sandbox that contains shell commands here: `bwrap`, `sandbox-exec`, `windows-low-integrity`; absent when there is none. */
+  shell_sandbox?: string;
+  /** MCP stdio servers can be isolated on this machine (not on Windows). */
+  mcp_sandbox?: boolean;
   uptime_s: number;
   pairing_code?: string;
   device: DeviceProfile;
@@ -54,6 +58,48 @@ export interface DiscoveredDevice {
   version: string;
   address: string;
   last_seen: string;
+}
+
+/** An access token as the API lists it (never the secret). */
+export interface ApiTokenInfo {
+  id: string;
+  name: string;
+  /** owner: this computer's own app and CLI; device: a paired phone or computer; gateway: an app of the person. */
+  kind: "owner" | "device" | "gateway";
+  device_id?: string;
+  /** First characters of the token, with an ellipsis. */
+  prefix: string;
+  scopes: string[];
+  created_at: string;
+  last_used_at?: string;
+  last_used_ip?: string;
+  expires_at?: string;
+  revoked_at?: string;
+}
+/** A token right after creation or rotation: the only time the secret is shown. */
+export interface ApiTokenCreated extends ApiTokenInfo {
+  token: string;
+}
+export interface ApiTokenCreate {
+  name: string;
+  kind?: "gateway" | "device";
+  expires_in_days?: number;
+  scopes?: string[];
+}
+export interface TlsStatus {
+  mode: "off" | "self_signed" | "files";
+  active: boolean;
+  lan: boolean;
+  port: number;
+  /** SHA-256 as AB:CD:… */
+  fingerprint?: string;
+  fingerprint_of?: "ca" | "certificate";
+  names: string[];
+  expires_at?: string;
+  error?: string;
+  ca_available: boolean;
+  /** Plain HTTP beyond this computer. */
+  warning: boolean;
 }
 
 export interface MeshState {
@@ -79,6 +125,54 @@ export interface VoiceStatus {
   /** Preferred local system voice for replies ("" = first one for the language). */
   tts_voice: string;
   models: string[];
+  /** Neural speech (Piper, a speech server): what reads replies aloud, besides the system voices. */
+  tts: TtsStatus;
+}
+
+/** A voice of a neural speech engine. */
+export interface TtsVoice {
+  id: string;
+  name: string;
+  /** ISO 639-1 code. */
+  language: string;
+  engine: "piper" | "openai";
+}
+
+export interface TtsStatus {
+  /** The setting `voice.tts.engine`. */
+  setting: "auto" | "system" | "piper" | "openai";
+  /** What would speak: "system" means the voices of the operating system, spoken by the app. */
+  engine: "system" | "piper" | "openai";
+  /** A neural engine can speak. */
+  neural: boolean;
+  backend: string | null;
+  /** Why a neural engine is not available, or what to do to enable it. */
+  detail: string | null;
+  voices: TtsVoice[];
+  /** Languages the neural engine speaks (empty with `any_language` for a server). */
+  languages: string[];
+  any_language: boolean;
+  /** Voice in use for each language. */
+  picks: Record<string, string>;
+  speed: number;
+  /** Most characters of one request. */
+  max_chars: number;
+}
+
+/** Request of `POST /api/voice/speak`. */
+export interface SpeakRequest {
+  text: string;
+  language?: string;
+  voice?: string;
+  speed?: number;
+}
+
+/** Synthesised audio: a WAV as base64 (the app's IPC bridge carries JSON only). */
+export interface Speech {
+  mime: string;
+  audio: string;
+  backend: string;
+  elapsed_ms: number;
 }
 
 export interface Transcript {
@@ -111,7 +205,7 @@ export interface PeerDevice {
 
 // ---------- Settings schema (JSON Schema subset → generated forms) ----------
 export interface FieldSchema {
-  type: "string" | "integer" | "number" | "boolean" | "array";
+  type: "string" | "integer" | "number" | "boolean" | "array" | "object";
   title?: string;
   description?: string;
   default?: unknown;
@@ -222,6 +316,42 @@ export interface UpdateStatus {
   error?: string | null;
 }
 
+// ---------- Backup and diagnostics ----------
+export interface BackupManifestFile { path: string; size: number; sha256: string }
+/** `manifest.json` of a backup archive. */
+export interface BackupManifest {
+  format: number;
+  app: string;
+  app_version: string;
+  /** Schema of the database inside the archive. */
+  schema_version: number;
+  created_at: string;
+  os: string;
+  arch: string;
+  /** The archive holds secrets: keep it like the data folder itself. */
+  sensitive: boolean;
+  /** What was left out, in words. */
+  excluded: string[];
+  skipped: string[];
+  files: BackupManifestFile[];
+}
+/** POST /api/backup — the archive itself travels as base64 in `data`. */
+export interface BackupFile {
+  file_name: string;
+  size: number;
+  sensitive: boolean;
+  manifest: BackupManifest;
+  data: string;
+}
+/** POST /api/backup/inspect — every file, size, SHA-256 and path was checked (a bad archive is an error). */
+export interface BackupInspect {
+  manifest: BackupManifest;
+  verified: boolean;
+  current_schema_version: number;
+  /** False when the database comes from a newer version of the app. */
+  restorable_here: boolean;
+}
+
 // ---------- Models ----------
 export type Fit = "great" | "ok" | "tight" | "no";
 
@@ -314,6 +444,40 @@ export interface TaskAdvice {
   installed: ModelChoice | null;
   /** Set when nothing installed fits the task or something clearly better would. */
   download: ModelChoice | null;
+}
+
+/** One way of running a model here, as ranked by the runtime router (`GET /api/route`). */
+export interface RouteCandidate {
+  rank: number;
+  runtime_id: string;
+  runtime_name: string;
+  /** Model sent to this runtime when it is not the requested one. */
+  model?: string;
+  accelerator: string;
+  /** `all` | `partial` | `none`. */
+  offload: "all" | "partial" | "none";
+  gpu_layers?: number;
+  context: number;
+  need_mb: number;
+  kv_mb: number;
+  kv_estimated: boolean;
+  remote: boolean;
+  ready: boolean;
+  reason: string;
+}
+
+export interface RouteExclusion {
+  runtime_id: string;
+  runtime_name: string;
+  reason: string;
+}
+
+export interface RouteDecision {
+  model: string;
+  wanted_context: number;
+  candidates: RouteCandidate[];
+  excluded: RouteExclusion[];
+  notes: string[];
 }
 
 /** `GET /api/recommend`. */
@@ -445,6 +609,8 @@ export interface InferenceParams {
   /** Most tokens spent reasoning, when the runtime can limit it. */
   thinking_budget?: number;
   adapters?: AdapterRef[];
+  /** With the runtime `auto`: the router may also pick a paired device or a remote server. */
+  allow_remote?: boolean;
 }
 
 /** A LoRA adapter on disk: a GGUF file for llama.cpp, a folder for MLX and PEFT. */
@@ -475,6 +641,8 @@ export interface AgentProfile {
   candidate_profiles?: string[];
   /** Models by role inside one run. Absent: one model (`inference_profile`) for everything. */
   roles?: AgentRoles;
+  /** Ids of the document collections this agent can search with `kb_search`. Absent or empty: all of them. */
+  knowledge?: string[];
 }
 
 /** The four jobs a model can have inside one run (plan, act, check, summarize). */
@@ -563,6 +731,8 @@ export interface Session {
   last_status?: RunStatus;
   /** Present when the session works in its own git worktree (branch `aiw/<id>`). */
   worktree?: WorktreeInfo;
+  /** Present when the conversation comes from a channel: `telegram` | `slack` | `email`. */
+  channel?: ChannelKind;
 }
 
 export interface WorktreeInfo {
@@ -692,6 +862,120 @@ export interface MemoryQuery {
   kind?: MemoryKind;
   /** Search text: the answer is ranked by relevance. */
   q?: string;
+}
+
+// ---- Documents: the local knowledge base (crates/aiw-engine/src/kb.rs)
+
+/** A set of documents the assistant can search. */
+export interface KbCollection {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  /** Documents, whatever their status. */
+  documents: number;
+  /** Searchable passages (of the documents that are ready). */
+  chunks: number;
+  /** Passages that also have a vector for the current embedding model. */
+  embedded_chunks: number;
+}
+
+export interface KbCollectionCreate {
+  name: string;
+  description?: string;
+}
+
+export interface KbCollectionPatch {
+  name?: string;
+  description?: string;
+}
+
+export type KbDocumentStatus = "indexing" | "ready" | "failed";
+
+export interface KbDocument {
+  id: string;
+  collection_id: string;
+  name: string;
+  /** Path of the file on this computer, or `caricato` for a file sent from the app. */
+  source: string;
+  mime: string;
+  /** Bytes. */
+  size: number;
+  sha256: string;
+  status: KbDocumentStatus;
+  /** Why it failed (Italian). */
+  error?: string;
+  chunks: number;
+  embedded_chunks: number;
+  created_at: string;
+}
+
+/** Body of `POST /api/kb/collections/{id}/documents`: files sent from the app, or a path on this computer. Exactly one. */
+export interface KbAddBody {
+  files?: AttachmentUpload[];
+  path?: string;
+}
+
+export interface KbSkipped {
+  name: string;
+  reason: string;
+}
+
+export type KbJobState = "running" | "done" | "cancelled";
+
+/** Progress and outcome of adding files or a folder, or of a reindex. */
+export interface KbJob {
+  id: string;
+  collection_id: string;
+  state: KbJobState;
+  total: number;
+  done: number;
+  added: number;
+  /** Same content already there: nothing was done. */
+  unchanged: number;
+  /** A changed file at the same path replaced its old document. */
+  replaced: number;
+  failed: number;
+  current?: string;
+  /** The first files left out (see `skipped_total`). */
+  skipped: KbSkipped[];
+  skipped_total: number;
+}
+
+export interface KbAddResult {
+  job: KbJob;
+}
+
+export interface KbStatus {
+  /** The embedding model that gives search by meaning; absent = keywords only. */
+  embedding_model?: string;
+  /** Running jobs and the latest finished ones, newest first. */
+  jobs: KbJob[];
+}
+
+export interface KbSearchBody {
+  query: string;
+  /** Name or id; absent = every collection. */
+  collection?: string;
+  max_results?: number;
+}
+
+export interface KbHit {
+  chunk_id: string;
+  document_id: string;
+  document_name: string;
+  collection_id: string;
+  collection_name: string;
+  /** Position of the passage in the document, from 1. */
+  part: number;
+  text: string;
+  score: number;
+}
+
+export interface KbSearchResult {
+  hits: KbHit[];
+  /** Was the meaning of the question used too? False = keywords only. */
+  semantic: boolean;
 }
 
 /** Longest memory text the engine accepts (characters). */
@@ -882,7 +1166,36 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /** Files the person attached to a `user` message (metadata only: `getAttachment` gives the bytes). */
+  attachments?: Attachment[];
   created_at: string;
+}
+
+/** What an attachment is, decided by the server (crates/aiw-core `AttachmentKind`). */
+export type AttachmentKind = "image" | "text" | "document" | "file";
+
+/** An attachment of a stored message. */
+export interface Attachment {
+  id: string;
+  name: string;
+  mime: string;
+  /** Bytes. */
+  size: number;
+  kind: AttachmentKind;
+}
+
+/** A file sent with a message: `data` is the base64 of its bytes. */
+export interface AttachmentUpload {
+  name: string;
+  mime: string;
+  data: string;
+}
+
+/** An attachment read back: `data` is base64. */
+export interface AttachmentData {
+  name: string;
+  mime: string;
+  data: string;
 }
 
 // AG-UI 1.0 event subset used by AIW (see docs/architecture/adr/0004-ag-ui-events.md)
@@ -1007,6 +1320,18 @@ export interface ToolInfo {
  */
 export const SECRET_MASK = "••••••";
 
+export type McpSandbox = "off" | "read-only" | "workspace-write";
+
+/** How the policy reads a shell command line (`POST /api/policy/analyze`): the simple commands it is made of. */
+export interface CommandAnalysis {
+  /** Commands that run: an allow rule applies only if every one of them is allowed. */
+  commands: string[];
+  /** Other forms (wrappers, raw text) that only deny and ask rules look at. */
+  also: string[];
+  /** False when part of the line could not be parsed with confidence: no allow rule applies. */
+  confident: boolean;
+}
+
 export interface McpServer {
   id: string;
   name: string;
@@ -1022,9 +1347,67 @@ export interface McpServer {
   /** Extra HTTP headers of an http server (e.g. `Authorization`); secret values come back as `SECRET_MASK`. */
   headers?: Record<string, unknown>;
   enabled: boolean;
-  status: "connected" | "disconnected" | "error";
+  /** Lets the server ask the model of a run for completions (`sampling/createMessage`). Off by default. */
+  sampling?: boolean;
+  /** Client id registered by hand, for authorization servers without dynamic registration. */
+  oauth_client_id?: string;
+  /**
+   * Isolation of a stdio server: `off` (it runs with the rights of the person; the default of servers saved before this
+   * existed), `read-only` or `workspace-write` (private home, hidden data folder and secret locations).
+   */
+  sandbox?: McpSandbox;
+  /** An isolated server may use the network (default true: most servers need it). */
+  sandbox_network?: boolean;
+  /**
+   * `connecting`, `reconnecting` (backoff in progress, see `attempt`), `unreachable` (gave up: «Riconnetti»),
+   * `auth_required` (the server answered 401: «Accedi»), `disconnected` (switched off), `approval_required`
+   * (a stdio command the person has not confirmed yet, or that changed since: it does not run).
+   */
+  status: "connected" | "connecting" | "reconnecting" | "unreachable" | "auth_required" | "disconnected" | "approval_required";
+  /** The command waits for the confirmation of the person (`POST /api/mcp/servers/{id}/approve` with `approval_hash`). */
+  approval_required?: boolean;
+  approval_hash?: string;
+  /** The command line to confirm, as the person reads it. */
+  command_line?: string;
   tools: string[];
   error?: string;
+  capabilities?: { tools: boolean; resources: boolean; prompts: boolean };
+  attempt?: number;
+  /** OAuth tokens are stored for this server (their values are never returned). */
+  signed_in?: boolean;
+}
+
+/** A prompt a connected MCP server offers (`GET /api/mcp/prompts`). */
+export interface McpPromptInfo {
+  server_id: string;
+  server: string;
+  name: string;
+  description: string;
+  arguments: { name: string; description: string; required: boolean }[];
+}
+
+/** A prompt rendered (`POST /api/mcp/prompts/get`): `text` goes in the composer for the person to review. */
+export interface McpPromptResult {
+  description: string;
+  text: string;
+}
+
+/** A question an MCP server asks the person during a run: a flat form (`GET /api/mcp/elicitations`). */
+export interface McpElicitation {
+  id: string;
+  run_id: string;
+  server: string;
+  message: string;
+  schema: {
+    type: "object";
+    properties: Record<string, { type: "string" | "number" | "integer" | "boolean"; title?: string; description?: string; enum?: string[] }>;
+    required?: string[];
+  };
+}
+
+export interface McpElicitationAnswer {
+  action: "accept" | "decline" | "cancel";
+  content?: Record<string, string | number | boolean>;
 }
 
 // ---------- Config & audit ----------
@@ -1301,4 +1684,90 @@ export interface ProactiveStatus {
   open_proposals: number;
   stopped_by_kill_switch: boolean;
   on_power?: boolean;
+}
+
+
+// ---- Channels (Telegram, Slack, email) and the IMAP accounts of the mail connector
+
+export type ChannelKind = "telegram" | "slack" | "email";
+export type ChannelMode = "read_only" | "ask";
+export type ChannelState = "off" | "connecting" | "connected" | "error" | "unavailable";
+
+export interface ChannelStatus {
+  state: ChannelState;
+  detail: string;
+  since?: string;
+  /** Messages from people who are not on the list: dropped, counted, never answered. */
+  ignored: number;
+  handled: number;
+  conversations: number;
+}
+
+/** A channel as the API shows it: secrets are always `SECRET_MASK` (or empty when not set). */
+export interface Channel {
+  id: string;
+  kind: ChannelKind;
+  name: string;
+  enabled: boolean;
+  agent_id: string;
+  mode: ChannelMode;
+  allowed: string[];
+  briefing: boolean;
+  secrets: Record<string, string>;
+  settings: Record<string, unknown>;
+}
+
+export interface ChannelInfo extends Channel {
+  status: ChannelStatus;
+  /** The agent runs in auto/yolo and the channel is in `ask` mode: it runs as `ask`. */
+  downgraded: boolean;
+}
+
+export interface ChannelCreate {
+  kind: ChannelKind;
+  name?: string;
+  agent_id?: string;
+  mode?: ChannelMode;
+  allowed?: string[];
+  secrets?: Record<string, string>;
+  settings?: Record<string, unknown>;
+}
+
+export interface ChannelPatch {
+  name?: string;
+  enabled?: boolean;
+  agent_id?: string;
+  mode?: ChannelMode;
+  allowed?: string[];
+  briefing?: boolean;
+  secrets?: Record<string, string>;
+  settings?: Record<string, unknown>;
+}
+
+export interface ChannelTestResult {
+  ok: boolean;
+  detail: string;
+}
+
+export interface ChannelPairing {
+  code: string;
+  expires_at: string;
+  /** The message to send to the bot, e.g. `/start 123456`. */
+  command: string;
+}
+
+/** An IMAP account of the mail connector. The password is `SECRET_MASK` when one is stored. */
+export interface MailAccount {
+  id: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  folders: string[];
+}
+
+export interface MailAccountTest {
+  ok: boolean;
+  detail: string;
+  folders: { name: string; recent: number }[];
 }

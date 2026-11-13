@@ -3,9 +3,10 @@ import { useApi } from "../../shared/api/context";
 import { ignoreNotFound } from "../../shared/lib/errors";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { Feedback, Session, ThinkingMode } from "../../shared/api/types";
+import type { AttachmentUpload, Feedback, Session, ThinkingMode } from "../../shared/api/types";
 import { withoutRating, withRating } from "./model/feedback";
 
+import { t } from "../../shared/i18n";
 export function useSessions() {
   const api = useApi();
   return useQuery({ queryKey: qk.sessions.list(), queryFn: () => api.sessions() });
@@ -43,7 +44,7 @@ export function useDeleteSession() {
     // Already deleted from another client (404): the session is gone, which is what was asked.
     mutationFn: (id: string) => ignoreNotFound(api.deleteSession(id)),
     onSuccess: (_r, id) => {
-      toast("Sessione eliminata");
+      toast(t("chat.sessione_eliminata"));
       // Out of the list at once, so the view never navigates back to a session that is gone.
       qc.setQueryData<Session[]>(qk.sessions.list(), (list) => list?.filter((x) => x.id !== id));
       void qc.invalidateQueries({ queryKey: qk.sessions.all() });
@@ -85,7 +86,8 @@ export function useDeleteFeedback(sessionId: string | null) {
 export function useStartRun() {
   const api = useApi();
   return useMutation({
-    mutationFn: (v: { sessionId: string; input: string; kind?: "a2ui.action"; thinking?: ThinkingMode }) => api.startRun(v.sessionId, v.input, v.kind, v.thinking),
+    mutationFn: (v: { sessionId: string; input: string; kind?: "a2ui.action"; thinking?: ThinkingMode; attachments?: AttachmentUpload[] }) =>
+      api.startRun(v.sessionId, v.input, v.kind, v.thinking, v.attachments),
     // The chat reports the failure itself (with the right wording): skip the generic toast.
     meta: { handled: true },
   });
@@ -139,7 +141,7 @@ export function useRewind(sessionId: string) {
   return useMutation({
     mutationFn: (runId: string) => api.rewindRun(runId),
     onSuccess: (r) => {
-      toast(r.failed.length > 0 ? `Ripristino incompleto: ${r.failed.length} file non ripristinati` : `File ripristinati: ${r.restored.length}, eliminati: ${r.deleted.length}`);
+      toast(r.failed.length > 0 ? t("chat.ripristino_incompleto_file_non_ripristinati", { count: r.failed.length }) : t("chat.file_ripristinati_eliminati", { restored: r.restored.length, deleted: r.deleted.length }));
       void qc.invalidateQueries({ queryKey: qk.sessions.checkpoints(sessionId) });
       void qc.invalidateQueries({ queryKey: qk.sessions.worktree(sessionId) });
     },
@@ -153,7 +155,7 @@ export function useWorktreeApply() {
     mutationFn: (sessionId: string) => api.worktreeApply(sessionId),
     onSuccess: (st, sessionId) => {
       qc.setQueryData(qk.sessions.worktree(sessionId), st);
-      toast("Modifiche applicate al workspace (non ancora committate)");
+      toast(t("chat.modifiche_applicate_al_workspace_non"));
     },
   });
 }
@@ -164,8 +166,21 @@ export function useWorktreeDiscard() {
   return useMutation({
     mutationFn: (v: { sessionId: string; branch: string }) => api.worktreeDiscard(v.sessionId),
     onSuccess: (_r, v) => {
-      toast(`Worktree ${v.branch} eliminato`);
+      toast(t("chat.worktree_eliminato", { branch: v.branch }));
       void qc.invalidateQueries({ queryKey: qk.sessions.all() });
     },
+  });
+}
+
+/** The bytes of a stored attachment (a thumbnail, a download). Kept for a while: they never change. */
+export function useAttachmentData(sessionId: string | undefined, attachmentId: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: qk.sessions.attachment(sessionId ?? "", attachmentId),
+    queryFn: () => api.getAttachment(sessionId!, attachmentId),
+    enabled: enabled && !!sessionId,
+    staleTime: Infinity,
+    gcTime: 10 * 60_000,
+    retry: false,
   });
 }

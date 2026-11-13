@@ -1,0 +1,79 @@
+name: Segnala un errore
+description: Qualcosa non funziona o funziona in modo diverso da come dovrebbe
+title: "[Errore] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Grazie. Se pensi che sia una **vulnerabilità di sicurezza**, non usare questo modulo: segui [SECURITY.md](https://github.com/davides93/ai-workspace-local/blob/main/SECURITY.md) (segnalazione privata).
+        Non incollare token, chiavi o conversazioni private: nei log nascondili.
+  - type: textarea
+    id: what
+    attributes:
+      label: Cosa succede
+      description: Descrivi il problema e cosa ti aspettavi.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Come riprodurlo
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versione di AIW
+      description: `aiw --version`, oppure il pannello degli aggiornamenti nelle Impostazioni.
+      placeholder: "0.5.0-beta.8"
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Dove l'hai usato
+      options:
+        - App desktop
+        - Daemon / CLI (aiw)
+        - Interfaccia web (browser)
+        - Android
+        - iOS / iPadOS
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Sistema operativo
+      options:
+        - Windows x64
+        - Windows arm64
+        - macOS Apple Silicon
+        - macOS Intel
+        - Linux x64
+        - Linux arm64
+        - Android
+        - iOS / iPadOS
+        - Altro
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime e modello (se c'entrano)
+      placeholder: "llama.cpp incorporato (CPU), qwen3-1.7b Q8_0"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Messaggi di errore e log
+      description: Registro delle attività o output di `aiw doctor`, senza segreti.
+      render: text
+  - type: checkboxes
+    id: device
+    attributes:
+      label: Hardware
+      options:
+        - label: L'ho visto su un dispositivo reale (non su un simulatore o una demo)

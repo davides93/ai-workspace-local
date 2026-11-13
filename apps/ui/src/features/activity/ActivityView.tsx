@@ -8,6 +8,7 @@ import { Pager } from "./components/Pager";
 import { auditExport, BACKEND_LIMIT, emptyFilters, facets, filterAudit, isFiltering, newestFirst, paginate, type AuditFilters } from "./model/filter";
 import "./activity.css";
 
+import { t, t as tr, tNode } from "../../shared/i18n";
 /** Attività: the audit trail with filters, search, pagination and a JSON export of what is on screen. */
 export function ActivityView() {
   const audit = useAudit();
@@ -33,26 +34,26 @@ export function ActivityView() {
   return (
     <Page className="act">
       <PageHeader
-        eyebrow="Controllo" title="Attività"
-        subtitle="Audit trail di ogni decisione di policy, azione dei tool e comando di sistema."
-        actions={<Button icon="download" disabled={filtered.length === 0} onClick={exportJson} title="Scarica le righe filtrate in un file JSON">Esporta JSON{filtered.length > 0 ? ` (${filtered.length})` : ""}</Button>}
+        eyebrow={t("nav.group_control")} title={t("activity.attivita")}
+        subtitle={t("activity.audit_trail_di_ogni_decisione")}
+        actions={<Button icon="download" disabled={filtered.length === 0} onClick={exportJson} title={tr("activity.scarica_le_righe_filtrate_in")}>{(filtered.length > 0 ? t("activity.esporta_json_count", { count: filtered.length }) : t("activity.esporta_json"))}</Button>}
       />
       <p className={truncated ? "act-note is-warn" : "act-note"} role={truncated ? "status" : undefined}>
         <Icon name="info" size={15} />
         <span>
-          Il workspace restituisce soltanto le <b>ultime {BACKEND_LIMIT} voci</b> dell'audit: la cronologia più vecchia non è raggiungibile da questa pagina.
-          {truncated && " L'elenco è al limite, quindi alcune voci più vecchie potrebbero mancare."}
+          {tNode("activity.il_workspace_restituisce_soltanto_le", { latest: <b>{t("activity.ultime_voci", { BACKEND_LIMIT })}</b> })}
+          {truncated && t("activity.l_elenco_e_al_limite")}
         </span>
       </p>
-      <QueryState query={audit} isEmpty={(l) => l.length === 0} empty={<EmptyState icon="activity" title="Ancora nessuna attività" description="Qui compaiono le decisioni di policy, le azioni dei tool e i comandi di sistema." />}>
+      <QueryState query={audit} isEmpty={(l) => l.length === 0} empty={<EmptyState icon="activity" title={t("activity.ancora_nessuna_attivita")} description={t("activity.qui_compaiono_le_decisioni_di")} />}>
         {() => (
           <>
             <AuditFilterBar filters={filters} onChange={change} {...menus} />
             <AuditTable
               rows={shown.rows}
               empty={isFiltering(filters) ? (
-                <EmptyState icon="search" title="Nessuna riga corrisponde ai filtri" action={<Button size="sm" onClick={() => change(emptyFilters)}>Azzera i filtri</Button>} />
-              ) : "Ancora nessuna attività."}
+                <EmptyState icon="search" title={tr("activity.nessuna_riga_corrisponde_ai_filtri")} action={<Button size="sm" onClick={() => change(emptyFilters)}>{tr("activity.azzera_i_filtri")}</Button>} />
+              ) : t("activity.ancora_nessuna_attivita_2")}
             />
             <Pager page={shown} size={size} onPage={setPage} onSize={(n) => { setSize(n); setPage(1); }} />
           </>

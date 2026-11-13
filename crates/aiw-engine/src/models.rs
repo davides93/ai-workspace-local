@@ -10,7 +10,7 @@ use aiw_models::sidecar;
 use std::sync::atomic::Ordering;
 
 /// Runtimes that exist only as manifests: no code behind them yet.
-const MANIFEST_ONLY: [&str; 6] = ["windows-ml", "mlx-swift", "core-ai", "executorch", "mlc-llm", "phi-silica"];
+pub(crate) const MANIFEST_ONLY: [&str; 6] = ["windows-ml", "mlx-swift", "core-ai", "executorch", "mlc-llm", "phi-silica"];
 
 /// Provider credentials as persisted in the store. The token never leaves the engine.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -280,7 +280,7 @@ impl Engine {
                 c.runtime_compat = runtime_compat(&infos, &device.os, &c.format);
                 c.installed = match &c.source {
                     ModelSource::Hf { repo, file } if !file.is_empty() => {
-                        index.iter().any(|e| e.provider == "hf" && e.model == *repo && e.files.iter().any(|f| f == file || f.ends_with(&format!("/{file}"))))
+                        index.iter().any(|e| e.provider == "hf" && e.model == *repo && e.files.iter().any(|f| f == file || f.ends_with(&format!("/{file}")) || Some(f.as_str()) == file.rsplit('/').next()))
                             // v0.3: the bare file in the models directory (exact file name, not a suffix).
                             || local.iter().any(|m| m.origin == "manual" && file_name_of(m.path.as_deref()) == Some(file.as_str()))
                     }

@@ -92,6 +92,22 @@ async fn rest_run_and_gateway_roundtrip() {
 }
 
 #[tokio::test]
+async fn the_search_key_never_comes_back_from_the_config_route() {
+    let (app, _e, _d, _w) = app().await;
+    let put = |key: &str, value: Value| json!({"layer": "global", "key": key, "value": value});
+    let (st, out) = dispatch(app.clone(), "PUT", "/api/config", Some(put("search.brave_api_key", json!("chiave-segreta")))).await;
+    assert_eq!(st, 200, "{out}");
+    assert!(!out.to_string().contains("chiave-segreta"), "{out}");
+    assert_eq!(out["effective"]["search.brave_api_key"], aiw_core::api::SECRET_MASK);
+    let (_, got) = dispatch(app.clone(), "GET", "/api/config", None).await;
+    assert!(!got.to_string().contains("chiave-segreta"), "{got}");
+    let (st, _) = dispatch(app.clone(), "PUT", "/api/config", Some(put("search.searxng_url", json!("gopher://x")))).await;
+    assert_eq!(st, 400);
+    let (st, _) = dispatch(app, "PUT", "/api/config", Some(put("search.provider", json!("bing")))).await;
+    assert_eq!(st, 400);
+}
+
+#[tokio::test]
 async fn lan_requests_need_the_token() {
     let (app, e, _d, _w) = app().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -177,13 +193,17 @@ async fn mcp_server_works_with_our_mcp_client() {
         env: None,
         headers: None,
         enabled: true,
+        sampling: false,
+        oauth_client_id: None,
+        sandbox: "off".into(),
+        sandbox_network: true,
     };
     let client = aiw_tools::mcp::McpClient::connect(&cfg).await.unwrap();
-    assert!(client.tools.iter().any(|t| t.name == "list_dir" && t.read_only));
-    assert!(client.tools.iter().any(|t| t.name == "aiw_agent_run"));
-    let out = client.call_tool("list_dir", json!({"path": "."})).await.unwrap();
+    assert!(client.tools().iter().any(|t| t.name == "list_dir" && t.read_only));
+    assert!(client.tools().iter().any(|t| t.name == "aiw_agent_run"));
+    let out = client.call_tool("list_dir", json!({"path": "."}), None).await.unwrap();
     assert!(!out.is_error && out.content.contains("hello.txt"), "{}", out.content);
-    let denied = client.call_tool("read_file", json!({"path": "/etc/passwd"})).await.unwrap();
+    let denied = client.call_tool("read_file", json!({"path": "/etc/passwd"}), None).await.unwrap();
     assert!(denied.is_error, "outside the workspace must fail: {}", denied.content);
 }
 
@@ -303,8 +323,8 @@ async fn pairs_with_another_device_over_http() {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app_b.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
 
-    assert!(a.pair_with_peer(&addr.to_string(), "000000").await.is_err(), "wrong code is refused");
-    let peer = a.pair_with_peer(&format!("http://{addr}/"), &b.pairing_code()).await.unwrap();
+    assert!(a.pair_with_peer(&addr.to_string(), "000000", None).await.is_err(), "wrong code is refused");
+    let peer = a.pair_with_peer(&format!("http://{addr}/"), &b.pairing_code(), None).await.unwrap();
     assert_eq!(peer.name, "Telefono di prova");
     assert_eq!(peer.address, format!("http://{addr}"));
     assert!(a.peers().iter().any(|p| p.id == peer.id));
@@ -510,4 +530,157 @@ async fn a_run_takes_an_optional_reasoning_override() {
     }
     let (st, run) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ancora"}))).await;
     assert_eq!(st, 200, "{run}");
+}
+
+#[tokio::test]
+async fn attachments_travel_as_base64_and_come_back_unchanged() {
+    use base64::Engine as _;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let (app, e, d, _w) = app().await;
+    let (_, ses) = dispatch(app.clone(), "POST", "/api/sessions", Some(json!({"agent_id": "planner"}))).await;
+    let sid = ses["id"].as_str().unwrap().to_string();
+    let path = format!("/api/sessions/{sid}/runs");
+    let bytes: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+    // no text, one file: allowed
+    let body = json!({"input": "", "attachments": [{"name": "foto.png", "mime": "image/png", "data": b64(&bytes)}]});
+    let (st, run) = dispatch(app.clone(), "POST", &path, Some(body)).await;
+    assert_eq!(st, 200, "{run}");
+    let rid = run["run_id"].as_str().unwrap().to_string();
+    for _ in 0..200 {
+        if e.run_done(&rid) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let (_, msgs) = dispatch(app.clone(), "GET", &format!("/api/sessions/{sid}/messages"), None).await;
+    let att = msgs[0]["attachments"][0].clone();
+    assert_eq!(
+        (att["name"].as_str(), att["mime"].as_str(), att["kind"].as_str(), att["size"].as_u64()),
+        (Some("foto.png"), Some("image/png"), Some("image"), Some(11))
+    );
+    assert!(att.get("data").is_none() && att.get("path").is_none(), "metadata only: {att}");
+    let id = att["id"].as_str().unwrap();
+    let (st, got) = dispatch(app.clone(), "GET", &format!("/api/sessions/{sid}/attachments/{id}"), None).await;
+    assert_eq!(st, 200, "{got}");
+    assert_eq!(got["name"], "foto.png");
+    assert_eq!(base64::engine::general_purpose::STANDARD.decode(got["data"].as_str().unwrap()).unwrap(), bytes);
+    // unknown or hostile ids: 404 in JSON
+    for bad in ["att_000000000000", "..%2F..%2Fetc%2Fpasswd", "x"] {
+        let (st, err) = dispatch(app.clone(), "GET", &format!("/api/sessions/{sid}/attachments/{bad}"), None).await;
+        assert_eq!(st, 404, "{bad}: {err}");
+        assert!(err["error"].is_string(), "{err}");
+    }
+    let (st, _) = dispatch(app.clone(), "GET", &format!("/api/sessions/none/attachments/{id}"), None).await;
+    assert_eq!(st, 404);
+    // over the limits: 400 in JSON, nothing starts
+    let too_many: Vec<Value> = (0..9).map(|i| json!({"name": format!("{i}.txt"), "data": b64(b"x")})).collect();
+    let (st, err) = dispatch(app.clone(), "POST", &path, Some(json!({"input": "ciao", "attachments": too_many}))).await;
+    assert_eq!(st, 400, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("al massimo 8 file"));
+    let big = vec![b'a'; (10 << 20) + 1];
+    let (st, err) = dispatch(app.clone(), "POST", &path, Some(json!({"attachments": [{"name": "grande.txt", "data": b64(&big)}]}))).await;
+    assert_eq!(st, 400, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("troppo grande"));
+    // text and files both missing
+    let (st, _) = dispatch(app.clone(), "POST", &path, Some(json!({"input": ""}))).await;
+    assert_eq!(st, 400);
+    // deleting the session removes the files
+    let (st, _) = dispatch(app, "DELETE", &format!("/api/sessions/{sid}"), None).await;
+    assert_eq!(st, 200);
+    assert!(!d.path().join("attachments").join(&sid).exists());
+}
+
+/// Stand-in for a speech server (Kokoro-FastAPI): `POST /v1/audio/speech`, 10 ms of audio per
+/// character of the input. Records the bodies.
+async fn fake_speech() -> (String, Arc<std::sync::Mutex<Vec<Value>>>) {
+    let seen: Arc<std::sync::Mutex<Vec<Value>>> = Arc::default();
+    let log = seen.clone();
+    let app = Router::new().route(
+        "/v1/audio/speech",
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+            let log = log.clone();
+            async move {
+                let ms = body["input"].as_str().unwrap_or_default().chars().count() as u32 * 10;
+                log.lock().unwrap().push(body);
+                ([(axum::http::header::CONTENT_TYPE, "audio/wav")], wav(ms))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), seen)
+}
+
+#[tokio::test]
+async fn voice_speaks_through_the_api_and_the_gateway() {
+    use base64::Engine as _;
+    use tower::ServiceExt;
+    let (app, e, _d, _w) = app().await;
+
+    // Nothing configured: the status says the system voices speak, and speak refuses (422).
+    let (_, st) = dispatch(app.clone(), "GET", "/api/voice", None).await;
+    assert_eq!(
+        (st["tts"]["engine"].as_str(), st["tts"]["neural"].as_bool(), st["tts"]["max_chars"].as_u64()),
+        (Some("system"), Some(false), Some(4000)),
+        "{st}"
+    );
+    let (code, err) = dispatch(app.clone(), "POST", "/api/voice/speak", Some(json!({"text": "Ciao a tutti."}))).await;
+    assert_eq!(code, 422, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("voce neurale"), "{err}");
+
+    let (base, seen) = fake_speech().await;
+    e.set_config("device", "voice.tts.server_url", json!(base)).unwrap();
+    let (_, st) = dispatch(app.clone(), "GET", "/api/voice", None).await;
+    assert_eq!((st["tts"]["engine"].as_str(), st["tts"]["any_language"].as_bool()), (Some("openai"), Some(true)), "{st}");
+
+    // JSON with the audio as base64 (the app's bridge): two sentences, joined.
+    let (code, out) =
+        dispatch(app.clone(), "POST", "/api/voice/speak", Some(json!({"text": "Ciao a tutti. Come stai?", "language": "it"}))).await;
+    assert_eq!(code, 200, "{out}");
+    assert_eq!(out["mime"], "audio/wav");
+    let audio = base64::engine::general_purpose::STANDARD.decode(out["audio"].as_str().unwrap()).unwrap();
+    let info = aiw_runtimes::stt::wav_info(&audio).unwrap();
+    assert_eq!(info.duration_ms, 230, "13 + 10 characters at 10 ms each");
+    assert_eq!(seen.lock().unwrap().len(), 2);
+
+    // Too long, empty.
+    let (code, err) = dispatch(app.clone(), "POST", "/api/voice/speak", Some(json!({"text": "a".repeat(4001)}))).await;
+    assert_eq!(code, 400, "{err}");
+    let (code, _) = dispatch(app.clone(), "POST", "/api/voice/speak", Some(json!({"text": " "}))).await;
+    assert_eq!(code, 400);
+
+    // The OpenAI-compatible gateway answers with the WAV itself.
+    let post = |body: Value| {
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/audio/speech")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let res = app
+        .clone()
+        .oneshot(post(json!({"model": "tts-1", "input": "Ciao a tutti.", "voice": "im_nicola", "response_format": "wav"})))
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    assert_eq!(res.headers().get("content-type").and_then(|v| v.to_str().ok()), Some("audio/wav"));
+    assert_eq!(res.headers().get("x-frame-options").map(|v| v.to_str().unwrap()), Some("DENY"), "behind the same middleware");
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    assert_eq!(aiw_runtimes::stt::wav_info(&bytes).unwrap().duration_ms, 130);
+    assert_eq!(seen.lock().unwrap().last().unwrap()["voice"], "im_nicola");
+    // mp3 is not offered, and the error is in the API's shape.
+    let res = app.clone().oneshot(post(json!({"input": "Ciao.", "response_format": "mp3"}))).await.unwrap();
+    assert_eq!(res.status().as_u16(), 400);
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("WAV"));
+    // Nothing is ever forwarded to a paired device: without an engine the answer is a refusal.
+    e.set_config("device", "voice.tts.server_url", json!("")).unwrap();
+    let mut m = Map::new();
+    m.insert("base_url".into(), json!("http://127.0.0.1:9/v1"));
+    e.update_runtime_settings("aiw-peer", m).unwrap();
+    let res = app.clone().oneshot(post(json!({"input": "Ciao."}))).await.unwrap();
+    assert_eq!(res.status().as_u16(), 422);
 }

@@ -36,6 +36,28 @@ describe("HttpTransport", () => {
     expect(t.capabilities).toEqual({ demo: false, native: false, pairing: true });
   });
 
+  it("calls the MCP paths (reconnect, sign-in, prompts, questions)", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url, body: init.body as string | undefined });
+      return new Response("{}", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.reconnectMcpServer("m 1");
+    await t.mcpOAuthStart("m 1");
+    await t.mcpOAuthSignout("m 1");
+    await t.mcpPrompts();
+    await t.mcpPromptGet("m1", "p", { a: "b" });
+    await t.mcpElicitations();
+    await t.respondMcpElicitation("e1", { action: "accept", content: { n: 1 } });
+    expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
+      "POST /mcp/servers/m%201/reconnect", "POST /mcp/servers/m%201/oauth/start", "DELETE /mcp/servers/m%201/oauth",
+      "GET /mcp/prompts", "POST /mcp/prompts/get", "GET /mcp/elicitations", "POST /mcp/elicitations/e1",
+    ]);
+    expect(JSON.parse(calls[4].body!)).toEqual({ server_id: "m1", name: "p", arguments: { a: "b" } });
+    expect(JSON.parse(calls[6].body!)).toEqual({ action: "accept", content: { n: 1 } });
+  });
+
   it("calls the paths of the contract", async () => {
     const calls: { method: string; url: string; body?: string }[] = [];
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
@@ -93,6 +115,7 @@ describe("HttpTransport", () => {
     await t.recommend();
     await t.adapters();
     await t.deleteAdapter("ad 1");
+    await t.route("qwen 3", 4096, true);
     vi.unstubAllGlobals();
     expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
       "POST /runtimes/refresh",
@@ -145,6 +168,7 @@ describe("HttpTransport", () => {
       "GET /recommend",
       "GET /adapters",
       "DELETE /adapters/ad%201",
+      "GET /route?model=qwen%203&context=4096&remote=true",
     ]);
     expect(JSON.parse(calls[2].body!)).toEqual({ token: "t0k", endpoint: "https://mirror" });
     expect(JSON.parse(calls[5].body!)).toEqual({ id: "some-id" });
@@ -157,6 +181,27 @@ describe("HttpTransport", () => {
     expect(JSON.parse(calls[30].body!)).toEqual({ profile: "veloce", repeat: 3 });
     expect(JSON.parse(calls[41].body!)).toEqual({ method: "sft", sources: ["feedback"] });
     expect(JSON.parse(calls[44].body!)).toEqual({ method: "sft", base_model: "m", dataset_id: "ds_1" });
+  });
+});
+
+describe("HttpTransport attachments", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the files with the run and reads one back", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response(JSON.stringify({ run_id: "r", name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }), { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.startRun("s 1", "ciao");
+    await t.startRun("s 1", "", undefined, "deep", [{ name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }]);
+    await t.startRun("s 1", "x", undefined, undefined, []);
+    expect(await t.getAttachment("s 1", "att/1")).toMatchObject({ name: "a.txt", data: "Y2lhbw==" });
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual(["POST /sessions/s%201/runs", "POST /sessions/s%201/runs", "POST /sessions/s%201/runs", "GET /sessions/s%201/attachments/att%2F1"]);
+    expect(JSON.parse(calls[0].body!)).toEqual({ input: "ciao" });
+    expect(JSON.parse(calls[1].body!)).toEqual({ input: "", thinking: "deep", attachments: [{ name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }] });
+    expect(JSON.parse(calls[2].body!)).toEqual({ input: "x" });
   });
 });
 
@@ -196,6 +241,48 @@ describe("HttpTransport memories", () => {
     ]);
     expect(JSON.parse(calls[3].body!)).toEqual({ text: "Ho due gatti", kind: "about_you", pinned: true });
     expect(JSON.parse(calls[4].body!)).toEqual({ text: "Ho tre gatti" });
+  });
+});
+
+describe("HttpTransport knowledge base", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("calls the paths of the contract", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response("{}", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.kbCollections();
+    await t.createKbCollection({ name: "Casa" });
+    await t.updateKbCollection("k/1", { description: "Bollette" });
+    await t.kbDocuments("k/1");
+    await t.addKbFiles("k/1", [{ name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }]);
+    await t.addKbPath("k/1", "/home/g/Documenti");
+    await t.reindexKbCollection("k/1");
+    await t.deleteKbDocument("d/1");
+    await t.kbSearch({ query: "affitto", collection: "Casa" });
+    await t.kbStatus();
+    await t.cancelKbJob("j/1");
+    await t.deleteKbCollection("k/1");
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      "GET /kb/collections",
+      "POST /kb/collections",
+      "PATCH /kb/collections/k%2F1",
+      "GET /kb/collections/k%2F1/documents",
+      "POST /kb/collections/k%2F1/documents",
+      "POST /kb/collections/k%2F1/documents",
+      "POST /kb/collections/k%2F1/reindex",
+      "DELETE /kb/documents/d%2F1",
+      "POST /kb/search",
+      "GET /kb/status",
+      "POST /kb/jobs/j%2F1/cancel",
+      "DELETE /kb/collections/k%2F1",
+    ]);
+    expect(JSON.parse(calls[4].body!)).toEqual({ files: [{ name: "a.txt", mime: "text/plain", data: "Y2lhbw==" }] });
+    expect(JSON.parse(calls[5].body!)).toEqual({ path: "/home/g/Documenti" });
+    expect(JSON.parse(calls[8].body!)).toEqual({ query: "affitto", collection: "Casa" });
   });
 });
 
@@ -261,5 +348,47 @@ describe("HttpTransport.subscribeRun", () => {
     stop();
     vi.advanceTimersByTime(10_000);
     expect(FakeEventSource.instances).toHaveLength(1);
+  });
+});
+
+describe("HttpTransport channels and mail accounts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("calls the paths of the contract", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response("{}", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.channels();
+    await t.createChannel({ kind: "telegram", name: "Casa", secrets: { bot_token: "1:x" } });
+    await t.updateChannel("c/1", { enabled: true });
+    await t.testChannel("c/1");
+    await t.pairChannel("c/1");
+    await t.channelStatus("c/1");
+    await t.deleteChannel("c/1");
+    await t.mailAccounts();
+    const account = { id: "casa", host: "imap.example.com", port: 993, username: "mario", password: "pw", folders: ["INBOX"] };
+    await t.setMailAccounts([account]);
+    await t.testMailAccount(account);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      "GET /channels", "POST /channels", "PATCH /channels/c%2F1", "POST /channels/c%2F1/test", "POST /channels/c%2F1/pair",
+      "GET /channels/c%2F1/status", "DELETE /channels/c%2F1", "GET /connectors/mail/accounts", "PUT /connectors/mail/accounts", "POST /connectors/mail/test",
+    ]);
+    expect(JSON.parse(calls[1].body!)).toEqual({ kind: "telegram", name: "Casa", secrets: { bot_token: "1:x" } });
+    expect(JSON.parse(calls[8].body!)).toEqual([account]);
+  });
+
+  it("speaks through POST /voice/speak with a JSON body", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response(JSON.stringify({ mime: "audio/wav", audio: "AAAA", backend: "Piper", elapsed_ms: 5 }), { status: 200 });
+    });
+    const out = await new HttpTransport("http://h", "tok").speak({ text: "Ciao.", language: "it" });
+    expect(out.mime).toBe("audio/wav");
+    expect(`${calls[0].method} ${calls[0].url}`).toBe("POST /voice/speak");
+    expect(JSON.parse(calls[0].body!)).toEqual({ text: "Ciao.", language: "it" });
   });
 });

@@ -13,8 +13,10 @@
 //! 3. CORS answers only to the allowlist (the webhook endpoint, which is authenticated by its own
 //!    secret, accepts any origin but never gets credentials).
 //!
-//! A request that presents the API token carries explicit credentials, which a forged request
-//! cannot have, so it is not subject to rules 1 and 2. Requests without `ConnectInfo` are the
+//! A request that presents an API token carries explicit credentials, which a forged request
+//! cannot have, so it is not subject to rules 1 and 2. What a token may then reach is decided by
+//! its scopes (see [`crate::scopes`]). Over TLS (the listener of `server.tls`) the page's own
+//! origin is `https://…`; the allowlist follows the scheme the request arrived with. Requests without `ConnectInfo` are the
 //! in-process dispatcher of the Tauri shell: there is no socket and no browser in between.
 
 use crate::{mesh, AppState};
@@ -29,6 +31,11 @@ use std::net::IpAddr;
 /// Paths that need the token (everything else is the static UI, the public agent card and the
 /// webhooks, which carry their own secret).
 pub(crate) fn is_guarded(path: &str) -> bool {
+    // The return of the browser from an OAuth authorization server cannot carry the token: the handler
+    // checks the peer and the one-time `state` itself.
+    if path == "/api/mcp/oauth/callback" {
+        return false;
+    }
     path.starts_with("/api/") || path.starts_with("/v1/") || path == "/mcp" || path == "/a2a"
 }
 
@@ -110,9 +117,19 @@ fn is_builtin_origin(o: &ParsedOrigin) -> bool {
     }
 }
 
-/// `http://<LAN address or mDNS name of this device>:<port of the listener>`.
-fn is_own_lan_origin(o: &ParsedOrigin, st: &AppState) -> bool {
-    if o.scheme != "http" || o.port.unwrap_or(80) != crate::server_port(st) {
+/// The scheme this listener serves for a request, and its default port.
+fn own_scheme(tls: bool) -> (&'static str, u16) {
+    if tls {
+        ("https", 443)
+    } else {
+        ("http", 80)
+    }
+}
+
+/// `http(s)://<LAN address or mDNS name of this device>:<port of the listener>`.
+fn is_own_lan_origin(o: &ParsedOrigin, st: &AppState, tls: bool) -> bool {
+    let (scheme, default_port) = own_scheme(tls);
+    if o.scheme != scheme || o.port.unwrap_or(default_port) != crate::server_port(st) {
         return false;
     }
     let own_ip = mesh::lan_ip().map(|ip| ip.to_string());
@@ -121,16 +138,17 @@ fn is_own_lan_origin(o: &ParsedOrigin, st: &AppState) -> bool {
 
 /// The page was served by this very listener over the LAN (its origin is the `Host` it was
 /// reached with). Only for names an attacker cannot rebind, see [`is_lan_style_host`].
-fn is_same_lan_origin(o: &ParsedOrigin, host: Option<&str>) -> bool {
+fn is_same_lan_origin(o: &ParsedOrigin, host: Option<&str>, tls: bool) -> bool {
+    let (scheme, default_port) = own_scheme(tls);
     let Some((h, port)) = host.and_then(split_authority) else { return false };
-    o.scheme == "http" && o.host == h && o.port.unwrap_or(80) == port.unwrap_or(80) && is_lan_style_host(&o.host)
+    o.scheme == scheme && o.host == h && o.port.unwrap_or(default_port) == port.unwrap_or(default_port) && is_lan_style_host(&o.host)
 }
 
 /// The CORS and CSRF allowlist: Tauri webviews, `localhost`/`127.0.0.1`/`[::1]` on any port (the
 /// vite dev server included) and the origins of this device on the LAN.
-pub(crate) fn origin_allowed(origin: &str, host: Option<&str>, st: &AppState) -> bool {
+pub(crate) fn origin_allowed(origin: &str, host: Option<&str>, st: &AppState, tls: bool) -> bool {
     let Some(o) = parse_origin(origin) else { return false };
-    is_builtin_origin(&o) || is_same_lan_origin(&o, host) || is_own_lan_origin(&o, st)
+    is_builtin_origin(&o) || is_same_lan_origin(&o, host, tls) || is_own_lan_origin(&o, st, tls)
 }
 
 fn host_of(req: &Request) -> Option<String> {
@@ -152,6 +170,15 @@ pub(crate) enum Peer {
     Remote,
 }
 
+/// Marker the TLS listener puts on the requests that arrived over an encrypted connection.
+#[derive(Clone, Copy)]
+pub(crate) struct TlsConn;
+
+/// Did the request arrive over TLS?
+pub(crate) fn is_tls(req: &Request) -> bool {
+    req.extensions().get::<TlsConn>().is_some()
+}
+
 pub(crate) fn peer(req: &Request) -> Peer {
     match req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
         None => Peer::InProcess,
@@ -160,30 +187,27 @@ pub(crate) fn peer(req: &Request) -> Peer {
     }
 }
 
-/// Constant-time byte comparison (the token is a secret).
-fn eq_secret(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    let mut diff = (a.len() ^ b.len()) as u8;
-    for i in 0..a.len().max(b.len()) {
-        diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
-    }
-    diff == 0
-}
-
-/// Does the request carry the API token (`Authorization: Bearer`, `x-api-key` or `?token=`)?
-pub(crate) fn has_valid_token(req: &Request, token: &str) -> bool {
+/// The tokens the request carries (`Authorization: Bearer`, `x-api-key` or `?token=`), without repeats.
+pub(crate) fn presented_tokens(req: &Request) -> Vec<String> {
     let h = req.headers();
     let bearer = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
     // Anthropic SDKs send the key as `x-api-key`.
     let api_key = h.get("x-api-key").and_then(|v| v.to_str().ok());
     let query = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
-    [bearer, api_key, query].into_iter().flatten().any(|t| eq_secret(t, token))
+    let mut out: Vec<String> = Vec::new();
+    for t in [bearer, api_key, query].into_iter().flatten().map(str::trim).filter(|t| !t.is_empty()) {
+        if !out.iter().any(|o| o == t) {
+            out.push(t.to_string());
+        }
+    }
+    out
 }
 
 /// Rule 2: `Origin` allowlist and `Sec-Fetch-Site`. `Some(response)` is the refusal.
 pub(crate) fn check_origin(req: &Request, st: &AppState) -> Option<Response> {
     let host = host_of(req);
-    let origin = req.headers().get(header::ORIGIN).map(|o| o.to_str().ok().is_some_and(|o| origin_allowed(o, host.as_deref(), st)));
+    let tls = is_tls(req);
+    let origin = req.headers().get(header::ORIGIN).map(|o| o.to_str().ok().is_some_and(|o| origin_allowed(o, host.as_deref(), st, tls)));
     let cross_site =
         req.headers().get("sec-fetch-site").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("cross-site"));
     match origin {
@@ -215,7 +239,7 @@ pub(crate) async fn cors(State(st): State<AppState>, req: Request, next: Next) -
     let Some(origin) = req.headers().get(header::ORIGIN).cloned() else { return next.run(req).await };
     let webhook = is_webhook(req.uri().path());
     let host = host_of(&req);
-    let allowed = webhook || origin.to_str().ok().is_some_and(|o| origin_allowed(o, host.as_deref(), &st));
+    let allowed = webhook || origin.to_str().ok().is_some_and(|o| origin_allowed(o, host.as_deref(), &st, is_tls(&req)));
     let preflight = req.method() == Method::OPTIONS && req.headers().contains_key(header::ACCESS_CONTROL_REQUEST_METHOD);
     if preflight {
         if !allowed {
@@ -323,7 +347,7 @@ mod tests {
 
     #[test]
     fn same_lan_origin_needs_a_name_that_cannot_be_rebound() {
-        let same = |origin: &str, host: &str| parse_origin(origin).is_some_and(|o| is_same_lan_origin(&o, Some(host)));
+        let same = |origin: &str, host: &str| parse_origin(origin).is_some_and(|o| is_same_lan_origin(&o, Some(host), false));
         assert!(same("http://192.168.1.5:7777", "192.168.1.5:7777"));
         assert!(same("http://studio-pc.local:7777", "studio-pc.local:7777"));
         assert!(same("http://studio-pc:7777", "studio-pc:7777"));
@@ -337,9 +361,15 @@ mod tests {
     }
 
     #[test]
-    fn token_comparison() {
-        assert!(eq_secret("abc", "abc"));
-        assert!(!eq_secret("abc", "abd"));
-        assert!(!eq_secret("abc", "abcd"));
+    fn https_origins_follow_the_scheme_of_the_listener() {
+        let same = |origin: &str, host: &str, tls: bool| parse_origin(origin).is_some_and(|o| is_same_lan_origin(&o, Some(host), tls));
+        // Over TLS the page was served as https: an http origin is not the same site, and the other way round.
+        assert!(same("https://192.168.1.5:7777", "192.168.1.5:7777", true));
+        assert!(same("https://studio-pc.local:7777", "studio-pc.local:7777", true));
+        assert!(same("https://studio-pc.local", "studio-pc.local:443", true), "default port of https");
+        assert!(!same("http://192.168.1.5:7777", "192.168.1.5:7777", true));
+        assert!(!same("https://192.168.1.5:7777", "192.168.1.5:7777", false));
+        assert!(!same("https://attacker.example:7777", "attacker.example:7777", true), "a public name may be rebound");
+        assert!(!same("https://192.168.1.5:7777", "192.168.1.5:9999", true), "port differs");
     }
 }

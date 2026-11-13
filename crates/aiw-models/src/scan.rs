@@ -225,6 +225,10 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Scanned>) {
             Some(local_gguf(&p, size))
         } else if lower.ends_with(".bin") && is_whisper_ggml(&p) {
             Some(local_whisper(&p, meta.len()))
+        } else if lower.ends_with(".onnx") && is_piper_voice(&p) {
+            let mut config = p.as_os_str().to_os_string();
+            config.push(".json");
+            Some(local_piper(&p, meta.len() + std::fs::metadata(PathBuf::from(config)).map(|m| m.len()).unwrap_or(0)))
         } else {
             [(".litertlm", "litertlm"), (".task", "litertlm"), (".pte", "pte"), (".llamafile", "llamafile")]
                 .iter()
@@ -376,6 +380,36 @@ fn is_whisper_ggml(p: &Path) -> bool {
     std::fs::File::open(p).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && u32::from_le_bytes(magic) == 0x6767_6d6c
 }
 
+/// A Piper voice is `<name>.onnx` next to `<name>.onnx.json` (its phonemes and sample rate).
+fn is_piper_voice(p: &Path) -> bool {
+    let mut config = p.as_os_str().to_os_string();
+    config.push(".json");
+    std::fs::read_to_string(PathBuf::from(config)).map(|t| t.contains("\"phoneme_id_map\"") || t.contains("\"espeak\"")).unwrap_or(false)
+}
+
+/// A Piper voice (`it_IT-paola-medium.onnx`): speech synthesis only, never offered to chat profiles.
+fn local_piper(p: &Path, size: u64) -> LocalModel {
+    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    // `<lang>_<REGION>-<speaker>-<quality>`: the card shows "it_IT paola (medium)".
+    let parts: Vec<&str> = stem.split('-').collect();
+    let name = match parts.as_slice() {
+        [lang, speaker, quality] => format!("Voce {speaker} ({lang}, {quality})"),
+        _ => format!("Voce {stem}"),
+    };
+    LocalModel {
+        id: stem.to_lowercase(),
+        name,
+        path: Some(p.display().to_string()),
+        format: "piper".into(),
+        size_bytes: size,
+        quant: parts.last().map(|q| q.to_string()),
+        arch: Some("piper".into()),
+        capabilities: vec!["tts".into()],
+        runtimes: crate::runtimes_for_format("piper").into_iter().map(String::from).collect(),
+        ..Default::default()
+    }
+}
+
 /// A whisper.cpp model: speech-to-text only, never offered to chat profiles.
 fn local_whisper(p: &Path, size: u64) -> LocalModel {
     let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -501,6 +535,12 @@ fn sidecar_models(root: &Path, dir: &Path, out: &mut Vec<Scanned>) {
                     continue;
                 };
                 local_whisper(p, size)
+            }
+            "piper" => {
+                let Some((p, _)) = files.iter().find(|f| f.0.extension().map(|e| e.eq_ignore_ascii_case("onnx")).unwrap_or(false)) else {
+                    continue;
+                };
+                local_piper(p, size)
             }
             "litertlm" | "pte" | "llamafile" => {
                 let (p, _) = &files[0];
@@ -908,6 +948,38 @@ mod tests {
         );
         assert_eq!(hub.runtimes, vec!["whisper-server".to_string()]);
         assert!(hub.source.as_deref().unwrap().starts_with("hf:ggerganov/whisper.cpp"));
+    }
+
+    #[test]
+    fn piper_voices_are_recognised_flat_and_installed_through_the_hub() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = br#"{"audio": {"sample_rate": 22050}, "espeak": {"voice": "it"}, "phoneme_id_map": {}}"#;
+        // A manual copy: the model next to its configuration. An `.onnx` without one is not a voice.
+        write(&dir.path().join("en_US-amy-medium.onnx"), &[1; 40]);
+        write(&dir.path().join("en_US-amy-medium.onnx.json"), config);
+        write(&dir.path().join("lonely.onnx"), &[1; 40]);
+        let repo = dir.path().join("hf/rhasspy/piper-voices");
+        write(&repo.join("it_IT-paola-medium.onnx"), &[2; 100]);
+        write(&repo.join("it_IT-paola-medium.onnx.json"), config);
+        let inst = install(
+            "hf",
+            "rhasspy/piper-voices",
+            "medium",
+            "piper",
+            &[("it_IT-paola-medium.onnx", 100), ("it_IT-paola-medium.onnx.json", config.len() as u64)],
+        );
+        sidecar::upsert(&repo, inst).unwrap();
+        let found = scan_models(dir.path());
+        assert_eq!(found.len(), 2, "{found:#?}");
+        let manual = found.iter().find(|m| m.origin == "manual").unwrap();
+        assert_eq!(
+            (manual.id.as_str(), manual.format.as_str(), manual.capabilities.clone()),
+            ("en_us-amy-medium", "piper", vec!["tts".to_string()])
+        );
+        let hub = found.iter().find(|m| m.origin == "aiw").unwrap();
+        assert_eq!((hub.name.as_str(), hub.size_bytes), ("Voce paola (it_IT, medium)", 100 + config.len() as u64));
+        assert_eq!(hub.runtimes, vec!["piper".to_string()]);
+        assert!(hub.path.as_deref().unwrap().ends_with("it_IT-paola-medium.onnx"));
     }
 
     #[test]

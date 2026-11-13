@@ -2,18 +2,19 @@ import type { DownloadProgress, DownloadStatus, PullRequest } from "../../../sha
 import { formatDuration } from "../../../shared/lib/format";
 import type { LedTone, PillTone } from "../../../shared/ui";
 
+import { t } from "../../../shared/i18n";
 /** Waiting, transferring or verifying: the job can still be cancelled and the list must keep polling. */
 export function isActiveJob(d: Pick<DownloadProgress, "status">): boolean {
   return d.status === "queued" || d.status === "running" || d.status === "verifying";
 }
 
 export const DOWNLOAD_STATUS: Record<DownloadStatus, { label: string; tone: PillTone; led: LedTone }> = {
-  queued: { label: "In coda", tone: "neutral", led: "off" },
-  running: { label: "In download", tone: "run", led: "run" },
-  verifying: { label: "Verifica sha256", tone: "run", led: "run" },
-  done: { label: "Completato", tone: "ok", led: "ok" },
-  error: { label: "Errore", tone: "crit", led: "crit" },
-  cancelled: { label: "Annullato", tone: "neutral", led: "off" },
+  queued: { get label() { return t("models.in_coda"); }, tone: "neutral", led: "off" },
+  running: { get label() { return t("models.in_download"); }, tone: "run", led: "run" },
+  verifying: { get label() { return t("models.verifica_sha256_2"); }, tone: "run", led: "run" },
+  done: { get label() { return t("models.completato"); }, tone: "ok", led: "ok" },
+  error: { get label() { return t("models.errore"); }, tone: "crit", led: "crit" },
+  cancelled: { get label() { return t("models.annullato"); }, tone: "neutral", led: "off" },
 };
 
 /** Name shown for a job: the repository or model reference, else the model id. */
@@ -40,9 +41,9 @@ export function etaSeconds(d: Pick<DownloadProgress, "received" | "total" | "spe
 /** "pochi secondi", "35 s", "circa 4 min", "circa 1 h 22 min". */
 export function formatEta(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds)) return "—";
-  if (seconds < 10) return "pochi secondi";
+  if (seconds < 10) return t("models.pochi_secondi");
   if (seconds < 60) return formatDuration(seconds);
-  return `circa ${formatDuration(seconds)}`;
+  return t("models.circa_durata", { duration: formatDuration(seconds) });
 }
 
 export interface QueueSummary {
@@ -111,7 +112,7 @@ export function retryPlan(job: DownloadProgress, catalogIds: ReadonlySet<string>
 /** "file 2 di 3" while transferring, "3 file" once done; nothing for a single-file job. */
 export function filesLabel(d: Pick<DownloadProgress, "files_done" | "files_total" | "status">): string | null {
   if (d.files_total <= 1) return null;
-  if (d.status === "done") return `${d.files_total} file`;
+  if (d.status === "done") return t("models.n_files", { n: d.files_total });
   const current = Math.min(d.files_done + (isActiveJob(d) ? 1 : 0), d.files_total);
-  return `file ${current} di ${d.files_total}`;
+  return t("models.file_current_of_total", { current, total: d.files_total });
 }

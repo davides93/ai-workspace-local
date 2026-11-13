@@ -106,6 +106,10 @@ mod tests {
             env: Some(map(json!({"API_KEY": "k1", "MODE": "a"}))),
             headers: Some(map(json!({"Authorization": "Bearer one", "Cookie": "c=1", "Accept": "x"}))),
             enabled: true,
+            sampling: false,
+            oauth_client_id: None,
+            sandbox: "off".into(),
+            sandbox_network: true,
         };
         // What the editor got is what it sends back, with one change of its own.
         let mut sent = masked(stored.clone());

@@ -2,12 +2,20 @@
 
 pub mod a2a_client;
 pub mod adviser;
+pub mod attachments;
 pub mod background;
+pub mod backup;
+pub mod channels;
 mod dataset;
 pub mod defaults;
+pub mod diagnostics;
 pub mod eval;
 mod host;
+pub mod kb;
 mod learning;
+mod mail_accounts;
+mod mcp_host;
+mod mcp_oauth;
 pub mod memory;
 mod models;
 pub mod notices;
@@ -17,13 +25,17 @@ pub mod peers;
 pub mod proactive;
 pub mod reward;
 mod roles;
+pub mod router;
 pub mod routing;
 mod secrets;
 pub mod store;
+pub mod tls;
+pub mod tokens;
 pub mod traces;
 pub mod train;
 pub mod train_jobs;
 mod training_tool;
+pub mod tts;
 pub mod update;
 pub mod voice;
 pub mod webhook;
@@ -32,7 +44,7 @@ pub mod worktree;
 pub use host::EngineHost;
 pub use pairing::PairOutcome;
 
-use aiw_agent::{to_msgs, AgentRunner, HookConfig, Policy, PolicyRule, RunBudget, RunInput};
+use aiw_agent::{AgentRunner, HookConfig, Policy, PolicyRule, RunBudget, RunInput};
 use aiw_core::api::*;
 use aiw_core::config::{app_schema, Layer, LayeredConfig};
 use aiw_core::events::{AgEvent, SeqEvent, TimedEvent};
@@ -41,7 +53,7 @@ use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use aiw_models::{DownloadManager, DownloadOptions, ExternalRoots, Hub, HubConfig};
 use aiw_runtimes::{ChatBackend, RuntimeRegistry};
 use aiw_tools::browser::BrowserManager;
-use aiw_tools::mcp::{McpClient, McpTool};
+use aiw_tools::mcp::McpClient;
 use aiw_tools::{SandboxMode, ToolContext, ToolRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -129,10 +141,19 @@ pub(crate) struct Inner {
     pub tools: Arc<ToolRegistry>,
     /// What the settings say about the calendar and mail connectors (read by their tools).
     pub connectors: aiw_tools::connectors::Shared,
+    /// What the settings say about the web search (read by `web_search`).
+    pub search: aiw_tools::search::Shared,
     pub browser: Arc<BrowserManager>,
     pub native_stt: RwLock<Option<Arc<dyn voice::NativeStt>>>,
-    pub mcp: tokio::sync::Mutex<HashMap<String, Arc<McpClient>>>,
-    pub mcp_status: RwLock<HashMap<String, (String, Option<String>)>>,
+    /// One speech synthesis at a time (see [`tts`]).
+    pub tts_gate: tokio::sync::Mutex<()>,
+    /// Runtime candidates that failed to run a model a moment ago (see [`router::FailureMemory`]).
+    pub route_failures: Arc<router::FailureMemory>,
+    pub mcp: Mutex<HashMap<String, Arc<McpClient>>>,
+    /// Questions an MCP server asked the person (`elicitation/create`), waiting for an answer.
+    pub elicitations: Mutex<HashMap<String, (McpElicitation, oneshot::Sender<aiw_tools::mcp::Elicited>)>>,
+    /// OAuth sign-ins in progress, by `state` (see `mcp_oauth`).
+    pub oauth_pending: Mutex<HashMap<String, mcp_oauth::PendingAuth>>,
     pub store: Store,
     pub runs: Mutex<HashMap<String, RunHandle>>,
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
@@ -141,12 +162,22 @@ pub(crate) struct Inner {
     pub reflecting: Mutex<HashSet<String>>,
     /// A background pass that computes memory embeddings is running (see `memory`).
     pub embedding_busy: std::sync::atomic::AtomicBool,
+    /// An embedding provider that replaces the adviser's choice (see `Engine::use_embedder`).
+    pub embedder_override: RwLock<Option<memory::EmbedTarget>>,
+    /// Indexing jobs of the knowledge base (see `kb`).
+    pub kb_jobs: Mutex<kb::Jobs>,
     pub bus: broadcast::Sender<RunEventMsg>,
     pub workflow_runs: Mutex<Vec<WorkflowRun>>,
     pub scheduler: Mutex<aiw_workflow::Scheduler>,
     /// The proactive assistant's heartbeat (see `proactive`).
     pub proactive: proactive::ProactiveRuntime,
+    /// Telegram, Slack and email channels (see `channels`).
+    pub channels: channels::Runtime,
     pub token: String,
+    /// Per-device and per-app tokens: limiter, throttles and revocation notices (see `tokens`).
+    pub(crate) tokens: tokens::TokenRuntime,
+    /// The listener of this process: LAN exposure and TLS (see `tls`).
+    pub(crate) net: tls::NetState,
     pub pairing: Mutex<(String, Instant)>,
     /// Failed-attempt limiter of the pairing endpoint.
     pub pair_guard: Mutex<pairing::PairGuard>,
@@ -174,7 +205,16 @@ fn random_digits(n: usize) -> String {
 impl Engine {
     pub async fn new(opts: EngineOptions) -> Result<Self> {
         let dirs = opts.data_dir.clone().map(DataDirs::at).unwrap_or_else(DataDirs::resolve);
+        // Before anything is created: does this data folder already belong to an installation?
+        let existing_install = dirs.db_file().exists() || dirs.config_file().exists();
         dirs.ensure()?;
+        // The shell's network is closed by default now: installations that already exist keep it open
+        // (written explicitly), with a notice for the interface; see `migrate_shell_network`.
+        if let Err(e) =
+            aiw_core::config::migrate_shell_network(&dirs.config_file(), existing_install, &dirs.root.join(".shell-network-migrated"))
+        {
+            tracing::warn!("migration of sandbox.shell_network failed: {e}");
+        }
         let device = match opts.device.clone() {
             Some(d) => d,
             None => tokio::task::spawn_blocking(aiw_hw::probe).await.map_err(Error::other)?,
@@ -197,6 +237,7 @@ impl Engine {
         runtimes.set_sandboxed(opts.sandboxed);
         runtimes.set_pyenv_dir(dirs.root.join("pyenv")); // pip-installed runtimes (MLX…) live here
         let store = Store::open(&dirs.db_file())?;
+        mcp_host::migrate_mcp_approvals(&store);
         let overrides: Vec<Value> = store.list_docs("runtime_settings")?;
         runtimes.load_overrides(
             overrides.into_iter().filter_map(|v| Some((v["id"].as_str()?.to_string(), v["settings"].as_object()?.clone()))).collect(),
@@ -205,7 +246,8 @@ impl Engine {
         let tools = Arc::new(ToolRegistry::default());
         let browser = Arc::new(BrowserManager::new(dirs.root.join("browser-profile")));
         let connectors = aiw_tools::connectors::ConnectorSettings::new(Default::default());
-        aiw_tools::register_builtins(&tools, browser.clone(), connectors.clone());
+        let search = aiw_tools::search::SearchSettings::new(Default::default());
+        aiw_tools::register_builtins(&tools, browser.clone(), connectors.clone(), search.clone());
         if let Some(d) = store.get_doc::<Vec<String>>("tool_settings", "disabled")? {
             tools.set_disabled(d);
         }
@@ -232,7 +274,7 @@ impl Engine {
             match std::fs::read_to_string(&p) {
                 Ok(t) if t.trim().len() >= 24 => t.trim().to_string(),
                 _ => {
-                    let t = uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string()[..8];
+                    let t = tokens::generate_token();
                     std::fs::write(&p, &t)?;
                     #[cfg(unix)]
                     {
@@ -263,21 +305,30 @@ impl Engine {
             models,
             tools,
             connectors,
+            search,
             browser,
             native_stt: Default::default(),
+            tts_gate: Default::default(),
+            route_failures: Default::default(),
             mcp: Default::default(),
-            mcp_status: Default::default(),
+            elicitations: Default::default(),
+            oauth_pending: Default::default(),
             store,
             runs: Default::default(),
             approvals: Default::default(),
             session_allow: Default::default(),
             reflecting: Default::default(),
             embedding_busy: Default::default(),
+            embedder_override: Default::default(),
+            kb_jobs: Default::default(),
             bus,
             workflow_runs: Default::default(),
             scheduler: Default::default(),
             proactive: Default::default(),
+            channels: Default::default(),
             token,
+            tokens: Default::default(),
+            net: Default::default(),
             pairing: Mutex::new((random_digits(6), Instant::now())),
             pair_guard: Default::default(),
             updater: update::Updater::new(opts.update_api_base.clone(), &updater_os, &updater_arch, updates_dir),
@@ -288,13 +339,24 @@ impl Engine {
         if !opts.offline {
             engine.0.runtimes.refresh().await;
         }
+        // The single token that always existed becomes the `owner` token (idempotent).
+        engine.sync_owner_token()?;
+        // Paired devices served over TLS are verified against the fingerprint saved at pairing.
+        engine.register_peer_pins();
         engine.sync_connectors();
+        engine.sync_search();
         training_tool::register(&engine);
+        engine.register_channel_tool();
         engine.seed()?;
         engine.resume_workflows();
         if !opts.offline {
             engine.start_background();
             engine.start_update_checks();
+            // Channels connect only in a process that stays up (the daemon; the app shell asks for it): a one-shot
+            // command of the CLI must not start a second connection next to the one of the running app.
+            if opts.mode == "daemon" {
+                engine.channels_start();
+            }
         }
         Ok(engine)
     }
@@ -404,6 +466,20 @@ impl Engine {
     pub fn workspace_root(&self) -> PathBuf {
         self.0.workspace_root.read().unwrap().clone()
     }
+
+    /// Network, hidden locations and environment of sandboxed commands, from `sandbox.*`: the data
+    /// folder of the app is always hidden, the rest is `sandbox.deny_read`.
+    pub(crate) fn shell_sandbox(&self) -> aiw_tools::ShellSandbox {
+        let cfg = &self.0.config;
+        let list = |key: &str| -> Vec<String> { cfg.get(key).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default() };
+        let mut hidden = vec![aiw_core::paths::normalize(&self.0.dirs.root)];
+        hidden.extend(aiw_tools::sandbox::expand_hidden(&list("sandbox.deny_read")));
+        aiw_tools::ShellSandbox {
+            network: cfg.get_str("sandbox.shell_network").as_deref() == Some("on"),
+            hidden,
+            env_allow: list("sandbox.env_allow"),
+        }
+    }
     pub fn token(&self) -> &str {
         &self.0.token
     }
@@ -440,12 +516,17 @@ impl Engine {
     /// smallest chat model downloaded on this device (see [`Engine::local_fallback_model`]).
     pub fn register_system_runtime(&self, id: &str, backend: Arc<dyn ChatBackend>) {
         let weak = Arc::downgrade(&self.0);
-        let resolver: aiw_runtimes::FallbackResolver = Arc::new(move || {
+        let resolver: aiw_runtimes::FallbackResolver = Arc::new(move |attempt| {
             let weak = weak.clone();
             Box::pin(async move {
                 let engine = Engine(weak.upgrade()?);
-                let model = engine.local_fallback_model()?;
-                engine.gateway_backend(&model).await.ok()
+                let local = engine.local_fallback_model()?;
+                let (backend, model) = engine.gateway_backend(&local).await.ok()?;
+                Some(aiw_runtimes::Fallback {
+                    backend,
+                    model,
+                    prefix: Some(format!("[Modello di sistema non disponibile ({}): risposta di un modello locale]\n\n", attempt.error)),
+                })
             })
         });
         self.register_native_runtime(id, Arc::new(aiw_runtimes::FallbackBackend::new(backend, resolver)));
@@ -471,8 +552,8 @@ impl Engine {
         }
         p.0.clone()
     }
-    /// Exchanges a pairing code for the API token (LAN devices). `None` when the code is wrong or
-    /// pairing is locked; use [`Engine::pair_attempt`] to tell the two apart.
+    /// Exchanges a pairing code for the API token of a new device (LAN devices). `None` when the
+    /// code is wrong or pairing is locked; use [`Engine::pair_attempt`] to tell the two apart.
     pub fn pair(&self, code: &str) -> Option<String> {
         match self.pair_attempt(code, None) {
             PairOutcome::Paired(token) => Some(token),
@@ -482,18 +563,38 @@ impl Engine {
 
     /// One pairing attempt from `client` (its address, when known). Failures are rate limited
     /// across all clients and per client: after too many the code is rotated and every attempt,
-    /// even with the right code, is refused with a retry hint (see [`pairing`]).
+    /// even with the right code, is refused with a retry hint (see [`pairing`]). A right code
+    /// issues the device its own token (see [`tokens`]), never the owner token.
     pub fn pair_attempt(&self, code: &str, client: Option<&str>) -> PairOutcome {
+        self.pair_attempt_as(code, client, None, None).0
+    }
+
+    /// Like [`Engine::pair_attempt`], for a device that says who it is (`device_id`, `name`); also
+    /// returns the id the token is bound to.
+    pub fn pair_attempt_as(
+        &self,
+        code: &str,
+        client: Option<&str>,
+        device_id: Option<&str>,
+        name: Option<&str>,
+    ) -> (PairOutcome, Option<String>) {
         let now = Instant::now();
         if let Some(retry_after) = self.0.pair_guard.lock().unwrap().check(client, now) {
-            return PairOutcome::Locked { retry_after };
+            return (PairOutcome::Locked { retry_after }, None);
         }
         let given = code.replace(' ', "");
         if pairing::constant_time_eq(&given, &self.pairing_code()) {
+            let issued = match self.issue_device_token(device_id, name) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("pairing: token non emesso: {e}");
+                    return (PairOutcome::Invalid, None);
+                }
+            };
             self.0.pair_guard.lock().unwrap().record_success(client);
             *self.0.pairing.lock().unwrap() = (random_digits(6), Instant::now());
-            self.audit_system("pair", "nuovo dispositivo accoppiato");
-            PairOutcome::Paired(self.0.token.clone())
+            self.audit_system("pair", &format!("nuovo dispositivo accoppiato: «{}» ({})", issued.info.name, issued.info.id));
+            (PairOutcome::Paired(issued.token), issued.info.device_id)
         } else {
             let tripped = self.0.pair_guard.lock().unwrap().record_failure(client, now);
             if tripped {
@@ -504,7 +605,7 @@ impl Engine {
                     &format!("{} tentativi di pairing falliti: codice rinnovato, nuovi tentativi sospesi", pairing::MAX_FAILURES),
                 );
             }
-            PairOutcome::Invalid
+            (PairOutcome::Invalid, None)
         }
     }
 
@@ -516,6 +617,8 @@ impl Engine {
             data_dir: self.0.dirs.root.display().to_string(),
             workspace_root: self.workspace_root().display().to_string(),
             sandboxed: self.0.runtimes.sandboxed(),
+            shell_sandbox: aiw_tools::shell::sandbox_backend().map(String::from),
+            mcp_sandbox: aiw_tools::sandbox::can_wrap_process(),
             uptime_s: self.0.started.elapsed().as_secs(),
             pairing_code: include_pairing.then(|| self.pairing_code()),
             device: self.device(),
@@ -564,18 +667,20 @@ impl Engine {
             token.cancel();
         }
         self.proactive_killed();
+        let channels_stopped = self.channels_killed();
         let sidecars = self.0.runtimes.stop_all().await;
         let browser = self.0.browser.close().await;
         let detail = format!(
-            "{} run, {} conferme, {} addestramenti, {} sidecar fermati{}",
+            "{} run, {} conferme, {} addestramenti, {} canali, {} sidecar fermati{}",
             runs.len(),
             n_appr,
             training.len(),
+            channels_stopped,
             sidecars,
             if browser { ", browser chiuso" } else { "" }
         );
         self.audit_system("kill", &detail);
-        json!({"runs": runs.len(), "approvals": n_appr, "training": training.len(), "sidecars": sidecars, "browser": browser})
+        json!({"runs": runs.len(), "approvals": n_appr, "training": training.len(), "channels": channels_stopped, "sidecars": sidecars, "browser": browser})
     }
 
     // ------------------------------------------------------------------ runtimes
@@ -684,10 +789,16 @@ impl Engine {
     /// An inference profile by id. `auto:<task>` (chat, agent, reasoning, vision) is not stored:
     /// the model adviser resolves it to what is installed now (see [`Engine::resolve_auto_profile`]).
     pub fn profile(&self, id: &str) -> Result<InferenceProfile> {
-        if let Some(task) = adviser::parse_auto_profile(id) {
-            return self.resolve_auto_profile(task);
-        }
-        self.0.store.get_doc("profile", id)?.ok_or_else(|| Error::NotFound(format!("profilo {id} non trovato")))
+        Ok(self.profile_routed(id)?.0)
+    }
+    /// Like [`Engine::profile`], with the plan of the runtime router when the profile's runtime is
+    /// `auto` (the returned profile always names a real runtime).
+    pub(crate) fn profile_routed(&self, id: &str) -> Result<(InferenceProfile, Option<router::RoutePlan>)> {
+        let p = match adviser::parse_auto_profile(id) {
+            Some(task) => self.resolve_auto_profile(task)?,
+            None => self.0.store.get_doc("profile", id)?.ok_or_else(|| Error::NotFound(format!("profilo {id} non trovato")))?,
+        };
+        self.resolve_runtime(p)
     }
     /// The model adviser's answer for this device, from the models found on disk right now.
     pub fn recommend(&self) -> aiw_core::api::Recommendations {
@@ -739,9 +850,20 @@ impl Engine {
         if p.id.starts_with("auto:") {
             return Err(Error::Invalid("gli id che iniziano con «auto:» sono riservati ai profili automatici".into()));
         }
-        let manifest = self.0.runtimes.manifest(&p.runtime_id)?;
-        // A runtime that cannot load an adapter says so now, not at the first message.
-        aiw_runtimes::adapters::validate(&manifest, &p.params.adapters)?;
+        if p.runtime_id == "auto" {
+            if p.model.trim().is_empty() {
+                return Err(Error::Invalid("con il runtime automatico serve un modello".into()));
+            }
+            if !p.params.adapters.is_empty() {
+                return Err(Error::Invalid(
+                    "gli adapter si caricano all'avvio di un runtime preciso: scegli il runtime invece di «Automatico»".into(),
+                ));
+            }
+        } else {
+            let manifest = self.0.runtimes.manifest(&p.runtime_id)?;
+            // A runtime that cannot load an adapter says so now, not at the first message.
+            aiw_runtimes::adapters::validate(&manifest, &p.params.adapters)?;
+        }
         self.0.store.put_doc("profile", &p.id, &p)?;
         Ok(p)
     }
@@ -792,6 +914,11 @@ impl Engine {
                     return Err(Error::Invalid(format!("ruoli: il profilo «{id}» del ruolo {} non esiste", role.as_str())));
                 }
             }
+        }
+        // Collections the agent may search: they must exist now (one deleted later is just ignored).
+        let existing = self.0.store.kb_collections()?;
+        if let Some(missing) = a.knowledge.iter().find(|id| !existing.iter().any(|c| &c.id == *id)) {
+            return Err(Error::Invalid(format!("documenti: la raccolta «{missing}» non esiste")));
         }
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
@@ -845,6 +972,9 @@ impl Engine {
         if let Some(base) = agent_id.strip_prefix(proactive::PROACTIVE_PREFIX) {
             return Ok((self.proactive_agent(base)?, None));
         }
+        if let Some((kind, base)) = channels::agent_kind(agent_id) {
+            return Ok((self.channel_agent(kind, base)?, None));
+        }
         let Some(team_id) = agent_id.strip_prefix(TEAM_PREFIX) else { return Ok((self.agent(agent_id)?, None)) };
         let team = self.team(team_id)?;
         let locals: Vec<AgentProfile> = team
@@ -883,6 +1013,7 @@ impl Engine {
                     budget: None,
                     candidate_profiles: vec![],
                     roles: None,
+                    knowledge: vec![],
                 }
             }
         };
@@ -1062,14 +1193,17 @@ impl Engine {
     // ------------------------------------------------------------------ sessions & runs
     pub fn sessions(&self) -> Result<Vec<Session>> {
         let mut list = self.0.store.sessions()?;
+        let channels = self.channel_session_kinds();
         for s in &mut list {
             s.worktree = self.worktree_info(&s.id);
+            s.channel = channels.get(&s.id).cloned();
         }
         Ok(list)
     }
     pub fn session(&self, id: &str) -> Result<Session> {
         let mut s = self.0.store.session(id)?;
         s.worktree = self.worktree_info(id);
+        s.channel = self.channel_session_kinds().remove(id);
         Ok(s)
     }
     pub fn create_session(&self, agent_id: &str, title: Option<String>) -> Result<Session> {
@@ -1079,7 +1213,12 @@ impl Engine {
     pub fn create_session_with(&self, agent_id: &str, title: Option<String>, isolation: Option<&str>) -> Result<Session> {
         match agent_id.strip_prefix(TEAM_PREFIX) {
             Some(team_id) => self.team(team_id).map(|_| ())?,
-            None => self.agent(agent_id.strip_prefix(proactive::PROACTIVE_PREFIX).unwrap_or(agent_id)).map(|_| ())?,
+            None => {
+                let base = channels::agent_kind(agent_id)
+                    .map(|(_, b)| b)
+                    .unwrap_or_else(|| agent_id.strip_prefix(proactive::PROACTIVE_PREFIX).unwrap_or(agent_id));
+                self.agent(base).map(|_| ())?
+            }
         }
         let now = now_rfc3339();
         let mut s = Session {
@@ -1090,6 +1229,7 @@ impl Engine {
             updated_at: now,
             last_status: None,
             worktree: None,
+            channel: None,
         };
         match isolation.unwrap_or("none") {
             "none" | "" => {}
@@ -1127,7 +1267,9 @@ impl Engine {
             }
             self.0.store.delete_doc("worktree", id)?;
         }
-        self.0.store.delete_session(id)
+        self.0.store.delete_session(id)?;
+        self.remove_attachments(id);
+        Ok(())
     }
 
     // ------------------------------------------------------------------ worktrees
@@ -1303,6 +1445,16 @@ impl Engine {
         self.0.session_allow.lock().unwrap().entry(session_id.to_string()).or_default().clone()
     }
 
+    /// One line that makes the assistant answer in the language chosen in `ui.language`. With
+    /// `auto` (the default) nothing is added: the generic rule "answer in the user's language" applies.
+    fn language_line(&self) -> String {
+        match self.0.config.get_str("ui.language").as_deref() {
+            Some("it") => "Lingua scelta dall'utente: rispondi in italiano, salvo che l'utente scriva in un'altra lingua.".into(),
+            Some("en") => "Language chosen by the user: reply in English, unless the user writes in another language.".into(),
+            _ => String::new(),
+        }
+    }
+
     fn agents_md(&self) -> String {
         let mut out = String::new();
         for (label, p) in [("globali", self.0.dirs.root.join("AGENTS.md")), ("del workspace", self.workspace_root().join("AGENTS.md"))] {
@@ -1351,7 +1503,21 @@ impl Engine {
             self.worktree_info(thread_id).map(|wt| format!(" (git worktree isolato, branch `{}`)", wt.branch)).unwrap_or_default();
         let device = self.device();
         let mut tool_ctx = ToolContext::new(run_id, ws.clone());
-        tool_ctx.read_roots = vec![self.0.dirs.skills(), ws.join(".aiw")];
+        tool_ctx.read_roots = vec![self.0.dirs.skills()];
+        // `<workspace>/.aiw` is read-only for the agent, unless it is (or holds) the app's own data folder:
+        // that one is hidden, only its skills and the attachments of the session are readable.
+        let ws_aiw = ws.join(".aiw");
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| aiw_core::paths::normalize(p));
+        let (ws_aiw_c, data_c) = (canon(&ws_aiw), canon(&self.0.dirs.root));
+        if !(ws_aiw_c.starts_with(&data_c) || data_c.starts_with(&ws_aiw_c)) {
+            tool_ctx.read_roots.push(ws_aiw);
+        }
+        tool_ctx.shell = self.shell_sandbox();
+        // Files the person attached in this session: read-only, like skills.
+        let attached = self.attachments_dir(thread_id);
+        if attached.is_dir() {
+            tool_ctx.read_roots.push(attached);
+        }
         tool_ctx.sandbox = SandboxMode::parse(&agent.sandbox);
         tool_ctx.require_read_before_overwrite = true;
         tool_ctx.cancel = cancel;
@@ -1378,6 +1544,15 @@ impl Engine {
             .chain(self.remote_subagents())
             .collect();
         let agent_budget = agent.budget.clone().unwrap_or_default();
+        let budget = Arc::new(if depth == 0 { self.run_budget(&agent_budget, None) } else { RunBudget::unlimited() });
+        tool_ctx.mcp_run = Some(Arc::new(mcp_host::EngineRunMcp::new(
+            self.clone(),
+            run_id,
+            thread_id,
+            profile.clone(),
+            budget.clone(),
+            tool_ctx.cancel.clone(),
+        )));
         let thinking = self.thinking_for(&profile, None);
         // Models by role: only for the run the person started, never for a sub-agent.
         let roles = if depth == 0 { self.resolve_roles(&agent, &profile) } else { None };
@@ -1393,14 +1568,15 @@ impl Engine {
             profile,
             history,
             user_input,
-            system_extra: vec![env, self.agents_md()],
+            user_extra: Default::default(),
+            system_extra: vec![env, self.agents_md(), self.language_line()],
             tool_ctx,
             hooks: self.hooks(),
             compact_at: self.0.config.get_f64("context.compact_at").unwrap_or(0.8),
             depth,
             session_allow,
             subagents,
-            budget: Arc::new(if depth == 0 { self.run_budget(&agent_budget, None) } else { RunBudget::unlimited() }),
+            budget,
             max_parallel_subagents: self.0.config.get("agents.max_parallel_subagents").and_then(|v| v.as_u64()).unwrap_or(3).max(1)
                 as usize,
             in_team: false,
@@ -1453,9 +1629,24 @@ impl Engine {
         kind: Option<&str>,
         thinking: Option<ThinkingMode>,
     ) -> Result<String> {
-        if input.trim().is_empty() {
+        self.start_run_attach(session_id, input, kind, thinking, vec![]).await
+    }
+
+    /// [`Engine::start_run_opts`] with files attached to the message (`data` is base64). The text
+    /// may be empty when there is at least one file. The limits are checked here: a message over
+    /// them is refused whole.
+    pub async fn start_run_attach(
+        &self,
+        session_id: &str,
+        input: String,
+        kind: Option<&str>,
+        thinking: Option<ThinkingMode>,
+        uploads: Vec<aiw_core::api::AttachmentUpload>,
+    ) -> Result<String> {
+        if input.trim().is_empty() && uploads.is_empty() {
             return Err(Error::Invalid("messaggio vuoto".into()));
         }
+        let files = attachments::prepare(uploads)?;
         let name = match kind {
             None | Some("") => None,
             Some(aiw_agent::a2ui::ACTION_NAME) => {
@@ -1466,7 +1657,7 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
-        self.start_run_inner(session_id, input, name, 0, thinking).await
+        self.start_run_inner(session_id, input, name, 0, thinking, files).await
     }
 
     /// Most handoffs one user message can chain before the conversation stops with a note.
@@ -1481,8 +1672,9 @@ impl Engine {
         name: Option<String>,
         hops: u32,
         thinking: Option<ThinkingMode>,
+        files: Vec<attachments::Prepared>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(self.start_run_body(session_id, input, name, hops, thinking))
+        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files))
     }
 
     async fn start_run_body(
@@ -1492,6 +1684,7 @@ impl Engine {
         name: Option<String>,
         hops: u32,
         thinking: Option<ThinkingMode>,
+        files: Vec<attachments::Prepared>,
     ) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
@@ -1504,9 +1697,11 @@ impl Engine {
         // The router (top-level runs of agents with candidate profiles) may replace the agent's own profile.
         // A team session keeps the profile of its own agent: its members run with theirs.
         let routed = if team.is_none() { self.route_profile(&agent) } else { None };
-        let profile = match &routed {
-            Some((p, _)) => p.clone(),
-            None => self.profile(&agent.inference_profile).map_err(|e| gone("il profilo", e))?,
+        // A profile whose runtime is `auto` is resolved now, by the runtime router; `route_plan` keeps the
+        // alternatives for the fallback.
+        let (profile, route_plan) = match &routed {
+            Some((p, _)) => self.profile_routed(&p.id).map_err(|e| gone("il profilo", e))?,
+            None => self.profile_routed(&agent.inference_profile).map_err(|e| gone("il profilo", e))?,
         };
         let manifest = self.0.runtimes.manifest(&profile.runtime_id).map_err(|e| gone("il runtime", e))?;
         if profile.model.is_empty() && manifest.launch.as_ref().map(|l| l.requires_model).unwrap_or(false) {
@@ -1529,6 +1724,15 @@ impl Engine {
                 RunHandle { session_id: Some(session_id.into()), cancel: cancel.clone(), events: vec![], done: false },
             );
         }
+        // The files are written now that the run is registered (a second run on the session is
+        // refused above, and the registration keeps it out while a PDF is read).
+        let attached = match self.save_attachments(session_id, files).await {
+            Ok(a) => a,
+            Err(e) => {
+                self.0.runs.lock().unwrap().remove(&run_id);
+                return Err(e);
+            }
+        };
         self.0.store.start_run(&run_id, Some(session_id))?;
         if let Some((p, choice)) = &routed {
             self.remember_route(&run_id, &agent.id, &p.id);
@@ -1537,7 +1741,13 @@ impl Engine {
                 AgEvent::Custom { name: "aiw.route".into(), value: json!({"profile": choice.profile, "reason": choice.reason}) },
             );
         }
-        let history = to_msgs(&self.0.store.messages(session_id)?);
+        if let Some(plan) = &route_plan {
+            self.emit(&run_id, AgEvent::Custom { name: router::RUNTIME_EVENT.into(), value: router::runtime_event(plan, None) });
+        }
+        // Only a model known not to see images loses them; an unknown one gets them and the runner
+        // retries without them if the backend refuses.
+        let vision = self.vision_support(&profile).unwrap_or(true);
+        let history = self.history_with_attachments(session_id, &self.0.store.messages(session_id)?, vision);
         let user_msg = ChatMessage {
             id: new_id("msg"),
             role: "user".into(),
@@ -1546,11 +1756,15 @@ impl Engine {
             tool_calls: None,
             tool_call_id: None,
             name,
+            attachments: (!attached.is_empty()).then(|| attached.clone()),
             created_at: now_rfc3339(),
         };
         self.0.store.append_messages(session_id, std::slice::from_ref(&user_msg))?;
         if session.title == "Nuova sessione" && user_msg.name.is_none() {
-            session.title = session_title(&input);
+            session.title = match attached.first() {
+                Some(first) if input.trim().is_empty() => session_title(&first.name),
+                _ => session_title(&input),
+            };
         }
         session.updated_at = now_rfc3339();
         session.last_status = Some("running".into());
@@ -1559,15 +1773,38 @@ impl Engine {
         let mut run_input =
             self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
         run_input.thinking = mode;
+        if !attached.is_empty() {
+            let (extra, vision_blocked) = attachments::user_extra(&self.load_attachment_files(session_id, &attached, vision), vision);
+            run_input.user_extra = extra;
+            if vision_blocked {
+                self.emit(
+                    &run_id,
+                    AgEvent::Custom {
+                        name: attachments::ATTACHMENTS_EVENT.into(),
+                        value: json!({"warning": attachments::NO_VISION_WARNING}),
+                    },
+                );
+            }
+        }
         // A proactive run cannot be talked into more than reading: only `deny` rules survive (an `allow` rule
         // would lift plan mode) and nobody is there to answer a confirmation.
         let proactive_run = session.agent_id.starts_with(proactive::PROACTIVE_PREFIX);
-        if proactive_run {
+        // A run started by a message from outside is read-only in the same way (nobody is asked), unless the
+        // channel is in `ask` mode: then the normal rules apply but never freer than «ask», and every
+        // confirmation is asked in the app and in the channel, where it expires.
+        let channel_kind = channels::agent_kind(&session.agent_id).map(|(k, _)| k);
+        let read_only_run = proactive_run || channel_kind == Some(channels::RunKind::ReadOnly);
+        if read_only_run {
             run_input.policy.rules.retain(|r| r.action == "deny");
+        }
+        if channel_kind == Some(channels::RunKind::Ask) && host::mode_rank(&run_input.policy.mode) > host::mode_rank("ask") {
+            run_input.policy.mode = "ask".into();
         }
         // What the assistant remembers: pinned notes and the ones that match this message.
         let memory = self.memory_prompt(&run_input.agent.id, &run_input.user_input).await;
         run_input.system_extra.extend(memory);
+        // Which document collections exist (the passages themselves are found with `kb_search`, never injected).
+        run_input.system_extra.extend(self.kb_prompt(&run_input.agent));
         if let Some(team) = &team {
             self.apply_team(&mut run_input, team);
         }
@@ -1575,8 +1812,13 @@ impl Engine {
         let rid = run_id.clone();
         let (from_name, from_mode) = (run_input.agent.name.clone(), run_input.policy.mode.clone());
         tokio::spawn(async move {
-            let host = EngineHost::new(engine.clone(), Some(session.id.clone()), None);
-            let host = Arc::new(if proactive_run { host.denying_approvals() } else { host });
+            let host = EngineHost::new(engine.clone(), Some(session.id.clone()), None).with_route(rid.clone(), route_plan);
+            let host = if read_only_run { host.denying_approvals() } else { host };
+            let host = Arc::new(if channel_kind == Some(channels::RunKind::Ask) {
+                host.with_approval_timeout(channels::APPROVAL_WAIT)
+            } else {
+                host
+            });
             // What the run produced is stored whatever its outcome: when it was cancelled or failed
             // its files were still written and its commands run, and the next turn must know.
             // (`new_messages[0]` is the user message, stored above.)
@@ -1613,6 +1855,7 @@ impl Engine {
                 tool_calls: None,
                 tool_call_id: None,
                 name: Some(RUN_ERROR_MESSAGE.into()),
+                attachments: None,
                 created_at: now_rfc3339(),
             }));
             let _ = engine.0.store.append_messages(&session.id, &stored);
@@ -1658,6 +1901,7 @@ impl Engine {
                 tool_calls: None,
                 tool_call_id: None,
                 name: Some(HANDOFF_MESSAGE.into()),
+                attachments: None,
                 created_at: now_rfc3339(),
             };
             let _ = self.0.store.append_messages(session_id, &[msg]);
@@ -1680,7 +1924,7 @@ impl Engine {
         }
         self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
         let input = format!("[Passaggio da {from_name}] {summary}");
-        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking).await {
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![]).await {
             note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
         }
     }
@@ -1964,7 +2208,6 @@ impl Engine {
         self.0.store.put_doc("tool_settings", "disabled", &self.0.tools.disabled())
     }
     pub fn mcp_servers(&self) -> Vec<McpServerInfo> {
-        let status = self.0.mcp_status.read().unwrap().clone();
         let tools = self.0.tools.info();
         self.0
             .store
@@ -1972,33 +2215,56 @@ impl Engine {
             .unwrap_or_default()
             .into_iter()
             .map(|c| {
-                let (st, err) = status.get(&c.id).cloned().unwrap_or_else(|| ("disconnected".into(), None));
+                let (mut status, mut error, attempt, capabilities) = self.mcp_state_view(&c.id);
+                let approval_required = c.enabled && !self.mcp_approved(&c);
+                let (approval_hash, command_line) = if approval_required {
+                    status = "approval_required".into();
+                    let line = aiw_tools::mcp::launch::command_line(&c);
+                    error = Some(format!("Questo server esegue il comando `{line}` su questo computer: confermalo per avviarlo"));
+                    (Some(aiw_tools::mcp::launch::approval_hash(&c)), Some(line))
+                } else {
+                    (None, None)
+                };
                 let t = tools.iter().filter(|t| t.server.as_deref() == Some(c.name.as_str())).map(|t| t.name.clone()).collect();
-                McpServerInfo { config: secrets::masked(c), status: st, tools: t, error: err }
+                let signed_in = self.oauth_signed_in(&c.id);
+                McpServerInfo {
+                    config: secrets::masked(c),
+                    status,
+                    tools: t,
+                    error,
+                    capabilities,
+                    attempt,
+                    signed_in,
+                    approval_required,
+                    approval_hash,
+                    command_line,
+                }
             })
             .collect()
     }
-    async fn connect_mcp(&self, cfg: McpServerConfig) -> Result<()> {
-        self.0.mcp_status.write().unwrap().insert(cfg.id.clone(), ("disconnected".into(), None));
-        match McpClient::connect(&cfg).await {
-            Ok(c) => {
-                let c = Arc::new(c);
-                self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", cfg.name)));
-                for t in McpTool::wrap(c.clone()) {
-                    self.0.tools.register(t);
-                }
-                if let Some(old) = self.0.mcp.lock().await.insert(cfg.id.clone(), c) {
-                    old.shutdown().await;
-                }
-                self.0.mcp_status.write().unwrap().insert(cfg.id.clone(), ("connected".into(), None));
-                Ok(())
-            }
-            Err(e) => {
-                tracing::warn!(server = %cfg.name, "MCP connection failed: {e}");
-                self.0.mcp_status.write().unwrap().insert(cfg.id.clone(), ("error".into(), Some(e.to_string())));
-                Err(e)
-            }
+    pub(crate) async fn connect_mcp(&self, cfg: McpServerConfig) -> Result<()> {
+        // A command the person has not confirmed (new, or changed since) never runs; a copy of the
+        // previous command that is still running is stopped.
+        if !self.mcp_approved(&cfg) {
+            self.stop_mcp(&cfg);
+            return Err(Error::Denied(format!(
+                "Questo server esegue il comando `{}` su questo computer: serve la tua conferma",
+                aiw_tools::mcp::launch::command_line(&cfg)
+            )));
         }
+        let events = Arc::new(mcp_host::EngineMcpEvents(Arc::downgrade(&self.0)));
+        let opts = aiw_tools::mcp::McpOptions { sandbox: self.mcp_sandbox_for(&cfg), ..Default::default() };
+        let c = McpClient::with_options(&cfg, events, opts);
+        let old = self.0.mcp.lock().unwrap().insert(cfg.id.clone(), c.clone());
+        if let Some(old) = old {
+            old.shutdown().await;
+        }
+        self.register_mcp_tools(&c);
+        let r = c.start().await;
+        if let Err(e) = &r {
+            tracing::warn!(server = %cfg.name, "MCP connection failed: {e}");
+        }
+        r
     }
     /// Saves (and connects, when enabled) an MCP server. The configuration is checked before
     /// anything is stored; a header or variable that comes back as [`SECRET_MASK`] keeps the
@@ -2008,14 +2274,22 @@ impl Engine {
         cfg.name = cfg.name.trim().replace(' ', "_");
         cfg.url = cfg.url.map(|u| u.trim().to_string());
         cfg.command = cfg.command.map(|c| c.trim().to_string());
+        if cfg.transport != "stdio" {
+            cfg.sandbox = "off".into(); // only a local process can be isolated
+        }
         if cfg.id.is_empty() {
             cfg.id = new_id("mcp");
         }
         let stored = self.0.store.get_doc::<McpServerConfig>("mcp", &cfg.id)?;
         let cfg = secrets::unmasked(cfg, stored.as_ref());
         self.0.store.put_doc("mcp", &cfg.id, &cfg)?;
+        if let Some(old) = stored.as_ref().filter(|o| o.name != cfg.name) {
+            self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", old.name)));
+        }
         if cfg.enabled {
             let _ = self.connect_mcp(cfg.clone()).await;
+        } else {
+            self.stop_mcp(&cfg);
         }
         self.mcp_servers()
             .into_iter()
@@ -2026,13 +2300,19 @@ impl Engine {
         let Some(cfg) = self.0.store.get_doc::<McpServerConfig>("mcp", id)? else {
             return Err(Error::NotFound(format!("server MCP {id} non trovato")));
         };
-        self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", cfg.name)));
-        if let Some(c) = self.0.mcp.lock().await.remove(id) {
-            c.shutdown().await;
-        }
-        self.0.mcp_status.write().unwrap().remove(id);
+        self.stop_mcp(&cfg);
+        self.oauth_forget(id);
+        self.forget_mcp_approval(id);
         self.0.store.delete_doc("mcp", id)?;
         Ok(())
+    }
+    /// Disconnects a server and takes its tools out of the registry.
+    fn stop_mcp(&self, cfg: &McpServerConfig) {
+        self.0.tools.unregister_prefix(&aiw_tools::openai_safe_name(&format!("mcp__{}__", cfg.name)));
+        let old = self.0.mcp.lock().unwrap().remove(&cfg.id);
+        if let Some(c) = old {
+            tokio::spawn(async move { c.shutdown().await });
+        }
     }
 
     // ------------------------------------------------------------------ config & audit
@@ -2045,12 +2325,20 @@ impl Engine {
                 "la versione Mac App Store (sandbox) lavora nella cartella dell'app: per sceglierne un'altra usa la versione DMG".into(),
             ));
         }
+        if key == "connectors.mail.imap" {
+            return Err(Error::Invalid(
+                "gli account di posta (con le password) si modificano dall'editor «Account di posta (IMAP)», non da qui".into(),
+            ));
+        }
         self.0.config.set(Layer::parse(layer)?, key, value)?;
         if key == "proactive.level" {
             self.proactive_level_set();
         }
         if key.starts_with("connectors.") {
             self.sync_connectors();
+        }
+        if key.starts_with("search.") {
+            self.sync_search();
         }
         if key == "workspace.root" {
             if let Some(p) = self.0.config.get_str("workspace.root") {
@@ -2275,6 +2563,7 @@ impl Engine {
         }
         let mut ctx = ToolContext::new(run_id, self.workspace_root());
         ctx.sandbox = SandboxMode::parse(&self.0.config.get_str("sandbox.mode").unwrap_or_else(|| "workspace-write".into()));
+        ctx.shell = self.shell_sandbox();
         ctx.checkpoint_dir = Some(self.0.dirs.checkpoints());
         ctx.allow_domains = self.0.config.get("network.allow_domains").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         t.call(args, &ctx).await
@@ -2335,6 +2624,12 @@ impl Engine {
     }
 
     /// Tool execution for workflows and the API (policy + approval apply).
+    /// How the policy reads a shell command line (the rule tester shows it).
+    pub fn analyze_command(&self, command: &str) -> aiw_core::api::CommandAnalysis {
+        let a = aiw_agent::shellparse::analyze(command, aiw_agent::shellparse::Flavor::native());
+        aiw_core::api::CommandAnalysis { commands: a.commands, also: a.also, confident: a.confident }
+    }
+
     pub(crate) fn tool_registry(&self) -> Arc<ToolRegistry> {
         self.0.tools.clone()
     }
@@ -2350,6 +2645,14 @@ fn validate_mcp(cfg: &McpServerConfig) -> Result<()> {
         "stdio" => {
             if cfg.command.as_deref().is_none_or(|c| c.trim().is_empty()) {
                 return Err(Error::Invalid("un server MCP stdio richiede il comando da avviare".into()));
+            }
+            if !["off", "read-only", "workspace-write"].contains(&cfg.sandbox.as_str()) {
+                return Err(Error::Invalid(format!("isolamento `{}` non valido: usa off, read-only o workspace-write", cfg.sandbox)));
+            }
+            if cfg.sandbox != "off" && !aiw_tools::sandbox::can_wrap_process() {
+                return Err(Error::Unsupported(
+                    "su questo sistema i server MCP non si possono isolare (su Windows non è disponibile, su Linux serve bubblewrap): scegli «Nessuno»".into(),
+                ));
             }
         }
         "http" => {
@@ -2409,9 +2712,15 @@ fn register_ort_genai(runtimes: &RuntimeRegistry, resolver: aiw_runtimes::ModelR
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_attachments;
+#[cfg(test)]
 mod tests_auto;
 #[cfg(test)]
 mod tests_background;
+#[cfg(test)]
+mod tests_backup;
+#[cfg(test)]
+mod tests_channels;
 #[cfg(test)]
 mod tests_eval;
 #[cfg(test)]
@@ -2419,7 +2728,11 @@ mod tests_hardening;
 #[cfg(test)]
 mod tests_inference;
 #[cfg(test)]
+mod tests_kb;
+#[cfg(test)]
 mod tests_learning;
+#[cfg(test)]
+mod tests_mcp;
 #[cfg(test)]
 mod tests_memory;
 #[cfg(test)]
@@ -2429,13 +2742,21 @@ mod tests_proactive;
 #[cfg(test)]
 mod tests_roles;
 #[cfg(test)]
+mod tests_router;
+#[cfg(test)]
 mod tests_routing;
 #[cfg(test)]
+mod tests_search;
+#[cfg(test)]
 mod tests_thinking;
+#[cfg(test)]
+mod tests_tls;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]
 mod tests_train;
+#[cfg(test)]
+mod tests_tts;
 #[cfg(test)]
 mod tests_validation;
 #[cfg(test)]

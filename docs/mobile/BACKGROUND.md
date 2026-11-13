@@ -69,3 +69,10 @@ Su Xcode 27.2 il wrapper Tauri non ha rilevato l'SDK del simulatore, pur elencat
 la verifica completa è stata fatta sul target dispositivo, senza installazione né pubblicazione.
 `cargo test -p aiw-engine`: 272 test passati, incluso il timeout che deve consumare budget e rilasciare il lock.
 `cargo clippy -p aiw-engine --all-targets`: passato, con avvisi preesistenti nelle dipendenze interne.
+
+## I canali (Telegram, Slack, email) sul telefono
+
+I canali hanno bisogno di una connessione sempre aperta (long polling, WebSocket, controllo della casella) e quindi non
+possono lavorare in background su un telefono: sul telefono restano «non disponibili» finché la shell non chiama
+`Engine::set_channels_foreground(true)` (app in primo piano). Questo collegamento nella shell mobile non è ancora fatto:
+oggi sul telefono i canali non partono. Sul computer partono con l'app (`Engine::channels_start()`) o con `aiw serve`.

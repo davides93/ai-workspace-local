@@ -1,6 +1,7 @@
 import type { RunStatus } from "../../../shared/api/types";
 import type { Item } from "./items";
 
+import { t } from "../../../shared/i18n";
 export type NoticeTone = "neutral" | "warn" | "crit";
 
 export interface RunNoticeInfo {
@@ -19,19 +20,26 @@ export interface RunNoticeInfo {
 export function describeRunError(code?: string): RunNoticeInfo {
   switch (code) {
     case "cancelled":
-      return { tone: "neutral", icon: "stop", title: "Run interrotto", hint: "Hai fermato l'esecuzione. Quello che l'agente aveva già prodotto resta nella conversazione." };
+      return { tone: "neutral", icon: "stop", title: t("chat.run_interrotto"), hint: t("chat.hai_fermato_l_esecuzione_quello") };
     case "runtime":
       return {
-        tone: "crit", icon: "alert", title: "Errore del runtime",
-        hint: "Il modello non ha risposto. Controlla che il runtime sia avviato e che il modello sia caricato, poi riprova.",
-        link: { to: "/runtimes", label: "Apri i runtime" },
+        tone: "crit", icon: "alert", title: t("chat.errore_del_runtime"),
+        hint: t("chat.il_modello_non_ha_risposto"),
+        link: { to: "/runtimes", label: t("chat.apri_i_runtime") },
       };
     case "hook_blocked":
-      return { tone: "warn", icon: "shield", title: "Bloccato da un hook", hint: "Un hook di sicurezza ha respinto il messaggio prima che arrivasse al modello.", link: { to: "/security/hooks", label: "Vedi gli hook" } };
+      return { tone: "warn", icon: "shield", title: t("chat.bloccato_da_un_hook"), hint: t("chat.un_hook_di_sicurezza_ha"), link: { to: "/security/hooks", label: t("chat.vedi_gli_hook") } };
     default:
-      return { tone: "crit", icon: "alert", title: "Run non riuscito" };
+      return { tone: "crit", icon: "alert", title: t("chat.run_non_riuscito") };
   }
 }
+
+/** The small note under a message whose images the model cannot see. */
+export const attachmentsNotice = (): RunNoticeInfo => ({
+  tone: "warn", icon: "alert", title: t("chat.questo_modello_non_vede_le"),
+  hint: t("chat.l_immagine_e_stata_allegata"),
+  link: { to: "/models", label: t("chat.apri_modelli") },
+});
 
 /** The standard texts of the backend need no repeating under a title that already says it. */
 export const isStandardErrorMessage = (code: string | undefined, message: string): boolean =>
@@ -72,10 +80,10 @@ export function errorDetail(code: string | undefined, message: string): string |
 export function lastRunNotice(status: RunStatus | undefined, items: Item[], running: boolean): RunNoticeInfo | null {
   if (running || items.length === 0 || items[items.length - 1].kind === "error") return null;
   if (status === "cancelled") {
-    return { tone: "neutral", icon: "stop", title: "L'ultimo run è stato interrotto", hint: "Il lavoro già svolto è conservato qui sopra: puoi proseguire scrivendo un nuovo messaggio." };
+    return { tone: "neutral", icon: "stop", title: t("chat.l_ultimo_run_e_stato"), hint: t("chat.il_lavoro_gia_svolto_e") };
   }
   if (status === "failed") {
-    return { tone: "crit", icon: "alert", title: "L'ultimo run non è andato a buon fine", hint: "Qui sopra c'è quello che l'agente aveva prodotto prima dell'errore. Controlla il runtime e riprova." , link: { to: "/runtimes", label: "Apri i runtime" } };
+    return { tone: "crit", icon: "alert", title: t("chat.l_ultimo_run_non_e"), hint: t("chat.qui_sopra_c_e_quello") , link: { to: "/runtimes", label: t("chat.apri_i_runtime") } };
   }
   return null;
 }

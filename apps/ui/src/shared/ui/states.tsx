@@ -5,10 +5,13 @@ import { errorMessage } from "../lib/errors";
 import { Button } from "./Button";
 import { Icon } from "./Icon";
 
+import { t, t as tr } from "../i18n";
 /** Nothing to show yet: say why and offer the next step. */
-export function EmptyState({ icon, title, description, action, className }: {
+export function EmptyState({ icon, title, description, action, className, headingLevel = 3 }: {
   icon?: string;
   title: string;
+  /** `2` when the state sits straight under the page title (no section heading in between), so no level is skipped. */
+  headingLevel?: 2 | 3;
   description?: ReactNode;
   action?: ReactNode;
   className?: string;
@@ -16,7 +19,7 @@ export function EmptyState({ icon, title, description, action, className }: {
   return (
     <div className={cx("empty", className)}>
       {icon && <Icon name={icon} size={22} />}
-      <h3>{title}</h3>
+      {headingLevel === 2 ? <h2>{title}</h2> : <h3>{title}</h3>}
       {description && <p className="muted">{description}</p>}
       {action && <div className="row">{action}</div>}
     </div>
@@ -24,7 +27,7 @@ export function EmptyState({ icon, title, description, action, className }: {
 }
 
 /** A request failed: show the reason and a retry button. */
-export function ErrorState({ error, onRetry, title = "Qualcosa non ha funzionato", retrying }: {
+export function ErrorState({ error, onRetry, title = tr("ui.qualcosa_non_ha_funzionato"), retrying }: {
   error: unknown;
   onRetry?: () => void;
   title?: string;
@@ -35,7 +38,7 @@ export function ErrorState({ error, onRetry, title = "Qualcosa non ha funzionato
       <Icon name="alert" size={22} />
       <h3>{title}</h3>
       <p className="muted">{errorMessage(error)}</p>
-      {onRetry && <Button size="sm" icon="refresh" onClick={onRetry} disabled={retrying}>Riprova</Button>}
+      {onRetry && <Button size="sm" icon="refresh" onClick={onRetry} disabled={retrying}>{t("ui.riprova")}</Button>}
     </div>
   );
 }
@@ -49,7 +52,7 @@ export function Skeleton({ width, height = 14, className }: { width?: number | s
 /** Several skeleton lines of varying width. */
 export function SkeletonLines({ lines = 3 }: { lines?: number }) {
   return (
-    <div className="skeleton-lines" role="status" aria-label="Caricamento">
+    <div className="skeleton-lines" role="status" aria-label={t("ui.caricamento")}>
       {Array.from({ length: lines }, (_, i) => <Skeleton key={i} width={`${92 - ((i * 17) % 40)}%`} />)}
     </div>
   );
@@ -58,7 +61,7 @@ export function SkeletonLines({ lines = 3 }: { lines?: number }) {
 /** Full page placeholder (route suspense fallback). */
 export function PageSkeleton() {
   return (
-    <div className="page" role="status" aria-label="Caricamento">
+    <div className="page" role="status" aria-label={t("ui.caricamento")}>
       <div className="stack">
         <Skeleton width={90} height={11} />
         <Skeleton width="min(320px, 60%)" height={28} />

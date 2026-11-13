@@ -1,4 +1,8 @@
+import { t } from "../../../shared/i18n";
 /** Copyable examples for every endpoint AI Workspace exposes to other programs. Pure, so they are testable. */
+
+const HELLO = (): string => t("integrations.snippet_hello");
+const SECRET = (): string => t("integrations.snippet_workflow_secret");
 
 export type SnippetLang = "curl" | "python" | "javascript" | "config";
 
@@ -51,37 +55,37 @@ export function buildEndpoints(baseUrl: string, opts: BuildOptions = {}): Endpoi
   return [
     {
       id: "openai",
-      title: "API compatibile OpenAI",
-      description: "Usa i modelli locali da qualsiasi client o SDK OpenAI: cambia solo la base URL.",
+      title: t("integrations.api_compatibile_openai"),
+      description: t("integrations.usa_i_modelli_locali_da"),
       url: `${base}/v1`,
-      extra: [{ label: "Elenco dei modelli", url: `${base}/v1/models` }],
+      extra: [{ label: t("integrations.elenco_dei_modelli"), url: `${base}/v1/models` }],
       guarded: true,
       snippets: [
         {
           lang: "curl", label: "curl",
           code: `curl ${base}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
-${curlAuth}  -d '{"model": "balanced", "messages": [{"role": "user", "content": "Ciao!"}]}'`,
+${curlAuth}  -d '{"model": "balanced", "messages": [{"role": "user", "content": "${HELLO()}"}]}'`,
         },
         {
-          lang: "python", label: "Python (SDK openai)",
+          lang: "python", label: t("integrations.python_sdk_openai"),
           code: `from openai import OpenAI
 
 client = OpenAI(base_url="${base}/v1", api_key="${apiKey}")
 r = client.chat.completions.create(
     model="balanced",
-    messages=[{"role": "user", "content": "Ciao!"}],
+    messages=[{"role": "user", "content": "${HELLO()}"}],
 )
 print(r.choices[0].message.content)`,
         },
         {
-          lang: "javascript", label: "JavaScript (fetch)",
+          lang: "javascript", label: t("integrations.javascript_fetch"),
           code: `const res = await fetch("${base}/v1/chat/completions", {
   method: "POST",
   headers: ${jsHeaders(withBearer)},
   body: JSON.stringify({
     model: "balanced",
-    messages: [{ role: "user", content: "Ciao!" }],
+    messages: [{ role: "user", content: "${HELLO()}" }],
   }),
 });
 const data = await res.json();
@@ -91,10 +95,10 @@ console.log(data.choices[0].message.content);`,
     },
     {
       id: "anthropic",
-      title: "API compatibile Anthropic",
-      description: "Messages API per gli SDK e gli strumenti che parlano il protocollo Anthropic (`/v1/messages`).",
+      title: t("integrations.api_compatibile_anthropic"),
+      description: t("integrations.messages_api_per_gli_sdk"),
       url: `${base}/v1/messages`,
-      extra: [{ label: "Conteggio dei token", url: `${base}/v1/messages/count_tokens` }],
+      extra: [{ label: t("integrations.conteggio_dei_token"), url: `${base}/v1/messages/count_tokens` }],
       guarded: true,
       snippets: [
         {
@@ -102,29 +106,29 @@ console.log(data.choices[0].message.content);`,
           code: `curl ${base}/v1/messages \\
   -H "Content-Type: application/json" \\
   -H "anthropic-version: 2023-06-01" \\
-${tok ? `  -H "x-api-key: ${TOKEN_PLACEHOLDER}" \\\n` : ""}  -d '{"model": "balanced", "max_tokens": 256, "messages": [{"role": "user", "content": "Ciao!"}]}'`,
+${tok ? `  -H "x-api-key: ${TOKEN_PLACEHOLDER}" \\\n` : ""}  -d '{"model": "balanced", "max_tokens": 256, "messages": [{"role": "user", "content": "${HELLO()}"}]}'`,
         },
         {
-          lang: "python", label: "Python (SDK anthropic)",
+          lang: "python", label: t("integrations.python_sdk_anthropic"),
           code: `import anthropic
 
 client = anthropic.Anthropic(base_url="${base}", api_key="${apiKey}")
 m = client.messages.create(
     model="balanced",
     max_tokens=256,
-    messages=[{"role": "user", "content": "Ciao!"}],
+    messages=[{"role": "user", "content": "${HELLO()}"}],
 )
 print(m.content[0].text)`,
         },
         {
-          lang: "javascript", label: "JavaScript (fetch)",
+          lang: "javascript", label: t("integrations.javascript_fetch"),
           code: `const res = await fetch("${base}/v1/messages", {
   method: "POST",
   headers: ${jsHeaders([...jsonHeader, ["anthropic-version", "2023-06-01"], ...(tok ? ([["x-api-key", TOKEN_PLACEHOLDER]] as [string, string][]) : [])])},
   body: JSON.stringify({
     model: "balanced",
     max_tokens: 256,
-    messages: [{ role: "user", content: "Ciao!" }],
+    messages: [{ role: "user", content: "${HELLO()}" }],
   }),
 });
 const data = await res.json();
@@ -134,13 +138,13 @@ console.log(data.content[0].text);`,
     },
     {
       id: "mcp",
-      title: "Server MCP",
-      description: "Espone i tool e gli agenti di AI Workspace a client MCP (editor, altri agenti) via streamable HTTP.",
+      title: t("integrations.server_mcp"),
+      description: t("integrations.espone_i_tool_e_gli"),
       url: `${base}/mcp`,
       guarded: true,
       snippets: [
         {
-          lang: "config", label: "Configurazione del client",
+          lang: "config", label: t("integrations.configurazione_del_client"),
           code: `{
   "mcpServers": {
     "ai-workspace": {
@@ -157,7 +161,7 @@ console.log(data.content[0].text);`,
 ${curlAuth}  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'`,
         },
         {
-          lang: "javascript", label: "JavaScript (fetch)",
+          lang: "javascript", label: t("integrations.javascript_fetch"),
           code: `const res = await fetch("${base}/mcp", {
   method: "POST",
   headers: ${jsHeaders([...jsonHeader, ["Accept", "application/json, text/event-stream"], ...(tok ? ([["Authorization", bearer]] as [string, string][]) : [])])},
@@ -169,24 +173,24 @@ console.log(await res.text());`,
     },
     {
       id: "a2a",
-      title: "A2A (agent to agent)",
-      description: "Altri agenti scoprono AI Workspace dalla agent card e gli affidano task sull'endpoint A2A.",
+      title: t("integrations.a2a_agent_to_agent"),
+      description: t("integrations.altri_agenti_scoprono_ai_workspace"),
       url: `${base}/a2a`,
-      extra: [{ label: "Agent card", url: `${base}/.well-known/agent-card.json` }],
+      extra: [{ label: t("integrations.agent_card"), url: `${base}/.well-known/agent-card.json` }],
       guarded: true,
       snippets: [
         {
           lang: "curl", label: "curl",
-          code: `# La agent card è pubblica
+          code: `# ${t("integrations.snippet_card_public")}
 curl ${base}/.well-known/agent-card.json
 
-# Invia un messaggio
+# ${t("integrations.snippet_send_message")}
 curl ${base}/a2a \\
   -H "Content-Type: application/json" \\
-${curlAuth}  -d '{"jsonrpc": "2.0", "id": 1, "method": "message/send", "params": {"message": {"role": "user", "parts": [{"text": "Riordina i PDF in Downloads"}], "messageId": "m1"}}}'`,
+${curlAuth}  -d '{"jsonrpc": "2.0", "id": 1, "method": "message/send", "params": {"message": {"role": "user", "parts": [{"text": "${t("integrations.snippet_a2a_prompt")}"}], "messageId": "m1"}}}'`,
         },
         {
-          lang: "python", label: "Python (requests)",
+          lang: "python", label: t("integrations.python_requests"),
           code: `import requests
 
 card = requests.get("${base}/.well-known/agent-card.json").json()
@@ -195,20 +199,20 @@ r = requests.post(
     headers=${tok ? `{"Authorization": "${bearer}"}` : "{}"},
     json={
         "jsonrpc": "2.0", "id": 1, "method": "message/send",
-        "params": {"message": {"role": "user", "parts": [{"text": "Riordina i PDF in Downloads"}], "messageId": "m1"}},
+        "params": {"message": {"role": "user", "parts": [{"text": "${t("integrations.snippet_a2a_prompt")}"}], "messageId": "m1"}},
     },
 )
 print(card["name"], r.json())`,
         },
         {
-          lang: "javascript", label: "JavaScript (fetch)",
+          lang: "javascript", label: t("integrations.javascript_fetch"),
           code: `const card = await (await fetch("${base}/.well-known/agent-card.json")).json();
 const res = await fetch("${base}/a2a", {
   method: "POST",
   headers: ${jsHeaders(withBearer)},
   body: JSON.stringify({
     jsonrpc: "2.0", id: 1, method: "message/send",
-    params: { message: { role: "user", parts: [{ text: "Riordina i PDF in Downloads" }], messageId: "m1" } },
+    params: { message: { role: "user", parts: [{ text: "${t("integrations.snippet_a2a_prompt")}" }], messageId: "m1" } },
   }),
 });
 console.log(card.name, await res.json());`,
@@ -217,8 +221,8 @@ console.log(card.name, await res.json());`,
     },
     {
       id: "webhook",
-      title: "Webhook dei workflow",
-      description: "Servizi esterni avviano un workflow con una POST: il JSON ricevuto diventa gli input. Sostituisci l'id con quello del workflow; il segreto del workflow è la credenziale.",
+      title: t("integrations.webhook_dei_workflow"),
+      description: t("integrations.servizi_esterni_avviano_un_workflow"),
       url: `${base}/hooks`,
       guarded: false,
       snippets: [
@@ -226,25 +230,25 @@ console.log(card.name, await res.json());`,
           lang: "curl", label: "curl",
           code: `curl -X POST ${base}/hooks/ordine-ricevuto \\
   -H "Content-Type: application/json" \\
-  -H "X-AIW-Secret: <segreto-del-workflow>" \\
+  -H "X-AIW-Secret: ${SECRET()}" \\
   -d '{"order_id": "A-1042", "customer": "Rossi Srl"}'`,
         },
         {
-          lang: "python", label: "Python (requests)",
+          lang: "python", label: t("integrations.python_requests"),
           code: `import requests
 
 r = requests.post(
     "${base}/hooks/ordine-ricevuto",
-    headers={"X-AIW-Secret": "<segreto-del-workflow>"},
+    headers={"X-AIW-Secret": "${SECRET()}"},
     json={"order_id": "A-1042", "customer": "Rossi Srl"},
 )
 print(r.status_code, r.text)`,
         },
         {
-          lang: "javascript", label: "JavaScript (fetch)",
+          lang: "javascript", label: t("integrations.javascript_fetch"),
           code: `const res = await fetch("${base}/hooks/ordine-ricevuto", {
   method: "POST",
-  headers: ${jsHeaders([...jsonHeader, ["X-AIW-Secret", "<segreto-del-workflow>"]])},
+  headers: ${jsHeaders([...jsonHeader, ["X-AIW-Secret", SECRET()]])},
   body: JSON.stringify({ order_id: "A-1042", customer: "Rossi Srl" }),
 });
 console.log(res.status, await res.text());`,

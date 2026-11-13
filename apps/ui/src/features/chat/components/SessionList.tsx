@@ -8,6 +8,7 @@ import { filterSessions, groupSessions } from "../model/sessions";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { SessionItem } from "./SessionItem";
 
+import { t as tr, t } from "../../../shared/i18n";
 export interface NewSessionInput {
   agent_id: string;
   isolation: "none" | "worktree";
@@ -55,29 +56,27 @@ export function SessionList({ sessions, agents, teams = [], defaultAgent, active
   return (
     <div className="ws-sessions-in">
       <div className="ws-sessions-head">
-        <h2 className="grow">Sessioni</h2>
-        {list && list.length > 0 && <span className="faint text-xs num" aria-label={`${list.length} sessioni`}>{list.length}</span>}
-        {onClose && <IconButton aria-label="Chiudi l'elenco delle sessioni" icon="close" onClick={onClose} />}
+        <h2 className="grow">{tr("chat.sessioni")}</h2>
+        {list && list.length > 0 && <span className="faint text-xs num" aria-label={tr("chat.sessioni_2", { length: list.length })}>{list.length}</span>}
+        {onClose && <IconButton aria-label={tr("chat.chiudi_l_elenco_delle_sessioni")} icon="close" onClick={onClose} />}
       </div>
 
       <div className="ws-new">
         <div className="ws-new-row">
-          <Select aria-label="Agente della nuova sessione" value={agent} onChange={(e) => setAgent(e.target.value)} disabled={agents.length === 0}>
+          <Select aria-label={tr("chat.agente_della_nuova_sessione")} value={agent} onChange={(e) => setAgent(e.target.value)} disabled={agents.length === 0}>
             {teams.length > 0 ? (
               <>
-                <optgroup label="Agenti">{agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</optgroup>
-                <optgroup label="Team">{teams.map((t) => <option key={t.id} value={teamAgentId(t.id)}>{t.name}</option>)}</optgroup>
+                <optgroup label={tr("chat.agenti")}>{agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</optgroup>
+                <optgroup label={tr("chat.team")}>{teams.map((t) => <option key={t.id} value={teamAgentId(t.id)}>{t.name}</option>)}</optgroup>
               </>
             ) : agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
           </Select>
           <Button variant="primary" icon="plus" disabled={!agent || creating} onClick={() => onCreate({ agent_id: agent, isolation: isolated ? "worktree" : "none" })}>
-            Nuova
-          </Button>
+            {tr("chat.nuova")}</Button>
         </div>
-        <label className="ws-check" title="L'agente lavora su un branch aiw/… in una copia separata del repository: rivedi le differenze e applicale quando vuoi.">
+        <label className="ws-check" title={tr("chat.l_agente_lavora_su_un")}>
           <input type="checkbox" checked={isolated} onChange={(e) => setIsolated(e.target.checked)} />
-          <Icon name="branch" size={14} /> Isola in un worktree git
-        </label>
+          <Icon name="branch" size={14} /> {" "}{t("chat.isola_in_un_worktree_git")}</label>
       </div>
 
       <div className="ws-search">
@@ -85,8 +84,8 @@ export function SessionList({ sessions, agents, teams = [], defaultAgent, active
         <input
           type="search"
           className="ws-search-input"
-          aria-label="Cerca nelle sessioni"
-          placeholder="Cerca per titolo o agente"
+          aria-label={tr("chat.cerca_nelle_sessioni")}
+          placeholder={tr("chat.cerca_per_titolo_o_agente")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -102,19 +101,19 @@ export function SessionList({ sessions, agents, teams = [], defaultAgent, active
         <QueryState
           query={sessions}
           isEmpty={(l) => l.length === 0}
-          empty={<EmptyState className="ws-sessions-empty" icon="chat" title="Nessuna sessione" description="Scegli un agente qui sopra e premi Nuova per iniziare." />}
+          empty={<EmptyState className="ws-sessions-empty" icon="chat" title={tr("chat.nessuna_sessione")} description={tr("chat.scegli_un_agente_qui_sopra")} />}
         >
           {() =>
             groups.length === 0 ? (
               <EmptyState
                 className="ws-sessions-empty"
                 icon="search"
-                title="Nessun risultato"
-                description={<>Nessuna sessione contiene «{query}».</>}
-                action={<Button size="sm" onClick={() => setQuery("")}>Azzera la ricerca</Button>}
+                title={tr("chat.nessun_risultato")}
+                description={<>{t("chat.nessuna_sessione_contiene", { query })}</>}
+                action={<Button size="sm" onClick={() => setQuery("")}>{tr("chat.azzera_la_ricerca")}</Button>}
               />
             ) : (
-              <nav aria-label="Elenco delle sessioni">
+              <nav aria-label={tr("chat.elenco_delle_sessioni")}>
                 {groups.map((g) => (
                   <section key={g.id} aria-labelledby={`ws-group-${g.id}`}>
                     <h3 id={`ws-group-${g.id}`} className="ws-group">{g.label}</h3>

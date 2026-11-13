@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button, Dialog, Field, Input } from "../../../shared/ui";
 import type { WorkflowDef } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 const asText = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
 
 /** Asks for the inputs of a manual run, prefilled with the defaults of the workflow. */
@@ -26,17 +27,17 @@ export function RunDialog({ workflow, pending, onRun, onClose }: {
     })));
   return (
     <Dialog
-      title={`Esegui «${workflow.name}»`} size="sm" onClose={onClose}
-      footer={<><Button onClick={onClose}>Annulla</Button><Button variant="primary" icon="play" onClick={submit} disabled={pending}>Esegui</Button></>}
+      title={t("workflows.esegui", { name: workflow.name })} size="sm" onClose={onClose}
+      footer={<><Button onClick={onClose}>{t("workflows.annulla")}</Button><Button variant="primary" icon="play" onClick={submit} disabled={pending}>{t("workflows.esegui_2")}</Button></>}
     >
       <form className="stack stack-lg" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-        <p className="muted text-sm">Questi valori valgono solo per questa esecuzione.</p>
+        <p className="muted text-sm">{t("workflows.questi_valori_valgono_solo_per")}</p>
         {keys.map((k, i) => (
           <Field key={k} label={k} htmlFor={`run-in-${k}`}>
             <Input id={`run-in-${k}`} mono data-autofocus={i === 0 ? "" : undefined} value={values[k]} onChange={(e) => setValues((v) => ({ ...v, [k]: e.target.value }))} spellCheck={false} />
           </Field>
         ))}
-        <button type="submit" className="sr-only" tabIndex={-1}>Esegui</button>
+        <button type="submit" className="sr-only" tabIndex={-1}>{t("workflows.esegui_2")}</button>
       </form>
     </Dialog>
   );

@@ -440,6 +440,30 @@ describe("other v0.4 methods", () => {
     await api.setConfig("global", "connectors.calendar.sources", null);
   });
 
+  it("offers web_search, hides it when the provider is off and never returns the Brave key", async () => {
+    const api = new MockTransport();
+    const search = async () => (await api.tools()).find((t) => t.name === "web_search")!;
+    expect(await search()).toMatchObject({ risk: "network", available: true });
+    const schema = (await api.config()).schema.properties;
+    expect(schema["search.provider"].enum).toEqual(["auto", "off", "searxng", "brave", "duckduckgo"]);
+    expect(schema["search.provider"].default).toBe("auto");
+    expect(schema["search.brave_api_key"].secret).toBe(true);
+    await api.setConfig("global", "search.provider", "off");
+    expect(await search()).toMatchObject({ available: false });
+    expect((await search()).unavailable_reason).toMatch(/Ricerca web/);
+    await api.setConfig("global", "search.provider", null);
+    expect((await search()).available).toBe(true);
+
+    const view = await api.setConfig("global", "search.brave_api_key", "chiave-segreta");
+    expect(JSON.stringify(view)).not.toContain("chiave-segreta");
+    expect(view.effective["search.brave_api_key"]).toBe(SECRET_MASK);
+    // Sending the mask back keeps the stored key.
+    await api.setConfig("global", "search.brave_api_key", SECRET_MASK);
+    expect((await api.config()).effective["search.brave_api_key"]).toBe(SECRET_MASK);
+    await api.setConfig("global", "search.brave_api_key", null);
+    expect((await api.config()).effective["search.brave_api_key"]).toBe("");
+  });
+
   it("answers the background check like the engine and keeps the phone side in step with the settings", async () => {
     const api = new MockTransport();
     // The demo runs on a computer: no background jobs, no notification permission.
@@ -578,12 +602,34 @@ describe("backend fixes in the demo", () => {
   it("lists the tools of the agent loop as internal, always on, and refuses to switch them (400)", async () => {
     const api = new MockTransport();
     const internal = (await api.tools()).filter((t) => t.source === "internal");
-    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "handoff", "memory_forget", "memory_save", "memory_search", "memory_update", "render_ui", "skill", "team_state", "todo"]);
+    expect(internal.map((t) => t.name).sort()).toEqual(["agent", "code", "handoff", "kb_search", "memory_forget", "memory_save", "memory_search", "memory_update", "render_ui", "skill", "team_state", "todo"]);
     expect(internal.every((t) => t.enabled && t.available && t.risk === "read")).toBe(true);
     await expect(api.setToolEnabled("todo", false)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("strumento interno") });
     await expect(api.setToolEnabled("nope", false)).rejects.toMatchObject({ status: 404 });
     await api.setToolEnabled("shell", false);
     await api.setToolEnabled("shell", true);
+  });
+
+  it("supports reconnection, sign-in, prompts and questions of MCP servers", async () => {
+    const api = new MockTransport();
+    const list = await api.mcpServers();
+    const pg = list.find((s) => s.name === "postgres")!;
+    const notes = list.find((s) => s.name === "appunti")!;
+    expect([pg.status, notes.status]).toEqual(["unreachable", "auth_required"]);
+    expect(list.find((s) => s.name === "github")!.capabilities).toEqual({ tools: true, resources: false, prompts: true });
+    expect((await api.reconnectMcpServer(pg.id)).status).toBe("connected");
+    await expect(api.reconnectMcpServer("nope")).rejects.toMatchObject({ status: 404 });
+    expect(await api.mcpOAuthStart(notes.id)).toEqual({ authorization_url: "" });
+    const after = (await api.mcpServers()).find((s) => s.name === "appunti")!;
+    expect([after.status, after.signed_in]).toEqual(["connected", true]);
+    await api.mcpOAuthSignout(notes.id);
+    expect((await api.mcpServers()).find((s) => s.name === "appunti")!.signed_in).toBe(false);
+    await expect(api.mcpOAuthStart("mcp_fs")).rejects.toMatchObject({ status: 400 });
+    const prompts = await api.mcpPrompts();
+    expect(prompts[0]).toMatchObject({ server: "github", name: "rivedi_pr" });
+    expect((await api.mcpPromptGet("mcp_gh", "rivedi_pr", { numero: "42" })).text).toContain("#42");
+    await expect(api.mcpPromptGet("mcp_gh", "rivedi_pr", {})).rejects.toMatchObject({ status: 400 });
+    expect(await api.mcpElicitations()).toEqual([]);
   });
 
   it("masks the secrets of MCP servers and keeps the stored value when the mask comes back", async () => {
@@ -641,6 +687,32 @@ describe("backend fixes in the demo", () => {
     const a = await api.startRun(s.id, "uno", undefined, "deep");
     const b = await api.startRun(s.id, "due");
     expect(api.runThinking).toEqual([{ runId: a.run_id, thinking: "deep" }, { runId: b.run_id, thinking: undefined }]);
+  });
+
+  it("keeps attachments in memory and refuses what the backend refuses", async () => {
+    const api = new MockTransport();
+    const s = await api.createSession({ agent_id: "operator" });
+    const png = btoa("\x89PNG....");
+    const { run_id } = await api.startRun(s.id, "", undefined, undefined, [
+      { name: "../foto.png", mime: "image/png", data: png },
+      { name: "note.md", mime: "", data: btoa("# Ciao") },
+    ]);
+    expect(run_id).toMatch(/^run_/);
+    const [m] = await api.messages(s.id);
+    expect(m.content).toBe("");
+    expect(m.attachments).toMatchObject([{ name: "foto.png", mime: "image/png", kind: "image" }, { name: "note.md", kind: "text", size: 6 }]);
+    expect(JSON.stringify(m)).not.toContain(png);
+    expect(await api.getAttachment(s.id, m.attachments![0].id)).toEqual({ name: "foto.png", mime: "image/png", data: png });
+    expect((await api.sessions()).find((x) => x.id === s.id)?.title).toBe("foto.png");
+    await expect(api.getAttachment(s.id, "att_none")).rejects.toMatchObject({ status: 404 });
+    // limits and empty messages
+    const many = Array.from({ length: 9 }, (_, i) => ({ name: `${i}.txt`, mime: "", data: btoa("x") }));
+    await expect(api.startRun(s.id, "ciao", undefined, undefined, many)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("al massimo 8 file") });
+    const big = btoa("a".repeat(10 * 1024 * 1024 + 1));
+    await expect(api.startRun(s.id, "ciao", undefined, undefined, [{ name: "grande.txt", mime: "", data: big }])).rejects.toMatchObject({ status: 400 });
+    await expect(api.startRun(s.id, "  ")).rejects.toMatchObject({ status: 400 });
+    await api.deleteSession(s.id);
+    await expect(api.getAttachment(s.id, m.attachments![0].id)).rejects.toMatchObject({ status: 404 });
   });
 
   it("keeps one rating per reply, like the engine", async () => {
@@ -735,7 +807,7 @@ describe("voice mode (demo)", () => {
     expect(v.models).toContain("ggml-large-v3-turbo-q5_0");
     expect(v.language).toBe("it");
     const view = await api.config();
-    expect(Object.keys(view.schema.properties).filter((k) => k.startsWith("voice."))).toEqual(["voice.language", "voice.stt_runtime", "voice.stt_model", "voice.tts_voice"]);
+    expect(Object.keys(view.schema.properties).filter((k) => k.startsWith("voice."))).toEqual(["voice.language", "voice.stt_runtime", "voice.stt_model", "voice.tts_voice", "voice.tts.engine", "voice.tts.voice", "voice.tts.speed", "voice.tts.server_url", "voice.tts.server_model"]);
   });
 
   it("offers the interface mode, simple by default, and saves a change in a layer", async () => {
@@ -938,5 +1010,64 @@ describe("the model adviser of the demo", () => {
       expect(r[task].installed && r[task].download, task).toBeFalsy();
     }
     expect(r.tier).toBe("xl");
+  });
+});
+
+describe("the runtime router in the demo", () => {
+  it("ranks ready runtimes first, leaves out the ones that cannot run, and keeps remote devices for the profiles that allow them", async () => {
+    const api = new MockTransport();
+    const gguf = (await api.models()).find((m) => m.format === "gguf")!;
+    const local = await api.route(gguf.id, 4096);
+    expect(local.wanted_context).toBe(4096);
+    expect(local.candidates.length).toBeGreaterThan(0);
+    expect(local.candidates.map((c) => c.rank)).toEqual(local.candidates.map((_, i) => i + 1));
+    expect(local.candidates.every((c) => !c.remote && c.reason !== "")).toBe(true);
+    expect(local.excluded.some((x) => x.runtime_name !== "" && x.reason !== "")).toBe(true);
+    const remote = await api.route(gguf.id, undefined, true);
+    expect(remote.wanted_context).toBe(8192);
+    expect((await api.route("sconosciuto")).candidates).toEqual([]);
+  });
+});
+
+describe("voice: neural speech demo", () => {
+  it("reports Piper with voices, and follows the engine setting", async () => {
+    const api = new MockTransport();
+    const st = await api.voice();
+    expect(st.tts).toMatchObject({ setting: "auto", engine: "piper", neural: true, max_chars: 4000 });
+    expect(st.tts.languages).toEqual(["en", "it"]);
+    expect(st.tts.picks.it).toBe("it_it-paola-medium");
+    await api.setConfig("device", "voice.tts.engine", "system");
+    const off = (await api.voice()).tts;
+    expect(off).toMatchObject({ engine: "system", neural: false, voices: [] });
+    await api.setConfig("device", "voice.tts.engine", "auto");
+  });
+
+  it("speaks a WAV and refuses like the engine does", async () => {
+    const api = new MockTransport();
+    const out = await api.speak({ text: "Ciao a tutti." });
+    expect(out.mime).toBe("audio/wav");
+    const bytes = Uint8Array.from(atob(out.audio), (c) => c.charCodeAt(0));
+    expect(String.fromCharCode(...bytes.subarray(0, 4))).toBe("RIFF");
+    await expect(api.speak({ text: "   " })).rejects.toMatchObject({ status: 400 });
+    await expect(api.speak({ text: "a".repeat(4001) })).rejects.toMatchObject({ status: 400 });
+    await api.setConfig("device", "voice.tts.engine", "system");
+    await expect(api.speak({ text: "Ciao" })).rejects.toMatchObject({ status: 422 });
+    await api.setConfig("device", "voice.tts.engine", "auto");
+  });
+});
+
+describe("MCP approval and isolation (demo)", () => {
+  it("lists an unapproved stdio server as approval_required and approves it with its hash", async () => {
+    const api = new MockTransport();
+    const saved = await api.saveMcpServer({ name: "novo", transport: "stdio", command: "node", args: ["s.js"], enabled: true });
+    expect(saved.approval_required).toBe(true);
+    expect(saved.status).toBe("approval_required");
+    expect(saved.command_line).toContain("node");
+    const ok = await api.approveMcpServer(saved.id, saved.approval_hash ?? "");
+    expect(ok.approval_required).toBeFalsy();
+  });
+  it("refuses isolation where the demo system cannot isolate", async () => {
+    const api = new MockTransport();
+    await expect(api.saveMcpServer({ name: "iso", transport: "stdio", command: "node", sandbox: "workspace-write", enabled: true })).rejects.toBeDefined();
   });
 });

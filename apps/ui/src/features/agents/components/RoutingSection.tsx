@@ -3,6 +3,7 @@ import { errorMessage } from "../../../shared/lib/errors";
 import type { AgentProfile, InferenceProfile } from "../../../shared/api/types";
 import { useAgentRouting, useResetRouting } from "../api";
 
+import { t, tNode } from "../../../shared/i18n";
 /** "0,75" for a reward mean; "—" while nothing was rewarded. */
 const meanText = (m: number | undefined): string => (m === undefined ? "—" : m.toFixed(2).replace(".", ","));
 
@@ -28,12 +29,9 @@ export function RoutingSection({ agent, savedAgent, profiles, onChange }: Props)
   return (
     <div className="form-grid">
       <p className="faint text-sm">
-        Facoltativo. Elenca i profili tra cui l'agente può scegliere a ogni nuovo run. Un pollice in su (o un task di valutazione superato)
-        vale 1, un pollice in giù (o un task fallito) vale 0. Il router si attiva da Impostazioni → <span className="mono">routing.bandit</span>;
-        spento, l'agente usa sempre il profilo scelto in «Modello».
-      </p>
+        {tNode("agents.facoltativo_elenca_i_profili_tra", { span: <span className="mono">routing.bandit</span> })}</p>
       <fieldset className="tr-sources">
-        <legend className="field-label">Profili candidati</legend>
+        <legend className="field-label">{t("agents.profili_candidati")}</legend>
         {profiles.map((p) => (
           <label key={p.id}>
             <input type="checkbox" checked={candidates.includes(p.id)} onChange={() => toggle(p.id)} /> {p.name}{" "}
@@ -44,14 +42,14 @@ export function RoutingSection({ agent, savedAgent, profiles, onChange }: Props)
       {hasSaved && (
         <div>
           <div className="row mb-2">
-            <b className="text-sm">Cosa ha imparato finora</b>
-            {stats.data && <Pill tone={stats.data.enabled ? "ok" : "neutral"}>{stats.data.enabled ? "router attivo" : "router spento"}</Pill>}
-            <Button size="sm" onClick={() => reset.mutate(agent.id)} disabled={reset.isPending || rows.every((r) => r.n === 0)}>Azzera</Button>
+            <b className="text-sm">{t("agents.cosa_ha_imparato_finora")}</b>
+            {stats.data && <Pill tone={stats.data.enabled ? "ok" : "neutral"}>{stats.data.enabled ? t("agents.router_attivo") : t("agents.router_spento")}</Pill>}
+            <Button size="sm" onClick={() => reset.mutate(agent.id)} disabled={reset.isPending || rows.every((r) => r.n === 0)}>{t("agents.azzera")}</Button>
           </div>
           {stats.isError && <p className="tr-error" role="alert">{errorMessage(stats.error)}</p>}
           {rows.length > 0 && (
-            <table className="table text-sm" aria-label="Statistiche del router">
-              <thead><tr><th>Profilo</th><th className="num">Valutazioni</th><th className="num">Reward media</th></tr></thead>
+            <table className="table text-sm" aria-label={t("agents.statistiche_del_router")}>
+              <thead><tr><th>{t("agents.profilo")}</th><th className="num">{t("agents.valutazioni")}</th><th className="num">{t("agents.reward_media")}</th></tr></thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.profile}>
@@ -63,7 +61,7 @@ export function RoutingSection({ agent, savedAgent, profiles, onChange }: Props)
               </tbody>
             </table>
           )}
-          <p className="faint text-xs mt-2">Le statistiche riguardano l'agente salvato: i profili appena spuntati compaiono dopo il salvataggio.</p>
+          <p className="faint text-xs mt-2">{t("agents.le_statistiche_riguardano_l_agente")}</p>
         </div>
       )}
     </div>

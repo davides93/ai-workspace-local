@@ -7,6 +7,7 @@ import { Icon, Led } from "../../../shared/ui";
 import type { Item } from "../model/items";
 import { traceItems } from "../model/trace";
 
+import { t, tNode } from "../../../shared/i18n";
 type SubagentItem = Extract<Item, { kind: "subagent" }>;
 
 /**
@@ -31,19 +32,19 @@ export function SubagentCard({ it, renderItem }: { it: SubagentItem; renderItem:
     <div className="ws-subagent-wrap">
       <div className="ws-subagent">
         <Icon name="agent" size={15} />
-        <span>Subagente <b>{it.name}</b></span>
-        {it.result !== undefined ? <span className="muted">→ {it.result}</span> : it.interrupted ? <span className="muted">interrotto</span> : <Led tone="run" />}
+        <span>{tNode("chat.subagent_name", { name: <b>{it.name}</b> })}</span>
+        {it.result !== undefined ? <span className="muted">→ {it.result}</span> : it.interrupted ? <span className="muted">{t("chat.interrotto")}</span> : <Led tone="run" />}
         {runId && (
           <button type="button" className="ws-subagent-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((o) => !o)}>
-            <Icon name="down" size={13} className={open ? undefined : "ws-subagent-chev"} /> {open ? "Nascondi traccia" : "Mostra traccia"}
+            <Icon name="down" size={13} className={open ? undefined : "ws-subagent-chev"} /> {open ? t("chat.nascondi_traccia") : t("chat.mostra_traccia")}
           </button>
         )}
       </div>
       {open && (
-        <div id={bodyId} className="ws-subagent-trace" role="region" aria-label={`Traccia di ${it.name}`}>
-          {trace.isPending && <span className="faint text-sm">Carico la traccia…</span>}
-          {trace.isError && <span className="faint text-sm">Traccia non disponibile: {errorMessage(trace.error)}</span>}
-          {trace.data && rows.length === 0 && <span className="faint text-sm">Il subagente non ha ancora scritto nulla.</span>}
+        <div id={bodyId} className="ws-subagent-trace" role="region" aria-label={t("chat.traccia_di", { name: it.name })}>
+          {trace.isPending && <span className="faint text-sm">{t("chat.carico_la_traccia")}</span>}
+          {trace.isError && <span className="faint text-sm">{t("chat.traccia_non_disponibile", { p: errorMessage(trace.error) })}</span>}
+          {trace.data && rows.length === 0 && <span className="faint text-sm">{t("chat.il_subagente_non_ha_ancora")}</span>}
           {rows.map((row, i) => <div key={`${row.kind}-${"id" in row ? row.id : i}-${i}`}>{renderItem(row)}</div>)}
         </div>
       )}

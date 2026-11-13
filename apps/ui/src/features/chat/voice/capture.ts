@@ -9,6 +9,7 @@ import { errorMessage, errorStatus } from "../../../shared/lib/errors";
 import { Vad, rms, type VadOptions } from "./vad";
 import { TARGET_RATE, concat, encodeWav, resample } from "./wav";
 
+import { t as tr, t } from "../../../shared/i18n";
 export interface Recording {
   /** The trimmed speech as WAV, or null when nothing was said (or it was cancelled). */
   result: Promise<Blob | null>;
@@ -36,7 +37,7 @@ export function micSupported(): boolean {
 }
 
 export async function record(opts: RecordOptions = {}): Promise<Recording> {
-  if (!micSupported()) throw Object.assign(new Error("Microfono non supportato in questa vista"), { name: "NotFoundError" });
+  if (!micSupported()) throw Object.assign(new Error(tr("chat.microfono_non_supportato_in_questa")), { name: "NotFoundError" });
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
@@ -88,12 +89,12 @@ export async function record(opts: RecordOptions = {}): Promise<Recording> {
 /** A readable reason for a failed microphone start. */
 export function micError(e: unknown): string {
   if (typeof window !== "undefined" && window.isSecureContext === false) {
-    return "Il microfono funziona solo in un contesto sicuro: usa l'app, oppure apri l'interfaccia da http://127.0.0.1 o in HTTPS.";
+    return t("chat.il_microfono_funziona_solo_in");
   }
   const name = (e as { name?: string } | null)?.name;
-  if (name === "NotAllowedError" || name === "SecurityError") return "Permesso del microfono negato: abilitalo nelle impostazioni del sistema o del browser.";
-  if (name === "NotFoundError" || name === "OverconstrainedError") return "Nessun microfono disponibile su questo dispositivo.";
-  if (name === "NotReadableError" || name === "AbortError") return "Il microfono è occupato da un'altra applicazione.";
+  if (name === "NotAllowedError" || name === "SecurityError") return t("chat.permesso_del_microfono_negato_abilitalo");
+  if (name === "NotFoundError" || name === "OverconstrainedError") return t("chat.nessun_microfono_disponibile_su_questo");
+  if (name === "NotReadableError" || name === "AbortError") return t("chat.il_microfono_e_occupato_da");
   return String((e as Error)?.message ?? e);
 }
 

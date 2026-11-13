@@ -7,6 +7,7 @@ import { isAutoProfile } from "../../models/model/adviser";
 import { normalizeRoles } from "./roles";
 import { ALL, normalizeTools } from "./tools";
 
+import { t as tr, t } from "../../../shared/i18n";
 /** Seeded on first run by crates/aiw-engine/src/defaults.rs `agents()`; the backend refuses to delete them (409). */
 export const BUILTIN_AGENT_IDS: readonly string[] = ["operator", "coder", "browser", "desktop", "planner", "teacher"];
 
@@ -42,7 +43,7 @@ export function blankAgent(inferenceProfile: string): AgentProfile {
 
 /** `Copia di Coder`, then `Copia di Coder (2)`… */
 export function copyName(name: string, existing: readonly string[]): string {
-  const base = `Copia di ${name}`;
+  const base = t("agents.copy_of", { name });
   const taken = new Set(existing.map((n) => n.toLowerCase()));
   if (!taken.has(base.toLowerCase())) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base} (${n})`.toLowerCase())) return `${base} (${n})`;
@@ -67,7 +68,8 @@ export function cleanBudget(b: BudgetLimits | undefined): BudgetLimits | undefin
 /** Form values trimmed and clamped the way the backend will keep them. */
 export function normalizeAgent(a: AgentProfile): AgentProfile {
   const turns = Number.isFinite(a.max_turns) ? Math.round(a.max_turns) : 30;
-  const { budget: _budget, candidate_profiles: _candidates, roles: _roles, ...rest } = a;
+  const { budget: _budget, candidate_profiles: _candidates, roles: _roles, knowledge: _knowledge, ...rest } = a;
+  const knowledge = [...new Set(a.knowledge ?? [])];
   const budget = cleanBudget(a.budget);
   const candidates = [...new Set(a.candidate_profiles ?? [])];
   const roles = normalizeRoles(a.roles);
@@ -76,12 +78,19 @@ export function normalizeAgent(a: AgentProfile): AgentProfile {
     ...(budget ? { budget } : {}),
     ...(candidates.length > 0 ? { candidate_profiles: candidates } : {}),
     ...(roles ? { roles } : {}),
+    ...(knowledge.length > 0 ? { knowledge } : {}),
     name: a.name.trim(),
     description: a.description.trim(),
     system_prompt: a.system_prompt,
     tools: normalizeTools(a.tools),
     max_turns: Math.min(MAX_TURNS_LIMIT, Math.max(1, turns)),
   };
+}
+
+/** Ticks or unticks a collection of documents the agent may search. */
+export function withKnowledge(a: AgentProfile, collectionId: string, on: boolean): AgentProfile {
+  const rest = (a.knowledge ?? []).filter((k) => k !== collectionId);
+  return { ...a, knowledge: on ? [...rest, collectionId] : rest };
 }
 
 /** The id a new agent is saved under: from its name, unique among `existing`. */
@@ -99,9 +108,9 @@ export function parseSchemaText(text: string): { value?: Record<string, unknown>
   try {
     v = JSON.parse(text);
   } catch (e) {
-    return { error: `JSON non valido: ${(e as Error).message}` };
+    return { error: t("agents.json_non_valido", { message: (e as Error).message }) };
   }
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return { error: "Lo schema deve essere un oggetto JSON, per esempio {\"type\": \"object\"}." };
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return { error: t("agents.schema_object", { example: "{\"type\": \"object\"}" }) };
   return { value: v as Record<string, unknown> };
 }
 
@@ -140,38 +149,38 @@ export function unknownTools(tools: readonly string[], known: readonly string[])
 export function validateAgent(a: AgentProfile, ctx: AgentContext): AgentIssue[] {
   const issues: AgentIssue[] = [];
   const name = a.name.trim();
-  if (!name) issues.push({ field: "name", level: "error", message: "Dai un nome all'agente." });
+  if (!name) issues.push({ field: "name", level: "error", message: tr("agents.dai_un_nome_all_agente") });
   else if (ctx.otherNames.some((n) => n.trim().toLowerCase() === name.toLowerCase())) {
-    issues.push({ field: "name", level: "warn", message: "Esiste già un altro agente con questo nome." });
+    issues.push({ field: "name", level: "warn", message: tr("agents.esiste_gia_un_altro_agente") });
   }
   const profilesLoaded = ctx.profilesLoaded ?? ctx.profileIds.length > 0;
-  if (!a.inference_profile) issues.push({ field: "inference_profile", level: "error", message: "Scegli un profilo di inferenza." });
+  if (!a.inference_profile) issues.push({ field: "inference_profile", level: "error", message: tr("agents.scegli_un_profilo_di_inferenza") });
   // `auto:<task>` is not a stored profile: the adviser resolves it when a run starts.
   else if (profilesLoaded && !isAutoProfile(a.inference_profile) && !ctx.profileIds.includes(a.inference_profile)) {
-    issues.push({ field: "inference_profile", level: "error", message: "Il profilo scelto non esiste più: sceglierne un altro." });
+    issues.push({ field: "inference_profile", level: "error", message: tr("agents.il_profilo_scelto_non_esiste") });
   }
   if (!Number.isFinite(a.max_turns) || a.max_turns < 1 || a.max_turns > MAX_TURNS_LIMIT) {
-    issues.push({ field: "max_turns", level: "error", message: `I turni massimi vanno da 1 a ${MAX_TURNS_LIMIT}.` });
+    issues.push({ field: "max_turns", level: "error", message: tr("agents.i_turni_massimi_vanno_da", { max: MAX_TURNS_LIMIT }) });
   }
   for (const k of BUDGET_KEYS) {
     const v = a.budget?.[k];
     if (v !== undefined && Number.isFinite(v) && (!Number.isInteger(v) || v < 1)) {
-      issues.push({ field: "budget", level: "error", message: "I limiti del budget sono numeri interi da 1 in su: lascia vuoto il campo per nessun limite." });
+      issues.push({ field: "budget", level: "error", message: tr("agents.i_limiti_del_budget_sono") });
       break;
     }
   }
   const unknown = ctx.knownTools ? unknownTools(a.tools, ctx.knownTools) : [];
   if (unknown.length > 0) {
-    issues.push({ field: "tools", level: "error", message: `Strumenti sconosciuti: ${unknown.join(", ")} (usa «*» oppure i nomi elencati in Tool). Toglili dall'elenco per salvare.` });
+    issues.push({ field: "tools", level: "error", message: tr("agents.strumenti_sconosciuti_usa_oppure_i", { names: unknown.join(", ") }) });
   }
   if (a.system_prompt.length > LONG_PROMPT_CHARS) {
-    issues.push({ field: "system_prompt", level: "warn", message: "Un prompt molto lungo riduce lo spazio di contesto disponibile per la conversazione." });
+    issues.push({ field: "system_prompt", level: "warn", message: tr("agents.un_prompt_molto_lungo_riduce") });
   }
   if (a.tools.length === 0) {
-    issues.push({ field: "tools", level: "warn", message: "Senza tool l'agente può solo rispondere a parole." });
+    issues.push({ field: "tools", level: "warn", message: tr("agents.senza_tool_l_agente_puo") });
   }
-  if (a.mode === "yolo") issues.push({ field: "mode", level: "warn", message: "Senza freni: l'agente non chiede mai conferma." });
-  if (a.sandbox === "off") issues.push({ field: "sandbox", level: "warn", message: "Senza contenimento i comandi agiscono con i tuoi privilegi, anche fuori dal workspace." });
+  if (a.mode === "yolo") issues.push({ field: "mode", level: "warn", message: tr("agents.senza_freni_l_agente_non") });
+  if (a.sandbox === "off") issues.push({ field: "sandbox", level: "warn", message: tr("agents.senza_contenimento_i_comandi_agiscono") });
   return issues;
 }
 

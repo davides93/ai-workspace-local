@@ -4,6 +4,7 @@ import type { Keyed } from "../../../shared/lib/keyedList";
 import type { PolicyAction, PolicyRule } from "../../../shared/api/types";
 import { ACTION_LABEL, type RuleIssue } from "../model/policy";
 
+import { t } from "../../../shared/i18n";
 export type RuleMark = "winner" | "match";
 
 const ACTIONS: PolicyAction[] = ["allow", "ask", "deny"];
@@ -25,7 +26,7 @@ export function RuleList({ rows, issues, marks, onChange, onMove, onRemove, focu
   }, [focusUid]);
 
   return (
-    <ol className="rule-list" aria-label="Regole di policy">
+    <ol className="rule-list" aria-label={t("security.regole_di_policy")}>
       {rows.map(({ uid, value: r }, i) => {
         const mark = marks.get(i);
         const mine = issues.filter((x) => x.index === i);
@@ -33,20 +34,20 @@ export function RuleList({ rows, issues, marks, onChange, onMove, onRemove, focu
         return (
           <li key={uid} className="rule-row" data-action={r.action} data-mark={mark}>
             <span className="rule-n" aria-hidden="true">{n}</span>
-            <Field label={`Tool della regola ${n}`} htmlFor={`rule-tool-${uid}`} className="rule-tool">
-              <Input id={`rule-tool-${uid}`} mono placeholder="shell, mcp__github__*" value={r.tool} onChange={(e) => onChange(uid, { tool: e.target.value })} />
+            <Field label={t("security.tool_della_regola", { n })} htmlFor={`rule-tool-${uid}`} className="rule-tool">
+              <Input id={`rule-tool-${uid}`} mono placeholder={t("security.shell_mcp_github")} value={r.tool} onChange={(e) => onChange(uid, { tool: e.target.value })} />
             </Field>
-            <Field label={`Pattern della regola ${n}`} htmlFor={`rule-pat-${uid}`} className="rule-pattern">
-              <Input id={`rule-pat-${uid}`} mono placeholder="qualsiasi · git status*, ~/Workspace/**" value={r.pattern ?? ""} onChange={(e) => onChange(uid, { pattern: e.target.value })} />
+            <Field label={t("security.pattern_della_regola", { n })} htmlFor={`rule-pat-${uid}`} className="rule-pattern">
+              <Input id={`rule-pat-${uid}`} mono placeholder={t("security.qualsiasi_git_status_workspace")} value={r.pattern ?? ""} onChange={(e) => onChange(uid, { pattern: e.target.value })} />
             </Field>
-            <Field label={`Azione della regola ${n}`} htmlFor={`rule-act-${uid}`} className="rule-action">
+            <Field label={t("security.azione_della_regola", { n })} htmlFor={`rule-act-${uid}`} className="rule-action">
               <Select id={`rule-act-${uid}`} value={r.action} onChange={(e) => onChange(uid, { action: e.target.value as PolicyAction })}>
                 {ACTIONS.map((a) => <option key={a} value={a}>{ACTION_LABEL[a]}</option>)}
               </Select>
             </Field>
             <div className="rule-buttons">
-              {mark && <Pill tone={mark === "winner" ? "run" : "neutral"}>{mark === "winner" ? "decide" : "combacia"}</Pill>}
-              <RowControls index={i} count={rows.length} noun={`la regola ${n}`} onMove={(d) => onMove(uid, d)} onRemove={() => onRemove(uid)} />
+              {mark && <Pill tone={mark === "winner" ? "run" : "neutral"}>{mark === "winner" ? t("security.decide") : t("security.combacia")}</Pill>}
+              <RowControls index={i} count={rows.length} noun={t("security.la_regola", { n })} onMove={(d) => onMove(uid, d)} onRemove={() => onRemove(uid)} />
             </div>
             {mine.length > 0 && (
               <ul className="rule-issues">

@@ -13,18 +13,19 @@
 
 import type { StepOptions, WorkflowStep } from "../../../shared/api/types";
 
+import { t as tr, tFields } from "../../../shared/i18n";
 export type StepKind = WorkflowStep["kind"];
 
 export const STEP_KINDS: { kind: StepKind; label: string; icon: string; hint: string }[] = [
-  { kind: "tool", label: "Tool", icon: "tool", hint: "Chiama un tool con argomenti fissi, senza il modello." },
-  { kind: "agent", label: "Agente", icon: "agent", hint: "Affida un compito a un agente, che può usare i suoi tool." },
-  { kind: "team", label: "Team", icon: "agent", hint: "Affida un compito a un team di agenti e ne usa la risposta finale." },
-  { kind: "llm", label: "LLM", icon: "sparkle", hint: "Una sola risposta del modello di un profilo, senza tool." },
-  { kind: "foreach", label: "Per ogni voce", icon: "flow", hint: "Ripete un passo per ogni voce di un elenco, anche più voci alla volta." },
-  { kind: "parallel", label: "In parallelo", icon: "flow", hint: "Esegue più passi insieme e aspetta che finiscano tutti." },
-  { kind: "workflow", label: "Sotto-workflow", icon: "flow", hint: "Avvia un altro workflow con degli input e ne aspetta la fine." },
-  { kind: "approval", label: "Conferma", icon: "shield", hint: "Si ferma e chiede il tuo consenso: se lo neghi il workflow finisce." },
-  { kind: "condition", label: "Condizione", icon: "flow", hint: "Sceglie quali passi eseguire in base a un'espressione." },
+  tFields({ kind: "tool" as const, icon: "tool" }, { label: "workflows.kind_tool", hint: "workflows.kind_tool_hint" }),
+  tFields({ kind: "agent" as const, icon: "agent" }, { label: "workflows.kind_agent", hint: "workflows.kind_agent_hint" }),
+  tFields({ kind: "team" as const, icon: "agent" }, { label: "workflows.kind_team", hint: "workflows.kind_team_hint" }),
+  tFields({ kind: "llm" as const, label: "LLM", icon: "sparkle" }, { hint: "workflows.kind_llm_hint" }),
+  tFields({ kind: "foreach" as const, icon: "flow" }, { label: "workflows.kind_foreach", hint: "workflows.kind_foreach_hint" }),
+  tFields({ kind: "parallel" as const, icon: "flow" }, { label: "workflows.kind_parallel", hint: "workflows.kind_parallel_hint" }),
+  tFields({ kind: "workflow" as const, icon: "flow" }, { label: "workflows.kind_workflow", hint: "workflows.kind_workflow_hint" }),
+  tFields({ kind: "approval" as const, icon: "shield" }, { label: "workflows.kind_approval", hint: "workflows.kind_approval_hint" }),
+  tFields({ kind: "condition" as const, icon: "flow" }, { label: "workflows.kind_condition", hint: "workflows.kind_condition_hint" }),
 ];
 
 export const stepMeta = (kind: StepKind) => STEP_KINDS.find((k) => k.kind === kind)!;
@@ -74,15 +75,15 @@ export function parseInline(text: string, many: boolean): { ok: true; steps: Wor
   try {
     v = JSON.parse(text);
   } catch {
-    return { ok: false, error: "Non è un JSON valido." };
+    return { ok: false, error: tr("workflows.inline_json_invalid") };
   }
   const list = many ? v : [v];
-  if (!Array.isArray(list) || (many && list.length === 0)) return { ok: false, error: many ? "Serve un elenco con almeno un passo." : "Serve un oggetto JSON." };
+  if (!Array.isArray(list) || (many && list.length === 0)) return { ok: false, error: many ? tr("workflows.inline_need_list") : tr("workflows.inline_need_object") };
   for (const s of list) {
     const o = s as { id?: unknown; kind?: unknown } | null;
-    if (o === null || typeof o !== "object" || Array.isArray(o) || typeof o.id !== "string" || !o.id.trim()) return { ok: false, error: "Ogni passo ha bisogno di un «id»." };
-    if (typeof o.kind !== "string" || !INLINE_KINDS.includes(o.kind)) return { ok: false, error: `Il passo «${o.id}» deve essere di tipo ${INLINE_KINDS.join(", ")} (niente annidamento, conferme o condizioni).` };
-    if (!STEP_ID.test(o.id)) return { ok: false, error: `L'id «${o.id}» può contenere solo lettere, cifre, «_» e «-».` };
+    if (o === null || typeof o !== "object" || Array.isArray(o) || typeof o.id !== "string" || !o.id.trim()) return { ok: false, error: tr("workflows.inline_need_id") };
+    if (typeof o.kind !== "string" || !INLINE_KINDS.includes(o.kind)) return { ok: false, error: tr("workflows.inline_kind", { id: o.id, kinds: INLINE_KINDS.join(", ") }) };
+    if (!STEP_ID.test(o.id)) return { ok: false, error: tr("workflows.inline_id_chars", { id: o.id }) };
   }
   return { ok: true, steps: list as WorkflowStep[] };
 }
@@ -104,7 +105,7 @@ export function newStep(kind: StepKind, steps: readonly StepDraft[], d: StepDefa
     case "foreach": return { id, kind, items: "", body: inlineJson({ id: `${id}-step`, kind: "llm", profile: d.profile ?? "", prompt: "{{item}}" }) };
     case "parallel": return { id, kind, steps: JSON.stringify([{ id: `${id}-a`, kind: "llm", profile: d.profile ?? "", prompt: "" }], null, 2) };
     case "workflow": return { id, kind, workflow: d.workflow ?? "", inputs: "{}" };
-    case "approval": return { id, kind, message: "Procedo?" };
+    case "approval": return { id, kind, message: tr("workflows.procedo") };
     case "condition": return { id, kind, if: "", then: [], else: [] };
   }
 }
@@ -145,16 +146,16 @@ export function optionsOf(s: StepOptions): StepOptions | undefined {
 /** Problem with the time limit of an approval, or null. */
 export function approvalTimeoutProblem(t: number | undefined): string | null {
   if (t === undefined) return null;
-  return Number.isInteger(t) && t >= 1 && t <= OPTION_LIMITS.timeout ? null : `Il tempo di attesa va da 1 a ${OPTION_LIMITS.timeout} secondi.`;
+  return Number.isInteger(t) && t >= 1 && t <= OPTION_LIMITS.timeout ? null : tr("workflows.wait_range", { max: OPTION_LIMITS.timeout });
 }
 
 /** First problem with the option values, or null. */
 export function optionsProblem(o: StepOptions | undefined): { field: string; message: string } | null {
   if (!o) return null;
   const bad = (n: number | undefined, min: number, max: number) => n !== undefined && (!Number.isInteger(n) || n < min || n > max);
-  if (bad(o.retry, 0, OPTION_LIMITS.retry)) return { field: "retry", message: `I tentativi extra vanno da 0 a ${OPTION_LIMITS.retry}.` };
-  if (bad(o.retry_delay_s, 0, OPTION_LIMITS.retryDelay)) return { field: "retry_delay_s", message: `L'attesa tra i tentativi va da 0 a ${OPTION_LIMITS.retryDelay} secondi.` };
-  if (bad(o.timeout_s, 1, OPTION_LIMITS.timeout)) return { field: "timeout_s", message: `Il limite di tempo va da 1 a ${OPTION_LIMITS.timeout} secondi.` };
+  if (bad(o.retry, 0, OPTION_LIMITS.retry)) return { field: "retry", message: tr("workflows.i_tentativi_extra_vanno_da", { retry: OPTION_LIMITS.retry }) };
+  if (bad(o.retry_delay_s, 0, OPTION_LIMITS.retryDelay)) return { field: "retry_delay_s", message: tr("workflows.l_attesa_tra_i_tentativi", { retryDelay: OPTION_LIMITS.retryDelay }) };
+  if (bad(o.timeout_s, 1, OPTION_LIMITS.timeout)) return { field: "timeout_s", message: tr("workflows.il_limite_di_tempo_va", { timeout: OPTION_LIMITS.timeout }) };
   return null;
 }
 
@@ -163,9 +164,9 @@ export function optionsSummary(o: StepOptions | undefined): string {
   const c = cleanOptions(o);
   if (!c) return "";
   const parts: string[] = [];
-  if (c.retry) parts.push(`${c.retry} ${c.retry === 1 ? "nuovo tentativo" : "nuovi tentativi"}`);
-  if (c.timeout_s) parts.push(`limite ${c.timeout_s} s`);
-  if (c.on_error === "continue") parts.push("prosegue se fallisce");
+  if (c.retry) parts.push(tr("workflows.opt_retries", { n: c.retry }));
+  if (c.timeout_s) parts.push(tr("workflows.opt_limit", { seconds: c.timeout_s }));
+  if (c.on_error === "continue") parts.push(tr("workflows.opt_continues"));
   return parts.join(" · ");
 }
 
@@ -254,18 +255,18 @@ export function gatedIds(steps: readonly StepDraft[]): Set<string> {
 /** One line that says what the step does, for the collapsed card. */
 export function stepSummary(s: StepDraft): string {
   switch (s.kind) {
-    case "tool": return `${s.tool || "tool da scegliere"} ${s.args.replace(/\s+/g, " ").trim()}`.trim();
-    case "agent": return `${s.agent || "agente da scegliere"}: ${s.prompt}`;
-    case "team": return `${s.team || "team da scegliere"}: ${s.prompt}`;
-    case "llm": return `${s.profile || "profilo da scegliere"}: ${s.prompt}`;
-    case "foreach": return `per ogni voce di ${s.items.replace(/\s+/g, " ").trim() || "…"}${s.parallel && s.parallel > 1 ? ` (${s.parallel} alla volta)` : ""}`;
+    case "tool": return `${s.tool || tr("workflows.sum_pick_tool")} ${s.args.replace(/\s+/g, " ").trim()}`.trim();
+    case "agent": return `${s.agent || tr("workflows.sum_pick_agent")}: ${s.prompt}`;
+    case "team": return `${s.team || tr("workflows.sum_pick_team")}: ${s.prompt}`;
+    case "llm": return `${s.profile || tr("workflows.sum_pick_profile")}: ${s.prompt}`;
+    case "foreach": return tr("workflows.sum_foreach", { items: s.items.replace(/\s+/g, " ").trim() || "…" }) + (s.parallel && s.parallel > 1 ? tr("workflows.sum_at_a_time", { n: s.parallel }) : "");
     case "parallel": {
       const ids = innerIds(s);
-      return ids.length ? `in parallelo: ${ids.join(", ")}` : "in parallelo (passi da correggere)";
+      return ids.length ? tr("workflows.sum_parallel", { ids: ids.join(", ") }) : tr("workflows.sum_parallel_fix");
     }
-    case "workflow": return `${s.workflow || "workflow da scegliere"} ${s.inputs.replace(/\s+/g, " ").trim()}`.trim();
-    case "approval": return s.timeout_s ? `${s.message} (dopo ${s.timeout_s} s: ${s.default === "allow" ? "approva" : "rifiuta"})` : s.message;
-    case "condition": return `se ${s.if || "…"} → ${s.then.join(", ") || "nessun passo"}${s.else.length ? ` altrimenti ${s.else.join(", ")}` : ""}`;
+    case "workflow": return `${s.workflow || tr("workflows.sum_pick_workflow")} ${s.inputs.replace(/\s+/g, " ").trim()}`.trim();
+    case "approval": return s.timeout_s ? tr("workflows.sum_approval", { message: s.message, seconds: s.timeout_s, action: s.default === "allow" ? tr("workflows.sum_approve") : tr("workflows.sum_reject") }) : s.message;
+    case "condition": return tr("workflows.sum_condition", { cond: s.if || "…", then: s.then.join(", ") || tr("workflows.sum_no_step") }) + (s.else.length ? tr("workflows.sum_else", { steps: s.else.join(", ") }) : "");
   }
 }
 

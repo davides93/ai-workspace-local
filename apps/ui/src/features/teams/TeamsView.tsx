@@ -6,6 +6,7 @@ import { TeamList } from "./components/TeamList";
 import "../agents/agents.css";
 import "./teams.css";
 
+import { t as tr } from "../../shared/i18n";
 /** `#/teams` and `#/teams/:teamId` (`new` opens a blank form, `?from=` a copy). */
 export function TeamsView() {
   const teamId = useParams().teamId;
@@ -18,13 +19,13 @@ export function TeamsView() {
   return (
     <Page className="agents-page">
       <PageHeader
-        eyebrow="Lavoro" title="Team"
-        subtitle="Un team riunisce più agenti: un supervisore che delega, membri che lavorano in parallelo o una catena di passi. Si usa in chat come un agente."
-        actions={<Link to="/teams/new" className="btn primary"><Icon name="plus" size={15} /> Nuovo team</Link>}
+        eyebrow={tr("nav.group_work")} title={tr("teams.team")}
+        subtitle={tr("teams.un_team_riunisce_piu_agenti")}
+        actions={<Link to="/teams/new" className="btn primary"><Icon name="plus" size={15} /> {tr("teams.nuovo_team")}</Link>}
       />
       <QueryState
         query={teams} isEmpty={(t) => t.length === 0 && !teamId}
-        empty={<EmptyState icon="team" title="Nessun team" description="Crea il primo team: scegli la strategia e gli agenti che ne fanno parte." action={<Link to="/teams/new" className="btn primary">Nuovo team</Link>} />}
+        empty={<EmptyState icon="team" title={tr("teams.nessun_team")} description={tr("teams.crea_il_primo_team_scegli")} action={<Link to="/teams/new" className="btn primary">{tr("teams.nuovo_team")}</Link>} />}
       >
         {(all) => (
           <MasterDetail

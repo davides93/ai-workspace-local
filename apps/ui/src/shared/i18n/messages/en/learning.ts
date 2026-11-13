@@ -1,0 +1,31 @@
+// English messages of "learning". One entry per line; must have exactly the keys of the Italian file.
+import type { learningIt } from "../it/learning";
+
+export const learningEn: Record<keyof typeof learningIt, string> = {
+  "learning.titolo": "Title",
+  "learning.contenuto_markdown": "Content (Markdown)",
+  "learning.fino_a_caratteri": "Up to {MAX_LESSON_CONTENT_CHARS} characters.",
+  "learning.finche_non_approvi_non_viene": "{p} Nothing is written until you approve.",
+  "learning.approva_con_le_modifiche": "Approve with the changes",
+  "learning.approva": "Approve",
+  "learning.annulla_le_modifiche": "Discard the changes",
+  "learning.modifica": "Edit",
+  "learning.scarta": "Dismiss",
+  "learning.vedi_la_conversazione": "See the conversation",
+  "learning.lezioni_da_rivedere": "Lessons to review",
+  "learning.nessuna_lezione_in_attesa_dopo": "No lessons waiting. After a thumbs down the agent can propose what to remember: you decide.",
+  "learning.vuoi_che_lo_ricordi": "Do you want me to remember it?",
+  "learning.conferma": "Confirm",
+  "learning.ho_proposto_una_lezione_la": "I proposed a lesson: you'll find it on Home",
+  "learning.lezione_scartata": "Lesson dismissed: \"{title}\"",
+  "learning.memoria": "Memory",
+  "learning.verra_aggiunta_a_aiw_agents": "It will be added to ~/.aiw/AGENTS.md, under \"Lessons learned\".",
+  "learning.diventera_una_nuova_skill_in": "It will become a new skill in ~/.aiw/skills.",
+  "learning.lezione_approvata_e_una_nuova": "Lesson approved: \"{title}\" is a new skill",
+  "learning.lezione_approvata_e_in_agents": "Lesson approved: \"{title}\" is in AGENTS.md",
+  "learning.il_titolo_non_puo_essere": "The title can't be empty.",
+  "learning.il_contenuto_non_puo_essere": "The content can't be empty.",
+  "learning.il_titolo_supera_i_caratteri": "The title is over {max} characters.",
+  "learning.il_contenuto_supera_i_caratteri": "The content is over {max} characters.",
+  "learning.anteprima_della_lezione": "Lesson preview",
+};

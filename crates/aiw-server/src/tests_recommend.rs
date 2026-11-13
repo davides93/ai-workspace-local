@@ -93,3 +93,21 @@ async fn an_auto_agent_without_any_model_answers_409_in_italian() {
     let (st, saved) = dispatch(app, "PUT", "/api/agents/operator", Some(op)).await;
     assert_eq!(st, 200, "{saved}");
 }
+
+#[tokio::test]
+async fn route_ranks_the_runtimes_for_a_model_with_reasons() {
+    let (app, e, _d, _w) = app_on(Some(device(16, None))).await;
+    e.register_native_runtime("llama-embedded", std::sync::Arc::new(aiw_runtimes::ScriptedBackend::new(vec![])));
+    let (st, v) = dispatch(app.clone(), "GET", "/api/route?model=sconosciuto", None).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["model"], "sconosciuto");
+    assert_eq!(v["wanted_context"], 8192);
+    assert!(v["candidates"].as_array().unwrap().is_empty(), "a model nobody has is routed nowhere: {v}");
+    let (st, v) = dispatch(app.clone(), "GET", "/api/route?model=x&context=4096&remote=true", None).await;
+    assert_eq!((st, v["wanted_context"].as_u64()), (200, Some(4096)));
+    assert!(v["excluded"].as_array().unwrap().iter().any(|x| x["runtime_id"] == "aiw-peer" && x["reason"] == "non raggiungibile"), "{v}");
+    let (st, v) = dispatch(app.clone(), "GET", "/api/route?model=", None).await;
+    assert_eq!(st, 400, "{v}");
+    let (st, _) = dispatch(app, "GET", "/api/route", None).await;
+    assert_eq!(st, 400);
+}

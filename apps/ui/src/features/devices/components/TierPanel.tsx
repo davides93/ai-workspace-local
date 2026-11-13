@@ -3,18 +3,19 @@ import { cx } from "../../../shared/lib/cx";
 import { Chip, Panel } from "../../../shared/ui";
 import { TIER_INFO, TIER_ORDER } from "../model/hardware";
 
+import { t as tr } from "../../../shared/i18n";
 /** The class of this device (XS–XL) and what each class can run. */
 export function TierPanel({ tier }: { tier: DeviceTier }) {
   return (
     <Panel>
       <div className="stack">
-        <span className="eyebrow">Classe del dispositivo</span>
+        <span className="eyebrow">{tr("devices.classe_del_dispositivo")}</span>
         <div className="row row-baseline">
           <span className="tier" aria-hidden="true">{tier.toUpperCase()}</span>
           <b>{TIER_INFO[tier].label}</b>
         </div>
         <p className="muted">{TIER_INFO[tier].models}</p>
-        <ul className="stack stack-sm dev-tiers" aria-label="Classi dei dispositivi">
+        <ul className="stack stack-sm dev-tiers" aria-label={tr("devices.classi_dei_dispositivi")}>
           {TIER_ORDER.map((t) => (
             <li key={t} className="row nowrap" aria-current={t === tier ? "true" : undefined}>
               <Chip hot={t === tier} className="tier-chip">{t.toUpperCase()}</Chip>

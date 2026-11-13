@@ -2,7 +2,7 @@ import type {
   AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, Fit, HookConfig, InferenceProfile, LocalModel, McpServer,
   PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, RemoteAgent, TeamDef, ToolInfo, WorkflowDef, WorkflowRun,
 } from "../types";
-import { RUN_ERROR_MESSAGE } from "../types";
+import { RUN_ERROR_MESSAGE, SECRET_MASK } from "../types";
 
 // Demo data for the interactive mockup. Everything here is sample content, clearly labelled
 // in the UI as "demo"; the real values come from the Rust core (crates/aiw-*).
@@ -78,6 +78,9 @@ export const runtimes: RuntimeInfo[] = [
   rt({ id: "whisper-server", name: "whisper.cpp server", vendor: "ggml-org", kind: "sidecar", status: "running", api: "native", endpoint: "http://127.0.0.1:39290", formats: ["ggml"],
     description: "Trascrizione vocale locale (whisper-server) per la modalità voce.", accelerators: ["cuda", "metal", "vulkan", "cpu"], capabilities: ["stt"], loaded_models: ["ggml-large-v3-turbo-q5_0"],
     status_detail: "ggml-large-v3-turbo-q5_0", install_hint: "winget install ggml.whispercpp", homepage: "https://github.com/ggml-org/whisper.cpp" }),
+  rt({ id: "piper", name: "Piper", vendor: "Rhasspy", kind: "sidecar", status: "available", api: "none", formats: ["piper"],
+    description: "Voce neurale locale (TTS) per leggere le risposte: AIW avvia l'eseguibile per ogni frase, con una voce .onnx scaricata da Modelli.", accelerators: ["cpu"], capabilities: ["tts"],
+    install_hint: "Scarica la release di Piper da https://github.com/rhasspy/piper/releases", homepage: "https://github.com/rhasspy/piper" }),
   rt({ id: "lmstudio", name: "LM Studio", vendor: "Element Labs", kind: "sidecar", status: "stopped", endpoint: "http://127.0.0.1:1234/v1",
     description: "Server locale di LM Studio (`lms server start`).", accelerators: ["cuda", "vulkan", "metal", "cpu"], formats: ["gguf", "mlx"], capabilities: ["chat", "tools", "vision", "embeddings"] }),
   rt({ id: "vllm", name: "vLLM", vendor: "vLLM project", kind: "sidecar", status: "installable", platforms: ["linux"],
@@ -108,6 +111,10 @@ export const system: SystemInfo = {
   mode: "demo",
   data_dir: "C:\\Users\\demo\\.aiw",
   workspace_root: "C:\\Users\\demo\\Workspace",
+  // The demo machine is a Windows PC: the shell is contained by the low-integrity token (no network or read isolation) and
+  // MCP servers cannot be isolated.
+  shell_sandbox: "windows-low-integrity",
+  mcp_sandbox: false,
   uptime_s: 4920,
   pairing_code: "482 913",
   device: {
@@ -188,6 +195,8 @@ const catalogSeeds: CatalogSeed[] = [
   { id: "gemma-4-e2b-litert", name: "Gemma 4 E2B (LiteRT-LM)", family: "Gemma 4", publisher: "Google", description: "Per telefoni: NPU e GPU con LiteRT-LM.", params_b: 5, active_params_b: 2, format: "litertlm", quant: "int4", size_bytes: 1.4 * GB, context_length: 32768, capabilities: ["chat", "vision", "audio", "tools"], license: "Gemma", source: { kind: "hf", repo: "litert-community/gemma-4-E2B-it-litert-lm", file: "gemma-4-E2B-it.litertlm" }, min_memory_mb: 3000, tags: ["mobile"], fit: "great", fit_detail: "Pensato per mobile; qui gira su CPU", installed: false },
   { id: "qwen3-4b-mlx", name: "Qwen3 4B (MLX)", family: "Qwen3", publisher: "mlx-community", description: "Repository MLX a 4 bit per Apple Silicon: si scarica intero e gira solo con MLX su macOS.", params_b: 4, format: "mlx", quant: "4bit", size_bytes: 2.3 * GB, context_length: 40960, capabilities: ["chat", "tools"], license: "Apache-2.0", source: { kind: "hf", repo: "mlx-community/Qwen3-4B-4bit", file: "" }, min_memory_mb: 4000, tags: ["mlx", "apple-silicon"], fit: "no", fit_detail: "Richiede macOS su Apple Silicon: questo PC non è compatibile", installed: false },
   { id: "whisper-small-q8", name: "Whisper Small", family: "Whisper", publisher: "OpenAI (ggml: ggml-org)", description: "Buon equilibrio tra qualità e velocità in italiano su CPU.", params_b: 0.244, format: "ggml", quant: "Q8_0", size_bytes: 0.25 * GB, context_length: 448, capabilities: ["stt"], license: "MIT", source: { kind: "hf", repo: "ggerganov/whisper.cpp", file: "ggml-small-q8_0.bin" }, min_memory_mb: 900, tags: ["voce"], fit: "great", fit_detail: "Tutto su GPU", installed: false },
+  { id: "piper-it-paola-medium", name: "Voce Paola (italiano)", family: "Piper", publisher: "Rhasspy (rhasspy/piper-voices)", description: "Voce neurale italiana per leggere le risposte (Piper). Dimensione indicativa.", params_b: 0, format: "piper", quant: "medium", size_bytes: 0.063 * GB, context_length: 0, capabilities: ["tts"], license: "vedi la scheda della voce", source: { kind: "hf", repo: "rhasspy/piper-voices", file: "it/it_IT/paola/medium/it_IT-paola-medium.onnx" }, min_memory_mb: 300, tags: ["voce"], fit: "great", fit_detail: "Gira sulla CPU", installed: false },
+  { id: "piper-en-lessac-medium", name: "Voce Lessac (inglese)", family: "Piper", publisher: "Rhasspy (rhasspy/piper-voices)", description: "Voce neurale inglese per leggere le risposte (Piper). Dimensione indicativa.", params_b: 0, format: "piper", quant: "medium", size_bytes: 0.063 * GB, context_length: 0, capabilities: ["tts"], license: "vedi la scheda della voce", source: { kind: "hf", repo: "rhasspy/piper-voices", file: "en/en_US/lessac/medium/en_US-lessac-medium.onnx" }, min_memory_mb: 300, tags: ["voce"], fit: "great", fit_detail: "Gira sulla CPU", installed: false },
   { id: "apple-fm-system", name: "Apple Foundation Model (di sistema)", family: "Apple", publisher: "Apple", description: "Già presente su iPhone e Mac con Apple Intelligence: non serve scaricarlo.", params_b: 3, format: "system", quant: "2-bit QAT", size_bytes: 0, context_length: 4096, capabilities: ["chat", "tools", "guided-generation"], license: "Apple", source: { kind: "system", runtime: "apple-fm" }, min_memory_mb: 0, tags: ["system", "mobile"], fit: "no", fit_detail: "Solo su dispositivi Apple", installed: false },
 ]
 export const catalog: CatalogModel[] = catalogSeeds.map<CatalogModel>((c) => ({ ...c, runtime_compat: compatForFormat(c.format), downloadable: c.source.kind !== "system" }));
@@ -200,12 +209,12 @@ export const profiles: InferenceProfile[] = [
 ];
 
 export const agents: AgentProfile[] = [
-  { id: "operator", name: "Operatore", description: "Task operativi su file, cartelle, documenti e app.", inference_profile: "balanced", system_prompt: "Sei un operatore preciso. Pianifica, chiedi conferma prima delle azioni distruttive e riporta cosa hai fatto.", tools: ["read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "shell", "web_fetch", "todo", "agent"], mode: "ask", sandbox: "workspace-write", max_turns: 30 },
+  { id: "operator", name: "Operatore", description: "Task operativi su file, cartelle, documenti e app.", inference_profile: "balanced", system_prompt: "Sei un operatore preciso. Pianifica, chiedi conferma prima delle azioni distruttive e riporta cosa hai fatto.", tools: ["read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "shell", "web_fetch", "web_search", "todo", "agent", "kb_search"], mode: "ask", sandbox: "workspace-write", max_turns: 30 },
   { id: "coder", name: "Coder", description: "Coding agent sul workspace corrente.", inference_profile: "balanced", system_prompt: "Sei un ingegnere software. Leggi prima di modificare e verifica con i test.", tools: ["*"], mode: "auto-edit", sandbox: "workspace-write", max_turns: 60 },
-  { id: "browser", name: "Navigatore", description: "Ricerca e azioni nel browser via CDP.", inference_profile: "fast-local", system_prompt: "Usi il browser per raccogliere informazioni e completare form.", tools: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot", "web_fetch", "todo"], mode: "ask", sandbox: "read-only", max_turns: 40 },
+  { id: "browser", name: "Navigatore", description: "Ricerca e azioni nel browser via CDP.", inference_profile: "fast-local", system_prompt: "Usi il browser per raccogliere informazioni e completare form.", tools: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_screenshot", "browser_tabs", "browser_tab_new", "browser_tab_select", "browser_select", "browser_hover", "browser_downloads", "browser_console", "web_fetch", "web_search", "todo"], mode: "ask", sandbox: "read-only", max_turns: 40 },
   { id: "desktop", name: "Pilota desktop", description: "Computer-use: vede lo schermo e usa mouse e tastiera.", inference_profile: "vision-cu", system_prompt: "Controlli il desktop tramite screenshot e azioni. Chiedi conferma prima di inviare, pagare o cancellare.", tools: ["computer_screenshot", "computer_click", "computer_type", "computer_key", "computer_scroll", "todo"], mode: "ask", sandbox: "read-only", max_turns: 50 },
   { id: "teacher", name: "Insegnante", description: "Impara da ciò che gli racconti: salva, corregge e dimentica i ricordi.", inference_profile: "fast-local", system_prompt: "Sei l'Insegnante: aiuti l'utente a insegnare all'assistente ciò che deve ricordare.", tools: ["memory_save", "memory_search", "memory_update", "memory_forget", "render_ui", "todo"], mode: "auto", sandbox: "read-only", max_turns: 12 },
-  { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "todo"], mode: "plan", sandbox: "read-only", max_turns: 20 },
+  { id: "planner", name: "Pianificatore", description: "Solo lettura: analizza e propone piani.", inference_profile: "mac-mlx", system_prompt: "Analizzi senza modificare nulla e proponi piani numerati.", tools: ["read_file", "list_dir", "glob", "grep", "web_fetch", "web_search", "todo", "kb_search"], mode: "plan", sandbox: "read-only", max_turns: 20 },
 ];
 
 /** Teams of the demo: a supervisor with two members, and a chain. */
@@ -322,8 +331,15 @@ export const sessionMessages: Record<string, ChatMessage[]> = {
 export const tools: ToolInfo[] = [
   ["read_file", "Legge un file di testo nel workspace", "read"], ["list_dir", "Elenca una cartella", "read"], ["glob", "Trova file per pattern", "read"], ["grep", "Cerca testo con regex", "read"],
   ["write_file", "Crea o sovrascrive un file", "write"], ["edit_file", "Sostituzione esatta in un file", "write"], ["shell", "Esegue un comando nella sandbox", "exec"],
-  ["web_fetch", "Scarica una pagina e la converte in testo", "network"], ["browser_navigate", "Apre un URL nel browser controllato", "network"], ["browser_snapshot", "Snapshot testuale della pagina", "read"],
-  ["browser_click", "Clic su un elemento", "computer"], ["browser_type", "Scrive in un campo", "computer"], ["browser_screenshot", "Screenshot della pagina", "read"],
+  ["web_fetch", "Scarica una pagina e la converte in testo", "network"], ["web_search", "Cerca sul web e restituisce titolo, indirizzo e anteprima dei risultati", "network"], ["browser_navigate", "Apre un URL nel browser controllato", "network"], ["browser_snapshot", "Snapshot della pagina: elementi numerati, albero di accessibilità (format=ax) o testo leggibile (format=text)", "read"],
+  ["browser_click", "Clicca un elemento dello snapshot (anche caselle e opzioni radio)", "computer"], ["browser_type", "Scrive in un campo", "computer"], ["browser_screenshot", "Screenshot della pagina", "read"],
+  ["browser_scroll", "Scorre la pagina o porta in vista un elemento", "read"], ["browser_back", "Torna alla pagina precedente", "computer"], ["browser_press", "Preme un tasto sull'elemento attivo o su un ref", "computer"],
+  ["browser_wait", "Aspetta un testo, un selettore, una navigazione o la rete inattiva (massimo 30 secondi)", "read"],
+  ["browser_tabs", "Elenca le schede aperte del browser", "read"], ["browser_tab_new", "Apre una nuova scheda, vuota o su un indirizzo", "network"], ["browser_tab_select", "Rende attiva una scheda", "read"], ["browser_tab_close", "Chiude una scheda", "computer"],
+  ["browser_select", "Sceglie un'opzione di un menu a tendina", "computer"], ["browser_hover", "Porta il puntatore su un elemento", "computer"],
+  ["browser_upload", "Sceglie un file del workspace da caricare in un campo di caricamento", "computer"],
+  ["browser_downloads", "Elenca i download della sessione", "read"], ["browser_console", "Errori e avvisi recenti della console della pagina", "read"],
+  ["browser_eval", "Esegue codice JavaScript nella pagina aperta (serve un permesso esplicito)", "exec"],
   ["computer_screenshot", "Screenshot del desktop", "computer"], ["computer_click", "Clic alle coordinate", "computer"], ["computer_type", "Digita testo", "computer"], ["computer_key", "Combinazione di tasti", "computer"], ["computer_scroll", "Scroll", "computer"],
 ].map(([name, description, risk]) => ({ name, description, risk: risk as ToolInfo["risk"], source: "builtin" as const, enabled: true, available: true, parameters: {} }));
 /** The read-only calendar and mail tools: listed always, available only while their switch (`connectors.*.enabled`) is on. */
@@ -341,7 +357,7 @@ tools.push(
  * The tools of the agent loop, as `GET /api/tools` lists them after the built-in and MCP ones: `source: "internal"`,
  * always on, risk `read`, no switch (crates/aiw-agent/src/internal.rs).
  */
-export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state", "memory_save", "memory_search", "memory_update", "memory_forget"] as const;
+export const INTERNAL_TOOL_NAMES = ["todo", "agent", "skill", "render_ui", "code", "handoff", "team_state", "memory_save", "memory_search", "memory_update", "memory_forget", "kb_search"] as const;
 tools.push(
   ...([
     ["todo", "Pubblica e aggiorna il piano di lavoro dell'agente: elenco di passi con il loro stato."],
@@ -355,6 +371,7 @@ tools.push(
     ["memory_search", "Cerca tra i ricordi dell'utente per parole e per significato."],
     ["memory_update", "Corregge un ricordo esistente."],
     ["memory_forget", "Dimentica un ricordo (l'utente può ripristinarlo)."],
+    ["kb_search", "Cerca nei documenti dell'utente (raccolte di file) per parole e per significato."],
   ] as const).map(([name, description]): ToolInfo => ({ name, description, source: "internal", risk: "read", enabled: true, available: true, parameters: {} })),
 );
 
@@ -363,10 +380,11 @@ tools.push(
  * secret when it lists them (`mcpServers()`), as `GET /api/mcp/servers` does.
  */
 export const mcp: McpServer[] = [
-  { id: "mcp_fs", name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Workspace"], env: { LOG_LEVEL: "info" }, enabled: true, status: "connected", tools: ["search_files", "read_text_file", "directory_tree"] },
-  { id: "mcp_gh", name: "github", transport: "http", url: "http://127.0.0.1:8931/mcp", headers: { Authorization: "Bearer ghp_demo_0000" }, enabled: true, status: "connected", tools: ["list_issues", "create_issue"] },
+  { id: "mcp_fs", name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Workspace"], env: { LOG_LEVEL: "info" }, enabled: true, status: "connected", tools: ["search_files", "read_text_file", "directory_tree"], capabilities: { tools: true, resources: true, prompts: false } },
+  { id: "mcp_gh", name: "github", transport: "http", url: "http://127.0.0.1:8931/mcp", headers: { Authorization: "Bearer ghp_demo_0000" }, enabled: true, status: "connected", tools: ["list_issues", "create_issue"], capabilities: { tools: true, resources: false, prompts: true }, signed_in: true, sampling: false },
   { id: "mcp_pw", name: "playwright", transport: "stdio", command: "npx", args: ["@playwright/mcp@latest"], enabled: false, status: "disconnected", tools: [] },
-  { id: "mcp_db", name: "postgres", transport: "stdio", command: "uvx", args: ["mcp-server-postgres", "--dsn", "postgresql://localhost/app"], env: { PGPASSWORD: "demo" }, enabled: true, status: "error", tools: [], error: "spawn uvx ENOENT: comando non trovato nel PATH" },
+  { id: "mcp_db", name: "postgres", transport: "stdio", command: "uvx", args: ["mcp-server-postgres", "--dsn", "postgresql://localhost/app"], env: { PGPASSWORD: "demo" }, enabled: true, status: "unreachable", tools: [], error: "spawn uvx ENOENT: comando non trovato nel PATH" },
+  { id: "mcp_notes", name: "appunti", transport: "http", url: "https://mcp.example.test/notes", enabled: true, status: "auth_required", tools: [], error: "il server MCP appunti richiede l'accesso: premi «Accedi» in Integrazioni" },
 ];
 
 export const workflows: WorkflowDef[] = [
@@ -413,16 +431,28 @@ export const audit: AuditEntry[] = [
   { id: "a5", ts: now(), actor: "system", action: "kill", detail: "Kill switch: 1 run e 1 sidecar fermati" },
 ];
 
+/** `sandbox.deny_read` by default (crates/aiw-core/src/config.rs `DEFAULT_DENY_READ`). */
+export const DEFAULT_DENY_READ: string[] = [
+  "~/.ssh", "~/.gnupg", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.config/gh", "~/.kube", "~/.docker/config.json", "~/.netrc", "~/.npmrc", "~/.pypirc", "~/.git-credentials",
+  "~/.mozilla", "~/.config/google-chrome", "~/.config/chromium", "~/.config/BraveSoftware", "~/.config/microsoft-edge", "~/snap/firefox/common/.mozilla", "~/snap/chromium/common/chromium",
+  "~/Library/Application Support/Google/Chrome", "~/Library/Application Support/Firefox", "~/Library/Application Support/BraveSoftware", "~/Library/Application Support/Microsoft Edge", "~/Library/Safari",
+  "~/Library/Keychains", "~/.local/share/keyrings",
+];
+
 export const configSchema: SettingsSchema = {
   type: "object",
   properties: {
     "ui.mode": { type: "string", title: "Modalità dell'interfaccia", description: "Semplice mostra solo le sezioni di uso quotidiano; Sviluppatore le mostra tutte", enum: ["simple", "developer"], default: "simple" },
     "ui.theme": { type: "string", title: "Tema", enum: ["system", "light", "dark"], default: "system" },
-    "ui.language": { type: "string", title: "Lingua", enum: ["it", "en"], default: "it" },
+    "ui.language": { type: "string", title: "Lingua", enum: ["auto", "it", "en"], default: "auto" },
     "agent.default": { type: "string", title: "Agente predefinito", default: "operator" },
     "approvals.timeout_s": { type: "integer", title: "Tempo massimo per rispondere a una richiesta di approvazione (secondi)", description: "0 = nessun limite. Allo scadere la richiesta dell'agente viene rifiutata", default: 0, minimum: 0, maximum: 86400 },
     "policy.mode": { type: "string", title: "Modalità di approvazione", enum: ["plan", "ask", "auto-edit", "auto", "yolo"], default: "ask" },
     "sandbox.mode": { type: "string", title: "Sandbox", enum: ["read-only", "workspace-write", "off"], default: "workspace-write" },
+    "sandbox.shell_network": { type: "string", title: "Rete della shell", description: "off = i comandi della shell non hanno rete (per installare pacchetti o scaricare file serve «on»); on = rete aperta. Vale per Linux e macOS: su Windows la sandbox non può chiudere la rete. Un repository può solo chiuderla, mai aprirla", enum: ["off", "on"], default: "off" },
+    "sandbox.shell_network_notice": { type: "boolean", title: "Avviso sulla rete della shell da mostrare", description: "Messo a true dalla migrazione per le installazioni esistenti (la rete è rimasta accesa); l'interfaccia lo mostra una volta e lo spegne", default: false },
+    "sandbox.deny_read": { type: "array", title: "Cartelle e file nascosti ai comandi", description: "Percorsi (~ è la tua cartella personale) che i comandi della shell e i server MCP isolati non possono né leggere né scrivere, e che i tool di file rifiutano. Le cartelle dati di AIW sono nascoste sempre. Togli una voce se un flusso di lavoro la richiede (per esempio ~/.ssh per git via ssh). Su Windows non ha effetto", items: { type: "string" }, default: DEFAULT_DENY_READ },
+    "sandbox.env_allow": { type: "array", title: "Variabili d'ambiente che i comandi possono ereditare", description: "I comandi della shell non ereditano le variabili che sembrano segreti (*_TOKEN, *_KEY, *_SECRET, *PASSWORD*, AIW_*, credenziali cloud). Qui elenchi i nomi (o un prefisso che finisce con *) da lasciare passare", items: { type: "string" }, default: [] },
     "agents.max_parallel_subagents": { type: "integer", title: "Subagenti in parallelo", default: 3, minimum: 1, maximum: 8 },
     "agents.budget.max_tokens": { type: "integer", title: "Budget di token per run (0 = nessun limite)", default: 0, minimum: 0 },
     "agents.budget.max_turns": { type: "integer", title: "Budget di turni per run (0 = nessun limite)", default: 0, minimum: 0 },
@@ -452,18 +482,35 @@ export const configSchema: SettingsSchema = {
     "connectors.calendar.sources": { type: "array", title: "Calendari da leggere", description: "File .ics, cartelle con file .ics o indirizzi di sottoscrizione (https:// o webcal://)", items: { type: "string" }, default: [] },
     "connectors.mail.enabled": { type: "boolean", title: "Posta: l'assistente può leggere la posta salvata sul computer", description: "Sola lettura: non invia, non cancella e non segna nulla; legge solo ciò che scegli, e i dati restano sul dispositivo", default: false },
     "connectors.mail.sources": { type: "array", title: "Posta da leggere", description: "Cartelle Maildir, file .mbox o .eml", items: { type: "string" }, default: [] },
+    "search.provider": { type: "string", title: "Motore della ricerca web", description: "Con «Automatico» usa SearXNG se hai indicato un indirizzo, altrimenti Brave se hai inserito una chiave, altrimenti DuckDuckGo. Il testo cercato viene inviato al motore scelto. «Spenta» toglie lo strumento di ricerca agli agenti", enum: ["auto", "off", "searxng", "brave", "duckduckgo"], default: "auto" },
+    "search.searxng_url": { type: "string", title: "Indirizzo di SearXNG", description: "Istanza di SearXNG, anche su questo computer o sulla rete di casa (per esempio http://localhost:8080). Deve consentire il formato json", default: "", placeholder: "http://localhost:8080" },
+    "search.brave_api_key": { type: "string", title: "Chiave di Brave Search", description: "Chiave dell'API di Brave Search; resta su questo dispositivo e non viene mai mostrata per intero", default: "", secret: true },
     "voice.language": { type: "string", title: "Lingua della voce", description: "Codice ISO 639-1 (it, en…) o auto per riconoscerla", default: "auto" },
     "voice.stt_runtime": { type: "string", title: "Motore di trascrizione", description: "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", enum: ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], default: "auto" },
     "voice.stt_model": { type: "string", title: "Modello Whisper", description: "Vuoto = il più grande installato che sta in memoria", default: "" },
-    "voice.tts_voice": { type: "string", title: "Voce per leggere le risposte", description: "Nome di una voce locale del sistema; vuoto = la prima per la lingua", default: "" },
+    "voice.tts_voice": { type: "string", title: "Voce del sistema per leggere le risposte", description: "Nome di una voce locale del sistema; vuoto = la prima per la lingua", default: "" },
+    "voice.tts.engine": { type: "string", title: "Motore della voce", description: "auto: Piper se è installato con una voce nella lingua della risposta, poi un server compatibile OpenAI se hai indicato l'indirizzo, altrimenti le voci del sistema. «Sistema» usa sempre le voci del sistema operativo", enum: ["auto", "system", "piper", "openai"], default: "auto" },
+    "voice.tts.voice": { type: "object", title: "Voce neurale per lingua", description: "Per ogni lingua (it, en…) la voce di Piper o del server; la lingua senza voce scelta usa la prima disponibile", default: {} },
+    "voice.tts.speed": { type: "number", title: "Velocità della voce", description: "1 = normale, 0.5 = metà, 2 = doppia (solo voci neurali)", default: 1.0, minimum: 0.5, maximum: 2.0, step: 0.1 },
+    "voice.tts.server_url": { type: "string", title: "Server della voce (compatibile OpenAI)", description: "Per esempio Kokoro-FastAPI su http://localhost:8880 o LocalAI: AIW chiama /v1/audio/speech. Il testo da leggere viene inviato a quel server", default: "", placeholder: "http://localhost:8880" },
+    "voice.tts.server_model": { type: "string", title: "Modello del server della voce", description: "Nome del modello da chiedere al server (kokoro, tts-1…)", default: "kokoro" },
   },
 };
 export const configLayers: ConfigView["layers"] = [
   { name: "defaults", values: Object.fromEntries(Object.entries(configSchema.properties).map(([k, v]) => [k, v.default])) },
-  { name: "global", path: "~/.aiw/config.json", values: { "ui.theme": "system", "models.dir": "D:\\Modelli", "server.lan": true, "proactive.level": "propose", "network.allow_domains": ["docs.rs", "crates.io"] } },
+  { name: "global", path: "~/.aiw/config.json", values: { "ui.theme": "system", "sandbox.shell_network": "on", "sandbox.shell_network_notice": true, "models.dir": "D:\\Modelli", "server.lan": true, "proactive.level": "propose", "network.allow_domains": ["docs.rs", "crates.io"] } },
   { name: "device", path: "~/.aiw/devices/Studio-PC.json", values: { "context.compact_at": 0.85 } },
   { name: "workspace", path: "Workspace/.aiw/config.json", values: { "policy.mode": "auto-edit" } },
 ];
+
+/** Replaces the value of every non-empty secret setting with the mask, as the API does. */
+export function maskConfigSecrets(values: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...values };
+  for (const [key, field] of Object.entries(configSchema.properties)) {
+    if (field.secret && typeof out[key] === "string" && out[key] !== "") out[key] = SECRET_MASK;
+  }
+  return out;
+}
 
 export function effective(): Record<string, unknown> {
   const out: Record<string, unknown> = {};

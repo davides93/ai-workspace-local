@@ -4,6 +4,7 @@ import type { Issue } from "../model/draft";
 import { hasOptions, optionsSummary, STEP_ID, STEP_KINDS, stepMeta, stepSummary, type StepDraft, type StepKind } from "../model/steps";
 import { AgentFields, ApprovalFields, ConditionFields, ForeachFields, LlmFields, OptionsFields, ParallelFields, TeamFields, ToolFields, WorkflowFields, type StepCatalog } from "./StepForms";
 
+import { t } from "../../../shared/i18n";
 /** Id of a step: edited as text, applied on blur so that references only follow a valid, free id. */
 function IdField({ uid, index, value, taken, onCommit }: { uid: number; index: number; value: string; taken: string[]; onCommit: (id: string) => void }) {
   const [text, setText] = useState(value);
@@ -11,13 +12,13 @@ function IdField({ uid, index, value, taken, onCommit }: { uid: number; index: n
   const id = text.trim();
   const problem =
     id === value || id === "" && value === "" ? null
-    : id === "" ? "L'identificativo non può essere vuoto."
-    : !STEP_ID.test(id) ? "Solo lettere, cifre, «_» e «-»."
-    : taken.includes(id) ? "Già usato da un altro passo."
+    : id === "" ? t("workflows.id_empty")
+    : !STEP_ID.test(id) ? t("workflows.id_chars")
+    : taken.includes(id) ? t("workflows.id_taken")
     : null;
   return (
     <div className="step-id">
-      <label htmlFor={`st-${uid}-id`} className="sr-only">Identificativo del passo {index + 1}</label>
+      <label htmlFor={`st-${uid}-id`} className="sr-only">{t("workflows.identificativo_del_passo", { number: index + 1 })}</label>
       <Input
         id={`st-${uid}-id`} mono value={text} spellCheck={false} aria-invalid={!!problem} aria-describedby={problem ? `st-${uid}-id-err` : undefined}
         onChange={(e) => setText(e.target.value)}
@@ -58,13 +59,13 @@ export function StepCard({ uid, index, steps, catalog, inputKeys, issues, runSta
       <div className="step-rail" aria-hidden="true"><b>{index + 1}</b>{index < steps.length - 1 && <i />}</div>
       <div className="step-body">
         <div className="step-head">
-          <IconButton aria-label={`${collapsed ? "Espandi" : "Comprimi"} il passo ${index + 1}`} aria-expanded={!collapsed} icon="down" size={16} className={collapsed ? "chev collapsed" : "chev"} onClick={onToggle} />
-          <Select aria-label={`Tipo del passo ${index + 1}`} value={step.kind} className="step-kind" onChange={(e) => onKind(e.target.value as StepKind)}>
+          <IconButton aria-label={t(collapsed ? "workflows.expand_step" : "workflows.collapse_step", { number: index + 1 })} aria-expanded={!collapsed} icon="down" size={16} className={collapsed ? "chev collapsed" : "chev"} onClick={onToggle} />
+          <Select aria-label={t("workflows.tipo_del_passo", { number: index + 1 })} value={step.kind} className="step-kind" onChange={(e) => onKind(e.target.value as StepKind)}>
             {STEP_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
           </Select>
           <IdField uid={uid} index={index} value={step.id} taken={steps.filter((_, i) => i !== index).map((s) => s.id)} onCommit={onRename} />
           {runStatus && <span className="step-status"><StatusPill status={runStatus} /></span>}
-          <RowControls index={index} count={steps.length} noun={`il passo ${index + 1} (${step.id})`} onMove={onMove} onRemove={onRemove} />
+          <RowControls index={index} count={steps.length} noun={t("workflows.il_passo_2", { number: index + 1, id: step.id })} onMove={onMove} onRemove={onRemove} />
         </div>
         {idIssue && <p className={idIssue.level === "error" ? "field-error" : "row-warn"}>{idIssue.message}</p>}
         {collapsed ? (

@@ -2,9 +2,10 @@
 // what the tool is about to do, say whether it is allowed, needs a confirmation or is denied.
 // Keep it in step with the Rust file: the test panel of the Security page relies on it.
 
-import type { PolicyAction, PolicyMode, PolicyRule, ToolRisk } from "../../../shared/api/types";
+import type { CommandAnalysis, PolicyAction, PolicyMode, PolicyRule, ToolRisk } from "../../../shared/api/types";
 import { globMatches } from "./glob";
 
+import { t, t as tr } from "../../../shared/i18n";
 export type DecisionKind = "allow" | "ask" | "deny";
 
 export interface Decision {
@@ -41,42 +42,76 @@ export interface EvaluateInput {
   sessionAllowed?: boolean;
   /** The OS can contain shell commands on this machine (matters for `auto`). */
   sandboxAvailable?: boolean;
+  /**
+   * How the backend reads a shell command line (`POST /api/policy/analyze`): the simple commands it is made of.
+   * Without it a shell command is judged as the single command it is written as.
+   */
+  analysis?: CommandAnalysis | null;
 }
 
-/** `Policy::evaluate`: deny rules beat allow rules, which beat ask rules; then the mode decides. */
+/** Message of an `ask` that comes from a command line the allow rules only cover in part. */
+export const partialCover = (): string => t("security.comando_composto_o_non_analizzabile");
+
+const SHELL_TOOL = "shell";
+
+/**
+ * `Policy::evaluate`: deny rules beat allow rules, which beat ask rules; then the mode decides.
+ *
+ * For the shell tool the command line is split into its simple commands: a deny or ask rule applies when it matches the
+ * raw text or ANY simple command; an allow rule with a pattern applies only when the parse is confident and EVERY simple
+ * command is allowed by some allow rule (a rule without a pattern allows the tool as a whole).
+ */
 export function evaluate(input: EvaluateInput): Decision {
   const { mode, rules, tool, risk, subject, sessionAllowed = false, sandboxAvailable = true } = input;
-  for (const action of ["deny", "allow", "ask"] as const) {
-    const index = rules.findIndex((r) => r.action === action && ruleMatches(r, tool, subject));
-    if (index < 0) continue;
-    const rule = rules[index];
-    if (action === "deny") return { kind: "deny", reason: `regola: ${ruleLabel(rule)}`, by: "rule", ruleIndex: index };
-    if (action === "allow") return { kind: "allow", reason: `regola: ${ruleLabel(rule)}`, by: "rule", ruleIndex: index };
-    return { kind: "ask", reason: "regola di conferma", by: "rule", ruleIndex: index };
+  const split: CommandAnalysis | null =
+    tool === SHELL_TOOL && typeof subject === "string" ? (input.analysis ?? { commands: [subject.trim()].filter(Boolean), also: [], confident: true }) : null;
+  const toolMatches = (r: PolicyRule) => globMatches(r.tool, tool);
+  const hasPattern = (r: PolicyRule) => r.pattern !== undefined && r.pattern !== null;
+  const hits = (r: PolicyRule): boolean =>
+    ruleMatches(r, tool, subject) || (split !== null && hasPattern(r) && toolMatches(r) && [...split.commands, ...split.also].some((c) => ruleMatches(r, tool, c)));
+
+  const denied = rules.findIndex((r) => r.action === "deny" && hits(r));
+  if (denied >= 0) return { kind: "deny", reason: t("security.regola", { rule: ruleLabel(rules[denied]) }), by: "rule", ruleIndex: denied };
+
+  let allowed = -1;
+  if (split === null) {
+    allowed = rules.findIndex((r) => r.action === "allow" && ruleMatches(r, tool, subject));
+  } else {
+    allowed = rules.findIndex((r) => r.action === "allow" && toolMatches(r) && !hasPattern(r));
+    if (allowed < 0 && split.confident && split.commands.length > 0) {
+      const covering = split.commands.map((c) => rules.findIndex((r) => r.action === "allow" && toolMatches(r) && hasPattern(r) && ruleMatches(r, tool, c)));
+      if (covering.every((i) => i >= 0)) allowed = covering[0];
+    }
   }
-  if (sessionAllowed) return { kind: "allow", reason: "già consentito per questa sessione", by: "session" };
+  if (allowed >= 0) return { kind: "allow", reason: t("security.regola", { rule: ruleLabel(rules[allowed]) }), by: "rule", ruleIndex: allowed };
+
+  const asked = rules.findIndex((r) => r.action === "ask" && hits(r));
+  if (asked >= 0) return { kind: "ask", reason: t("security.regola_di_conferma"), by: "rule", ruleIndex: asked };
+  if (sessionAllowed) return { kind: "allow", reason: t("security.gia_consentito_per_questa_sessione"), by: "session" };
   const allow = (reason: string): Decision => ({ kind: "allow", reason, by: "mode" });
-  const ask = (reason: string): Decision => ({ kind: "ask", reason, by: "mode" });
+  const partial =
+    split !== null && rules.some((r) => r.action === "allow" && toolMatches(r) && hasPattern(r)) && (!split.confident || split.commands.length !== 1);
+  const ask = (reason: string): Decision => ({ kind: "ask", reason: partial ? partialCover() : reason, by: "mode" });
   switch (mode) {
     case "yolo":
-      return allow("modalità senza freni: nessuna conferma");
+      return allow(tr("security.modalita_senza_freni_nessuna_conferma"));
     case "plan":
       return risk === "read" || risk === "network"
-        ? allow("modalità piano: lettura consentita")
-        : { kind: "deny", reason: "modalità piano: solo lettura, proponi le modifiche invece di eseguirle", by: "mode" };
+        ? allow(tr("security.modalita_piano_lettura_consentita"))
+        : { kind: "deny", reason: t("security.modalita_piano_solo_lettura_proponi"), by: "mode" };
     case "auto":
-      if (risk === "computer") return ask("azione su mouse e tastiera");
-      if (risk === "exec" && !sandboxAvailable) return ask("comando senza sandbox su questo sistema");
-      return allow("modalità auto: dentro la sandbox");
+      if (risk === "computer") return ask(tr("security.mouse_keyboard_action"));
+      if (risk === "exec" && !sandboxAvailable) return ask(tr("security.comando_senza_sandbox_su_questo"));
+      return allow(tr("security.modalita_auto_dentro_la_sandbox"));
     case "auto-edit":
-      if (risk === "exec") return ask("esecuzione di un comando");
-      if (risk === "computer") return ask("azione su mouse e tastiera");
-      return allow("modalità modifica: lettura e scrittura consentite");
+      if (risk === "exec") return ask(tr("security.command_execution"));
+      if (risk === "computer") return ask(tr("security.mouse_keyboard_action"));
+      return allow(tr("security.modalita_modifica_lettura_e_scrittura"));
     default:
-      if (risk === "read" || risk === "network") return allow("lettura consentita");
-      if (risk === "write") return ask("modifica di file");
-      if (risk === "exec") return ask("esecuzione di un comando");
-      return ask("azione su mouse e tastiera");
+      if (risk === "read" || risk === "network") return allow(tr("security.lettura_consentita"));
+      if (risk === "write") return ask(tr("security.file_edit"));
+      if (risk === "exec") return ask(tr("security.command_execution"));
+      return ask(tr("security.mouse_keyboard_action"));
   }
 }
 
@@ -98,20 +133,21 @@ export interface ProbeResult {
 }
 
 /** Runs the draft rules against a probe; null while no tool is named. */
-export function runProbe(rules: readonly PolicyRule[], probe: Probe): ProbeResult | null {
+export function runProbe(rules: readonly PolicyRule[], probe: Probe, analysis?: CommandAnalysis | null): ProbeResult | null {
   const tool = probe.tool.trim();
   if (!tool) return null;
   const subject = probe.subject.trim() === "" ? null : probe.subject;
   // Rules still being written (no tool yet) take no part in the test.
   const live = rules.map((r) => (r.tool.trim() ? r : { ...r, tool: "\u0000" }));
-  const decision = evaluate({ mode: probe.mode, rules: live, tool, risk: probe.risk, subject, sessionAllowed: probe.sessionAllowed, sandboxAvailable: probe.sandboxAvailable });
-  const matches = live.flatMap((r, i) => (ruleMatches(r, tool, subject) ? [i] : []));
+  const decision = evaluate({ mode: probe.mode, rules: live, tool, risk: probe.risk, subject, sessionAllowed: probe.sessionAllowed, sandboxAvailable: probe.sandboxAvailable, analysis });
+  const parts = tool === SHELL_TOOL && analysis ? [...analysis.commands, ...analysis.also] : [];
+  const matches = live.flatMap((r, i) => (ruleMatches(r, tool, subject) || (r.pattern && parts.some((c) => ruleMatches(r, tool, c))) ? [i] : []));
   return { decision, matches };
 }
 
-export const DECISION_LABEL: Record<DecisionKind, string> = { allow: "Consentito", ask: "Chiede conferma", deny: "Negato" };
+export const DECISION_LABEL: Record<DecisionKind, string> = { get allow() { return tr("security.consentito"); }, get ask() { return tr("security.chiede_conferma"); }, get deny() { return tr("security.negato"); } };
 
-export const ACTION_LABEL: Record<PolicyAction, string> = { allow: "Consenti", ask: "Chiedi", deny: "Nega" };
+export const ACTION_LABEL: Record<PolicyAction, string> = { get allow() { return tr("security.consenti"); }, get ask() { return tr("security.chiedi"); }, get deny() { return tr("security.nega"); } };
 
 /** Moves the item at `from` by `delta` positions (clamped); returns a new array. */
 export function moveItem<T>(list: readonly T[], from: number, delta: number): T[] {
@@ -139,16 +175,16 @@ export function checkRules(rules: readonly PolicyRule[], problem: (glob: string)
   const issues: RuleIssue[] = [];
   rules.forEach((r, index) => {
     const tool = r.tool.trim();
-    if (!tool) issues.push({ index, level: "error", message: "Indica il tool a cui si applica la regola." });
+    if (!tool) issues.push({ index, level: "error", message: t("security.indica_il_tool_a_cui") });
     else {
       const p = problem(tool);
-      if (p) issues.push({ index, level: "error", message: `Il tool «${tool}» non è un glob valido (${p}).` });
+      if (p) issues.push({ index, level: "error", message: t("security.il_tool_non_e_un", { tool, error: p }) });
     }
-    if (!ACTIONS.includes(r.action)) issues.push({ index, level: "error", message: `Azione «${String(r.action)}» non valida: usa allow, ask o deny.` });
+    if (!ACTIONS.includes(r.action)) issues.push({ index, level: "error", message: t("security.azione_non_valida_usa_allow", { action: String(r.action) }) });
     const pattern = r.pattern?.trim();
     if (pattern) {
       const p = problem(pattern);
-      if (p) issues.push({ index, level: "error", message: `Il pattern «${pattern}» non è un glob valido (${p}).` });
+      if (p) issues.push({ index, level: "error", message: t("security.il_pattern_non_e_un", { pattern, error: p }) });
     }
   });
   const seen = new Map<string, number>();
@@ -156,7 +192,7 @@ export function checkRules(rules: readonly PolicyRule[], problem: (glob: string)
     const key = `${r.tool}\u0000${r.pattern ?? ""}\u0000${r.action}`;
     const first = seen.get(key);
     if (first === undefined) seen.set(key, index);
-    else issues.push({ index, level: "warn", message: `Uguale alla regola ${first + 1}.` });
+    else issues.push({ index, level: "warn", message: t("security.uguale_alla_regola", { number: first + 1 }) });
   });
   return issues;
 }

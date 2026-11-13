@@ -6,15 +6,16 @@ import { Icon, Pill } from "../../../shared/ui";
 import type { AuditEntry } from "../../../shared/api/types";
 import { ACTOR_LABEL, decisionInfo } from "../model/filter";
 
+import { t, t as tr } from "../../../shared/i18n";
 function RunCell({ runId }: { runId?: string }) {
   if (!runId) return <>—</>;
   const to = chatPathForRun(runId);
   const label = <span className="act-run-id" title={runId}>{runId}</span>;
   return to ? (
-    <Link to={to} className="act-run-link" title="Apri la sessione di questo run">
+    <Link to={to} className="act-run-link" title={t("activity.apri_la_sessione_di_questo")}>
       {label}
       <Icon name="forward" size={12} />
-      <span className="sr-only">Apri la sessione di questo run</span>
+      <span className="sr-only">{t("activity.apri_la_sessione_di_questo")}</span>
     </Link>
   ) : label;
 }
@@ -25,16 +26,16 @@ function RunCell({ runId }: { runId?: string }) {
  */
 export function AuditTable({ rows, empty }: { rows: AuditEntry[]; empty: ReactNode }) {
   return (
-    <div className="table-wrap act-wrap">
-      <table className="data act-table" aria-label="Audit trail">
+    <div className="table-wrap act-wrap" tabIndex={0} role="region" aria-label={t("activity.audit_trail")}>
+      <table className="data act-table" aria-label={t("activity.audit_trail")}>
         <thead>
           <tr>
-            <th scope="col">Quando</th>
-            <th scope="col">Attore</th>
-            <th scope="col">Azione</th>
-            <th scope="col">Decisione</th>
-            <th scope="col">Dettaglio</th>
-            <th scope="col">Run</th>
+            <th scope="col">{t("activity.quando")}</th>
+            <th scope="col">{t("activity.attore")}</th>
+            <th scope="col">{t("activity.azione")}</th>
+            <th scope="col">{t("activity.decisione")}</th>
+            <th scope="col">{t("activity.dettaglio")}</th>
+            <th scope="col">{t("activity.run")}</th>
           </tr>
         </thead>
         <tbody>
@@ -42,12 +43,12 @@ export function AuditTable({ rows, empty }: { rows: AuditEntry[]; empty: ReactNo
             const d = a.decision ? decisionInfo(a.decision) : null;
             return (
               <tr key={a.id}>
-                <td data-label="Quando" className="num act-when"><time dateTime={a.ts}>{formatDateTime(a.ts)}</time></td>
-                <td data-label="Attore">{ACTOR_LABEL[a.actor] ?? a.actor}</td>
-                <td data-label="Azione" className="mono act-action">{a.tool ? `${a.action}:${a.tool}` : a.action}</td>
-                <td data-label="Decisione">{d ? <Pill tone={d.tone}>{d.label}</Pill> : <span className="faint">—</span>}</td>
-                <td data-label="Dettaglio" className="mono text-xs act-detail">{a.detail || "—"}</td>
-                <td data-label="Run" className="mono text-xs faint"><RunCell runId={a.run_id} /></td>
+                <td data-label={tr("activity.quando")} className="num act-when"><time dateTime={a.ts}>{formatDateTime(a.ts)}</time></td>
+                <td data-label={tr("activity.attore")}>{ACTOR_LABEL[a.actor] ?? a.actor}</td>
+                <td data-label={tr("activity.azione")} className="mono act-action">{a.tool ? `${a.action}:${a.tool}` : a.action}</td>
+                <td data-label={tr("activity.decisione")}>{d ? <Pill tone={d.tone}>{d.label}</Pill> : <span className="faint">—</span>}</td>
+                <td data-label={tr("activity.dettaglio")} className="mono text-xs act-detail">{a.detail || "—"}</td>
+                <td data-label={tr("activity.run")} className="mono text-xs faint"><RunCell runId={a.run_id} /></td>
               </tr>
             );
           })}

@@ -1,5 +1,6 @@
 import type { ProactiveStatus, Proposal, ProposalStatus } from "../../../shared/api/types";
 
+import { t as tr } from "../../../shared/i18n";
 /** Proposals waiting for the person: only real proposals, never the briefing (a note, not a task). */
 export const waiting = (list: Proposal[]): Proposal[] => list.filter((p) => p.kind === "proposal" && p.status === "open");
 
@@ -21,9 +22,9 @@ export function decided(list: Proposal[]): Proposal[] {
 export const STATUS_LABEL: Record<ProposalStatus, string> = {
   open: "In attesa",
   approved: "In corso",
-  done: "Fatta",
-  dismissed: "Scartata",
-  expired: "Scaduta",
+  get done() { return tr("inbox.fatta"); },
+  get dismissed() { return tr("inbox.scartata"); },
+  get expired() { return tr("inbox.scaduta"); },
 };
 
 export const STATUS_TONE: Record<ProposalStatus, "warn" | "info" | "ok" | "neutral"> = {
@@ -37,12 +38,12 @@ export const STATUS_TONE: Record<ProposalStatus, "warn" | "info" | "ok" | "neutr
 /** One line saying whether the assistant is on, and when it looks next. */
 export function statusLine(s: ProactiveStatus | undefined, now: number = Date.now()): string {
   if (!s) return "";
-  if (s.level === "off") return "L'assistente proattivo è spento: lo accendi dalle impostazioni.";
-  if (s.stopped_by_kill_switch) return "Fermato dal pulsante di emergenza: riparte quando lo riaccendi dalle impostazioni.";
+  if (s.level === "off") return tr("inbox.l_assistente_proattivo_e_spento");
+  if (s.stopped_by_kill_switch) return tr("inbox.fermato_dal_pulsante_di_emergenza");
   if (s.skipped_reason) return s.skipped_reason;
   if (s.next_wake) {
     const min = Math.max(1, Math.round((new Date(s.next_wake).getTime() - now) / 60_000));
-    return min < 90 ? `Riguarda tra circa ${min} minuti.` : "Riguarda più tardi.";
+    return min < 90 ? tr("inbox.riguarda_tra_circa_minuti", { min }) : tr("inbox.riguarda_piu_tardi");
   }
   return "";
 }

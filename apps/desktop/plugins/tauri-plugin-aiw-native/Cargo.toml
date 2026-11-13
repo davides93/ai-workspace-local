@@ -3,6 +3,7 @@ name = "tauri-plugin-aiw-native"
 description = "Native on-device inference for AI Workspace Local: Apple Foundation Models (iOS/macOS), Gemini Nano via ML Kit GenAI and LiteRT-LM (Android)"
 version = "0.5.0-beta.8"
 edition = "2021"
+publish = false
 links = "tauri-plugin-aiw-native"
 
 [features]

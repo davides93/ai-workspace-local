@@ -1,12 +1,13 @@
 import type { Fit } from "../../../shared/api/types";
 import type { PillTone } from "../../../shared/ui";
 
+import { t } from "../../../shared/i18n";
 /** How well a model fits this device, as label and pill tone. */
 export const FIT: Record<Fit, { label: string; tone: PillTone }> = {
-  great: { label: "Ci sta comodo", tone: "ok" },
-  ok: { label: "Ci sta", tone: "info" },
-  tight: { label: "Al limite", tone: "warn" },
-  no: { label: "Non ci sta", tone: "crit" },
+  great: { get label() { return t("models.ci_sta_comodo"); }, tone: "ok" },
+  ok: { get label() { return t("models.ci_sta"); }, tone: "info" },
+  tight: { get label() { return t("models.al_limite"); }, tone: "warn" },
+  no: { get label() { return t("models.non_ci_sta"); }, tone: "crit" },
 };
 
 /** Formats a provider can supply; the Scopri filter uses the provider's own list when it has one. */

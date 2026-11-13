@@ -8,6 +8,7 @@ import { apiLabel, compatibleModels, FIT_META, settingsDirty } from "../model/ru
 import { RuntimeInstall } from "./RuntimeInstall";
 import { RuntimeLogs } from "./RuntimeLogs";
 
+import { t, tNode } from "../../../shared/i18n";
 /** `#/runtimes/:runtimeId` — state, start with a model, settings and logs of one runtime. */
 export function RuntimeDrawer({ runtime: r, models, deviceAccels, onClose }: {
   runtime: RuntimeInfo;
@@ -45,62 +46,61 @@ export function RuntimeDrawer({ runtime: r, models, deviceAccels, onClose }: {
     <Drawer
       title={r.name} subtitle={`${r.kind} · ${apiLabel(r.api)} · ${r.platforms.join(" / ")}`} onClose={onClose}
       footer={<>
-        {dirty && <span className="faint text-sm grow">Modifiche non salvate</span>}
-        <Button onClick={onClose}>{dirty ? "Annulla" : "Chiudi"}</Button>
-        <Button variant="primary" onClick={save} disabled={!dirty || pending}>{update.isPending ? "Salvo…" : "Salva impostazioni"}</Button>
+        {dirty && <span className="faint text-sm grow">{t("runtimes.modifiche_non_salvate")}</span>}
+        <Button onClick={onClose}>{dirty ? t("runtimes.annulla") : t("runtimes.chiudi")}</Button>
+        <Button variant="primary" onClick={save} disabled={!dirty || pending}>{update.isPending ? t("runtimes.salvo") : t("runtimes.salva_impostazioni")}</Button>
       </>}
     >
-      <section className="stack" aria-label="Stato">
+      <section className="stack" aria-label={t("runtimes.stato")}>
         <KeyValue items={[
-          ["Stato", <span className="row"><StatusPill status={r.status} />{r.status_detail && r.status !== "installable" && <span className="faint text-xs">{r.status_detail}</span>}</span>],
-          r.endpoint ? ["Endpoint", <span className="mono">{r.endpoint}</span>] : false,
-          ["Capacità", <Chips>{r.capabilities.map((c) => <Chip key={c}>{c}</Chip>)}</Chips>],
-          ["Acceleratori", <Chips>{r.accelerators.map((a) => <Chip key={a} hot={deviceAccels.has(a)}>{a}</Chip>)}</Chips>],
-          r.loaded_models.length > 0 ? ["Caricato", <span className="mono">{r.loaded_models.join(", ")}</span>] : false,
-          r.homepage ? ["Progetto", <a href={r.homepage} target="_blank" rel="noreferrer">{r.homepage.replace(/^https?:\/\//, "")}</a>] : false,
+          [t("runtimes.stato"), <span className="row"><StatusPill status={r.status} />{r.status_detail && r.status !== "installable" && <span className="faint text-xs">{r.status_detail}</span>}</span>],
+          r.endpoint ? [t("runtimes.endpoint"), <span className="mono">{r.endpoint}</span>] : false,
+          [t("runtimes.capacita"), <Chips>{r.capabilities.map((c) => <Chip key={c}>{c}</Chip>)}</Chips>],
+          [t("runtimes.acceleratori"), <Chips>{r.accelerators.map((a) => <Chip key={a} hot={deviceAccels.has(a)}>{a}</Chip>)}</Chips>],
+          r.loaded_models.length > 0 ? [t("runtimes.caricato_label"), <span className="mono">{r.loaded_models.join(", ")}</span>] : false,
+          r.homepage ? [t("runtimes.progetto"), <a href={r.homepage} target="_blank" rel="noreferrer">{r.homepage.replace(/^https?:\/\//, "")}</a>] : false,
         ]} />
-        {r.status !== "installable" && r.install_hint && <CopyField label="Installazione" value={r.install_hint} />}
+        {r.status !== "installable" && r.install_hint && <CopyField label={t("runtimes.installazione")} value={r.install_hint} />}
       </section>
 
       {(r.status === "installable" || r.id === "localai") && <RuntimeInstall runtime={r} />}
 
-      <section className="stack" aria-label="Avvio">
-        <h3>{active ? "In esecuzione" : "Avvia con un modello"}</h3>
+      <section className="stack" aria-label={t("runtimes.avvio_2")}>
+        <h3>{active ? t("runtimes.in_esecuzione") : t("runtimes.avvia_con_un_modello")}</h3>
         {active && r.kind === "system" ? (
-          <Link to="/models?origin=system">Vedi i modelli di sistema</Link>
+          <Link to="/models?origin=system">{t("runtimes.vedi_i_modelli_di_sistema")}</Link>
         ) : active ? (
           <div className="row">
-            <Button icon="stop" disabled={pending} onClick={() => action.mutate({ runtime: r, action: "stop" })}>Ferma {r.name}</Button>
-            {r.status === "starting" && <span className="faint text-sm">Avvio in corso…</span>}
+            <Button icon="stop" disabled={pending} onClick={() => action.mutate({ runtime: r, action: "stop" })}>{t("runtimes.ferma_2", { name: r.name })}</Button>
+            {r.status === "starting" && <span className="faint text-sm">{t("runtimes.avvio_in_corso")}</span>}
           </div>
         ) : !canStart ? (
-          <p className="faint text-sm">{r.status === "installable" ? "Installa il runtime (sopra) per poterlo avviare." : "Questo runtime non è utilizzabile su questo device."}</p>
+          <p className="faint text-sm">{r.status === "installable" ? t("runtimes.installa_il_runtime_sopra_per") : t("runtimes.questo_runtime_non_e_utilizzabile")}</p>
         ) : options.length === 0 ? (
-          <p className="muted text-sm">Nessun modello installato è compatibile con questo runtime. <Link to="/models/discover">Cerca un modello</Link> adatto ai suoi formati ({r.formats.map((f) => `.${f}`).join(", ") || "—"}).</p>
+          <p className="muted text-sm">{tNode("runtimes.no_compatible_model", { link: <Link to="/models/discover">{t("runtimes.cerca_un_modello")}</Link> }, { formats: r.formats.map((f) => `.${f}`).join(", ") || "—" })}</p>
         ) : (
           <div className="rt-start">
-            <Field label="Modello" htmlFor="rt-model" className="grow">
+            <Field label={t("runtimes.modello")} htmlFor="rt-model" className="grow">
               <Select id="rt-model" value={chosen?.id ?? ""} onChange={(e) => setModelId(e.target.value)}>
                 {options.map((m) => <option key={m.id} value={m.id}>{m.name}{m.quant ? ` · ${m.quant}` : ""}</option>)}
               </Select>
             </Field>
-            <Button variant="primary" icon="play" onClick={() => void start()} disabled={pending}>{action.isPending ? "Avvio…" : dirty ? "Salva e avvia" : "Avvia"}</Button>
+            <Button variant="primary" icon="play" onClick={() => void start()} disabled={pending}>{action.isPending ? t("runtimes.avvio") : dirty ? t("runtimes.salva_e_avvia") : t("runtimes.avvia_2")}</Button>
             {chosen?.fit && <p className="rt-fit faint text-xs"><Pill tone={FIT_META[chosen.fit].tone}>{FIT_META[chosen.fit].label}</Pill> {chosen.fit_detail}</p>}
           </div>
         )}
       </section>
 
-      <section className="stack" aria-label="Impostazioni">
+      <section className="stack" aria-label={t("runtimes.impostazioni")}>
         <div className="row row-between">
-          <h3>Impostazioni</h3>
+          <h3>{t("runtimes.impostazioni")}</h3>
           <span className="row text-sm">
-            <Toggle label="Mostra le impostazioni avanzate" checked={advanced} onChange={setAdvanced} /> Avanzate
-          </span>
+            <Toggle label={t("runtimes.show_advanced_settings")} checked={advanced} onChange={setAdvanced} /> {t("runtimes.avanzate")}</span>
         </div>
         <SchemaForm idPrefix={`rt-${r.id}`} schema={r.settings_schema} value={draft} onChange={setDraft} showAdvanced={advanced} />
         {Object.keys(r.settings_schema.properties).length > 0 && (
           <div>
-            <Button variant="ghost" size="sm" icon="refresh" onClick={() => setDraft({})} disabled={Object.keys(draft).length === 0}>Ripristina i predefiniti</Button>
+            <Button variant="ghost" size="sm" icon="refresh" onClick={() => setDraft({})} disabled={Object.keys(draft).length === 0}>{t("runtimes.ripristina_i_predefiniti")}</Button>
           </div>
         )}
       </section>

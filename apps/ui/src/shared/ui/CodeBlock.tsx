@@ -3,8 +3,9 @@ import { copyText } from "../lib/clipboard";
 import { cx } from "../lib/cx";
 import { Icon } from "./Icon";
 
+import { t, t as tr } from "../i18n";
 /** Copy button with a short "Copiato" confirmation. */
-export function CopyButton({ text, label = "Copia", className }: { text: string; label?: string; className?: string }) {
+export function CopyButton({ text, label = tr("ui.copia"), className }: { text: string; label?: string; className?: string }) {
   const [done, setDone] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -20,7 +21,7 @@ export function CopyButton({ text, label = "Copia", className }: { text: string;
   return (
     <button type="button" className={cx("btn sm", className)} onClick={() => void copy()} aria-live="polite">
       <Icon name={done ? "check" : "copy"} size={14} />
-      {done ? "Copiato" : label}
+      {done ? t("ui.copiato") : label}
     </button>
   );
 }
@@ -47,7 +48,7 @@ export function CopyField({ label, value, secret = false, hint }: { label: strin
       <label htmlFor={id}>{label}</label>
       <div className="copyfield-row">
         <input id={id} className="input mono" readOnly value={shown ? value : "•".repeat(Math.min(24, value.length))} onFocus={(e) => shown && e.currentTarget.select()} />
-        {secret && <button type="button" className="btn sm" onClick={() => setShown((v) => !v)}>{shown ? "Nascondi" : "Mostra"}</button>}
+        {secret && <button type="button" className="btn sm" onClick={() => setShown((v) => !v)}>{shown ? t("ui.nascondi") : t("ui.mostra")}</button>}
         <CopyButton text={value} />
       </div>
       {hint && <span className="hint">{hint}</span>}

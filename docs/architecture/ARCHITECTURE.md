@@ -43,7 +43,7 @@ flowchart TB
     SH["shell (sandbox)"]
     BR["browser (CDP)"]
     CU["computer-use"]
-    WEB["web_fetch"]
+    WEB["web_fetch · web_search"]
     MCPC["client MCP"]
   end
   subgraph Infer["L3 · Inferenza unificata"]
@@ -203,6 +203,25 @@ assegnabile per agente, per workflow step o per sessione. Il router, a partire d
 (RAM, VRAM, acceleratori), propone il runtime migliore per un modello e stima se ci sta in memoria
 (pesi + KV cache). L'utente può sempre forzare un'altra scelta.
 
+**Router automatico** (`aiw-engine/src/router.rs`). Un profilo con `runtime_id: "auto"` (e i profili
+`auto:*` dell'adviser) viene risolto quando parte il run: `rank` (pura) ordina i runtime che sanno
+servire il modello su questo dispositivo, ciascuno col motivo del suo posto, ed esclude gli altri col
+motivo. Ordine: dove gira il modello (GPU nativa 60, GPU portabile o NPU 50, diviso GPU/RAM 30, CPU 10),
+pronto prima di «da avviare», poi `route_priority` del manifest; i remoti solo se `allow_remote`. Il
+contesto si dimezza (minimo 2048) se la memoria non basta. I candidati successivi sono i **fallback**
+del run: `FallbackBackend` guarda il primo evento di ogni tentativo, quindi non cambia mai modello a
+metà risposta, con al massimo 2 cambi; i fallimenti restano in RAM per 10 minuti (`FailureMemory`).
+Lo stesso meccanismo copre il modello di sistema (Apple Foundation Models → il più piccolo modello
+locale). La scelta e i cambi escono come evento `aiw.runtime`; `GET /api/route` mostra la decisione.
+`gpu_layers` è riportato ma non applicato.
+
+**Voce neurale** (`aiw-engine/src/tts.rs`, specchio di `voice.rs` per la trascrizione). `voice.tts.engine`
+= `auto` (Piper se c'è l'eseguibile e una voce per la lingua, poi un server `POST /v1/audio/speech`,
+poi le voci di sistema, che parlano nella UI), `system`, `piper`, `openai`. Il testo (tetto 4000
+caratteri) è diviso in frasi, sintetizzato in ordine sotto un solo lock per motore e riunito in un WAV;
+chiudere la richiesta ferma Piper (`kill_on_drop`). Piper è un runtime senza server (`api: "none"`):
+l'eseguibile parte per frase. Le voci sono modelli di tipo `piper` (capacità `tts`).
+
 ## 5. Layer agentico (L5)
 
 ### 5.1 Ciclo di un run
@@ -215,7 +234,7 @@ sequenceDiagram
   participant Policy
   participant Tool
   participant LLM as Runtime
-  UI->>Engine: POST /sessions/{id}/runs {input}
+  UI->>Engine: POST /sessions/{id}/runs {input, attachments?}
   Engine-->>UI: SSE RUN_STARTED
   loop fino a risposta finale o max_turns
     Agent->>LLM: chat(messages, tools) stream
@@ -312,21 +331,59 @@ proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs
 - **Stato condiviso**: il tool `team_state` (leggi, scrivi, elimina; 64 chiavi, 32 KB) vive nel `RunState.shared` del run
   radice ed è pubblicato con `STATE_SNAPSHOT`.
 - **Agenti remoti**: il registro (`remote_agent`, API `/api/remote-agents`) e i dispositivi accoppiati. Il client A2A
-  (`aiw-engine/src/a2a_client.rs`) legge l'Agent Card, invia `SendMessage` non bloccante, interroga `GetTask` con
+  (`aiw-engine/src/a2a_client.rs`) legge l'Agent Card; se annuncia `capabilities.streaming` invia
+  `SendStreamingMessage` e segue il flusso SSE (avanzamenti come eventi `aiw.remote_progress` del run padre), altrimenti
+  (o se il flusso non parte o si interrompe) invia `SendMessage` non bloccante e interroga `GetTask` con
   attesa crescente fino a `completed`, `failed` o `canceled` (o al timeout `a2a.timeout_seconds`) e invia `CancelTask`
   se il run viene annullato. Rete solo verso gli URL registrati; ogni delega è nell'audit (`a2a.delegate`, `a2a.result`).
-  Il server A2A (`aiw-server/src/a2a.rs`) tiene i task in SQLite (`a2a_tasks`, scadenza 24 ore, pulizia all'avvio).
+  Il server A2A (`aiw-server/src/a2a.rs`) tiene i task in SQLite (`a2a_tasks`, scadenza 24 ore, pulizia all'avvio) e
+  trasmette `SendStreamingMessage` / `SubscribeToTask` in SSE: il primo evento è il task, poi `statusUpdate` e
+  `artifactUpdate` ricavati dal bus degli eventi del run (testo → pezzi dell'artefatto, strumenti → messaggi di stato);
+  lo stato finale si legge dal task salvato, così il flusso si chiude anche se il run lo ha avviato un altro.
+- **Client MCP** (`aiw-tools/src/mcp.rs`): una `McpClient` per server, che sopravvive alle riconnessioni (la connessione
+  `Conn` — un processo o una sessione HTTP — si sostituisce). Stati: connesso, in connessione, riconnessione (attesa
+  esponenziale 1→30 s, 6 tentativi), non raggiungibile, serve l'accesso (401). Richieste e notifiche del server
+  arrivano da stdio, dal flusso SSE di ogni POST e dal GET facoltativo; `McpEvents` (implementato dal motore) dà il
+  token OAuth e riceve i cambi di stato e di elenco, `RunMcp` (nel `ToolContext`, uno per run, condiviso coi
+  sotto-agenti) risponde al campionamento (profilo e budget del run, tetti in `mcp.sampling.*`, audit) e alle domande
+  del server (`McpElicitation` in attesa di risposta). `aiw-tools/src/mcp_oauth.rs` è il protocollo OAuth 2.1
+  (scoperta RFC 9728/8414, registrazione RFC 7591, PKCE S256, `resource` RFC 8707, controlli su https/origine/issuer);
+  `aiw-engine/src/mcp_oauth.rs` conserva stato e token (raccolta `mcp_oauth`, come gli altri segreti) e li rinnova.
+  Il ritorno dal browser è `GET /api/mcp/oauth/callback`, escluso dal token API ma solo da questo computer e con
+  `state` monouso.
 
 ### 5.2 Policy, sandbox, audit
 
 | Elemento | Default | Personalizzabile |
 |---|---|---|
 | Modalità | `ask` (chiede conferma per gli effetti collaterali) | `plan` (solo lettura), `auto-edit` (modifica file senza chiedere, comandi su conferma), `auto` (tutto entro la sandbox), `yolo` (tutto, sconsigliato) |
-| Regole | allow: read, list, search, web_fetch su host pubblici · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow |
+| Regole | allow: read, list, search, web_fetch su host pubblici, web_search · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow |
 | Sandbox OS (P07) | `workspace-write`: Linux bwrap, macOS sandbox-exec, Windows token a integrità Low + job object + desktop dedicato (`aiw-winsandbox`) | `read-only`, `workspace-write`, `off` |
+| Rete della shell | **Chiusa** (`sandbox.shell_network` = `off`; Linux `--unshare-net`, macOS `(deny network*)`). Le installazioni esistenti sono state migrate a `on`. **Windows: non chiudibile** | `on`/`off` a livello di macchina; un workspace può solo restringere |
+| Cartelle nascoste ai comandi | La cartella dei dati di AIW e `sandbox.deny_read` (`.ssh`, `.gnupg`, `.aws`, gcloud, `.kube`, docker, `.netrc`, `.npmrc`, `.pypirc`, profili dei browser, portachiavi); skill e allegati di sessione restano leggibili. I tool di file rispettano lo stesso elenco. **Windows: non nascondibili** | `sandbox.deny_read` (solo macchina) |
+| Ambiente dei comandi | Variabili che sembrano segreti (`*_TOKEN`, `*_KEY`, `*_SECRET`, `*PASSWORD*`, `AIW_*`, credenziali cloud) tolte anche con sandbox `off` | `sandbox.env_allow` |
 | Rete dei tool | Consentita solo per i tool web e browser | Allowlist di domini |
 | Audit (P22) | Ogni decisione di policy ed esecuzione viene registrata con l'ID del run | Esportabile in JSONL |
 | Kill switch | `POST /kill` e scorciatoia globale: ferma run, sidecar avviati per i run e browser | — |
+
+**Come è fatta la sandbox della shell** (`aiw-tools/src/sandbox.rs`, costruttori di argomenti puri e testati per sistema):
+Linux `bwrap --die-with-parent --new-session --unshare-pid --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp`, con `--unshare-net` a rete spenta,
+la cartella di lavoro in scrittura, un `--tmpfs` sulle cartelle nascoste (e `/dev/null` sui file) e il riattacco in sola lettura delle
+sottocartelle che servono (skill, allegati). `--unshare-pid` serve perché altrimenti `/proc/<pid del demone>/root` aggira il nascondiglio.
+Una scrittura in una cartella nascosta finisce in un tmpfs privato e non arriva mai a quella vera. macOS usa un profilo Seatbelt (`(deny file-write*)`,
+`(deny network*)`, rifiuto di lettura sui percorsi nascosti, eccezioni dopo i rifiuti perché vince l'ultima regola); mai eseguito su un Mac.
+Windows usa `aiw-winsandbox` (integrità bassa + job object): limita le scritture e toglie le variabili segrete, ma non chiude la rete né nasconde letture.
+
+**Regole di policy sulla shell** (`aiw-agent/src/shellparse.rs`, `policy.rs`): la riga viene divisa in comandi semplici da un lexer prudente
+(`;`, `&&`, `||`, `|`, `&`, a capo, sottoshell, gruppi, `$(…)`, apici inversi, `<(…)`, reindirizzamenti, heredoc; wrapper `env`, `sh -c` a un livello,
+`xargs`, `find -exec`, `sudo`; variante PowerShell). «Consenti» con un pattern vale solo se l'analisi è sicura e **ogni** comando semplice è consentito;
+«Nega» e «Chiedi» valgono se il testo grezzo o **uno qualsiasi** dei comandi corrisponde. Ciò che non si capisce con certezza non è mai consentito da una regola, ma resta soggetto a «Nega».
+Il soggetto della policy per il tool shell è solo `command` (un argomento in più non può più spostare la corrispondenza).
+
+**Server MCP stdio** (`aiw-tools/src/mcp/launch.rs`, `aiw-engine/src/mcp_host.rs`): con `sandbox` ≠ `off` il server parte dallo stesso lanciatore della shell, con
+ambiente ripulito (solo una base sicura più le variabili configurate, `HOME` in una cartella privata sotto `<dati>/mcp-home/<id>`). Prima di avviare un
+comando nuovo o cambiato serve l'approvazione del proprietario (token `owner`): si salva l'hash sha256 di (trasporto, comando, argomenti, **nomi** delle variabili);
+una definizione che arriva da un workspace o da un'importazione non è mai approvata da sola. Senza lanciatore (Windows) un server con isolamento richiesto non parte.
 
 ### 5.3 Workflow (task operativi)
 
@@ -437,7 +494,9 @@ nuova, con la policy dell'agente, collegando run e proposta.
   file nuovi), senza modello e senza connettori; vuoto = «Niente da segnalare per oggi.», già `done`, senza notifica.
 - **Notifiche**: `notices::NoticeTracker::on_proposals` (le proposte aperte all'avvio non sono notizie; nell'orario di
   silenzio resta tutto in sospeso e si dice dopo); il guscio decide solo `app.notifications` e la finestra in primo piano.
-- **Connettori locali** (`aiw_tools::connectors`): quattro strumenti incorporati di sola lettura (`calendar_today`, `calendar_upcoming(days)`, `mail_recent(hours)`, `mail_search(query)`), registrati come gli altri (rischio `read`: la policy li tratta come `read_file` e i run delle proposte li possono usare) ma disponibili (`Tool::available`) solo con `connectors.calendar.enabled` / `connectors.mail.enabled`, spenti di serie e a livello di macchina. File e indirizzi vengono da `connectors.*.sources`, mai dagli argomenti del modello; il motore copia le impostazioni nel `ConnectorSettings` condiviso a ogni modifica. Calendario: parser iCalendar compatto (VEVENT, giorno intero, UTC, `TZID` da una tabella interna con regole dell'ora legale UE e USA, `EXDATE`, `RECURRENCE-ID`, RRULE DAILY/WEEKLY/MONTHLY/YEARLY con INTERVAL, COUNT, UNTIL e BYDAY settimanale; il resto mostra solo la prima occorrenza), file, cartelle e sottoscrizioni (scaricate con cache di 10 minuti). Posta: Maildir, `.mbox`, `.eml`, mai scritti né spostati. Il battito li legge in `connector_context`: gli eventi di oggi non finiti e la posta dall'ultimo controllo entrano nel riepilogo (dati, niente modello) e come voci del filtro (`calendar:<data>:<impronta>`, `mail:<data>`). IMAP e gli account online richiedono credenziali e restano lavoro futuro; un server MCP dell'utente funziona accanto agli strumenti incorporati.
+- **Connettori locali** (`aiw_tools::connectors`): quattro strumenti incorporati di sola lettura (`calendar_today`, `calendar_upcoming(days)`, `mail_recent(hours)`, `mail_search(query)`), registrati come gli altri (rischio `read`: la policy li tratta come `read_file` e i run delle proposte li possono usare) ma disponibili (`Tool::available`) solo con `connectors.calendar.enabled` / `connectors.mail.enabled`, spenti di serie e a livello di macchina. File e indirizzi vengono da `connectors.*.sources`, mai dagli argomenti del modello; il motore copia le impostazioni nel `ConnectorSettings` condiviso a ogni modifica. Calendario: parser iCalendar compatto (VEVENT, giorno intero, UTC, `TZID` da una tabella interna con regole dell'ora legale UE e USA, `EXDATE`, `RECURRENCE-ID`, RRULE DAILY/WEEKLY/MONTHLY/YEARLY con INTERVAL, COUNT, UNTIL e BYDAY settimanale; il resto mostra solo la prima occorrenza), file, cartelle e sottoscrizioni (scaricate con cache di 10 minuti). Posta: Maildir, `.mbox`, `.eml`, mai scritti né spostati. Il battito li legge in `connector_context`: gli eventi di oggi non finiti e la posta dall'ultimo controllo entrano nel riepilogo (dati, niente modello) e come voci del filtro (`calendar:<data>:<impronta>`, `mail:<data>`). IMAP è in sola lettura (vedi sotto); gli account online con OAuth restano lavoro futuro; un server MCP dell'utente funziona accanto agli strumenti incorporati.
+- **Posta IMAP** (`aiw_tools::connectors::imap`, `tls`): client scritto a mano sopra `tokio-rustls` (rustls con ring). Connessione cifrata implicita sulla 993, STARTTLS altrove e solo se riesce; mai `LOGIN` in chiaro. Un elenco chiuso di comandi (`command_allowed`): `CAPABILITY`, `STARTTLS`, `LOGIN`, `EXAMINE`, `UID SEARCH`, `UID FETCH … BODY.PEEK[]`, `LOGOUT`; `SELECT` e `UID STORE` esistono solo con `Access::MarkSeen` (canale email), mai nel connettore. Tetti su giorni, messaggi e dimensione, cache di 2 minuti con dati vecchi in caso di errore, tempi massimi. Gli account stanno in `connectors.mail.imap` (senza password); la password è un documento `secret` (`imap:<id>`) nell'archivio, mascherata nella API (`GET/PUT /api/connectors/mail/accounts`, `POST /api/connectors/mail/test`). `Config::mail_since` e `mail_search` sono asincroni e uniscono file locali e IMAP.
+- **Canali** (`aiw-engine/src/channels/`): `mod.rs` (modello, API del motore, supervisore con attesa crescente, associazione conversazione → sessione, flusso in entrata: elenco → limite → registro → risposta a una conferma in sospeso → coda (5) → un worker per conversazione → run → risposta), `telegram.rs`, `slack.rs`, `email.rs` + `smtp.rs`, `text.rs` (spezzare, Markdown → testo, escape Slack), `tool.rs` (`channel_send`). Le sessioni dei canali hanno l'assistente `channel:ro:<id>` o `channel:ask:<id>`: `ro` usa il percorso di sola lettura dell'assistente proattivo (piano, sandbox in sola lettura, strumenti di sola lettura, conferme negate: `approve_outcome` rispetta `deny_approvals`), `ask` la policy normale con modalità limitata a `ask` e le conferme inoltrate nel canale (abbinate alla conversazione da `PendingApproval.session_id`, scadenza 10 minuti). Gli indirizzi dei server (Telegram, Slack) si cambiano solo da codice (`set_channel_endpoints_for_tests`): nessuna impostazione può mandare un token altrove. I canali partono da soli solo con `mode == "daemon"`; la shell desktop chiama `Engine::channels_start()`; sul telefono restano «non disponibili» finché la shell non chiama `set_channels_foreground(true)`. L'interruttore d'emergenza (`channels_killed`) ferma i connettori e mette `enabled=false` nell'archivio.
 - **Background sul telefono** (`aiw_engine::background`): `Engine::proactive_background_tick(BackgroundRequest{reason, budget_s, on_power})`, esposto da `POST /api/proactive/background-tick`, riusa `proactive_tick_at` con un tetto duro di 25 s (`BackgroundSummary` con notifiche locali da mostrare). Senza modello locale fa le parti senza modello, delega il filtro a un peer accoppiato (`roles::peer_planner`) oppure lo salta (`TickResult.model_skipped`). Un registro statico del motore in esecuzione permette al sistema operativo di svegliare l'app senza runtime Tauri: in quel caso `run_background_blocking` costruisce un motore offline (`EngineOptions.offline`) dai percorsi salvati dal lato nativo (SharedPreferences, UserDefaults). Colla nativa nel plugin `tauri-plugin-aiw-native` (Android WorkManager, iOS BGTaskScheduler e App Intents) e comandi `aiw_background*` della shell; vedi `docs/mobile/BACKGROUND.md`. Non compilata in locale.
 - API: `GET /api/proposals?status=&kind=`, `GET /api/proposals/{id}`, `POST /api/proposals/{id}/approve|dismiss`,
   `GET /api/proactive/status`, `POST /api/proactive/tick`.
@@ -633,10 +692,12 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | `read_file`, `write_file`, `edit_file` (sostituzione esatta), `list_dir`, `glob`, `grep` | tutte | Confinati alle radici del workspace |
 | `shell` | desktop | Timeout, cwd nel workspace, sandbox OS, output troncato |
 | `web_fetch` | tutte | HTML → testo, limiti di dimensione |
-| `browser_*` (navigate, snapshot, click, type, screenshot) | desktop (Chrome/Edge/Chromium via CDP) | Snapshot testuale con riferimenti numerati per i modelli solo testo; screenshot per i VLM |
+| `web_search` | tutte | Rischio `network`, soggetto della policy = la `query`. Motore scelto dalla persona (`search.provider`: `auto`, `duckduckgo`, `searxng`, `brave`, `off`; indirizzo di SearXNG e chiave di Brave nelle impostazioni, a livello di macchina, chiave mascherata dall'API), mai dal modello. `auto`: SearXNG se c'è l'indirizzo, poi Brave se c'è la chiave, poi DuckDuckGo (pagina HTML, parser tollerante). Con `off` `Tool::available` dà un errore e lo strumento non è offerto. Il motore copia le impostazioni nel `SearchSettings` condiviso a ogni modifica; 20 s, risposta fino a 2 MB, risultati 1–10 (predefinito 5) |
+| `browser_*` (navigate, snapshot, click, type, scroll, back, press, wait, screenshot, tabs, tab_new, tab_select, tab_close, select, hover, upload, downloads, console, eval) | desktop (Chrome/Edge/Chromium via CDP) · telefoni: WebView in-app con un sottoinsieme | Snapshot con `format` `elements` (di serie: riferimenti numerati), `ax` (albero di accessibilità con ref `eN` stabili) o `text` (testo leggibile a pagine); screenshot per i VLM. Collegamento al browser intero (non a una pagina) con `Target.setAutoAttach` in pausa: ogni scheda, anche quelle aperte dal sito, riceve `Fetch.enable` prima di partire, quindi la policy di rete vale per ogni richiesta. Schede (max 8), attese (testo, selettore, navigazione, rete inattiva, max 30 s, annullabili), finestre di dialogo chiuse da sole e riportate, console (100 voci). Download in `<workspace>/downloads/<run>/` solo con scrittura (10 per run, 200 MB, stessa policy di rete, `record_created`). `browser_upload` legge solo da workspace e cartelle di lettura (rischio `computer`); `browser_eval` esegue JavaScript nella pagina: rischio `exec`, `explicit_grant`, mai nei run proattivi. Su telefono: niente schede, console, download, upload, albero |
 | `computer_*` (screenshot, click, type, key, scroll) | desktop (feature `computer-use`) · Android via AccessibilityService (plugin) | Modalità *vision* oppure *accessibility* |
 | `todo`, `agent` (subagente), `skill` | tutte | — |
-| `mcp__<server>__<tool>` | tutte (stdio solo desktop) | Client MCP: stdio e streamable HTTP |
+| `kb_search` | tutte | Rischio `read`, nessuna conferma. Visibile solo se esiste una raccolta di documenti; cerca per parole chiave e per significato nelle raccolte dell'agente (`AgentProfile.knowledge`, vuoto = tutte) e restituisce estratti «[documento · parte N]» |
+| `mcp__<server>__<tool>` | tutte (stdio solo desktop) | Client MCP: stdio e streamable HTTP; con le risorse anche `mcp__<server>__list_resources` e `mcp__<server>__read_resource` (rischio `read`) |
 
 ## 7. Configurazione a strati
 
@@ -653,11 +714,17 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET | `/api/runtimes` · POST `/api/runtimes/{id}/start` · `/stop` · PUT `/settings` | Catalogo e ciclo di vita dei runtime |
 | GET | `/api/models` · POST `/api/models/pull` · GET `/api/models/catalog` | Modelli locali, download, catalogo consigliato |
 | GET | `/api/recommend` | Consigliere: per compito (chat, agent, reasoning, vision, embeddings) il modello installato migliore e quello da scaricare |
-| GET/PUT | `/api/profiles` | Profili di inferenza |
-| GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run |
+| GET/PUT | `/api/profiles` | Profili di inferenza (`runtime_id: "auto"` = router automatico) |
+| GET | `/api/route?model=&context=&remote=` | Decisione del router: candidati in ordine con motivo, memoria e KV stimate, runtime esclusi con motivo |
+| GET | `/api/voice` · POST `/api/voice/transcribe` · POST `/api/voice/speak` | Stato della voce (trascrizione e voce neurale), trascrizione, sintesi (`{text, language?, voice?, speed?}` → `{mime, audio base64, backend, elapsed_ms}`; 422 se parlano le voci di sistema) |
+| POST | `/v1/audio/transcriptions` · `/v1/audio/speech` | Gateway OpenAI di trascrizione (multipart) e di sintesi (JSON, risposta WAV); mai inoltrati a un altro dispositivo |
+| GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run. Il corpo del run ha `input`, `kind?`, `thinking?` e `attachments?: [{name, mime, data}]` (base64; al massimo 8 file, 10 MB ciascuno, 25 MB in tutto, errore 400 in italiano; il testo può mancare se c'è un allegato) |
+| GET | `/api/sessions/{id}/attachments/{attachment_id}` | Un allegato di un messaggio: `{name, mime, data}` (base64), 404 in JSON se manca |
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
 | POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
 | GET | `/api/proposals` · `/api/proposals/{id}` · POST `…/approve` `…/dismiss` · GET `/api/proactive/status` · POST `/api/proactive/tick` | Assistente proattivo |
+| GET/POST | `/api/channels` · PATCH/DELETE `/api/channels/{id}` · POST `…/test` `…/pair` · GET `…/status` | Canali (Telegram, Slack, email); segreti mascherati, solo a livello di macchina |
+| GET/PUT/POST | `/api/connectors/mail/accounts` · POST `/api/connectors/mail/test` | Account IMAP del connettore di posta (sola lettura) |
 | GET/POST | `/api/workflows` · POST `/api/workflows/{id}/run` | Workflow |
 | PUT/DELETE | `/api/sessions/{id}/messages/{mid}/feedback` · GET `/api/sessions/{id}/feedback` | Feedback sulle risposte |
 | GET/PUT/DELETE | `/api/evals[/{id}]` | Suite di valutazione (PUT: JSON della suite o `{"text": yaml|json}`; i grader `command` non si scrivono via API) |
@@ -674,14 +741,58 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET/POST | `/api/datasets` · GET/DELETE `/api/datasets/{id}` | Dataset di addestramento: POST crea da sessioni, feedback e report (`DatasetSpec`), rifiuta con meno di 10 esempi |
 | GET/POST | `/api/train/jobs` · GET `/api/train/jobs/{id}` · `/api/train/jobs/{id}/log?lines=` · POST `/api/train/jobs/{id}/cancel` | Addestramenti (uno alla volta), log e annullamento |
 | GET/DELETE | `/api/adapters[/{id}]` | Adapter registrati; un adapter usato da un profilo non si cancella |
-| GET/POST | `/api/mcp/servers` | Server MCP |
+| GET/POST | `/api/mcp/servers` · POST `/api/mcp/servers/{id}/reconnect` · POST `/api/mcp/servers/{id}/oauth/start` · DELETE `/api/mcp/servers/{id}/oauth` · GET `/api/mcp/oauth/callback` | Server MCP, riconnessione, accesso OAuth (il ritorno non richiede il token API) |
+| GET/POST | `/api/mcp/prompts` · `/api/mcp/prompts/get` · GET `/api/mcp/elicitations` · POST `/api/mcp/elicitations/{id}` | Prompt dei server MCP e domande dei server alla persona |
 | GET/PUT/DELETE | `/api/teams` · `/api/teams/{id}` · `/api/remote-agents` · `/api/remote-agents/{id}` | Team e agenti remoti A2A |
 | GET/PUT | `/api/config` · GET `/api/config/explain` | Configurazione a strati |
+| GET/POST | `/api/kb/collections` · PATCH/DELETE `/api/kb/collections/{id}` | Raccolte di documenti |
+| GET/POST | `/api/kb/collections/{id}/documents` | Documenti; POST con `{files: [{name, mime, data}]}` (base64, 8 file, 10 MB, 25 MB) o `{path}` (solo da questo computer), risponde con un lavoro in background |
+| POST | `/api/kb/collections/{id}/reindex` · `/api/kb/jobs/{id}/cancel` · DELETE `/api/kb/documents/{id}` | Reindicizzazione, interruzione, eliminazione |
+| GET/POST | `/api/kb/status` · `/api/kb/search` | Lavori e modello di embedding; ricerca `{query, collection?, max_results?}` → `{hits, semantic}` |
 | POST | `/api/kill` | Kill switch |
-| — | `/v1/models`, `/v1/chat/completions` | Gateway OpenAI-compatibile verso i runtime locali |
+| GET/POST | `/api/tokens` · DELETE `/api/tokens/{id}` · POST `/api/tokens/{id}/rotate` · DELETE `/api/auth/token` | Token di accesso (solo `full`); il token che si lascia da solo |
+| GET | `/api/tls` · `/api/tls/ca` · `/api/tls/ca.pem` | Stato TLS e certificato dell'autorità (solo `full`) |
+| — | `/v1/models`, `/v1/chat/completions`, `/v1/embeddings` | Gateway OpenAI-compatibile verso i runtime locali (gli embedding usano un runtime di embedding già avviato, 503 in JSON altrimenti) |
 
-Autenticazione: in loopback (e nel canale in-process della shell Tauri) non serve; per l'accesso
-dalla LAN serve un **token di pairing** (QR mostrato nell'app) inviato come `Authorization: Bearer`.
+Autenticazione: in loopback senza token (e nel canale in-process della shell Tauri) si ha l'accesso
+completo di questo computer, con le regole sotto. Da altre macchine serve un **token** inviato come
+`Authorization: Bearer`, `x-api-key` o `?token=`. I token (`aiw-engine/src/tokens.rs`, tabella SQLite
+`api_tokens`) sono `aiw_` + 256 bit casuali; nel database ci sono solo un hash SHA-256 con sale, i primi
+caratteri e le date (il segreto si vede una volta, alla creazione). Tipi: `owner` (il file `token`
+nella cartella dei dati: app e CLI di questo computer; migrato dal vecchio token unico), `device` (uno per
+dispositivo accoppiato, legato all'id del dispositivo), `gateway` (app di terzi). Si revocano all'istante
+(le connessioni SSE aperte con quel token si chiudono), si ruotano, scadono, e i token non validi sono limitati
+per indirizzo (10 ogni 10 minuti, poi 5 minuti di attesa); creazioni, revoche, rotazioni e usi di token
+revocati o scaduti vanno nel registro delle attività (gli usi rifiutati al massimo una volta al minuto per token).
+
+**Ambiti** (`aiw-server/src/scopes.rs`, una sola tabella percorso → ambito minimo; un percorso senza voce
+richiede `full`, e un test legge le rotte registrate in `lib.rs` e fallisce se una non ha voce):
+
+| Ambito | Chi | Cosa apre |
+|---|---|---|
+| `full` | token `owner` da questo computer o su TLS; richieste da questo computer senza token | tutto, comprese impostazioni di macchina (`PUT /api/config`), segreti e chiavi dei provider, modifica di server MCP, hook, policy, agenti, profili, canali e posta, runtime e download, addestramento, importazioni da percorso, `/api/tokens`, `/api/tls` |
+| `device` | un dispositivo accoppiato | chat, sessioni, approvazioni, ricordi, base di conoscenza, voce, elenchi (modelli, agenti, impostazioni in sola lettura), più `gateway`, `a2a` e `mcp` |
+| `gateway` | un'app di terzi | solo `/v1/*` |
+| `a2a`, `mcp` | un token `gateway` creato con quell'ambito, o `device` | solo `/a2a`, solo `/mcp` |
+
+Il token `owner` presentato da un'altra macchina **senza TLS** ha solo l'ambito `device` (è anche quello che
+ha in mano un dispositivo accoppiato prima dei token per dispositivo, e quello che vedrebbe chi ascolta la
+rete); su TLS è `full`. Un token che non è `full` non è «locale» nemmeno da loopback (niente codice di
+pairing, niente importazioni da percorso). Un token revocato o scaduto riceve `401` ovunque. Il pairing
+(`POST /api/pair {code, device_id?, name?}`) restituisce il token del nuovo dispositivo e, su TLS, l'impronta
+del certificato; scollegare un dispositivo (o `DELETE /api/auth/token` fatto dal dispositivo stesso)
+lo revoca. Ogni direzione tra due dispositivi è un pairing e un token distinti, revocabili da chi li ha emessi.
+
+**TLS** (`server.tls` = `off` | `self_signed` | `files`; `aiw-engine/src/tls.rs`, `aiw-server/src/tls.rs`): rustls
+(ring) con un acceptor a mano; con `self_signed` un'autorità locale (10 anni) firma un certificato foglia
+(397 giorni, rinnovato prima di 30 giorni dalla scadenza o se cambiano gli indirizzi) con SAN nome host,
+`localhost`, loopback e indirizzi di rete; chiavi in `<dati>/tls/` con permessi `0600`. Il pairing porta
+l'impronta SHA-256 dell'autorità (con `files`, del certificato): i client Rust (peer, runtime `aiw-peer`, client MCP e
+A2A verso un dispositivo accoppiato, `aiw-core/src/tlspin.rs`) verificano solo quella, mai le radici di
+sistema. Con TLS il listener non risponde all'HTTP in chiaro dalla rete (resta, da loopback, per i client di
+questo computer); le richieste cifrate hanno `Origin` `https://…` ammessa solo se è la pagina servita da noi,
+e ricevono HSTS. Non si usano cookie.
+
 Una pagina web non deve poter pilotare l'API locale (CSRF, DNS rebinding), quindi senza token:
 - da loopback l'header `Host` deve essere `localhost`, `127.0.0.1` o `[::1]` (qualsiasi porta), altrimenti `403`;
 - un `Origin` fuori dalla allowlist (`tauri://localhost`, `http(s)://tauri.localhost`,
@@ -700,8 +811,27 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
 - `~/.aiw/` (desktop) o la sandbox dell'app (mobile): `config.json`, `aiw.db` (SQLite:
   sessioni, messaggi, eventi, run, workflow, audit, feedback, report di valutazione), `models/`,
   `runtimes/` (manifest utente), `skills/`, `checkpoints/`, `evals/` (suite di valutazione),
-  `eval-work/` (cartelle temporanee dei task).
+  `eval-work/` (cartelle temporanee dei task), `attachments/<sessione>/` (allegati della chat:
+  `<id>-<nome>` e, per un PDF con testo, `<id>.extracted.txt`; si cancella con la sessione).
+- **Documenti (knowledge base)** (`crates/aiw-engine/src/kb.rs`, `store/kb.rs`): `kb_collections`
+  (nome unico senza maiuscole), `kb_documents` (percorso o «caricato», mime, dimensione, `sha256`,
+  stato `indexing|ready|failed`, errore) e `kb_chunks` (testo, posizione, vettore f32 LE e modello
+  di embedding) con indice FTS5 `kb_chunks_fts` e trigger; l'eliminazione di una raccolta cancella a
+  cascata documenti e passaggi. Il chunker è puro (`chunk_text`: blocchi per paragrafo e titolo,
+  circa 1.200 caratteri, 150 di sovrapposizione). L'aggiunta è un lavoro in background con
+  avanzamento e annullamento; la ricerca riusa la meccanica della memoria (FTS5 con ripiego in Rust,
+  coseno sui vettori, reciprocal rank fusion) e gli embedding si calcolano in background solo con un
+  runtime di embedding già avviato.
 - Workspace utente: `AGENTS.md`, `.aiw/config.json`, `.aiw/skills/`, `.aiw/workflows/`.
+- **Allegati della chat** (`crates/aiw-engine/src/attachments.rs`): il messaggio salvato ha solo i
+  metadati (`ChatMessage.attachments`); i byte sono in `attachments/<sessione>/`, mai nel workspace.
+  Il motore li trasforma in ciò che vede il modello con funzioni pure (`render_attachments`,
+  `build_history`): testo e PDF in blocchi `[Allegato: …]` con tetti di 40.000 e 120.000 caratteri,
+  immagini come parti `image_url` (solo per gli ultimi 2 messaggi che ne hanno), altri file come una
+  riga con il percorso. Il testo del messaggio dell'utente per hook, memoria e titoli resta
+  `RunInput.user_input`; gli allegati vanno in `RunInput.user_extra` e il runner li unisce nel
+  messaggio. La cartella della sessione è in `read_roots` (lettura sola). Le tracce e i dataset non
+  esportano gli allegati. Altri ingressi (A2A, gateway, workflow, voce) restano solo testo.
 
 ## 10. Piattaforme: cosa gira dove
 
@@ -737,12 +867,12 @@ risponde `429` con `Retry-After`, con pausa crescente. `GET /api/runs/{id}/event
    renderer A2UI, git worktree per i task paralleli, sandbox Windows a integrità Low.
 3. v0.3 (fatto): device mesh (mDNS, pairing via QR, A2A 1.0, peer come runtime e server MCP), worker
    RPC di llama.cpp ed exo per l'inferenza distribuita, voice mode (whisper.cpp o server
-   OpenAI-compatibili o peer, voci di sistema locali), code mode (Rhai ermetico, P13), trigger webhook.
+   OpenAI-compatibili o peer, voci di sistema locali; poi voce neurale con Piper o un server `/v1/audio/speech`), code mode (Rhai ermetico, P13), trigger webhook.
 4. v0.4 (fatto): UI riorganizzata per domini con data layer TanStack Query, model hub multi-provider
    (Hugging Face, ModelScope, registry Ollama, URL diretto, catalogo con i modelli Whisper), API locale
    protetta (token, CORS ristretto, controllo di Origin/Host), correzioni di agent loop e runtime.
    Il voice mode della 0.3 è nella nuova struttura (`features/chat/voice/`).
-5. Prossimi passi: MLX Swift su iOS (template Xcode con mlx-swift-lm e bridge `@_cdecl`), Kokoro come voce
-   neurale locale, trascrizione nativa on-device su mobile (SpeechAnalyzer, SpeechRecognizer)
+5. Prossimi passi: MLX Swift su iOS (template Xcode con mlx-swift-lm e bridge `@_cdecl`), Kokoro Core ML/MLX in-process come voce
+   neurale locale (oggi via server OpenAI-compatibile), trascrizione nativa on-device su mobile (SpeechAnalyzer, SpeechRecognizer)
    quando manca whisper, catalogo degli execution provider di Windows ML, HTTPS in LAN (serve al
    microfono nei browser), firma e notarizzazione dei pacchetti.

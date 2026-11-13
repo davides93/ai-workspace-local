@@ -4,6 +4,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { InstallJob, RuntimeInfo } from "../../shared/api/types";
 
+import { t } from "../../shared/i18n";
 /** Polling of the runtime list while the runtimes view is open. */
 export const RUNTIMES_POLL_MS = 5_000;
 /** Polling of a running installation. */
@@ -29,7 +30,7 @@ export function useRefreshRuntimes() {
     onSuccess: (list) => {
       qc.setQueryData<RuntimeInfo[]>(qk.runtimes.list(), list);
       void qc.invalidateQueries({ queryKey: qk.models.installed() });
-      toast("Rilevamento dei runtime completato");
+      toast(t("runtimes.rilevamento_dei_runtime_completato"));
     },
   });
 }
@@ -42,7 +43,7 @@ export function useRuntimeAction(handled = false) {
     mutationFn: (v: { runtime: RuntimeInfo; action: "start" | "stop"; model?: string }) =>
       api.runtimeAction(v.runtime.id, v.action, v.model ? { model: v.model } : undefined),
     onSuccess: (_r, v) => {
-      toast(v.model ? `${v.runtime.name} avviato con ${v.model}` : `${v.runtime.name}: ${v.action === "start" ? "avviato" : "fermato"}`);
+      toast(v.model ? t("runtimes.avviato_con", { name: v.runtime.name, model: v.model }) : t(v.action === "start" ? "runtimes.started_name" : "runtimes.stopped_name", { name: v.runtime.name }));
       void qc.invalidateQueries({ queryKey: qk.runtimes.all() });
     },
   });
@@ -54,7 +55,7 @@ export function useUpdateRuntimeSettings() {
   return useMutation({
     mutationFn: (v: { id: string; settings: Record<string, unknown> }) => api.updateRuntimeSettings(v.id, v.settings),
     onSuccess: (r) => {
-      toast(`Impostazioni di ${r.name} salvate`);
+      toast(t("runtimes.impostazioni_di_salvate", { name: r.name }));
       void qc.invalidateQueries({ queryKey: qk.runtimes.all() });
     },
   });
@@ -104,7 +105,7 @@ export function useInstallRuntime() {
     meta: { handled: true },
     onSuccess: (job, runtime) => {
       qc.setQueryData(qk.runtimes.install(runtime.id), job);
-      toast(`Installazione di ${runtime.name} avviata`);
+      toast(t("runtimes.installazione_di_avviata", { name: runtime.name }));
     },
   });
 }

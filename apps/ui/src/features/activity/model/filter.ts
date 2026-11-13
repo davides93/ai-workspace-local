@@ -2,6 +2,7 @@ import { matchesQuery } from "../../../shared/lib/text";
 import type { AuditEntry } from "../../../shared/api/types";
 import type { PillTone } from "../../../shared/ui";
 
+import { t } from "../../../shared/i18n";
 /** The backend returns only the latest entries of the audit trail (`audit(500)`). */
 export const BACKEND_LIMIT = 500;
 
@@ -18,15 +19,15 @@ export const emptyFilters: AuditFilters = { actor: ALL, decision: ALL, tool: ALL
 
 export const isFiltering = (f: AuditFilters): boolean => f.actor !== ALL || f.decision !== ALL || f.tool !== ALL || f.q.trim() !== "";
 
-export const ACTOR_LABEL: Record<string, string> = { agent: "Agente", user: "Utente", workflow: "Workflow", system: "Sistema" };
+export const ACTOR_LABEL: Record<string, string> = { get agent() { return t("activity.agente"); }, get user() { return t("activity.utente"); }, get workflow() { return t("activity.workflow"); }, get system() { return t("activity.sistema"); } };
 
 /** Decisions of the audit trail: the policy answers (allow, ask, deny) and the user's (approved, rejected). */
 export const DECISION_INFO: Record<string, { label: string; tone: PillTone }> = {
-  allow: { label: "Consentito", tone: "ok" },
-  approved: { label: "Approvato", tone: "ok" },
-  ask: { label: "Conferma richiesta", tone: "warn" },
-  deny: { label: "Negato", tone: "crit" },
-  rejected: { label: "Rifiutato", tone: "crit" },
+  allow: { get label() { return t("activity.consentito"); }, tone: "ok" },
+  approved: { get label() { return t("activity.approvato"); }, tone: "ok" },
+  ask: { get label() { return t("activity.conferma_richiesta"); }, tone: "warn" },
+  deny: { get label() { return t("activity.negato"); }, tone: "crit" },
+  rejected: { get label() { return t("activity.rifiutato"); }, tone: "crit" },
 };
 
 export const decisionInfo = (d: string): { label: string; tone: PillTone } => DECISION_INFO[d] ?? { label: d, tone: "neutral" };
@@ -88,7 +89,7 @@ export function auditExport(rows: AuditEntry[], filters: AuditFilters, now: Date
   const content = JSON.stringify(
     {
       exported_at: now.toISOString(),
-      source: `Audit trail di AI Workspace Local (le ultime ${BACKEND_LIMIT} voci)`,
+      source: t("activity.audit_export_source", { BACKEND_LIMIT }),
       filters: isFiltering(filters) ? filters : null,
       count: rows.length,
       entries: rows,

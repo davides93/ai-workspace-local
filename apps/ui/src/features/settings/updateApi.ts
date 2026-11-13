@@ -4,6 +4,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { UpdateStatus } from "../../shared/api/types";
 
+import { t } from "../../shared/i18n";
 /** While an installer downloads the status is read every second; otherwise once a minute. */
 const DOWNLOAD_POLL_MS = 1_000;
 const IDLE_POLL_MS = 60_000;
@@ -34,6 +35,6 @@ function useUpdateAction(run: (api: ReturnType<typeof useApi>) => Promise<Update
 }
 
 export const useCheckUpdate = () =>
-  useUpdateAction((api) => api.checkUpdate(), (s) => (s.available ? `Disponibile la versione ${s.available.version}` : "Sei aggiornato"));
+  useUpdateAction((api) => api.checkUpdate(), (s) => (s.available ? t("settings.update_available", { version: s.available.version }) : t("settings.sei_aggiornato")));
 export const useDownloadUpdate = () => useUpdateAction((api) => api.downloadUpdate());
-export const useInstallUpdate = () => useUpdateAction((api) => api.installUpdate(), (s) => s.message ?? "Installer avviato");
+export const useInstallUpdate = () => useUpdateAction((api) => api.installUpdate(), (s) => s.message ?? t("settings.installer_avviato"));

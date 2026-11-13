@@ -4,6 +4,7 @@
 import { SECRET_MASK, type RemoteAgent } from "../../../shared/api/types";
 import { slugify, uniqueSlug } from "../../../shared/lib/slug";
 
+import { t } from "../../../shared/i18n";
 /** Ids that start like this belong to the paired devices. */
 export const PEER_PREFIX = "peer-";
 
@@ -26,10 +27,10 @@ export interface RemoteIssue { field: "name" | "url"; message: string }
 
 export function validateRemote(r: RemoteAgent): RemoteIssue[] {
   const issues: RemoteIssue[] = [];
-  if (!r.name.trim()) issues.push({ field: "name", message: "Dai un nome all'agente." });
+  if (!r.name.trim()) issues.push({ field: "name", message: t("integrations.dai_un_nome_all_agente") });
   const url = r.url.trim();
-  if (!url) issues.push({ field: "url", message: "Indica l'indirizzo dell'agente." });
-  else if (!/^https?:\/\/[^/\s]+/i.test(url)) issues.push({ field: "url", message: "L'indirizzo deve iniziare con http:// o https://." });
+  if (!url) issues.push({ field: "url", message: t("integrations.indica_l_indirizzo_dell_agente") });
+  else if (!/^https?:\/\/[^/\s]+/i.test(url)) issues.push({ field: "url", message: t("integrations.l_indirizzo_deve_iniziare_con") });
   return issues;
 }
 

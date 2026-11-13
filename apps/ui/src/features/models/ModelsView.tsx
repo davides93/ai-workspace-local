@@ -14,6 +14,7 @@ import { DownloadsTab } from "./components/DownloadsTab";
 import { InstalledTab } from "./components/InstalledTab";
 import "./models.css";
 
+import { t as tr } from "../../shared/i18n";
 type Tab = "gallery" | "installed" | "discover" | "downloads" | "catalog" | "profiles";
 const TABS: Tab[] = ["gallery", "installed", "discover", "downloads", "catalog", "profiles"];
 /** Tab of `/models`: the gallery on iPhone and iPad, the installed models elsewhere. */
@@ -34,18 +35,18 @@ export function ModelsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Inferenza" title="Modelli"
-        subtitle={`${models.data?.length ?? 0} disponibili · ${formatBytes(totalInstalled)} su disco · memoria disponibile: RAM ${formatMb(system.data?.device.memory_mb)}${vram ? `, VRAM ${formatMb(vram)}` : ""}`}
+        eyebrow={tr("nav.group_inference")} title={tr("models.modelli")}
+        subtitle={tr("models.disponibili_su_disco_memoria_disponibile", { p: models.data?.length ?? 0, p2: formatBytes(totalInstalled), p3: formatMb(system.data?.device.memory_mb), p4: vram ? `, VRAM ${formatMb(vram)}` : "" })}
       />
       <Tabs
-        idPrefix="models" label="Sezioni dei modelli" value={tab} onChange={(t) => navigate(t === defaultTab() ? "/models" : `/models/${t}`)}
+        idPrefix="models" label={tr("models.sezioni_dei_modelli")} value={tab} onChange={(t) => navigate(t === defaultTab() ? "/models" : `/models/${t}`)}
         tabs={[
-          { id: "gallery", label: "Galleria" },
-          { id: "installed", label: "Disponibili qui", count: models.data?.length },
-          { id: "profiles", label: "Profili" },
-          { id: "discover", label: "Scopri" },
-          { id: "downloads", label: "Download", count: jobs.filter(isActiveDownload).length || undefined },
-          { id: "catalog", label: "Catalogo" },
+          { id: "gallery", label: tr("models.galleria") },
+          { id: "installed", label: tr("models.disponibili_qui"), count: models.data?.length },
+          { id: "profiles", label: tr("models.profili") },
+          { id: "discover", label: tr("models.scopri") },
+          { id: "downloads", label: tr("models.download"), count: jobs.filter(isActiveDownload).length || undefined },
+          { id: "catalog", label: tr("models.catalogo") },
         ]}
       />
       {tab !== "downloads" && <ActiveDownloadsStrip jobs={jobs} />}

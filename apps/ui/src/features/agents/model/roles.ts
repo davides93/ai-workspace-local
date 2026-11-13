@@ -2,21 +2,22 @@
 
 import type { AgentProfile, AgentRoles, ModelRole, RoleProfiles } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 export const ROLE_KEYS: readonly ModelRole[] = ["plan", "act", "check", "summarize"];
 
 export type RolesMode = "single" | "auto" | "custom";
 
 export const ROLE_INFO: Record<ModelRole, { label: string; hint: string; empty: string }> = {
-  plan: { label: "Pianifica", hint: "Il primo passo e quello dopo un errore: il modello più capace, con il ragionamento acceso.", empty: "Come l'agente" },
-  act: { label: "Esegue", hint: "I passi che proseguono dopo un risultato riuscito: può essere un modello più veloce, senza ragionamento.", empty: "Come l'agente" },
-  check: { label: "Verifica", hint: "Un controllo finale prima di concludere, solo se l'agente ha modificato qualcosa. Al massimo un giro in più.", empty: "Nessuna verifica" },
-  summarize: { label: "Riassume", hint: "Accorcia la conversazione quando diventa lunga: il modello più piccolo che hai.", empty: "Come l'agente" },
+  plan: { get label() { return t("agents.pianifica"); }, get hint() { return t("agents.il_primo_passo_e_quello"); }, get empty() { return t("agents.come_l_agente"); } },
+  act: { get label() { return t("agents.esegue"); }, get hint() { return t("agents.i_passi_che_proseguono_dopo"); }, get empty() { return t("agents.come_l_agente"); } },
+  check: { get label() { return t("agents.verifica"); }, get hint() { return t("agents.un_controllo_finale_prima_di"); }, get empty() { return t("agents.nessuna_verifica"); } },
+  summarize: { get label() { return t("agents.riassume"); }, get hint() { return t("agents.accorcia_la_conversazione_quando_diventa"); }, get empty() { return t("agents.come_l_agente"); } },
 };
 
 export const MODES: readonly { value: RolesMode; label: string; hint: string }[] = [
-  { value: "auto", label: "Automatico", hint: "Decide l'app in base al tuo dispositivo: su un computer piccolo usa un solo modello, su uno grande può usarne due che stanno insieme in memoria." },
-  { value: "single", label: "Un solo modello", hint: "Tutto il lavoro lo fa il modello scelto in «Modello». È il comportamento di sempre." },
-  { value: "custom", label: "Personalizzato", hint: "Scegli tu un profilo per ogni ruolo; quelli lasciati vuoti usano il modello dell'agente." },
+  { value: "auto", get label() { return t("agents.automatico"); }, get hint() { return t("agents.decide_l_app_in_base"); } },
+  { value: "single", get label() { return t("agents.un_solo_modello"); }, get hint() { return t("agents.tutto_il_lavoro_lo_fa"); } },
+  { value: "custom", get label() { return t("agents.personalizzato"); }, get hint() { return t("agents.scegli_tu_un_profilo_per"); } },
 ];
 
 export function rolesMode(r: AgentRoles | undefined): RolesMode {
@@ -51,8 +52,8 @@ export function normalizeRoles(r: AgentRoles | undefined): AgentRoles | undefine
 /** One line for the list or the summary: what the roles mean for this agent. */
 export function rolesSummary(r: AgentRoles | undefined): string {
   const mode = rolesMode(normalizeRoles(r));
-  if (mode === "single") return "Un solo modello";
-  if (mode === "auto") return "Ruoli automatici";
+  if (mode === "single") return t("agents.un_solo_modello");
+  if (mode === "auto") return t("agents.ruoli_automatici");
   const n = ROLE_KEYS.filter((k) => typeof r === "object" && r[k]).length;
-  return `Ruoli personalizzati (${n})`;
+  return t("agents.ruoli_personalizzati", { n });
 }

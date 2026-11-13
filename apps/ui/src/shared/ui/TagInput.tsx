@@ -4,6 +4,7 @@ import { splitList } from "../lib/tokens";
 import { Icon } from "./Icon";
 import "./TagInput.css";
 
+import { t as tr } from "../i18n";
 /**
  * List of text values edited as removable tags (arguments, domains).
  * Enter or leaving the field turns the typed text into tags, Backspace on an empty field removes
@@ -68,7 +69,7 @@ export function TagInput({ id, label, value, onChange, parse = splitList, liveSp
       {value.map((t, i) => (
         <span className="ti-tag" key={`${i}-${t}`}>
           <span className="ti-text" title={t}>{t === "" ? "\"\"" : t}</span>
-          <button type="button" className="ti-x" aria-label={`Rimuovi ${t === "" ? "argomento vuoto" : t}`} disabled={disabled} onClick={() => removeAt(i)}>
+          <button type="button" className="ti-x" aria-label={tr("ui.rimuovi_2", { p: t === "" ? "argomento vuoto" : t })} disabled={disabled} onClick={() => removeAt(i)}>
             <Icon name="close" size={12} />
           </button>
         </span>
@@ -76,6 +77,8 @@ export function TagInput({ id, label, value, onChange, parse = splitList, liveSp
       <input
         ref={inputRef}
         id={id}
+        // The placeholder goes away with the first tag, so the field needs a name of its own.
+        aria-label={label}
         className="taginput-field"
         value={draft}
         placeholder={value.length === 0 ? placeholder : undefined}

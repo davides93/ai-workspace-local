@@ -4,6 +4,7 @@ description = "Workspace facade: wires hardware, runtimes, models, tools, agents
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [features]
 default = []
@@ -32,6 +33,7 @@ async-trait.workspace = true
 chrono.workspace = true
 futures.workspace = true
 globset.workspace = true
+ignore.workspace = true
 regex.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
@@ -44,6 +46,23 @@ sha2.workspace = true
 semver.workspace = true
 reqwest.workspace = true
 dirs.workspace = true
+# gzip of the backup archive (pure Rust backend; already in the tree through reqwest).
+flate2 = "1"
+base64.workspace = true
+tokio-tungstenite.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rcgen.workspace = true
+ring.workspace = true
+pdf-extract = "0.12"
 
 [dev-dependencies]
+# Benchmarks (`cargo bench`); the CI only compiles them. Without the default features criterion does not pull rayon or plotters.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 tempfile = "3"
+aiw-tools = { workspace = true, features = ["testing"] }
+axum.workspace = true
+
+[[bench]]
+name = "hot_paths"
+harness = false

@@ -107,6 +107,121 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<LessonsCmd>,
     },
+    /// Canali per parlare con l'assistente da Telegram, Slack o email
+    Channels {
+        #[command(subcommand)]
+        cmd: Option<ChannelsCmd>,
+    },
+    /// Token di accesso all'API: per app di terzi e per i dispositivi accoppiati
+    Tokens {
+        #[command(subcommand)]
+        cmd: Option<TokensCmd>,
+    },
+    /// Documenti locali che gli assistenti possono cercare (base di conoscenza)
+    Kb {
+        #[command(subcommand)]
+        cmd: Option<KbCmd>,
+    },
+    /// Copia di sicurezza e ripristino dei dati (la cartella ~/.aiw): crea un archivio, lo controlla, lo ripristina
+    Backup {
+        #[command(subcommand)]
+        cmd: BackupCmd,
+    },
+    /// Esporta la diagnostica in un file JSON da allegare a una segnalazione: versione, sistema, hardware, runtime,
+    /// impostazioni (segreti mascherati), schema del database, controlli di salute, ultime righe dei log.
+    /// Non contiene chat, documenti o posta.
+    Diagnostics {
+        /// File di destinazione (di serie: stampa sul terminale)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackupCmd {
+    /// Crea un archivio .tar.gz dei dati con un manifesto (versioni, file, SHA-256). Funziona anche a daemon acceso.
+    /// Esclusi sempre: modelli (non si includono mai), runtime, cache, log, browser, checkpoint. Esclusi di serie: chiavi
+    /// e certificati TLS, token, e tutti i segreti (password IMAP, token dei canali, chiavi dei provider, header dei
+    /// server MCP, chiavi API nelle impostazioni).
+    Create {
+        /// File di destinazione (di serie: aiw-backup-<data>.tar.gz nella cartella corrente; non si sovrascrive)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Include anche i segreti: l'archivio diventa sensibile e va custodito come la cartella dei dati
+        #[arg(long)]
+        include_secrets: bool,
+    },
+    /// Ripristina un archivio. Solo con l'app chiusa e il daemon fermo. Prima controlla tutto (manifesto, SHA-256,
+    /// percorsi, versione dello schema), poi salva una copia dei dati attuali in <dati>/backups/ e solo allora sostituisce.
+    Restore {
+        file: PathBuf,
+        /// Non chiede conferma
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Controlla un archivio senza ripristinarlo e mostra cosa contiene
+    Inspect { file: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum TokensCmd {
+    /// Elenca i token con ultimo uso, scadenza e stato (predefinito)
+    List,
+    /// Crea un token; il valore si vede una volta sola
+    Create {
+        /// Nome (per esempio l'app che lo userà)
+        name: String,
+        /// gateway (app di terzi, solo /v1) o device (dispositivo accoppiato)
+        #[arg(long, default_value = "gateway")]
+        kind: String,
+        /// Giorni di validità (di serie non scade)
+        #[arg(long)]
+        expires_in_days: Option<u32>,
+        /// Ambiti in più per un token gateway: a2a, mcp
+        #[arg(long)]
+        scope: Vec<String>,
+    },
+    /// Revoca un token: smette di funzionare subito
+    Revoke { id: String },
+    /// Sostituisce un token con uno nuovo (il vecchio smette di funzionare subito)
+    Rotate { id: String },
+}
+
+#[derive(Subcommand)]
+enum ChannelsCmd {
+    /// Elenca i canali con modalità, lista dei mittenti e conteggi (predefinito)
+    List,
+    /// Mostra i conteggi e il motivo dello stato di ogni canale (o di uno solo)
+    Status {
+        /// Nome o id del canale
+        channel: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum KbCmd {
+    /// Elenca raccolte e documenti (predefinito)
+    List,
+    /// Aggiunge file o cartelle (testo, Markdown, codice, PDF) a una raccolta; la crea se non c'è
+    Add {
+        /// Nome o id della raccolta
+        collection: String,
+        /// File o cartelle del computer
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Cerca nei documenti
+    Search {
+        query: String,
+        /// Solo in questa raccolta (nome o id)
+        #[arg(long)]
+        collection: Option<String>,
+        /// Quanti passaggi mostrare (massimo 10)
+        #[arg(long, short = 'n', default_value_t = 5)]
+        max: usize,
+    },
+    /// Elimina un documento (id o nome)
+    Rm { document: String },
 }
 
 #[derive(Subcommand)]
@@ -432,7 +547,12 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();
-    let serve_mode = matches!(cli.cmd, Cmd::Serve { .. });
+    // Backup commands never start the engine: restoring must not have the database open, and inspecting needs no data.
+    let cmd = match cli.cmd {
+        Cmd::Backup { cmd } => return backup_cmd(cli.data.clone(), cmd),
+        other => other,
+    };
+    let serve_mode = matches!(cmd, Cmd::Serve { .. });
     let engine = Engine::new(EngineOptions {
         data_dir: cli.data.clone(),
         workspace_root: cli.workspace.clone(),
@@ -441,7 +561,7 @@ async fn main() -> Result<()> {
     })
     .await
     .context("avvio del motore")?;
-    match cli.cmd {
+    match cmd {
         Cmd::Serve { port, lan, ui } => {
             let lan = lan || engine.config().effective.get("server.lan").and_then(|v| v.as_bool()).unwrap_or(false);
             let ui = ui_dir(ui);
@@ -452,6 +572,17 @@ async fn main() -> Result<()> {
             );
             if lan {
                 eprintln!("Accesso LAN attivo: codice di pairing {}", engine.pairing_code());
+                match engine.tls_material() {
+                    Ok(Some(m)) => eprintln!(
+                        "TLS attivo ({}): impronta {} — il pairing la porta con sé; per un browser su un altro dispositivo installa il certificato da Sicurezza → Rete.",
+                        engine.tls_mode().as_str(),
+                        aiw_core::tlspin::display_fingerprint(&m.fingerprint)
+                    ),
+                    Ok(None) => eprintln!(
+                        "ATTENZIONE: l'API è raggiungibile dalla rete in HTTP in chiaro (token e dati senza cifratura). Attiva la cifratura con server.tls = self_signed."
+                    ),
+                    Err(e) => eprintln!("ATTENZIONE: TLS non disponibile ({e}): il servizio non parte finché non lo correggi."),
+                }
             }
             if ui.is_none() {
                 eprintln!("UI web non trovata: compila apps/ui (npm run build) o passa --ui <cartella>");
@@ -463,6 +594,23 @@ async fn main() -> Result<()> {
                     eprintln!("\nArresto: fermo i runtime avviati…");
                     e2.kill().await;
                 }
+            }
+        }
+        Cmd::Backup { .. } => unreachable!("handled before the engine starts"),
+        Cmd::Diagnostics { output } => {
+            let doc = serde_json::to_string_pretty(&engine.diagnostics().await?)?;
+            match output {
+                Some(path) => {
+                    if path.exists() {
+                        bail!("{} esiste già: scegli un altro nome", path.display());
+                    }
+                    std::fs::write(&path, doc + "\n").with_context(|| format!("scrittura di {}", path.display()))?;
+                    eprintln!(
+                        "Diagnostica scritta in {}. Non contiene chat, documenti o posta; i segreti sono mascherati.",
+                        path.display()
+                    );
+                }
+                None => println!("{doc}"),
             }
         }
         Cmd::Doctor => doctor(&engine).await,
@@ -499,6 +647,7 @@ async fn main() -> Result<()> {
                     thinking: None,
                     thinking_budget: None,
                     adapters: adapter.into_iter().map(|path| aiw_core::api::AdapterRef { path, scale: None }).collect(),
+                    allow_remote: false,
                 },
             })?;
             println!("Profilo {} → {} · {}", p.id, p.runtime_id, p.model);
@@ -546,6 +695,9 @@ async fn main() -> Result<()> {
             }
         },
         Cmd::Lessons { cmd } => lessons_cmd(&engine, cmd.unwrap_or(LessonsCmd::List { status: "pending".into() }))?,
+        Cmd::Channels { cmd } => channels_cmd(&engine, cmd.unwrap_or(ChannelsCmd::List))?,
+        Cmd::Tokens { cmd } => tokens_cmd(&engine, cmd.unwrap_or(TokensCmd::List))?,
+        Cmd::Kb { cmd } => kb_cmd(&engine, cmd.unwrap_or(KbCmd::List)).await?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Rewind { run_id, dry_run } => {
             let info = engine.checkpoint_info(&run_id)?;
@@ -808,6 +960,183 @@ fn lessons_cmd(engine: &Engine, cmd: LessonsCmd) -> Result<()> {
     Ok(())
 }
 
+fn tokens_cmd(engine: &Engine, cmd: TokensCmd) -> Result<()> {
+    match cmd {
+        TokensCmd::List => {
+            for t in engine.api_tokens() {
+                let state = if t.revoked_at.is_some() { "revocato" } else { "attivo" };
+                println!(
+                    "{:<22} {:<8} {:<9} {:<16} ultimo uso: {}{}  {}",
+                    t.id,
+                    t.kind,
+                    state,
+                    t.prefix,
+                    t.last_used_at.as_deref().unwrap_or("mai"),
+                    t.expires_at.as_deref().map(|e| format!("  scade: {e}")).unwrap_or_default(),
+                    t.name
+                );
+            }
+        }
+        TokensCmd::Create { name, kind, expires_in_days, scope } => {
+            let t = engine.create_api_token(&name, &kind, None, expires_in_days, Some(&scope))?;
+            println!("{}", t.token);
+            eprintln!("Token «{}» creato ({}). Copialo ora: non verrà mostrato di nuovo.", t.info.name, t.info.id);
+        }
+        TokensCmd::Revoke { id } => {
+            engine.revoke_api_token(&id)?;
+            println!("Token {id} revocato: da ora le nuove richieste con quel token sono rifiutate. I flussi già aperti si chiudono solo revocando dall'app o dall'API del servizio, oppure al suo riavvio.");
+        }
+        TokensCmd::Rotate { id } => {
+            let t = engine.rotate_api_token(&id)?;
+            println!("{}", t.token);
+            eprintln!("Il token {id} è stato sostituito da {}: copia il nuovo valore ora, non verrà mostrato di nuovo.", t.info.id);
+        }
+    }
+    Ok(())
+}
+
+fn channels_cmd(engine: &Engine, cmd: ChannelsCmd) -> Result<()> {
+    let list = engine.channels()?;
+    if list.is_empty() {
+        println!("Nessun canale. Li configuri dall'app (Canali) o con l'API /api/channels; la guida è in docs/channels.md.");
+        return Ok(());
+    }
+    let mode = |m: &str| if m == "ask" { "chiede conferma" } else { "sola lettura" };
+    match cmd {
+        ChannelsCmd::List => {
+            for c in &list {
+                let ch = &c.channel;
+                println!(
+                    "{:<26} {:<9} {:<18} {:<8} {:>2} mittenti  {}",
+                    ch.id,
+                    ch.kind,
+                    mode(&ch.mode),
+                    if ch.enabled { "acceso" } else { "spento" },
+                    ch.allowed.len(),
+                    ch.name
+                );
+            }
+        }
+        ChannelsCmd::Status { channel } => {
+            let wanted = channel.map(|c| c.to_lowercase());
+            let shown: Vec<_> = list
+                .iter()
+                .filter(|c| wanted.as_ref().is_none_or(|w| c.channel.id.to_lowercase() == *w || c.channel.name.to_lowercase() == *w))
+                .collect();
+            if shown.is_empty() {
+                anyhow::bail!("canale non trovato");
+            }
+            for c in shown {
+                let (ch, st) = (&c.channel, &c.status);
+                println!("{} ({}, {})", ch.name, ch.kind, ch.id);
+                println!("  stato: {}", if ch.enabled { "acceso nelle impostazioni" } else { "spento" });
+                println!("  messaggi ignorati da sconosciuti: {}", st.ignored);
+                println!("  messaggi passati all'assistente: {}", st.handled);
+                println!("  conversazioni: {}", st.conversations);
+            }
+            println!("\nI canali si collegano solo mentre l'app o `aiw serve` è in esecuzione: lo stato dal vivo (connesso o errore) lo vedi nell'app.");
+        }
+    }
+    Ok(())
+}
+
+async fn kb_cmd(engine: &Engine, cmd: KbCmd) -> Result<()> {
+    use aiw_core::api::{KbAddBody, KbCollectionCreate};
+    match cmd {
+        KbCmd::List => {
+            let cols = engine.kb_collections()?;
+            if cols.is_empty() {
+                println!("Nessuna raccolta. Aggiungi dei documenti con: aiw kb add <raccolta> <percorso>");
+            }
+            for c in cols {
+                println!("{:<24} {:>3} documenti  {:>5} passaggi  {}", c.id, c.documents, c.chunks, c.name);
+                for d in engine.kb_documents(&c.id)? {
+                    let note = d.error.as_deref().map(|e| format!("  ({e})")).unwrap_or_default();
+                    println!("    {:<24} {:<9} {:>4} passaggi  {}{note}", d.id, d.status, d.chunks, d.name);
+                }
+            }
+            match engine.embedding_model_name() {
+                Some(m) => println!("Ricerca anche per significato con il modello {m}."),
+                None => println!("Ricerca per parole chiave: per trovare anche per significato serve un modello di embedding acceso."),
+            }
+        }
+        KbCmd::Add { collection, paths } => {
+            let col = match engine.kb_collection(&collection) {
+                Ok(c) => c,
+                Err(aiw_core::Error::NotFound(_)) => {
+                    let c = engine.kb_create_collection(KbCollectionCreate { name: collection.clone(), description: None })?;
+                    println!("Creata la raccolta «{}».", c.name);
+                    c
+                }
+                Err(e) => return Err(e.into()),
+            };
+            for p in paths {
+                let path = std::fs::canonicalize(&p).with_context(|| format!("il percorso {} non esiste", p.display()))?;
+                let job =
+                    engine.kb_add(&col.id, KbAddBody { files: None, path: Some(path.to_string_lossy().into_owned()) }, true).await?.job;
+                let mut shown = usize::MAX;
+                let done = loop {
+                    let j = engine.kb_job(&job.id).unwrap_or_else(|| job.clone());
+                    if j.done != shown && j.total > 0 {
+                        shown = j.done;
+                        eprint!("\r  {} / {}  {:<60}", j.done, j.total, j.current.as_deref().unwrap_or(""));
+                    }
+                    if j.state != "running" {
+                        break j;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                };
+                eprintln!();
+                println!(
+                    "{}: aggiunti {}, già presenti {}, sostituiti {}, falliti {}, esclusi {}.",
+                    path.display(),
+                    done.added,
+                    done.unchanged,
+                    done.replaced,
+                    done.failed,
+                    done.skipped_total
+                );
+                for s in &done.skipped {
+                    println!("    escluso: {} ({})", s.name, s.reason);
+                }
+                if done.skipped_total > done.skipped.len() {
+                    println!("    … e altri {} file esclusi.", done.skipped_total - done.skipped.len());
+                }
+            }
+            engine.kb_wait_idle().await;
+            if engine.embedding_model_name().is_some() {
+                let n = engine.kb_embed_now().await?;
+                if n > 0 {
+                    println!("Calcolati {n} vettori per la ricerca per significato.");
+                }
+            } else {
+                println!("Nessun modello di embedding acceso: la ricerca funziona per parole chiave.");
+            }
+        }
+        KbCmd::Search { query, collection, max } => {
+            let r = engine.kb_search(&query, collection.as_deref(), max).await?;
+            if r.hits.is_empty() {
+                println!("Nessun passaggio trovato.");
+            }
+            for (i, h) in r.hits.iter().enumerate() {
+                println!("[{}] {} · parte {}  ({})", i + 1, h.document_name, h.part, h.collection_name);
+                for line in h.text.lines().filter(|l| !l.trim().is_empty()).take(6) {
+                    println!("    {}", line.trim());
+                }
+            }
+            if !r.semantic {
+                println!("(Ricerca per parole chiave: nessun modello di embedding acceso.)");
+            }
+        }
+        KbCmd::Rm { document } => {
+            let d = engine.kb_document(&document)?;
+            engine.kb_delete_document(&d.id)?;
+            println!("Documento «{}» eliminato.", d.name);
+        }
+    }
+    Ok(())
+}
+
 async fn eval_cmd(engine: &Engine, cmd: EvalCmd) -> Result<()> {
     use aiw_engine::eval::EvalRequest;
     match cmd {
@@ -985,6 +1314,88 @@ async fn eval_run_one(engine: &Engine, suite: &aiw_eval::Suite, req: aiw_engine:
             Ok(report)
         }
     }
+}
+
+fn backup_cmd(data: Option<PathBuf>, cmd: BackupCmd) -> Result<()> {
+    use aiw_engine::backup::{self, BackupManifest, BackupOptions};
+    let dirs = data.map(aiw_core::paths::DataDirs::at).unwrap_or_else(aiw_core::paths::DataDirs::resolve);
+    let describe = |m: &BackupManifest| {
+        println!("  Creato il {} da AI Workspace Local {} ({}, {})", m.created_at, m.app_version, m.os, m.arch);
+        println!("  Schema del database: {} · {} file · {}", m.schema_version, m.files.len(), size(m.total_bytes()));
+        if m.sensitive {
+            println!("  SENSIBILE: contiene segreti (chiavi, token, certificati TLS). Conservalo come la cartella dei dati.");
+        }
+        for e in &m.excluded {
+            println!("  Escluso: {e}");
+        }
+        for s in &m.skipped {
+            println!("  Non salvato: {s}");
+        }
+    };
+    match cmd {
+        BackupCmd::Create { output, include_secrets } => {
+            let out = output.unwrap_or_else(|| {
+                let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                PathBuf::from(format!("aiw-backup-{stamp}{}.tar.gz", if include_secrets { "-con-segreti" } else { "" }))
+            });
+            let m = backup::create(&dirs, &BackupOptions { include_secrets }, &out)?;
+            println!("Backup creato: {} ({})", out.display(), size(std::fs::metadata(&out)?.len()));
+            describe(&m);
+            if include_secrets {
+                eprintln!("ATTENZIONE: l'archivio contiene i segreti in chiaro. Non caricarlo su servizi condivisi e non allegarlo a una segnalazione.");
+            } else {
+                eprintln!("I segreti non sono inclusi: dopo un ripristino vanno inseriti di nuovo (chiavi dei provider, password IMAP, token dei canali e dei server MCP).");
+            }
+        }
+        BackupCmd::Inspect { file } => {
+            let m = backup::inspect(&file)?;
+            println!("{}: archivio valido (manifesto, percorsi, dimensioni e SHA-256 di ogni file controllati)", file.display());
+            describe(&m);
+            if m.schema_version > aiw_engine::store::SCHEMA_VERSION {
+                println!(
+                    "  NON ripristinabile qui: lo schema {} è più recente di quello che questa versione conosce ({}).",
+                    m.schema_version,
+                    aiw_engine::store::SCHEMA_VERSION
+                );
+            }
+        }
+        BackupCmd::Restore { file, yes } => {
+            if backup::data_in_use(&dirs)? {
+                bail!(
+                    "i dati in {} sono in uso: chiudi l'app e ferma il daemon (`aiw serve`), poi riprova. Il ripristino non gira a programma acceso",
+                    dirs.root.display()
+                );
+            }
+            let m = backup::inspect(&file)?;
+            println!("Ripristino di {} in {}", file.display(), dirs.root.display());
+            describe(&m);
+            if !yes {
+                eprint!(
+                    "Sostituire i dati con quelli del backup? Prima salvo una copia di quelli attuali in {}. [s/N] ",
+                    dirs.root.join("backups").display()
+                );
+                std::io::stderr().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                if !(line.trim().eq_ignore_ascii_case("s") || line.trim().eq_ignore_ascii_case("y")) {
+                    bail!("annullato: non ho toccato nulla");
+                }
+            }
+            let r = backup::restore(&dirs, &file)?;
+            match &r.safety_copy {
+                Some(p) => println!("Copia di sicurezza dei dati di prima (con i segreti, trattala come sensibile): {}", p.display()),
+                None => println!("Non c'erano dati da salvare prima."),
+            }
+            if r.schema_from != r.schema_to {
+                println!("Database migrato dallo schema {} al {}.", r.schema_from, r.schema_to);
+            }
+            println!("Ripristinati {} file. Riavvia l'app.", r.restored.len());
+            if !r.manifest.sensitive {
+                println!("Il backup non conteneva i segreti: reinserisci chiavi dei provider, password IMAP, token dei canali e dei server MCP, e accoppia di nuovo i dispositivi.");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn size(bytes: u64) -> String {

@@ -1,0 +1,97 @@
+// Pure logic of the page "Documenti": what to send, in which batches, and the sentences that describe a job.
+// Limits mirror the engine (crates/aiw-engine/src/kb.rs and attachments.rs).
+
+import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, humanSize } from "../../../shared/lib/attachments";
+import type { KbCollection, KbDocument, KbJob, KbStatus } from "../../../shared/api/types";
+
+import { t } from "../../../shared/i18n";
+/** Shown while no embedding model is running: search still works, by keywords. */
+export const keywordsOnlyBanner = (): string => t("documents.la_ricerca_funziona_per_parole");
+
+export interface Batches<T extends { name: string; size: number }> {
+  /** Groups to send one call each: at most 8 files and 25 MB in a group. */
+  batches: T[][];
+  /** One Italian sentence per file that cannot be sent. */
+  errors: string[];
+}
+
+/** Splits the chosen files into groups the server accepts; empty and too big files are left out with the reason. */
+export function splitBatches<T extends { name: string; size: number }>(files: T[]): Batches<T> {
+  const batches: T[][] = [];
+  const errors: string[] = [];
+  let cur: T[] = [];
+  let total = 0;
+  for (const f of files) {
+    if (f.size === 0) {
+      errors.push(t("documents.e_vuoto_non_c_e", { name: f.name }));
+      continue;
+    }
+    if (f.size > MAX_ATTACHMENT_BYTES) {
+      errors.push(t("documents.e_troppo_grande_ogni_file", { name: f.name, size: humanSize(f.size), max: humanSize(MAX_ATTACHMENT_BYTES) }));
+      continue;
+    }
+    if (cur.length >= MAX_ATTACHMENTS || total + f.size > MAX_ATTACHMENTS_TOTAL_BYTES) {
+      batches.push(cur);
+      cur = [];
+      total = 0;
+    }
+    cur.push(f);
+    total += f.size;
+  }
+  if (cur.length > 0) batches.push(cur);
+  return { batches, errors };
+}
+
+export const isRunning = (j: KbJob) => j.state === "running";
+
+/** Running jobs of a collection (all of them when no collection is given). */
+export function runningJobs(status: KbStatus | undefined, collectionId?: string): KbJob[] {
+  return (status?.jobs ?? []).filter((j) => isRunning(j) && (collectionId === undefined || j.collection_id === collectionId));
+}
+
+/** 0 to 100. */
+export function jobPercent(j: KbJob): number {
+  if (j.state === "done") return 100;
+  return j.total <= 0 ? 0 : Math.min(100, Math.round((j.done / j.total) * 100));
+}
+
+
+/** One sentence with the outcome of a finished (or cancelled) job. */
+export function jobSummary(j: KbJob): string {
+  const parts: string[] = [];
+  if (j.added > 0) parts.push(t("documents.job_added", { n: j.added }));
+  if (j.replaced > 0) parts.push(t("documents.job_replaced", { n: j.replaced }));
+  if (j.unchanged > 0) parts.push(t("documents.job_unchanged", { n: j.unchanged }));
+  if (j.failed > 0) parts.push(t("documents.job_failed", { n: j.failed }));
+  if (j.skipped_total > 0) parts.push(t("documents.job_skipped", { n: j.skipped_total }));
+  const body = parts.length > 0 ? parts.join(", ") : t("documents.nessuna_novita");
+  return j.state === "cancelled" ? t("documents.job_cancelled", { body }) : `${body.charAt(0).toUpperCase()}${body.slice(1)}.`;
+}
+
+/** What the job is doing now, for the progress line. */
+export function jobProgressText(j: KbJob): string {
+  const base = t("documents.job_progress", { done: j.done, total: j.total });
+  return j.current ? `${base} · ${j.current}` : base;
+}
+
+export function documentStatusLabel(d: KbDocument): string {
+  if (d.status === "indexing") return t("documents.in_lavorazione");
+  if (d.status === "failed") return t("documents.non_riuscito");
+  return t("documents.pronto");
+}
+
+/** How much of the collection can be searched by meaning, as a sentence (empty when nothing is indexed). */
+export function coverageText(c: KbCollection): string {
+  if (c.chunks === 0) return "";
+  if (c.embedded_chunks === 0) return t("documents.ricerca_per_parole_chiave");
+  if (c.embedded_chunks >= c.chunks) return t("documents.ricerca_anche_per_significato");
+  return t("documents.ricerca_per_significato_pronta_su", { embedded_chunks: c.embedded_chunks, chunks: c.chunks });
+}
+
+export const collectionCounts = (c: KbCollection) => t("documents.n_documents", { n: c.documents });
+
+/** The id of the collection to show: the wanted one if it still exists, else the first. */
+export function pickCollection(list: readonly KbCollection[] | undefined, wanted: string | null): string | null {
+  if (!list || list.length === 0) return null;
+  return list.some((c) => c.id === wanted) ? wanted : list[0].id;
+}

@@ -8,6 +8,7 @@ import type { Memory, MemoryPatch, MemoryQuery } from "../../shared/api/types";
 import { useCreateSession, useSessions } from "../chat/api";
 import { activated, forgotten, patched, TEACHER_ID, teachSession, without } from "./model/memories";
 
+import { t, t as tr } from "../../shared/i18n";
 /** What the assistant remembers. Proposals can arrive while the page is open (the assistant saved them in a chat), so it is refreshed now and then. */
 export function useMemories(query: MemoryQuery = {}) {
   const api = useApi();
@@ -52,29 +53,29 @@ export function useUpdateMemory() {
   return useMemoryAction(
     (v: { id: string; patch: MemoryPatch }) => api.updateMemory(v.id, v.patch),
     (v, list) => patched(list, v.id, v.patch),
-    "Non sono riuscito a salvare la modifica",
+    tr("teach.non_sono_riuscito_a_salvare"),
   );
 }
 
 /** Soft delete: the memory leaves the lists at once and can be restored. */
 export function useForgetMemory() {
   const api = useApi();
-  return useMemoryAction((id: string) => api.forgetMemory(id), (id, list, key) => forgotten(list, id, statusOf(key) === "all"), "Non sono riuscito a dimenticarlo");
+  return useMemoryAction((id: string) => api.forgetMemory(id), (id, list, key) => forgotten(list, id, statusOf(key) === "all"), tr("teach.non_sono_riuscito_a_dimenticarlo"));
 }
 
 export function useRestoreMemory() {
   const api = useApi();
-  return useMemoryAction((m: Memory) => api.restoreMemory(m.id), (m, list, key) => (["", "active", "all"].includes(statusOf(key)) ? activated(list, m) : without(list, m.id)), "Non sono riuscito a ripristinarlo");
+  return useMemoryAction((m: Memory) => api.restoreMemory(m.id), (m, list, key) => (["", "active", "all"].includes(statusOf(key)) ? activated(list, m) : without(list, m.id)), tr("teach.non_sono_riuscito_a_ripristinarlo"));
 }
 
 export function useApproveMemory() {
   const api = useApi();
-  return useMemoryAction((m: Memory) => api.approveMemory(m.id), (m, list, key) => (statusOf(key) === "proposed" ? without(list, m.id) : activated(list, m)), "Non sono riuscito a confermarlo");
+  return useMemoryAction((m: Memory) => api.approveMemory(m.id), (m, list, key) => (statusOf(key) === "proposed" ? without(list, m.id) : activated(list, m)), tr("teach.non_sono_riuscito_a_confermarlo"));
 }
 
 export function useRejectMemory() {
   const api = useApi();
-  return useMemoryAction((id: string) => api.rejectMemory(id), (id, list) => without(list, id), "Non sono riuscito a scartarlo");
+  return useMemoryAction((id: string) => api.rejectMemory(id), (id, list) => without(list, id), tr("teach.non_sono_riuscito_a_scartarlo"));
 }
 
 /** Deletes everything for good; the caller has asked for a confirmation. */
@@ -85,7 +86,7 @@ export function useDeleteAllMemories() {
     mutationFn: () => api.deleteAllMemories(),
     meta: { handled: true },
     onSuccess: ({ deleted }) => {
-      toast(deleted === 1 ? "Ho cancellato 1 ricordo" : `Ho cancellato ${deleted} ricordi`);
+      toast(deleted === 1 ? t("teach.ho_cancellato_1_ricordo") : t("teach.ho_cancellato_ricordi", { deleted }));
       void qc.invalidateQueries({ queryKey: qk.memories.all() });
     },
   });
@@ -111,7 +112,7 @@ export function useTeachSession() {
   useEffect(() => {
     if (!ready || found || asked.current || isPending || isError) return;
     asked.current = true;
-    mutate({ agent_id: TEACHER_ID, title: "Insegna", isolation: "none" }, { onError: () => { asked.current = false; } });
+    mutate({ agent_id: TEACHER_ID, title: t("teach.insegna"), isolation: "none" }, { onError: () => { asked.current = false; } });
   }, [ready, found, isPending, isError, mutate]);
   return {
     id: found?.id ?? null,

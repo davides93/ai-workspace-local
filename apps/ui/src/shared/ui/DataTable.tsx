@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cx } from "../lib/cx";
 
+import { t } from "../i18n";
 export interface Column<T> {
   key: string;
   header: ReactNode;
@@ -22,8 +23,9 @@ export function DataTable<T>({ columns, rows, rowKey, onRowClick, empty, label, 
   label: string;
   className?: string;
 }) {
+  // The wrapper scrolls sideways, so it takes the focus: the keyboard can scroll it too.
   return (
-    <div className={cx("table-wrap", className)}>
+    <div className={cx("table-wrap", className)} tabIndex={0} role="region" aria-label={label}>
       <table className="data" aria-label={label}>
         <thead>
           <tr>
@@ -42,7 +44,7 @@ export function DataTable<T>({ columns, rows, rowKey, onRowClick, empty, label, 
           ))}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={columns.length} className="table-empty">{empty ?? "Nessun dato."}</td>
+              <td colSpan={columns.length} className="table-empty">{empty ?? t("ui.nessun_dato")}</td>
             </tr>
           )}
         </tbody>

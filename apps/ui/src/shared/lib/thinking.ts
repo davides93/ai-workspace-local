@@ -1,15 +1,16 @@
 import type { LocalModel, ThinkingMode } from "../api/types";
 
+import { t } from "../i18n";
 /** The "Ragionamento" choices, in the order they are shown. */
 export const THINKING_MODES: ThinkingMode[] = ["off", "auto", "deep"];
 
-export const THINKING_LABEL: Record<ThinkingMode, string> = { off: "Spento", auto: "Automatico", deep: "Approfondito" };
+export const THINKING_LABEL: Record<ThinkingMode, string> = { get off() { return t("lib.spento"); }, get auto() { return t("lib.automatico"); }, get deep() { return t("lib.approfondito"); } };
 
 /** One sentence per choice, for the title of the control. */
 export const THINKING_HINT: Record<ThinkingMode, string> = {
-  off: "Risponde subito, senza pensarci su.",
-  auto: "Ragiona all'inizio e quando qualcosa non va, poi procede veloce.",
-  deep: "Ragiona sempre e più a lungo: più lento, più accurato.",
+  get off() { return t("lib.risponde_subito_senza_pensarci_su"); },
+  get auto() { return t("lib.ragiona_all_inizio_e_quando"); },
+  get deep() { return t("lib.ragiona_sempre_e_piu_a"); },
 };
 
 export const isThinkingMode = (v: unknown): v is ThinkingMode => v === "off" || v === "auto" || v === "deep";

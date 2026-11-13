@@ -1,0 +1,105 @@
+name: Mobile check
+
+# Compiles the mobile shells (Kotlin/Android and Swift/iOS), which the ordinary CI never builds.
+# Not a gate: both builds are `continue-on-error`, so a red result is a signal to look at, not a
+# blocked pull request. NEVER EXECUTED YET: written from the commands of store.yml and of
+# docs/mobile/BACKGROUND.md (which were run by hand on a Mac, see that page), not tried on GitHub.
+#
+# The Android and Xcode projects are not in the repository: `tauri android init` and `tauri ios init`
+# generate them in the runner (apps/desktop/src-tauri/gen/ is generated, as in store.yml). What IS in
+# the repository and gets compiled here: the Kotlin plugin (apps/desktop/plugins/tauri-plugin-aiw-native/android),
+# the Swift package (.../ios) and the Rust shell for the mobile targets. Nothing is signed or published.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/mobile-check.yml"
+
+concurrency:
+  group: mobile-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mobile-check:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # Never blocks: see the header.
+    continue-on-error: true
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Android (Kotlin, debug APK, arm64)
+            platform: android
+            os: ubuntu-latest
+          - name: iOS (Swift, debug, no signing)
+            platform: ios
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      # The shell embeds the built UI at compile time (frontendDist = apps/ui/dist).
+      - run: npm ci --prefix apps/ui && npm ci --prefix apps/desktop
+
+      # ---------------------------------------------------------------- Android
+      - if: matrix.platform == 'android'
+        uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - if: matrix.platform == 'android'
+        name: Android SDK platform
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null || true
+      - if: matrix.platform == 'android'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - if: matrix.platform == 'android'
+        uses: Swatinem/rust-cache@v2
+        with: { key: android }
+      - if: matrix.platform == 'android'
+        name: Build debug APK (compiles the Kotlin plugin and the Rust shell)
+        working-directory: apps/desktop
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          export ANDROID_NDK="$ANDROID_NDK_LATEST_HOME" ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
+          export ANDROID_API_LEVEL=26
+          npx tauri android init --ci
+          # Same Kotlin fixes as store.yml and release.yml (LiteRT-LM / ML Kit GenAI).
+          sed -i -E 's/(kotlin-gradle-plugin:)[0-9.]+/\12.4.0/' src-tauri/gen/android/build.gradle.kts
+          sed -i -E 's|(implementation\("com.android.tools.build:gradle:[0-9.]+"\))|\1\n    implementation("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.0")|' src-tauri/gen/android/buildSrc/build.gradle.kts
+          npx tauri android build --debug --target aarch64 --apk --ci
+
+      # -------------------------------------------------------------------- iOS
+      - if: matrix.platform == 'ios'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - if: matrix.platform == 'ios'
+        uses: Swatinem/rust-cache@v2
+        with: { key: ios }
+      - if: matrix.platform == 'ios'
+        name: Generate the Xcode project
+        working-directory: apps/desktop
+        run: |
+          xcodebuild -version
+          npx tauri ios init --ci
+      # The command verified by hand (docs/mobile/BACKGROUND.md): device target, archive only, no signing.
+      - if: matrix.platform == 'ios'
+        name: Build debug, device target, unsigned archive
+        working-directory: apps/desktop
+        run: npx tauri ios build --debug --target aarch64 --no-sign --archive-only --ci
+      # What was asked for: the simulator. The Tauri wrapper did not find the simulator SDK on the Xcode
+      # used for the manual run, so this one may fail for that reason alone; it has its own `continue-on-error`.
+      - if: matrix.platform == 'ios'
+        name: Build debug for the simulator, no signing
+        continue-on-error: true
+        working-directory: apps/desktop
+        run: npx tauri ios build --debug --target aarch64-sim --no-sign --ci

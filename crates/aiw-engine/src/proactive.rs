@@ -251,7 +251,7 @@ pub(crate) struct ConnectorCtx {
     /// Events of today that are not over yet, in time order.
     events: Vec<aiw_tools::connectors::Event>,
     /// Messages that arrived since the last tick, newest first.
-    mail: Vec<aiw_tools::connectors::Mail>,
+    pub(crate) mail: Vec<aiw_tools::connectors::Mail>,
 }
 
 impl ConnectorCtx {
@@ -342,6 +342,20 @@ impl Engine {
             calendar_sources: list("connectors.calendar.sources"),
             mail_enabled: self.0.config.get_bool("connectors.mail.enabled"),
             mail_sources: list("connectors.mail.sources"),
+            imap: self.imap_runtime(),
+            imap_days: self.0.config.get("connectors.mail.imap_days").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            imap_max_messages: self.0.config.get("connectors.mail.imap_max_messages").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            extra_roots: self.tls_roots(),
+        });
+    }
+
+    /// Copies the search settings (`search.*`) to the tool. Called at start and when one changes.
+    pub(crate) fn sync_search(&self) {
+        let text = |k: &str| self.0.config.get_str(k).unwrap_or_default();
+        self.0.search.set(aiw_tools::search::Config {
+            provider: text("search.provider"),
+            searxng_url: text("search.searxng_url"),
+            brave_api_key: text("search.brave_api_key"),
         });
     }
 
@@ -683,6 +697,10 @@ impl Engine {
             let status = if empty { "done" } else { "open" };
             let p = new_proposal("briefing", "Il riepilogo di oggi".into(), text, String::new(), day_key, status);
             self.0.store.proposal_insert(&p)?;
+            // The channels the person asked to receive the briefing on (nothing is sent to the others).
+            if !empty {
+                self.channels_send_briefing(p.noticed.clone());
+            }
             created.push(p.id);
         }
 
@@ -846,9 +864,8 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
             ctx.events = c.calendar_events(now, midnight_next).await.0;
         }
         if c.mail_enabled() {
-            let c = c.clone();
-            // File reading: off the async threads.
-            ctx.mail = tokio::task::spawn_blocking(move || c.mail_since(since, now).0).await.unwrap_or_default();
+            // File reading happens off the async threads, inside; IMAP is read with its own timeouts.
+            ctx.mail = c.mail_since(since, now).await.0;
         }
         ctx
     }
@@ -968,7 +985,7 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
     }
 
     /// One short question, the whole answer as text.
-    async fn ask_once(&self, p: &InferenceProfile, messages: Vec<Msg>, cancel: &CancellationToken) -> Result<String> {
+    pub(crate) async fn ask_once(&self, p: &InferenceProfile, messages: Vec<Msg>, cancel: &CancellationToken) -> Result<String> {
         let backend = self
             .0
             .runtimes
@@ -1010,15 +1027,12 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
         Ok(clean.trim().to_string())
     }
 
-    /// The agent a proposal run uses: the configured one, read-only. Never more permissive than its own
-    /// policy: plan mode (so only reading is allowed), a read-only sandbox, only the tools that read (plus
-    /// `todo` and the memory search), no sub-agents and a small budget.
-    pub(crate) fn proactive_agent(&self, base_id: &str) -> Result<AgentProfile> {
-        let mut a = self.agent(base_id)?;
-        let network = self.proactive_level() == "act_readonly";
+    /// The tools a read-only run may use: those that read (and, when `network`, those that reach the network),
+    /// except the ones an agent must be given explicitly, plus `todo` and the memory and document searches. The
+    /// connectors only read and the person switched them on in the settings: they are allowed even when the
+    /// agent's own list was written before they existed.
+    pub(crate) fn readonly_tools(&self, a: &AgentProfile, network: bool) -> Vec<String> {
         let reg = self.tool_registry();
-        // The connectors only read and the person switched them on in the settings: a proposal run may use them
-        // even when the agent's own list was written before they existed.
         let allowed = |name: &str| a.tools.iter().any(|t| t == "*" || t == name) || aiw_tools::connectors::TOOL_NAMES.contains(&name);
         let mut tools: Vec<String> = reg
             .all()
@@ -1032,11 +1046,21 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
             })
             .map(|t| t.name().to_string())
             .collect();
-        for internal in ["todo", "memory_search"] {
+        for internal in ["todo", "memory_search", aiw_agent::internal::KB_SEARCH] {
             if allowed(internal) {
                 tools.push(internal.into());
             }
         }
+        tools
+    }
+
+    /// The agent a proposal run uses: the configured one, read-only. Never more permissive than its own
+    /// policy: plan mode (so only reading is allowed), a read-only sandbox, only the tools that read (plus
+    /// `todo` and the memory and document searches), no sub-agents and a small budget.
+    pub(crate) fn proactive_agent(&self, base_id: &str) -> Result<AgentProfile> {
+        let mut a = self.agent(base_id)?;
+        let network = self.proactive_level() == "act_readonly";
+        let tools = self.readonly_tools(&a, network);
         a.id = format!("{PROACTIVE_PREFIX}{}", a.id);
         a.name = format!("{} (proposte)", a.name);
         a.tools = tools;

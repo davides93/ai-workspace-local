@@ -4,6 +4,7 @@ description = "Hardware probe: CPU features, memory, GPUs (CUDA/ROCm/Metal/Vulka
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [dependencies]
 aiw-core.workspace = true

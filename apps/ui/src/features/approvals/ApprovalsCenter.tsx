@@ -5,6 +5,7 @@ import { ApprovalDrawer } from "./components/ApprovalDrawer";
 import { pendingLabel } from "./model/shortcuts";
 import "./approvals.css";
 
+import { t } from "../../shared/i18n";
 /**
  * Global inbox of pending confirmations (agents, sub-agents and unattended workflows): a banner
  * under the shell header with the count, and the drawer to decide. The banner's live region is
@@ -31,8 +32,8 @@ export function ApprovalsCenter() {
               <b>{pendingLabel(items.length)}</b>
               <span className="apv-banner-reason"> · {items[0].reason}</span>
             </span>
-            {high > 0 && <Pill tone="crit">{high === 1 ? "1 ad alto rischio" : `${high} ad alto rischio`}</Pill>}
-            <span className="btn sm primary banner-cta" aria-hidden="true">Rivedi</span>
+            {high > 0 && <Pill tone="crit">{high === 1 ? t("approvals.1_ad_alto_rischio") : t("approvals.ad_alto_rischio", { high })}</Pill>}
+            <span className="btn sm primary banner-cta" aria-hidden="true">{t("approvals.rivedi")}</span>
           </button>
         )}
       </div>

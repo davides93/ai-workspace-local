@@ -1,6 +1,7 @@
 [
  {
   "id": "llama-server",
+  "route_priority": 10,
   "thinking": { "style": "template-kwargs", "budget_field": "reasoning_budget_tokens" },
   "name": "llama.cpp server",
   "vendor": "ggml-org",
@@ -194,6 +195,7 @@
  },
  {
   "id": "ollama",
+  "route_priority": 20,
   "thinking": { "style": "reasoning-effort" },
   "name": "Ollama",
   "vendor": "Ollama",
@@ -293,6 +295,7 @@
  },
  {
   "id": "lmstudio",
+  "route_priority": 30,
   "thinking": { "style": "prompt-suffix" },
   "name": "LM Studio",
   "vendor": "Element Labs",
@@ -357,6 +360,7 @@
  },
  {
   "id": "vllm",
+  "route_priority": 10,
   "thinking": { "style": "template-kwargs" },
   "name": "vLLM",
   "vendor": "vLLM project",
@@ -517,6 +521,7 @@
  },
  {
   "id": "sglang",
+  "route_priority": 20,
   "name": "SGLang",
   "vendor": "LMSYS",
   "kind": "sidecar",
@@ -610,6 +615,7 @@
  },
  {
   "id": "trtllm",
+  "route_priority": 25,
   "name": "TensorRT-LLM",
   "vendor": "NVIDIA",
   "kind": "sidecar",
@@ -687,6 +693,7 @@
  },
  {
   "id": "mlx-lm",
+  "route_priority": 10,
   "thinking": { "style": "prompt-suffix" },
   "name": "MLX LM",
   "vendor": "Apple ML Research",
@@ -778,6 +785,7 @@
  },
  {
   "id": "mlx-vlm",
+  "route_priority": 20,
   "name": "MLX VLM",
   "vendor": "Prince Canuma",
   "kind": "sidecar",
@@ -847,6 +855,7 @@
  },
  {
   "id": "foundry-local",
+  "route_priority": 20,
   "name": "Foundry Local",
   "vendor": "Microsoft",
   "kind": "sidecar",
@@ -911,6 +920,7 @@
  },
  {
   "id": "lemonade",
+  "route_priority": 30,
   "name": "Lemonade Server",
   "vendor": "AMD",
   "kind": "sidecar",
@@ -978,6 +988,7 @@
  },
  {
   "id": "openvino",
+  "route_priority": 30,
   "name": "OpenVINO Model Server",
   "vendor": "Intel",
   "kind": "sidecar",
@@ -1061,6 +1072,7 @@
  },
  {
   "id": "localai",
+  "route_priority": 45,
   "name": "LocalAI",
   "vendor": "mudler",
   "kind": "sidecar",
@@ -1139,6 +1151,7 @@
  },
  {
   "id": "koboldcpp",
+  "route_priority": 40,
   "thinking": { "style": "prompt-suffix" },
   "name": "KoboldCpp",
   "vendor": "LostRuins",
@@ -1243,6 +1256,7 @@
  },
  {
   "id": "llamafile",
+  "route_priority": 45,
   "thinking": { "style": "prompt-suffix" },
   "name": "llamafile",
   "vendor": "Mozilla.ai",
@@ -1349,6 +1363,7 @@
  },
  {
   "id": "nexa",
+  "route_priority": 40,
   "name": "Nexa SDK",
   "vendor": "Nexa AI",
   "kind": "sidecar",
@@ -1417,6 +1432,7 @@
  },
  {
   "id": "mistralrs",
+  "route_priority": 30,
   "name": "mistral.rs",
   "vendor": "Eric Buehler",
   "kind": "sidecar",
@@ -1485,6 +1501,7 @@
  },
  {
   "id": "tabbyapi",
+  "route_priority": 15,
   "name": "TabbyAPI (ExLlamaV3)",
   "vendor": "theroyallab",
   "kind": "sidecar",
@@ -1649,6 +1666,7 @@
  },
  {
   "id": "exo",
+  "route_priority": 60,
   "name": "exo (cluster)",
   "vendor": "exo labs",
   "kind": "sidecar",
@@ -1784,7 +1802,51 @@
   "homepage": "https://github.com/ggml-org/whisper.cpp"
  },
  {
+  "id": "piper",
+  "name": "Piper",
+  "vendor": "Rhasspy",
+  "kind": "sidecar",
+  "api": "none",
+  "description": "Voce neurale locale (TTS) per leggere le risposte: AIW avvia l'eseguibile per ogni frase, con una voce .onnx scaricata da Modelli.",
+  "platforms": [
+   "windows",
+   "macos",
+   "linux"
+  ],
+  "accelerators": [
+   "cpu"
+  ],
+  "formats": [
+   "piper"
+  ],
+  "capabilities": [
+   "tts"
+  ],
+  "detect": {
+   "binaries": [
+    "piper"
+   ]
+  },
+  "settings": {
+   "type": "object",
+   "properties": {
+    "binary": {
+     "type": "string",
+     "title": "Percorso dell'eseguibile",
+     "description": "Lascia vuoto per cercarlo nel PATH e nella cartella dei runtime di AIW",
+     "default": "",
+     "advanced": true
+    }
+   }
+  },
+  "install": {
+   "any": "Scarica la release di Piper da https://github.com/rhasspy/piper/releases, estraila e metti la cartella nel PATH (o in quella dei runtime di AIW)"
+  },
+  "homepage": "https://github.com/rhasspy/piper"
+ },
+ {
   "id": "llama-embedded",
+  "route_priority": 12,
   "thinking": { "style": "prompt-suffix" },
   "name": "llama.cpp (embedded)",
   "vendor": "ggml-org",
@@ -1849,6 +1911,7 @@
  },
  {
   "id": "ort-genai",
+  "route_priority": 15,
   "thinking": { "style": "prompt-suffix" },
   "name": "ONNX Runtime GenAI",
   "vendor": "Microsoft",
@@ -2069,6 +2132,7 @@
  },
  {
   "id": "litert-lm",
+  "route_priority": 15,
   "name": "LiteRT-LM",
   "vendor": "Google AI Edge",
   "kind": "embedded",
@@ -2224,6 +2288,7 @@
  },
  {
   "id": "apple-fm",
+  "route_priority": 5,
   "name": "Apple Foundation Models",
   "vendor": "Apple",
   "kind": "system",
@@ -2274,6 +2339,7 @@
  },
  {
   "id": "gemini-nano",
+  "route_priority": 5,
   "name": "Gemini Nano (ML Kit GenAI)",
   "vendor": "Google",
   "kind": "system",
@@ -2318,6 +2384,7 @@
  },
  {
   "id": "phi-silica",
+  "route_priority": 5,
   "name": "Phi Silica (Windows AI APIs)",
   "vendor": "Microsoft",
   "kind": "system",

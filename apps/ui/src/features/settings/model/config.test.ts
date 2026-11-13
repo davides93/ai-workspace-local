@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigView, SettingsSchema } from "../../../shared/api/types";
 import {
-  configTheme, configUiMode, DEVELOPER_ONLY, definingLayers, formatValue, groupSettings, hasOwn, hintOf, overriddenBy, parseNumber, sectionOf, shortTitle, shownValue, uiModeLayer, winningLayer,
+  configTheme, configUiMode, DEVELOPER_ONLY, definingLayers, formatValue, groupSettings, hasOwn, hintOf, optionLabel, overriddenBy, parseNumber, sectionOf, shortTitle, shownValue, uiModeLayer, winningLayer,
 } from "./config";
 
 const schema: SettingsSchema = {
@@ -72,6 +72,20 @@ describe("sections", () => {
     expect(sectionOf("connectors.calendar.sources").id).toBe("connectors");
     expect(sectionOf("connectors.mail.sources").description).toMatch(/Sola lettura.*restano su questo dispositivo/);
     for (const k of ["connectors.calendar.enabled", "connectors.calendar.sources", "connectors.mail.enabled", "connectors.mail.sources"]) expect(DEVELOPER_ONLY).not.toContain(k);
+  });
+  it("puts the web search settings in their own section, visible in the simple view too", () => {
+    const keys = ["search.provider", "search.searxng_url", "search.brave_api_key"];
+    for (const k of keys) {
+      expect(sectionOf(k)).toMatchObject({ id: "search", title: "Ricerca web" });
+      expect(DEVELOPER_ONLY).not.toContain(k);
+    }
+    expect(sectionOf("search.provider").description).toMatch(/inviato al motore scelto.*SearXNG può girare su questo computer/);
+    const search = { type: "object", properties: Object.fromEntries(["connectors.mail.enabled", ...keys].map((k) => [k, { type: "string" }])) } as unknown as SettingsSchema;
+    expect(groupSettings(search).map((g) => g.section.id)).toEqual(["connectors", "search"]);
+    expect(groupSettings(search, "ricerca")).toEqual([]);
+  });
+  it("names the choices of the search engine", () => {
+    expect(["auto", "duckduckgo", "searxng", "brave", "off"].map((v) => optionLabel("search.provider", v))).toEqual(["Automatico", "DuckDuckGo", "SearXNG", "Brave Search", "Spenta"]);
   });
   it("puts the voice settings in their own section", () => {
     const voice = { type: "object", properties: { "voice.language": { type: "string" }, "voice.stt_runtime": { type: "string" }, "server.port": { type: "integer" } } } as unknown as SettingsSchema;

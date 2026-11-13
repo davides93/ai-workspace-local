@@ -3,6 +3,7 @@
 
 import type { Platform } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 export interface Containment {
   os: Platform;
   label: string;
@@ -14,40 +15,54 @@ export interface Containment {
   writes: string;
   /** Can the network of a command be closed? */
   network: string;
+  /** Can the app folder and the credential folders be hidden from a command's reads? */
+  reads: string;
+  /** Can an MCP server (stdio) be isolated the same way? */
+  mcp: string;
   /** Condition or caveat. */
   note: string;
 }
 
 export const CONTAINMENT: Containment[] = [
   {
-    os: "linux", label: "Linux", mechanism: "bubblewrap (bwrap)", shell: true,
-    writes: "Radice in sola lettura, /tmp privato; la cartella di lavoro è scrivibile solo in «Scrittura nel workspace».",
-    network: "Aperta di default. Si chiude (--unshare-net) solo se la chiamata del tool la esclude.",
-    note: "Richiede bubblewrap installato: senza, i comandi girano senza contenimento e la modalità Auto chiede conferma per ognuno.",
+    os: "linux", get label() { return t("security.linux"); }, get mechanism() { return t("security.bubblewrap_bwrap"); }, shell: true,
+    get writes() { return t("security.radice_in_sola_lettura_tmp"); },
+    get network() { return t("security.chiusa_di_default_unshare_net"); },
+    get reads() { return t("security.si_la_cartella_dei_dati"); },
+    get mcp() { return t("security.si_con_lo_stesso_meccanismo"); },
+    get note() { return t("security.richiede_bubblewrap_installato_senza_i"); },
   },
   {
-    os: "macos", label: "macOS", mechanism: "sandbox-exec (profilo Seatbelt)", shell: true,
-    writes: "Scritture negate ovunque tranne la cartella di lavoro (in «Scrittura nel workspace») e le cartelle temporanee.",
-    network: "Aperta di default. Si chiude ((deny network*)) solo se la chiamata del tool la esclude.",
-    note: "Usa lo strumento di sistema /usr/bin/sandbox-exec.",
+    os: "macos", get label() { return t("security.macos"); }, get mechanism() { return t("security.sandbox_exec_profilo_seatbelt"); }, shell: true,
+    get writes() { return t("security.scritture_negate_ovunque_tranne_la"); },
+    get network() { return t("security.chiusa_di_default_deny_network"); },
+    get reads() { return t("security.si_con_regole_del_profilo"); },
+    get mcp() { return t("security.si_con_lo_stesso_meccanismo_2"); },
+    get note() { return t("security.sandbox_exec_note"); },
   },
   {
-    os: "windows", label: "Windows", mechanism: "token a integrità bassa e job object", shell: true,
-    writes: "Scrive solo nella cartella di lavoro (in «Scrittura nel workspace»).",
-    network: "Non isolata: il contenimento di Windows non chiude la rete.",
-    note: "I comandi girano in PowerShell; il contenimento è quello del crate aiw-winsandbox.",
+    os: "windows", get label() { return t("security.windows"); }, get mechanism() { return t("security.token_a_integrita_bassa_e"); }, shell: true,
+    get writes() { return t("security.scrive_solo_nella_cartella_di"); },
+    get network() { return t("security.non_isolata_su_windows_la"); },
+    get reads() { return t("security.no_il_token_a_integrita"); },
+    get mcp() { return t("security.no_i_server_mcp_non"); },
+    get note() { return t("security.i_comandi_girano_in_powershell"); },
   },
   {
-    os: "android", label: "Android", mechanism: null, shell: true,
-    writes: "Nessun contenimento dei comandi.",
+    os: "android", get label() { return t("security.android"); }, mechanism: null, shell: true,
+    get writes() { return t("security.nessun_contenimento_dei_comandi"); },
     network: "Aperta.",
-    note: "Il backend non rileva una sandbox: i comandi girano con i privilegi dell'app e la modalità Auto chiede conferma per ognuno.",
+    reads: "No.",
+    mcp: "No.",
+    get note() { return t("security.il_backend_non_rileva_una"); },
   },
   {
-    os: "ios", label: "iOS", mechanism: null, shell: false,
+    os: "ios", get label() { return t("security.ios"); }, mechanism: null, shell: false,
     writes: "—",
     network: "—",
-    note: "iOS non consente di eseguire processi: il tool di shell non è disponibile.",
+    reads: "—",
+    mcp: "—",
+    get note() { return t("security.ios_non_consente_di_eseguire"); },
   },
 ];
 
@@ -56,19 +71,23 @@ export const containmentFor = (os: string | undefined): Containment | undefined 
 /** Limits of the current implementation, stated as the code behaves today. */
 export const KNOWN_LIMITS: { title: string; body: string }[] = [
   {
-    title: "La rete dei comandi è aperta di default",
-    body: "Il tool di shell ha un parametro «network» che vale «vero» se non indicato: la sandbox chiude la rete (Linux e macOS) solo quando la chiamata lo chiede. Non esiste un'impostazione che la chiuda per tutti i comandi e su Windows la rete non è isolata. I domini consentiti valgono per web e browser, non per i comandi.",
+    get title() { return t("security.su_windows_la_rete_dei_2"); },
+    get body() { return t("security.su_linux_e_macos_la"); },
   },
   {
-    title: "Senza sandbox i comandi hanno i tuoi privilegi",
-    body: "Succede con la sandbox «Nessun contenimento», su Linux senza bubblewrap e su Android. In quei casi la sola barriera è la conferma: tieni la modalità su «Chiedi» o «Modifica».",
+    get title() { return t("security.senza_sandbox_i_comandi_hanno"); },
+    get body() { return t("security.succede_con_la_sandbox_nessun"); },
   },
   {
-    title: "La sandbox riguarda solo i comandi di shell",
-    body: "I tool di file sono limitati alla cartella di lavoro da un controllo sui percorsi (anche attraverso i collegamenti simbolici). Il browser controllato, i server MCP (stdio) e gli hook non passano da questa sandbox: sono processi avviati con i tuoi privilegi.",
+    get title() { return t("security.le_regole_della_policy_leggono"); },
+    get body() { return t("security.un_comando_composto_con_e"); },
   },
   {
-    title: "«Senza freni» più «Nessun contenimento» non lascia protezioni",
-    body: "Un agente con entrambe le impostazioni può fare ciò che puoi fare tu, senza chiedere. Solo le regole «Nega» della policy e gli hook di blocco restano in vigore.",
+    get title() { return t("security.browser_controllato_hook_e_valutatori"); },
+    get body() { return t("security.i_tool_di_file_sono"); },
+  },
+  {
+    get title() { return t("security.senza_freni_piu_nessun_contenimento"); },
+    get body() { return t("security.un_agente_con_entrambe_le"); },
   },
 ];

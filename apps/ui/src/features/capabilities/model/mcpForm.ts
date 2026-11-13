@@ -1,8 +1,9 @@
-import type { McpServer } from "../../../shared/api/types";
+import type { McpSandbox, McpServer } from "../../../shared/api/types";
 import { duplicateKeys, recordToRows, rowsToRecord, strayMasks, type KvRow } from "../../../shared/lib/kvRows";
 import { isSecretName, SECRET_MASK } from "../../../shared/lib/secrets";
 import { joinShellWords, splitShellWords } from "../../../shared/lib/tokens";
 
+import { t } from "../../../shared/i18n";
 export type McpTransportKind = "stdio" | "http";
 
 /** The drawer form: strings and rows while editing, converted to the API shape on save. */
@@ -17,13 +18,34 @@ export interface McpDraft {
   url: string;
   headers: KvRow[];
   enabled: boolean;
+  /** Sampling for this server; `undefined` = not set (off). */
+  sampling?: boolean;
+  /** Client id registered by hand (http servers without dynamic registration). */
+  oauthClientId: string;
+  /** Isolation of a stdio server (ignored for http). */
+  sandbox: McpSandbox;
+  /** Network for an isolated stdio server. */
+  sandboxNetwork: boolean;
 }
 
 export type McpPayload = Partial<McpServer> & { name: string; transport: McpTransportKind };
 
-export function emptyDraft(): McpDraft {
-  return { name: "", transport: "stdio", command: "", args: [], env: [], url: "", headers: [], enabled: true };
+/**
+ * A new server is isolated (workspace-write, network on) when this system can do it; otherwise it stays `off`
+ * and the form says why.
+ */
+export function emptyDraft(isolationAvailable = true): McpDraft {
+  return {
+    name: "", transport: "stdio", command: "", args: [], env: [], url: "", headers: [], enabled: true, oauthClientId: "",
+    sandbox: isolationAvailable ? "workspace-write" : "off", sandboxNetwork: true,
+  };
 }
+
+export const MCP_SANDBOX_LABEL: Record<McpSandbox, string> = {
+  get "off"() { return t("capabilities.nessun_isolamento"); },
+  get "read-only"() { return t("capabilities.sola_lettura"); },
+  get "workspace-write"() { return t("capabilities.scrittura_nel_workspace"); },
+};
 
 export function draftFromServer(s: McpServer): McpDraft {
   return {
@@ -37,6 +59,10 @@ export function draftFromServer(s: McpServer): McpDraft {
     url: s.url ?? "",
     headers: recordToRows(s.headers, SECRET_MASK),
     enabled: s.enabled,
+    sampling: s.sampling,
+    oauthClientId: s.oauth_client_id ?? "",
+    sandbox: s.sandbox ?? "off",
+    sandboxNetwork: s.sandbox_network ?? true,
   };
 }
 
@@ -48,13 +74,14 @@ export const normalizeName = (name: string) => name.trim().replace(/ /g, "_");
  * did not touch goes back as `SECRET_MASK`, which the backend reads as "keep the stored value".
  */
 export function draftToPayload(d: McpDraft): McpPayload {
-  const base = { ...(d.id ? { id: d.id } : {}), name: normalizeName(d.name), enabled: d.enabled };
+  const base = { ...(d.id ? { id: d.id } : {}), name: normalizeName(d.name), enabled: d.enabled, ...(d.sampling !== undefined ? { sampling: d.sampling } : {}) };
   if (d.transport === "stdio") {
     const env = rowsToRecord(d.env);
-    return { ...base, transport: "stdio", command: d.command.trim(), args: d.args, ...(Object.keys(env).length ? { env } : {}) };
+    return { ...base, transport: "stdio", command: d.command.trim(), args: d.args, sandbox: d.sandbox, sandbox_network: d.sandboxNetwork, ...(Object.keys(env).length ? { env } : {}) };
   }
   const headers = rowsToRecord(d.headers);
-  return { ...base, transport: "http", url: d.url.trim(), ...(Object.keys(headers).length ? { headers } : {}) };
+  const clientId = d.oauthClientId.trim();
+  return { ...base, transport: "http", url: d.url.trim(), ...(Object.keys(headers).length ? { headers } : {}), ...(clientId ? { oauth_client_id: clientId } : {}) };
 }
 
 export type McpErrors = Partial<Record<"name" | "command" | "url" | "env" | "headers", string>>;
@@ -70,7 +97,7 @@ export function isHttpUrl(s: string): boolean {
 }
 
 const strayMessage = (names: string[]) =>
-  `Il valore di ${names.join(", ")} è nascosto e non può passare a un altro nome: scrivilo di nuovo («${SECRET_MASK}» è riservato ai segreti già salvati).`;
+  t("capabilities.il_valore_di_e_nascosto", { names: names.join(", "), mask: SECRET_MASK });
 
 /**
  * Mirrors `validate_mcp` (crates/aiw-engine/src/lib.rs): a name, a command for stdio, an `http(s)` address for
@@ -80,20 +107,20 @@ const strayMessage = (names: string[]) =>
 export function validateDraft(d: McpDraft, others: string[]): McpErrors {
   const e: McpErrors = {};
   const name = normalizeName(d.name);
-  if (!name) e.name = "Serve un nome";
-  else if (others.some((n) => n.toLowerCase() === name.toLowerCase())) e.name = "Esiste già un server con questo nome";
+  if (!name) e.name = t("capabilities.need_name");
+  else if (others.some((n) => n.toLowerCase() === name.toLowerCase())) e.name = t("capabilities.esiste_gia_un_server_con");
   if (d.transport === "stdio") {
-    if (!d.command.trim()) e.command = "Serve il comando da avviare";
+    if (!d.command.trim()) e.command = t("capabilities.need_command");
     const dup = duplicateKeys(d.env);
     const stray = strayMasks(d.env, SECRET_MASK);
-    if (dup.length) e.env = `Variabile ripetuta: ${dup.join(", ")}`;
+    if (dup.length) e.env = t("capabilities.variabile_ripetuta", { names: dup.join(", ") });
     else if (stray.length) e.env = strayMessage(stray);
   } else {
-    if (!d.url.trim()) e.url = "Serve l'indirizzo del server";
-    else if (!isHttpUrl(d.url.trim())) e.url = "L'indirizzo deve iniziare con http:// o https://";
+    if (!d.url.trim()) e.url = t("capabilities.serve_l_indirizzo_del_server");
+    else if (!isHttpUrl(d.url.trim())) e.url = t("capabilities.l_indirizzo_deve_iniziare_con");
     const dup = duplicateKeys(d.headers, true);
     const stray = strayMasks(d.headers, SECRET_MASK);
-    if (dup.length) e.headers = `Header ripetuto: ${dup.join(", ")}`;
+    if (dup.length) e.headers = t("capabilities.header_ripetuto", { names: dup.join(", ") });
     else if (stray.length) e.headers = strayMessage(stray);
   }
   return e;

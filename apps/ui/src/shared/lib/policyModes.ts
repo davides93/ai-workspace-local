@@ -1,32 +1,33 @@
 import type { PolicyMode, SandboxMode, ToolRisk } from "../api/types";
 import type { PillTone } from "../ui";
 
+import { t } from "../i18n";
 /** Approval modes of an agent (crates/aiw-agent/src/policy.rs), with what each one really does. */
 export const APPROVAL_MODES: { id: PolicyMode; label: string; summary: string; detail: string; tone: PillTone }[] = [
   {
-    id: "plan", label: "Piano", tone: "info",
-    summary: "Solo lettura: analizza e propone, non modifica nulla.",
-    detail: "Consente lettura e rete; nega scritture, comandi e azioni su mouse e tastiera.",
+    id: "plan", get label() { return t("lib.piano"); }, tone: "info",
+    get summary() { return t("lib.solo_lettura_analizza_e_propone"); },
+    get detail() { return t("lib.consente_lettura_e_rete_nega"); },
   },
   {
-    id: "ask", label: "Chiedi", tone: "ok",
-    summary: "Chiede conferma per ogni modifica, comando o azione sul computer.",
-    detail: "Legge e naviga da solo; prima di scrivere file, eseguire comandi o usare mouse e tastiera chiede il tuo consenso.",
+    id: "ask", get label() { return t("lib.chiedi"); }, tone: "ok",
+    get summary() { return t("lib.chiede_conferma_per_ogni_modifica"); },
+    get detail() { return t("lib.legge_e_naviga_da_solo"); },
   },
   {
-    id: "auto-edit", label: "Modifica", tone: "warn",
-    summary: "Modifica i file da solo, chiede per i comandi.",
-    detail: "Lettura, rete e scrittura di file senza conferma; i comandi e le azioni su mouse e tastiera chiedono il consenso.",
+    id: "auto-edit", get label() { return t("lib.modifica"); }, tone: "warn",
+    get summary() { return t("lib.modifica_i_file_da_solo"); },
+    get detail() { return t("lib.lettura_rete_e_scrittura_di"); },
   },
   {
-    id: "auto", label: "Auto", tone: "warn",
-    summary: "Esegue anche i comandi, ma dentro la sandbox.",
-    detail: "Chiede solo per mouse e tastiera e, se il sistema non ha una sandbox, per ogni comando.",
+    id: "auto", get label() { return t("lib.auto"); }, tone: "warn",
+    get summary() { return t("lib.esegue_anche_i_comandi_ma"); },
+    get detail() { return t("lib.chiede_solo_per_mouse_e"); },
   },
   {
-    id: "yolo", label: "Senza freni", tone: "crit",
-    summary: "Nessuna conferma: sconsigliato.",
-    detail: "Consente tutto, comprese le azioni distruttive. Le regole di rifiuto della policy restano valide.",
+    id: "yolo", get label() { return t("lib.senza_freni"); }, tone: "crit",
+    get summary() { return t("lib.nessuna_conferma_sconsigliato"); },
+    get detail() { return t("lib.consente_tutto_comprese_le_azioni"); },
   },
 ];
 
@@ -34,18 +35,18 @@ export const approvalMode = (id: string) => APPROVAL_MODES.find((m) => m.id === 
 
 /** Sandbox modes of an agent: how far its commands and file tools can reach. */
 export const SANDBOX_MODES: { id: SandboxMode; label: string; summary: string; tone: PillTone }[] = [
-  { id: "read-only", label: "Sola lettura", tone: "ok", summary: "I comandi leggono ma non scrivono; i tool di file non modificano nulla." },
-  { id: "workspace-write", label: "Scrittura nel workspace", tone: "ok", summary: "Comandi e tool di file scrivono solo dentro la cartella di lavoro." },
-  { id: "off", label: "Nessun contenimento", tone: "crit", summary: "Comandi e tool di file agiscono con i tuoi privilegi, anche fuori dal workspace." },
+  { id: "read-only", get label() { return t("lib.sola_lettura"); }, tone: "ok", get summary() { return t("lib.i_comandi_leggono_ma_non"); } },
+  { id: "workspace-write", get label() { return t("lib.scrittura_nel_workspace"); }, tone: "ok", get summary() { return t("lib.comandi_e_tool_di_file"); } },
+  { id: "off", get label() { return t("lib.nessun_contenimento"); }, tone: "crit", get summary() { return t("lib.comandi_e_tool_di_file_2"); } },
 ];
 
 export const sandboxMode = (id: string) => SANDBOX_MODES.find((m) => m.id === id);
 
 /** Same labels and tones as the tool table of "Tool, MCP e browser". */
 export const RISK_META: Record<ToolRisk, { label: string; tone: PillTone; hint: string }> = {
-  read: { label: "lettura", tone: "ok", hint: "Legge dati, non cambia nulla." },
-  write: { label: "scrittura", tone: "warn", hint: "Crea o modifica file." },
-  exec: { label: "esecuzione", tone: "crit", hint: "Esegue comandi di shell." },
-  network: { label: "rete", tone: "info", hint: "Accede a pagine web o servizi di rete." },
-  computer: { label: "computer-use", tone: "crit", hint: "Controlla mouse, tastiera o il desktop." },
+  read: { get label() { return t("lib.lettura"); }, tone: "ok", get hint() { return t("lib.legge_dati_non_cambia_nulla"); } },
+  write: { get label() { return t("lib.scrittura"); }, tone: "warn", get hint() { return t("lib.crea_o_modifica_file"); } },
+  exec: { get label() { return t("lib.esecuzione"); }, tone: "crit", get hint() { return t("lib.esegue_comandi_di_shell"); } },
+  network: { get label() { return t("lib.rete"); }, tone: "info", get hint() { return t("lib.accede_a_pagine_web_o"); } },
+  computer: { get label() { return t("lib.computer_use"); }, tone: "crit", get hint() { return t("lib.controlla_mouse_tastiera_o_il"); } },
 };

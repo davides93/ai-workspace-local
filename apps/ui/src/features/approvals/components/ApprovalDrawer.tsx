@@ -5,6 +5,7 @@ import { useRespondApproval } from "../api";
 import { approvalShortcut, isTypingTarget, moveSelection, pendingLabel } from "../model/shortcuts";
 import { ApprovalCard } from "./ApprovalCard";
 
+import { t, tNode } from "../../../shared/i18n";
 /**
  * Side drawer with every pending confirmation. A allows and N denies the highlighted request
  * (the first one to begin with), ↑/↓ change it, so a queue is cleared from the keyboard.
@@ -35,15 +36,15 @@ export function ApprovalDrawer({ items, onClose }: { items: ApprovalRequest[]; o
 
   return (
     <Drawer
-      title={`Conferme in attesa (${items.length})`}
-      subtitle="Gli agenti e i workflow restano in pausa finché non decidi."
+      title={t("approvals.conferme_in_attesa", { length: items.length })}
+      subtitle={t("approvals.gli_agenti_e_i_workflow")}
       onClose={onClose}
       footer={
-        <p className="apv-hints" aria-label="Scorciatoie da tastiera">
-          <span><kbd>A</kbd> consenti</span>
-          <span><kbd>N</kbd> nega</span>
-          {items.length > 1 && <span><kbd>↑</kbd><kbd>↓</kbd> cambia richiesta</span>}
-          <span><kbd>Esc</kbd> chiudi</span>
+        <p className="apv-hints" aria-label={t("approvals.scorciatoie_da_tastiera")}>
+          <span>{tNode("approvals.consenti", { kbd: <kbd>{t("approvals.a")}</kbd> })}</span>
+          <span>{tNode("approvals.nega", { kbd: <kbd>{t("approvals.n")}</kbd> })}</span>
+          {items.length > 1 && <span>{tNode("approvals.cambia_richiesta", { kbd: <kbd>↑</kbd>, kbd2: <kbd>↓</kbd> })}</span>}
+          <span>{tNode("approvals.chiudi", { kbd: <kbd>{t("approvals.esc")}</kbd> })}</span>
         </p>
       }
     >

@@ -10,6 +10,7 @@ import { Stat, Stats } from "./common";
 import { DownloadCard } from "./DownloadCard";
 import { useProviderAuthDialog } from "./ProviderAuthDialog";
 
+import { t } from "../../../shared/i18n";
 /** The queue: every job with progress, speed, time left, persistent errors, retry, cancel and clear. */
 export function DownloadsTab({ jobs }: { jobs: DownloadProgress[] }) {
   const catalog = useCatalog();
@@ -24,32 +25,31 @@ export function DownloadsTab({ jobs }: { jobs: DownloadProgress[] }) {
   if (jobs.length === 0) {
     return (
       <EmptyState
-        icon="download" title="Nessun download"
-        description="I download avviati da Scopri o dal catalogo compaiono qui, con avanzamento, velocità, tempo stimato ed eventuali errori."
-        action={<><Button variant="primary" icon="search" onClick={() => navigate("/models/discover")}>Scopri modelli</Button><Button onClick={() => navigate("/models/catalog")}>Apri il catalogo</Button></>}
+        headingLevel={2} icon="download" title={t("models.nessun_download")}
+        description={t("models.i_download_avviati_da_scopri")}
+        action={<><Button variant="primary" icon="search" onClick={() => navigate("/models/discover")}>{t("models.scopri_modelli")}</Button><Button onClick={() => navigate("/models/catalog")}>{t("models.apri_il_catalogo")}</Button></>}
       />
     );
   }
 
   return (
     <div className="stack stack-lg">
-      <h2 className="sr-only">Coda dei download</h2>
+      <h2 className="sr-only">{t("models.coda_dei_download")}</h2>
       {summary.active > 0 && (
-        <Panel title="Coda in corso" icon="activity">
+        <Panel title={t("models.coda_in_corso")} icon="activity">
           <Stats wide>
-            <Stat label="Attivi">{summary.running + summary.verifying}{summary.queued > 0 ? ` · ${summary.queued} in coda` : ""}</Stat>
-            <Stat label="Velocità">{formatSpeed(summary.speedBps)}</Stat>
-            <Stat label="Da scaricare">{formatBytes(summary.remainingBytes)}</Stat>
-            <Stat label="Tempo stimato">{summary.etaSeconds === null ? "—" : formatEta(summary.etaSeconds)}</Stat>
+            <Stat label={t("models.attivi")}>{summary.running + summary.verifying}{summary.queued > 0 ? t("models.in_coda_2", { queued: summary.queued }) : ""}</Stat>
+            <Stat label={t("models.velocita")}>{formatSpeed(summary.speedBps)}</Stat>
+            <Stat label={t("models.da_scaricare")}>{formatBytes(summary.remainingBytes)}</Stat>
+            <Stat label={t("models.tempo_stimato")}>{summary.etaSeconds === null ? "—" : formatEta(summary.etaSeconds)}</Stat>
           </Stats>
         </Panel>
       )}
       {finishedIds.length > 0 && (
         <div className="row row-between">
-          <span className="faint text-sm">{summary.failed > 0 ? "Gli errori restano qui finché non li rimuovi." : "Download conclusi."}</span>
+          <span className="faint text-sm">{summary.failed > 0 ? t("models.gli_errori_restano_qui_finche") : t("models.download_conclusi")}</span>
           <Button size="sm" variant="ghost" icon="trash" onClick={() => clearAll.mutate(finishedIds)} disabled={clearAll.isPending}>
-            Rimuovi i conclusi ({finishedIds.length})
-          </Button>
+            {t("models.rimuovi_i_conclusi", { length: finishedIds.length })}</Button>
         </div>
       )}
       <div className="mh-jobs">

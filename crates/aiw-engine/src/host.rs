@@ -26,6 +26,11 @@ pub struct EngineHost {
     workflow_session: Mutex<Option<String>>,
     /// Nobody can answer: every confirmation the run asks for is refused (evaluation runs).
     deny_approvals: bool,
+    /// How long a confirmation waits for an answer, instead of `approvals.timeout_s` (runs started from a channel).
+    approval_timeout: Option<Duration>,
+    /// The run this host serves and the runtime router's plan for it (`runtime_id: "auto"`).
+    run_id: Option<String>,
+    route: Option<crate::router::RoutePlan>,
 }
 
 impl EngineHost {
@@ -38,6 +43,9 @@ impl EngineHost {
             first_update: Mutex::new(None),
             workflow_session: Mutex::new(None),
             deny_approvals: false,
+            approval_timeout: None,
+            run_id: None,
+            route: None,
         }
     }
     /// `first` receives the first state of the run (a resumed run has no one waiting for it).
@@ -50,7 +58,22 @@ impl EngineHost {
             first_update: Mutex::new(first),
             workflow_session: Mutex::new(None),
             deny_approvals: false,
+            approval_timeout: None,
+            run_id: None,
+            route: None,
         }
+    }
+    /// The run this host serves and, when its profile runs on `auto`, the router's plan: the
+    /// next candidates are tried when the chosen runtime does not start or cannot load the model.
+    pub fn with_route(mut self, run_id: String, route: Option<crate::router::RoutePlan>) -> Self {
+        self.run_id = Some(run_id);
+        self.route = route;
+        self
+    }
+    /// Confirmations expire after `t` (sub-agents inherit this).
+    pub fn with_approval_timeout(mut self, t: Duration) -> Self {
+        self.approval_timeout = Some(t);
+        self
     }
     /// Refuses every confirmation instead of waiting for a person (sub-agents inherit this).
     pub fn denying_approvals(mut self) -> Self {
@@ -104,11 +127,20 @@ impl RunHost for EngineHost {
         if self.deny_approvals {
             return false;
         }
-        self.engine.wait_approval(req, self.session_id.clone()).await
+        match self.approval_timeout {
+            Some(t) => self.engine.wait_approval_outcome(req, self.session_id.clone(), Some(t)).await == ApprovalOutcome::Allowed,
+            None => self.engine.wait_approval(req, self.session_id.clone()).await,
+        }
     }
 
     async fn approve_outcome(&self, req: ApprovalRequest) -> ApprovalOutcome {
-        self.engine.wait_approval_outcome(req, self.session_id.clone(), self.engine.approval_timeout()).await
+        // The runner asks through this one: a run nobody can answer (proactive, read-only channel) refuses here too.
+        if self.deny_approvals {
+            return ApprovalOutcome::Denied;
+        }
+        self.engine
+            .wait_approval_outcome(req, self.session_id.clone(), self.approval_timeout.or_else(|| self.engine.approval_timeout()))
+            .await
     }
 
     fn audit(&self, entry: AuditEntry) {
@@ -116,6 +148,13 @@ impl RunHost for EngineHost {
     }
 
     async fn backend(&self, profile: &InferenceProfile) -> Result<Arc<dyn ChatBackend>> {
+        // The model the router chose for this run (not the models of the roles, or of a sub-agent).
+        if let (Some(plan), Some(run_id)) = (&self.route, &self.run_id) {
+            let first = &plan.steps[0];
+            if profile.runtime_id == first.runtime_id && profile.model == first.model {
+                return self.engine.routed_backend(plan, &profile.params, run_id).await;
+            }
+        }
         // The profile's context window goes to the runtime (launch argument of a sidecar, or the
         // in-process engine), not only to the compaction threshold of the runner.
         self.engine
@@ -162,6 +201,8 @@ impl RunHost for EngineHost {
         }
         // The run budget is shared with the parent: delegating does not buy more.
         input.budget = parent.budget.clone();
+        // Its MCP servers are served by the same run hooks: same caps, same budget.
+        input.tool_ctx.mcp_run = parent.tool_ctx.mcp_run.clone();
         // Same for the sandbox and the tool list.
         input.tool_ctx.sandbox = narrow_sandbox(parent.tool_ctx.sandbox, input.tool_ctx.sandbox);
         input.agent.tools = narrow_tools(&parent.agent.tools, &input.agent.tools);
@@ -177,6 +218,7 @@ impl RunHost for EngineHost {
         }
         let mut host = EngineHost::new(self.engine.clone(), self.session_id.clone(), Some(parent.run_id.clone()));
         host.deny_approvals = self.deny_approvals;
+        host.approval_timeout = self.approval_timeout;
         let host = Arc::new(host);
         let out = AgentRunner::run(input, host).await?;
         Ok(if out.final_text.is_empty() { "(nessuna risposta)".into() } else { out.final_text })
@@ -189,6 +231,14 @@ impl RunHost for EngineHost {
 
     async fn memory_tool(&self, input: &RunInput, name: &str, args: &Value) -> Result<String> {
         self.engine.memory_tool(&input.thread_id, &input.agent.id, name, args).await
+    }
+
+    fn kb_available(&self, input: &RunInput) -> bool {
+        self.engine.kb_available(&input.agent.knowledge)
+    }
+
+    async fn kb_tool(&self, input: &RunInput, name: &str, args: &Value) -> Result<String> {
+        self.engine.kb_tool(&input.agent.knowledge, name, args).await
     }
 
     fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {

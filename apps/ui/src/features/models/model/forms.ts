@@ -1,5 +1,6 @@
 import type { ModelProviderInfo, PullRequest } from "../../../shared/api/types";
 
+import { t as tr } from "../../../shared/i18n";
 // Validation and request building of the two hand-written forms: direct URL and provider settings.
 
 export function isHttpUrl(value: string): boolean {
@@ -26,12 +27,12 @@ const FILE_NAME = /^[^\\/:*?"<>|\u0000-\u001f]+$/;
 /** Errors of the direct URL form; an empty object means it can be submitted. */
 export function validateUrlForm(v: UrlFormValues): UrlFormErrors {
   const e: UrlFormErrors = {};
-  if (!v.url.trim()) e.url = "Inserisci l'indirizzo del file.";
-  else if (!isHttpUrl(v.url)) e.url = "Serve un indirizzo che inizia con http:// o https://.";
+  if (!v.url.trim()) e.url = tr("models.inserisci_l_indirizzo_del_file");
+  else if (!isHttpUrl(v.url)) e.url = tr("models.serve_un_indirizzo_che_inizia");
   const name = v.fileName.trim();
-  if (name && (!FILE_NAME.test(name) || name === "." || name === "..")) e.fileName = "Solo il nome del file, senza cartelle.";
+  if (name && (!FILE_NAME.test(name) || name === "." || name === "..")) e.fileName = tr("models.solo_il_nome_del_file");
   const sha = v.sha256.trim();
-  if (sha && !SHA256.test(sha)) e.sha256 = "Lo sha256 ha 64 caratteri esadecimali (0-9, a-f).";
+  if (sha && !SHA256.test(sha)) e.sha256 = tr("models.lo_sha256_ha_64_caratteri");
   return e;
 }
 
@@ -77,7 +78,7 @@ export function hasAuthChanges(p: AuthPayload): boolean {
 export function validateEndpoint(value: string): string | null {
   const t = value.trim();
   if (!t) return null;
-  return isHttpUrl(t) ? null : "Serve un indirizzo che inizia con http:// o https://.";
+  return isHttpUrl(t) ? null : tr("models.serve_un_indirizzo_che_inizia");
 }
 
 /** Host that receives the token, for the reassurance line of the dialog ("huggingface.co"). */

@@ -3,6 +3,7 @@
 
 import type { HookConfig, HookEvent } from "../../../shared/api/types";
 
+import { t, t as tr } from "../../../shared/i18n";
 export interface HookEventInfo {
   id: HookEvent;
   label: string;
@@ -18,44 +19,44 @@ export interface HookEventInfo {
 
 export const HOOK_EVENTS: HookEventInfo[] = [
   {
-    id: "UserPromptSubmit", label: "Invio del messaggio", tools: false, active: true,
+    id: "UserPromptSubmit", get label() { return tr("security.invio_del_messaggio"); }, tools: false, active: true,
     stdin: '{ "prompt", "run_id" }',
-    can: "Bloccare il messaggio (uscita con codice 2) o aggiungere contesto (testo su stdout).",
+    get can() { return tr("security.bloccare_il_messaggio_uscita_con"); },
   },
   {
-    id: "PreToolUse", label: "Prima di un tool", tools: true, active: true,
+    id: "PreToolUse", get label() { return tr("security.prima_di_un_tool"); }, tools: true, active: true,
     stdin: '{ "tool", "args", "run_id" }',
-    can: "Bloccare la chiamata (codice 2 o {\"decision\":\"block\"}) o riscrivere gli argomenti ({\"updatedInput\":{…}}).",
+    get can() { return tr("security.hook_can_pre_tool", { decision: '{"decision":"block"}', updated: '{"updatedInput":{…}}' }); },
   },
   {
-    id: "PostToolUse", label: "Dopo un tool", tools: true, active: true,
+    id: "PostToolUse", get label() { return tr("security.dopo_un_tool"); }, tools: true, active: true,
     stdin: '{ "tool", "args", "output", "is_error", "run_id" }',
-    can: "Aggiungere contesto al risultato ({\"additionalContext\":\"…\"}); non può annullare la chiamata già eseguita.",
+    get can() { return tr("security.hook_can_post_tool", { context: '{"additionalContext":"…"}' }); },
   },
   {
-    id: "Stop", label: "Fine del run", tools: false, active: true,
+    id: "Stop", get label() { return tr("security.fine_del_run"); }, tools: false, active: true,
     stdin: '{ "run_id", "final" }',
-    can: "Solo osservare (notifiche, log): un blocco viene registrato ma l'agente non riprende.",
+    get can() { return tr("security.solo_osservare_notifiche_log_un"); },
   },
   {
-    id: "SessionStart", label: "Avvio sessione", tools: false, active: true,
+    id: "SessionStart", get label() { return tr("security.avvio_sessione"); }, tools: false, active: true,
     stdin: '{ "session_id", "run_id", "agent" }',
-    can: "Aggiungere contesto al prompt di sistema (testo su stdout); parte solo al primo messaggio di una conversazione e non può bloccare.",
+    get can() { return tr("security.aggiungere_contesto_al_prompt_di"); },
   },
   {
-    id: "SubagentStart", label: "Avvio di un subagente", tools: true, active: true,
+    id: "SubagentStart", get label() { return tr("security.avvio_di_un_subagente"); }, tools: true, active: true,
     stdin: '{ "agent", "task", "run_id", "depth" }',
-    can: "Bloccare la delega (codice 2), riscrivere il compito ({\"updatedInput\":{\"task\":\"…\"}}) o aggiungere contesto. Il filtro si applica al nome dell'agente, non a un tool.",
+    get can() { return tr("security.hook_can_subagent_start", { updated: '{"updatedInput":{"task":"…"}}' }); },
   },
   {
-    id: "SubagentStop", label: "Fine di un subagente", tools: true, active: true,
+    id: "SubagentStop", get label() { return tr("security.fine_di_un_subagente"); }, tools: true, active: true,
     stdin: '{ "agent", "task", "result", "is_error", "run_id" }',
-    can: "Aggiungere contesto al risultato del subagente ({\"additionalContext\":\"…\"}). Il filtro si applica al nome dell'agente.",
+    get can() { return tr("security.hook_can_subagent_stop", { context: '{"additionalContext":"…"}' }); },
   },
   {
-    id: "PreCompact", label: "Prima della compattazione", tools: false, active: true,
+    id: "PreCompact", get label() { return tr("security.prima_della_compattazione"); }, tools: false, active: true,
     stdin: '{ "run_id", "messages", "estimated_tokens" }',
-    can: "Saltare la compattazione del contesto in quel turno (codice 2).",
+    get can() { return tr("security.saltare_la_compattazione_del_contesto"); },
   },
 ];
 
@@ -78,17 +79,17 @@ export function checkHooks(hooks: readonly HookConfig[], globProblem: (glob: str
   const issues: HookIssue[] = [];
   hooks.forEach((h, index) => {
     const info = hookEvent(h.event);
-    if (!info) issues.push({ index, level: "error", message: `Evento «${String(h.event)}» non valido: usa ${HOOK_EVENTS.map((e) => e.id).join(", ")}.` });
-    if (!h.command.trim()) issues.push({ index, level: "error", message: "Scrivi il comando da eseguire." });
+    if (!info) issues.push({ index, level: "error", message: t("security.invalid_hook_event", { event: String(h.event), list: HOOK_EVENTS.map((e) => e.id).join(", ") }) });
+    if (!h.command.trim()) issues.push({ index, level: "error", message: t("security.scrivi_il_comando_da_eseguire") });
     if (!Number.isInteger(h.timeout_s) || h.timeout_s < 1 || h.timeout_s > MAX_TIMEOUT_S) {
-      issues.push({ index, level: "error", message: `Il timeout deve essere tra 1 e ${MAX_TIMEOUT_S} secondi.` });
+      issues.push({ index, level: "error", message: t("security.il_timeout_deve_essere_tra", { max: MAX_TIMEOUT_S }) });
     }
-    if (info && !info.active) issues.push({ index, level: "warn", message: "Il backend non esegue ancora questo evento: l'hook viene salvato ma non partirà." });
+    if (info && !info.active) issues.push({ index, level: "warn", message: t("security.il_backend_non_esegue_ancora") });
     // The filter is sent only for the events that have a tool (see `normalizeHooks`).
     const matcher = info?.tools ? h.matcher?.trim() : "";
     if (matcher) {
       const p = globProblem(matcher);
-      if (p) issues.push({ index, level: "error", message: `Il filtro «${matcher}» non è un glob valido (${p}).` });
+      if (p) issues.push({ index, level: "error", message: t("security.il_filtro_non_e_un", { matcher, error: p }) });
     }
   });
   return issues;

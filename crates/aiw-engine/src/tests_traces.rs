@@ -71,6 +71,7 @@ async fn internal_notes_are_counted_not_exported() {
         tool_calls: None,
         tool_call_id: None,
         name: name.map(String::from),
+        attachments: None,
         created_at: now_rfc3339(),
     };
     e.0.store

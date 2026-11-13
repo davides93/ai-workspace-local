@@ -1,5 +1,6 @@
 import type { PromptOptimization } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 /** The optimization is still going: the page polls it. */
 export const isOptimizing = (o: Pick<PromptOptimization, "status">): boolean => o.status === "running";
 
@@ -14,7 +15,7 @@ export const DEFAULT_VARIANTS = 3;
 /** Why the number of variants is wrong, if it is. */
 export function variantsError(text: string): string | undefined {
   const n = Number(text);
-  return Number.isInteger(n) && n >= MIN_VARIANTS && n <= MAX_VARIANTS ? undefined : `Un numero intero da ${MIN_VARIANTS} a ${MAX_VARIANTS}.`;
+  return Number.isInteger(n) && n >= MIN_VARIANTS && n <= MAX_VARIANTS ? undefined : t("evals.integer_range", { min: MIN_VARIANTS, max: MAX_VARIANTS });
 }
 
 export interface OptRow {
@@ -33,9 +34,9 @@ export interface OptRow {
 /** The baseline and the variants as table rows, in that order. */
 export function optRows(o: PromptOptimization): OptRow[] {
   return [
-    { key: "base", label: "Prompt attuale", score: o.baseline_score, passRate: o.baseline_pass_rate, reportId: o.baseline_report_id, best: false, applied: false },
+    { key: "base", label: t("evals.prompt_attuale"), score: o.baseline_score, passRate: o.baseline_pass_rate, reportId: o.baseline_report_id, best: false, applied: false },
     ...o.variants.map((v, i): OptRow => ({
-      key: i, label: `Variante ${i + 1}`, score: v.score, passRate: v.pass_rate, reportId: v.report_id, delta: v.score - o.baseline_score,
+      key: i, label: t("evals.variante", { number: i + 1 }), score: v.score, passRate: v.pass_rate, reportId: v.report_id, delta: v.score - o.baseline_score,
       best: o.best === i, applied: o.applied === i,
     })),
   ];
@@ -49,15 +50,15 @@ export const defaultVariant = (o: Pick<PromptOptimization, "applied" | "best" | 
 export function verdict(o: PromptOptimization): string {
   switch (o.status) {
     case "running":
-      return `In corso: ${o.variants.length} varianti provate finora.`;
+      return t("evals.verdict_running", { count: o.variants.length });
     case "failed":
-      return o.error ?? "L'ottimizzazione è fallita.";
+      return o.error ?? t("evals.verdict_failed");
     case "applied":
-      return `Applicata la variante ${(o.applied ?? 0) + 1} al prompt dell'agente.`;
+      return t("evals.verdict_applied", { number: (o.applied ?? 0) + 1 });
     default:
       return o.best === undefined
-        ? "Nessuna variante batte il prompt attuale: non c'è nulla da applicare."
-        : `La variante ${o.best + 1} batte il prompt attuale: puoi applicarla all'agente.`;
+        ? t("evals.verdict_none")
+        : t("evals.verdict_best", { number: o.best + 1 });
   }
 }
 

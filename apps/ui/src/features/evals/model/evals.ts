@@ -1,4 +1,5 @@
 import type { EvalComparison, EvalReport, EvalSuite, EvalTaskResult } from "../../../shared/api/types";
+import { t } from "../../../shared/i18n";
 
 /** The report is still being filled in: the page polls it. */
 export const isRunning = (r: Pick<EvalReport, "status">): boolean => r.status === "running";
@@ -16,8 +17,8 @@ export const pct = (ratio: number): string => `${Math.round(ratio * 100)}%`;
 export function blankSuite(id = "nuova-suite"): EvalSuite {
   return {
     id,
-    name: "Nuova suite",
-    tasks: [{ id: "primo-task", prompt: "Crea note.md con scritto ciao", graders: [{ kind: "file_exists", path: "note.md" }] }],
+    name: t("evals.blank_suite_name"),
+    tasks: [{ id: "primo-task", prompt: t("evals.blank_suite_prompt"), graders: [{ kind: "file_exists", path: "note.md" }] }],
   };
 }
 
@@ -35,11 +36,11 @@ export function parseSuiteText(text: string): ParsedSuite {
   try {
     v = JSON.parse(text);
   } catch (e) {
-    return { error: `JSON non valido: ${e instanceof Error ? e.message : String(e)}` };
+    return { error: t("evals.json_invalid", { error: e instanceof Error ? e.message : String(e) }) };
   }
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return { error: "La suite deve essere un oggetto JSON." };
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return { error: t("evals.suite_not_object") };
   const id = (v as { id?: unknown }).id;
-  if (typeof id !== "string" || !id.trim()) return { error: "Manca l'id della suite (campo «id»)." };
+  if (typeof id !== "string" || !id.trim()) return { error: t("evals.suite_missing_id") };
   return { suite: v as EvalSuite };
 }
 
@@ -74,7 +75,7 @@ export function progress(report: Pick<EvalReport, "tasks" | "repeat">, suite: Pi
 
 /** Who the report was made with: the agent and profile asked for, if any. */
 export function reportWho(r: Pick<EvalReport, "agent" | "profile">): string {
-  return [r.agent, r.profile].filter(Boolean).join(" · ") || "predefiniti della suite";
+  return [r.agent, r.profile].filter(Boolean).join(" · ") || t("evals.suite_defaults");
 }
 
 export type DeltaTone = "better" | "worse" | "same";

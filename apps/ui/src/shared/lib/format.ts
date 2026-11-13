@@ -1,16 +1,16 @@
-// Locale-aware formatters built on Intl. The UI text is Italian, so numbers use the decimal
-// comma ("1,5 GB") and dates the it-IT layout. A single constant makes a later language switch
-// (the `ui.language` config key) a one-line change.
+// Locale-aware formatters built on Intl. They follow the active interface language
+// (`ui.language`, see shared/i18n): Italian gives the decimal comma ("1,5 GB") and the it-IT
+// date layout, English the English ones. Components re-render on a language change (the app
+// remounts below the providers), so every call reads the current tag.
+import { intlTag } from "../i18n/locale";
+import { t as tr } from "../i18n/t";
 
-export let LOCALE = "it-IT";
-
-/** Switches the locale used by every formatter (called when `ui.language` changes). */
-export function setLocale(locale: string): void {
-  LOCALE = locale;
-}
+/** The BCP 47 tag the formatters use now. */
+export const currentLocaleTag = (): string => intlTag();
 
 const numberFormats = new Map<string, Intl.NumberFormat>();
 function nf(options: Intl.NumberFormatOptions): Intl.NumberFormat {
+  const LOCALE = intlTag();
   const key = `${LOCALE}|${JSON.stringify(options)}`;
   let f = numberFormats.get(key);
   if (!f) {
@@ -82,21 +82,22 @@ export function formatDuration(totalSeconds: number): string {
   const h = Math.floor(m / 60);
   const rest = m % 60;
   if (h < 48) return rest ? `${h} h ${rest} min` : `${h} h`;
-  return `${Math.floor(h / 24)} gg`;
+  return tr("time.days", { n: Math.floor(h / 24) });
 }
 
 let relFormat: { locale: string; f: Intl.RelativeTimeFormat } | null = null;
 function rtf(): Intl.RelativeTimeFormat {
+  const LOCALE = intlTag();
   if (!relFormat || relFormat.locale !== LOCALE) relFormat = { locale: LOCALE, f: new Intl.RelativeTimeFormat(LOCALE, { numeric: "always", style: "short" }) };
   return relFormat.f;
 }
 
-/** Relative time in a compact form: "ora", "5 min fa", "3 h fa", "2 gg fa". */
+/** Relative time in a compact form: "ora", "5 min fa", "3 h fa", "2 gg fa" (English: "now", "5 min. ago"). */
 export function relTime(iso: string | number | Date, now: number = Date.now()): string {
   const t = iso instanceof Date ? iso.getTime() : new Date(iso).getTime();
   if (Number.isNaN(t)) return "—";
   const d = (now - t) / 1000;
-  if (d < 45) return "ora";
+  if (d < 45) return tr("time.now");
   if (d < 3600) return rtf().format(-Math.floor(d / 60), "minute");
   if (d < 86400) return rtf().format(-Math.floor(d / 3600), "hour");
   if (d < 86400 * 60) return rtf().format(-Math.floor(d / 86400), "day");
@@ -107,12 +108,12 @@ export function relTime(iso: string | number | Date, now: number = Date.now()): 
 export function formatDateTime(iso: string | number | Date): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat(LOCALE, { dateStyle: "short", timeStyle: "short" }).format(d);
+  return new Intl.DateTimeFormat(intlTag(), { dateStyle: "short", timeStyle: "short" }).format(d);
 }
 
 /** Short date ("02/11/2026"). */
 export function formatDate(iso: string | number | Date): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat(LOCALE, { dateStyle: "short" }).format(d);
+  return new Intl.DateTimeFormat(intlTag(), { dateStyle: "short" }).format(d);
 }

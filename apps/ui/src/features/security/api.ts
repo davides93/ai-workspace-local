@@ -1,9 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { HookConfig, PolicyRule } from "../../shared/api/types";
+import type { ApiTokenCreate, HookConfig, PolicyRule } from "../../shared/api/types";
 
+import { t as tr } from "../../shared/i18n";
 /** Tool catalogue (same query as the Capabilities page): names and risks for the rule tester. */
 export function useToolList() {
   const api = useApi();
@@ -15,6 +16,18 @@ export function usePolicy() {
   return useQuery({ queryKey: qk.policy(), queryFn: () => api.policy() });
 }
 
+/** How the backend splits a shell command line into simple commands (for the rule tester); disabled for an empty line. */
+export function useAnalyzeCommand(command: string) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["policy-analyze", command] as const,
+    queryFn: () => api.analyzeCommand(command),
+    enabled: command.trim() !== "",
+    placeholderData: keepPreviousData,
+    staleTime: Infinity,
+  });
+}
+
 export function useSetPolicy() {
   const api = useApi();
   const qc = useQueryClient();
@@ -22,7 +35,7 @@ export function useSetPolicy() {
     mutationFn: (rules: PolicyRule[]) => api.setPolicy(rules),
     onSuccess: (doc) => {
       qc.setQueryData(qk.policy(), doc);
-      toast("Regole di policy salvate");
+      toast(tr("security.regole_di_policy_salvate"));
     },
   });
 }
@@ -39,7 +52,47 @@ export function useSetHooks() {
     mutationFn: (hooks: HookConfig[]) => api.setHooks(hooks),
     onSuccess: (doc) => {
       qc.setQueryData(qk.hooks(), doc);
-      toast("Hook salvati");
+      toast(tr("security.hook_salvati"));
     },
   });
+}
+
+export function useApiTokens() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.tokens(), queryFn: () => api.apiTokens() });
+}
+
+export function useCreateToken() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: ApiTokenCreate) => api.createApiToken(req),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.tokens() }),
+  });
+}
+
+export function useRevokeToken() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (t: { id: string; name: string }) => api.revokeApiToken(t.id),
+    onSuccess: (_r, t) => {
+      toast(tr("security.revocato_non_funziona_piu", { name: t.name }));
+      void qc.invalidateQueries({ queryKey: qk.tokens() });
+    },
+  });
+}
+
+export function useRotateToken() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (t: { id: string; name: string }) => api.rotateApiToken(t.id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.tokens() }),
+  });
+}
+
+export function useTlsStatus() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.tls(), queryFn: () => api.tlsStatus() });
 }

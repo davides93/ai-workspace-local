@@ -9,6 +9,7 @@ import { useApproveLesson, useLessons, useRejectLesson } from "../api";
 import { checkLessonEdit, editOf, KIND_DESTINATION, KIND_LABEL } from "../model/lessons";
 import "../learning.css";
 
+import { t } from "../../../shared/i18n";
 /** One proposal: what the agent learned and why, with a preview; the user can edit it, approve it (it is written) or discard it. */
 function LessonCard({ lesson, busy, onApprove, onReject, error }: {
   lesson: Lesson;
@@ -42,27 +43,27 @@ function LessonCard({ lesson, busy, onApprove, onReject, error }: {
       <p className="muted text-sm">{lesson.reason}</p>
       {editing ? (
         <div className="stack">
-          <Field label="Titolo" htmlFor={`${id}-ti`} error={!check.ok && !title.trim() ? check.error : undefined}>
+          <Field label={t("learning.titolo")} htmlFor={`${id}-ti`} error={!check.ok && !title.trim() ? check.error : undefined}>
             <Input id={`${id}-ti`} value={title} maxLength={MAX_LESSON_TITLE_CHARS} onChange={(e) => setTitle(e.target.value)} />
           </Field>
-          <Field label="Contenuto (Markdown)" htmlFor={`${id}-co`} hint={`Fino a ${MAX_LESSON_CONTENT_CHARS} caratteri.`} error={!check.ok && title.trim() ? check.error : undefined}>
+          <Field label={t("learning.contenuto_markdown")} htmlFor={`${id}-co`} hint={t("learning.fino_a_caratteri", { MAX_LESSON_CONTENT_CHARS })} error={!check.ok && title.trim() ? check.error : undefined}>
             <Textarea id={`${id}-co`} rows={8} value={content} onChange={(e) => setContent(e.target.value)} />
           </Field>
         </div>
       ) : (
-        <div className="ln-preview"><Markdown text={lesson.content} /></div>
+        <div className="ln-preview" tabIndex={0} role="region" aria-label={t("learning.anteprima_della_lezione")}><Markdown text={lesson.content} /></div>
       )}
-      <p className="faint text-xs">{KIND_DESTINATION[lesson.kind]} Finché non approvi, non viene scritto nulla.</p>
+      <p className="faint text-xs">{t("learning.finche_non_approvi_non_viene", { p: KIND_DESTINATION[lesson.kind] })}</p>
       {error !== undefined && error !== null && <p className="field-error" role="alert">{errorMessage(error)}</p>}
       <div className="ln-actions">
-        <Button size="sm" variant="primary" icon="check" disabled={busy || !check.ok} onClick={approve}>{editing ? "Approva con le modifiche" : "Approva"}</Button>
+        <Button size="sm" variant="primary" icon="check" disabled={busy || !check.ok} onClick={approve}>{editing ? t("learning.approva_con_le_modifiche") : t("learning.approva")}</Button>
         {editing ? (
-          <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={busy}>Annulla le modifiche</Button>
+          <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={busy}>{t("learning.annulla_le_modifiche")}</Button>
         ) : (
-          <Button size="sm" icon="edit" onClick={() => setEditing(true)} disabled={busy}>Modifica</Button>
+          <Button size="sm" icon="edit" onClick={() => setEditing(true)} disabled={busy}>{t("learning.modifica")}</Button>
         )}
-        <Button size="sm" variant="ghost" icon="close" disabled={busy} onClick={onReject}>Scarta</Button>
-        <Link to={`/chat/${encodeURIComponent(lesson.session_id)}`} className="btn sm ghost">Vedi la conversazione</Link>
+        <Button size="sm" variant="ghost" icon="close" disabled={busy} onClick={onReject}>{t("learning.scarta")}</Button>
+        <Link to={`/chat/${encodeURIComponent(lesson.session_id)}`} className="btn sm ghost">{t("learning.vedi_la_conversazione")}</Link>
       </div>
     </article>
   );
@@ -77,11 +78,11 @@ export function LessonsPanel() {
   const failed = approve.isError ? approve.variables?.id : reject.isError ? reject.variables : undefined;
   const failure = approve.isError ? approve.error : reject.error;
   return (
-    <Panel title="Lezioni da rivedere" icon="sparkle" actions={lessons.data && <Pill tone={lessons.data.length ? "info" : "neutral"}>{lessons.data.length}</Pill>}>
+    <Panel title={t("learning.lezioni_da_rivedere")} icon="sparkle" actions={lessons.data && <Pill tone={lessons.data.length ? "info" : "neutral"}>{lessons.data.length}</Pill>}>
       <QueryState query={lessons}>
         {(list) =>
           list.length === 0 ? (
-            <p className="muted text-sm">Nessuna lezione in attesa. Dopo un pollice giù l'agente può proporre cosa ricordare: lo decidi tu.</p>
+            <p className="muted text-sm">{t("learning.nessuna_lezione_in_attesa_dopo")}</p>
           ) : (
             <div className="stack stack-lg">
               {list.map((l) => (

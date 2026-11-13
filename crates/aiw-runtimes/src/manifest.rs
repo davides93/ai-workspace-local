@@ -60,6 +60,17 @@ pub struct RuntimeManifest {
     /// How the runtime lets a request switch reasoning on and off. Without it nothing is sent.
     #[serde(default)]
     pub thinking: ThinkingControl,
+    /// Tie-break of the runtime router between runtimes that run a model equally well here
+    /// (lower = preferred; see `aiw_engine::router`).
+    #[serde(default = "default_route_priority")]
+    pub route_priority: u32,
+}
+
+/// Priority of a runtime whose manifest does not say.
+pub const DEFAULT_ROUTE_PRIORITY: u32 = 50;
+
+fn default_route_priority() -> u32 {
+    DEFAULT_ROUTE_PRIORITY
 }
 
 /// Launch arguments that load LoRA adapters (see [`crate::adapters`]).
@@ -303,7 +314,8 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), all.len(), "duplicate ids");
         for m in &all {
-            if m.kind == "sidecar" {
+            // `api: "none"`: an executable run per use (Piper), not a server to connect to.
+            if m.kind == "sidecar" && m.api != "none" {
                 assert!(m.launch.is_some() || m.external_endpoint.is_some(), "{} has no way to connect", m.id);
             }
         }

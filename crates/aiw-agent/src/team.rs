@@ -113,6 +113,7 @@ fn message(role: &str, content: String) -> ChatMessage {
         tool_calls: None,
         tool_call_id: None,
         name: None,
+        attachments: None,
         created_at: now_rfc3339(),
     }
 }
@@ -199,7 +200,7 @@ fn budget_note(input: &RunInput, host: &Arc<dyn RunHost>, reason: &str) -> Strin
 /// merges the answers, or they are joined under one heading per role.
 async fn parallel(input: &RunInput, team: &TeamDef, host: &Arc<dyn RunHost>) -> Result<String> {
     check_cancel(input)?;
-    let task = if team.aggregator.is_some() { input.user_input.clone() } else { format!("{}{}", input.user_input, schema_note(team)) };
+    let task = if team.aggregator.is_some() { input.task_text() } else { format!("{}{}", input.task_text(), schema_note(team)) };
     let runs = (0..team.members.len()).map(|i| {
         let host = host.clone();
         let task = member_task(&task, team, i);
@@ -239,7 +240,7 @@ async fn parallel(input: &RunInput, team: &TeamDef, host: &Arc<dyn RunHost>) -> 
     }
     let prompt = format!(
         "Richiesta originale:\n{}\n\nRisultati dei membri del team:\n\n{joined}\n\nUnisci i risultati in un'unica risposta per l'utente.{}",
-        input.user_input,
+        input.task_text(),
         schema_note(team)
     );
     let out = delegate(input, host, aggregator, &prompt).await;
@@ -261,7 +262,7 @@ async fn pipeline(input: &RunInput, team: &TeamDef, host: &Arc<dyn RunHost>) -> 
                 None => note,
             });
         }
-        let mut task = input.user_input.clone();
+        let mut task = input.task_text();
         if let Some((j, out)) = &previous {
             task.push_str(&format!("\n\n# Uscita del passo precedente: {}\n{out}", label(team, *j)));
         }

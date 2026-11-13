@@ -7,6 +7,7 @@ import { describeCron, nextCronRun, parseCron } from "../model/cron";
 import type { Issue, TriggerDraft } from "../model/draft";
 import { joinInterval, MIN_INTERVAL_S, TRIGGER_KINDS, UNIT_LABEL, type IntervalUnit } from "../model/triggers";
 
+import { t as tr, tNode as trNode } from "../../../shared/i18n";
 const UNITS: IntervalUnit[] = ["s", "min", "h"];
 const issue = (issues: Issue[], field: string) => issues.find((i) => i.scope === "trigger" && i.field === field);
 
@@ -15,15 +16,13 @@ function Webhook({ id, secret }: { id: string; secret: string }) {
   const url = id ? `${serviceBaseUrl({ native: api.capabilities.native })}/hooks/${encodeURIComponent(id)}` : "";
   return (
     <div className="webhook-info">
-      {url ? <CopyField label="Indirizzo (POST)" value={url} /> : <p className="faint text-sm">L'indirizzo compare dopo il primo salvataggio.</p>}
+      {url ? <CopyField label={tr("workflows.indirizzo_post")} value={url} /> : <p className="faint text-sm">{tr("workflows.l_indirizzo_compare_dopo_il")}</p>}
       {secret
-        ? <CopyField label="Segreto" value={secret} secret hint="Mostralo solo a chi deve chiamare il workflow." />
-        : <p className="faint text-sm">Il segreto viene generato dal backend al salvataggio.</p>}
+        ? <CopyField label={tr("workflows.segreto")} value={secret} secret hint={tr("workflows.mostralo_solo_a_chi_deve")} />
+        : <p className="faint text-sm">{tr("workflows.il_segreto_viene_generato_dal")}</p>}
       <p className="faint text-xs">
-        Invia il segreto nell'header <span className="mono">X-AIW-Secret</span> oppure firma il corpo con <span className="mono">X-Hub-Signature-256</span> (HMAC-SHA256, come GitHub).
-        Il JSON ricevuto diventa gli input del workflow; il workflow deve essere attivo.
-      </p>
-      {url && <CodeBlock title="Esempio" code={`curl -X POST ${url} \\\n  -H "X-AIW-Secret: <segreto>" \\\n  -H "Content-Type: application/json" \\\n  -d '{"chiave": "valore"}'`} />}
+        {trNode("workflows.invia_il_segreto_nell_header", { span: <span className="mono">X-AIW-Secret</span>, span2: <span className="mono">X-Hub-Signature-256</span> })}</p>
+      {url && <CodeBlock title={tr("workflows.esempio")} code={`curl -X POST ${url} \\\n  -H "X-AIW-Secret: ${tr("workflows.example_secret")}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"${tr("workflows.example_key")}": "${tr("workflows.example_value")}"}'`} />}
     </div>
   );
 }
@@ -57,7 +56,7 @@ export function TriggerEditor({ trigger, onChange, issues, workflowId, savedSecr
 
   return (
     <div className="stack stack-lg">
-      <Field label="Quando parte" htmlFor="wf-trigger" hint={kind.hint}>
+      <Field label={tr("workflows.quando_parte")} htmlFor="wf-trigger" hint={kind.hint}>
         <Select id="wf-trigger" value={trigger.kind} onChange={(e) => setKind(e.target.value as TriggerDraft["kind"])}>
           {TRIGGER_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
         </Select>
@@ -65,32 +64,32 @@ export function TriggerEditor({ trigger, onChange, issues, workflowId, savedSecr
 
       {trigger.kind === "cron" && (
         <div className="stack">
-          <Field label="Espressione cron" htmlFor="wf-cron" error={issue(issues, "expr")?.message} hint="minuto ora giorno-del-mese mese giorno-della-settimana (0 o 7 = domenica)">
+          <Field label={tr("workflows.espressione_cron")} htmlFor="wf-cron" error={issue(issues, "expr")?.message} hint={tr("workflows.minuto_ora_giorno_del_mese")}>
             <Input id="wf-cron" mono value={trigger.expr} onChange={(e) => onChange({ kind: "cron", expr: e.target.value })} aria-invalid={!!issue(issues, "expr")} spellCheck={false} placeholder="0 8 * * 1-5" />
           </Field>
           {cron?.ok && (
             <p className="trigger-next text-sm" role="status">
               <Icon name="refresh" size={14} />
               <span>
-                {describeCron(trigger.expr) ?? "Pianificazione personalizzata"}
-                {enabled && next ? <> — prossima esecuzione <b>{formatDateTime(next)}</b></> : null}
-                {!enabled && <span className="muted"> — il workflow è disattivato, quindi non parte da solo</span>}
-                {enabled && !next && <span className="muted"> — nessuna esecuzione prevista</span>}
+                {describeCron(trigger.expr) ?? tr("workflows.pianificazione_personalizzata")}
+                {enabled && next ? <>{trNode("workflows.next_run_prefix", { when: <b>{formatDateTime(next)}</b> })}</> : null}
+                {!enabled && <span className="muted">{" "}{tr("workflows.il_workflow_e_disattivato_quindi")}</span>}
+                {enabled && !next && <span className="muted">{" "}{tr("workflows.nessuna_esecuzione_prevista")}</span>}
               </span>
             </p>
           )}
-          <p className="faint text-xs">L'orario è quello del computer su cui gira il servizio. Giorno del mese e giorno della settimana, se indicati entrambi, devono combaciare insieme.</p>
+          <p className="faint text-xs">{tr("workflows.l_orario_e_quello_del")}</p>
         </div>
       )}
 
       {trigger.kind === "interval" && (
         <div className="stack">
           <div className="interval-row">
-            <Field label="Ogni" htmlFor="wf-interval" error={issue(issues, "amount")?.level === "error" ? issue(issues, "amount")?.message : undefined}>
+            <Field label={tr("workflows.ogni")} htmlFor="wf-interval" error={issue(issues, "amount")?.level === "error" ? issue(issues, "amount")?.message : undefined}>
               <Input id="wf-interval" className="num" type="number" min={1} step={1} value={Number.isNaN(trigger.amount) ? "" : trigger.amount}
                 onChange={(e) => onChange({ ...trigger, amount: e.target.value === "" ? Number.NaN : Number(e.target.value) })} />
             </Field>
-            <Field label="Unità" htmlFor="wf-interval-unit">
+            <Field label={tr("workflows.unita")} htmlFor="wf-interval-unit">
               <Select id="wf-interval-unit" value={trigger.unit} onChange={(e) => onChange({ ...trigger, unit: e.target.value as IntervalUnit })}>
                 {UNITS.map((u) => <option key={u} value={u}>{UNIT_LABEL[u]}</option>)}
               </Select>
@@ -98,14 +97,14 @@ export function TriggerEditor({ trigger, onChange, issues, workflowId, savedSecr
           </div>
           {issue(issues, "amount")?.level === "warn" && <p className="row-warn">{issue(issues, "amount")?.message}</p>}
           <p className="faint text-xs">
-            Il conteggio parte all'avvio del servizio (non prima di {MIN_INTERVAL_S} secondi).
-            {last && seconds > 0 && enabled && <> Ultima esecuzione: {formatDateTime(last)}.</>}
+            {tr("workflows.interval_note", { seconds: MIN_INTERVAL_S })}
+            {last && seconds > 0 && enabled && <>{" "}{tr("workflows.ultima_esecuzione", { time: formatDateTime(last) })}</>}
           </p>
         </div>
       )}
 
       {trigger.kind === "file" && (
-        <Field label="File o cartella" htmlFor="wf-file" error={issue(issues, "path")?.message} hint="Parte quando la data di modifica cambia. Si può usare ~ per la cartella personale.">
+        <Field label={tr("workflows.file_o_cartella")} htmlFor="wf-file" error={issue(issues, "path")?.message} hint={tr("workflows.parte_quando_la_data_di")}>
           <Input id="wf-file" mono value={trigger.path} onChange={(e) => onChange({ kind: "file", path: e.target.value })} placeholder="~/Download/ordini.csv" aria-invalid={!!issue(issues, "path")} spellCheck={false} />
         </Field>
       )}

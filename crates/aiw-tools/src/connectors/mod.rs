@@ -7,12 +7,18 @@
 //! The files and addresses they read come from the settings, never from the model: the model can only
 //! say how many days or hours it wants, or what to search for.
 //!
-//! Nothing is ever written, moved, sent, flagged or deleted. Mail through IMAP (which needs a password)
-//! is not part of this package; the person's own MCP servers keep working next to these tools as an
-//! alternative.
+//! Nothing is ever written, moved, sent, flagged or deleted. Mail comes from local files and, when the
+//! person adds an account, from IMAP servers over TLS (see [`imap`]: `EXAMINE` and `BODY.PEEK` only, so
+//! nothing is ever marked as read). OAuth sign-in (Gmail, Microsoft) is not supported: those providers
+//! need an app password. The person's own MCP servers keep working next to these tools as an alternative.
 
 pub mod ics;
+pub mod imap;
 pub mod mail;
+pub mod tls;
+
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 use crate::{Risk, Tool, ToolContext, ToolOutput};
 use aiw_core::{Error, Result};
@@ -34,7 +40,22 @@ pub struct Config {
     pub calendar_sources: Vec<String>,
     pub mail_enabled: bool,
     pub mail_sources: Vec<String>,
+    /// IMAP accounts (the password comes from the secret store, never from the settings).
+    pub imap: Vec<imap::Account>,
+    /// How many days back an IMAP account is read (0 = [`DEFAULT_IMAP_DAYS`]).
+    pub imap_days: u32,
+    /// Most messages read from one folder (0 = [`DEFAULT_IMAP_MESSAGES`]).
+    pub imap_max_messages: usize,
+    /// Extra trusted TLS roots (DER); tests only.
+    pub extra_roots: Vec<Vec<u8>>,
 }
+
+pub const DEFAULT_IMAP_DAYS: u32 = 14;
+pub const DEFAULT_IMAP_MESSAGES: usize = 100;
+/// Bytes of one message fetched from a server.
+pub const IMAP_MAX_BYTES: usize = 256 * 1024;
+const IMAP_CACHE_TTL_S: u64 = 120;
+const IMAP_ACCOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The connector settings shared by the tools and the engine (the engine refreshes them when the
 /// settings change).
@@ -43,6 +64,8 @@ pub struct ConnectorSettings {
     cfg: RwLock<Config>,
     /// Subscription URLs already downloaded: (when, text).
     cache: Mutex<HashMap<String, (Instant, String)>>,
+    /// IMAP messages already fetched, by account and settings: (when, mails).
+    imap_cache: Mutex<HashMap<String, (Instant, Vec<Mail>)>>,
 }
 
 pub type Shared = Arc<ConnectorSettings>;
@@ -103,10 +126,12 @@ fn ics_files(spec: &str) -> std::result::Result<Vec<PathBuf>, String> {
 
 impl ConnectorSettings {
     pub fn new(cfg: Config) -> Shared {
-        Arc::new(Self { cfg: RwLock::new(cfg), cache: Mutex::default() })
+        Arc::new(Self { cfg: RwLock::new(cfg), cache: Mutex::default(), imap_cache: Mutex::default() })
     }
     pub fn set(&self, cfg: Config) {
         *self.cfg.write().unwrap() = cfg;
+        // A changed account (host, password…) must not be served from what the old one fetched.
+        self.imap_cache.lock().unwrap().clear();
     }
     pub fn get(&self) -> Config {
         self.cfg.read().unwrap().clone()
@@ -181,7 +206,8 @@ impl ConnectorSettings {
         (events, notes)
     }
 
-    fn all_mail(&self, not_older_than: Option<DateTime<Local>>) -> (Vec<Mail>, Vec<String>) {
+    /// Messages of the local sources (Maildir, mbox, eml), newest first. Blocking: file reads.
+    fn local_mail(&self, not_older_than: Option<DateTime<Local>>) -> (Vec<Mail>, Vec<String>) {
         let sources = self.get().mail_sources;
         let (mut mails, mut notes) = (Vec::new(), Vec::new());
         for s in sources.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -190,28 +216,128 @@ impl ConnectorSettings {
                 Err(e) => notes.push(e),
             }
         }
+        (mails, notes)
+    }
+
+    /// Messages from the IMAP accounts: read-only, bounded, cached for a short while.
+    async fn imap_mail(&self) -> (Vec<Mail>, Vec<String>) {
+        let cfg = self.get();
+        let (mut mails, mut notes) = (Vec::new(), Vec::new());
+        for acct in cfg.imap.iter().filter(|a| !a.host.trim().is_empty()) {
+            let key = format!("{}|{}|{}|{}|{}", acct.id, acct.host, acct.port, acct.username, acct.folders.join(","));
+            if let Some((at, m)) = self.imap_cache.lock().unwrap().get(&key) {
+                if at.elapsed().as_secs() < IMAP_CACHE_TTL_S {
+                    mails.extend(m.clone());
+                    continue;
+                }
+            }
+            let days = if cfg.imap_days == 0 { DEFAULT_IMAP_DAYS } else { cfg.imap_days };
+            let max = if cfg.imap_max_messages == 0 { DEFAULT_IMAP_MESSAGES } else { cfg.imap_max_messages };
+            let fetched = tokio::time::timeout(IMAP_ACCOUNT_TIMEOUT, fetch_account(acct, &cfg.extra_roots, days, max))
+                .await
+                .unwrap_or_else(|_| (Vec::new(), vec!["il server non risponde in tempo".into()]));
+            let (got, errs) = fetched;
+            notes.extend(errs.into_iter().map(|e| format!("account «{}»: {e}", acct.id)));
+            if notes.is_empty() || !got.is_empty() {
+                self.imap_cache.lock().unwrap().insert(key.clone(), (Instant::now(), got.clone()));
+            } else if let Some((_, old)) = self.imap_cache.lock().unwrap().get(&key) {
+                // A stale copy is better than nothing when the server is down.
+                mails.extend(old.clone());
+            }
+            mails.extend(got);
+        }
+        (mails, notes)
+    }
+
+    async fn all_mail(self: &Arc<Self>, not_older_than: Option<DateTime<Local>>) -> (Vec<Mail>, Vec<String>) {
+        let me = self.clone();
+        let (mut mails, mut notes) = tokio::task::spawn_blocking(move || me.local_mail(not_older_than)).await.unwrap_or_default();
+        let (imap_mails, imap_notes) = self.imap_mail().await;
+        mails.extend(imap_mails);
+        notes.extend(imap_notes);
         mails.sort_by_key(|m| std::cmp::Reverse(m.date));
         mails.dedup_by(|a, b| a.date == b.date && a.subject == b.subject && a.from == b.from);
         (mails, notes)
     }
 
     /// Messages dated after `since` (and not in the future), newest first.
-    pub fn mail_since(&self, since: DateTime<Local>, now: DateTime<Local>) -> (Vec<Mail>, Vec<String>) {
-        let (mut m, notes) = self.all_mail(Some(since));
+    pub async fn mail_since(self: &Arc<Self>, since: DateTime<Local>, now: DateTime<Local>) -> (Vec<Mail>, Vec<String>) {
+        let (mut m, notes) = self.all_mail(Some(since)).await;
         m.retain(|x| x.date > since && x.date <= now + Duration::hours(1));
         (m, notes)
     }
 
     /// Messages containing every word of `query`, newest first.
-    pub fn mail_search(&self, query: &str) -> (Vec<Mail>, Vec<String>) {
+    pub async fn mail_search(self: &Arc<Self>, query: &str) -> (Vec<Mail>, Vec<String>) {
         let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
-        let (mut m, notes) = self.all_mail(None);
+        let (mut m, notes) = self.all_mail(None).await;
         m.retain(|x| {
             let hay = format!("{} {} {}", x.from, x.subject, x.body).to_lowercase();
             terms.iter().all(|t| hay.contains(t))
         });
         (m, notes)
     }
+}
+
+/// What one IMAP account yields: the messages of its folders of the last `days` days (at most `max` per
+/// folder, newest first) and a note for everything that went wrong.
+async fn fetch_account(acct: &imap::Account, roots: &[Vec<u8>], days: u32, max: usize) -> (Vec<Mail>, Vec<String>) {
+    let (mut mails, mut notes) = (Vec::new(), Vec::new());
+    let mut session = match imap::Session::connect(acct, roots, imap::Access::ReadOnly).await {
+        Ok(s) => s,
+        Err(e) => return (mails, vec![e.to_string()]),
+    };
+    let since = (Local::now() - Duration::days(days as i64)).date_naive();
+    let folders: Vec<String> = if acct.folders.iter().all(|f| f.trim().is_empty()) { vec!["INBOX".into()] } else { acct.folders.clone() };
+    for folder in folders.iter().map(|f| f.trim()).filter(|f| !f.is_empty()) {
+        let step = async {
+            session.open_folder(folder).await?;
+            let uids = session.search_since(since).await?;
+            let newest: Vec<u32> = uids.iter().rev().take(max).rev().copied().collect();
+            session.fetch_peek(&newest, IMAP_MAX_BYTES).await
+        }
+        .await;
+        match step {
+            Ok(list) => {
+                for f in list {
+                    if let Some(m) = mail::parse_message(&f.raw, f.internal_date.unwrap_or_else(Local::now)) {
+                        mails.push(m);
+                    }
+                }
+            }
+            Err(e @ imap::ImapError::NoFolder(_)) => notes.push(e.to_string()),
+            Err(e) => {
+                notes.push(e.to_string());
+                break;
+            }
+        }
+    }
+    session.logout().await;
+    (mails, notes)
+}
+
+/// The outcome of trying an account: how many messages each folder has from the last week.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountTest {
+    pub folders: Vec<(String, usize)>,
+}
+
+/// Connects, logs in and counts the recent messages of every folder: nothing is read or changed.
+pub async fn test_account(acct: &imap::Account, roots: &[Vec<u8>]) -> Result<AccountTest, imap::ImapError> {
+    let run = async {
+        let mut s = imap::Session::connect(acct, roots, imap::Access::ReadOnly).await?;
+        let since = (Local::now() - Duration::days(7)).date_naive();
+        let folders: Vec<String> =
+            if acct.folders.iter().all(|f| f.trim().is_empty()) { vec!["INBOX".into()] } else { acct.folders.clone() };
+        let mut out = Vec::new();
+        for f in folders.iter().map(|f| f.trim()).filter(|f| !f.is_empty()) {
+            s.open_folder(f).await?;
+            out.push((f.to_string(), s.search_since(since).await?.len()));
+        }
+        s.logout().await;
+        Ok(AccountTest { folders: out })
+    };
+    tokio::time::timeout(IMAP_ACCOUNT_TIMEOUT, run).await.unwrap_or(Err(imap::ImapError::Net(tls::NetError::Timeout)))
 }
 
 fn shorten_url(u: &str) -> String {
@@ -360,8 +486,8 @@ impl Tool for ConnectorTool {
         match self.kind {
             Kind::CalendarToday => "Elenca gli eventi di oggi dai calendari scelti dall'utente (file .ics, cartelle, indirizzi di sottoscrizione). Sola lettura.",
             Kind::CalendarUpcoming => "Elenca gli eventi dei prossimi giorni (da adesso) dai calendari scelti dall'utente. Sola lettura.",
-            Kind::MailRecent => "Elenca la posta recente (mittente, oggetto, data, anteprima) dalle cartelle di posta locali scelte dall'utente. Sola lettura: non invia, non cancella, non segna nulla.",
-            Kind::MailSearch => "Cerca nella posta locale scelta dall'utente le parole indicate (mittente, oggetto, testo). Sola lettura.",
+            Kind::MailRecent => "Elenca la posta recente (mittente, oggetto, data, anteprima) dalle cartelle locali e dagli account IMAP scelti dall'utente. Sola lettura: non invia, non cancella, non segna nulla come letto.",
+            Kind::MailSearch => "Cerca nella posta scelta dall'utente (cartelle locali e account IMAP, ultimi giorni) le parole indicate (mittente, oggetto, testo). Sola lettura.",
         }
     }
     fn parameters(&self) -> Value {
@@ -399,8 +525,8 @@ impl Tool for ConnectorTool {
                 "Nessun calendario scelto: aggiungi un file .ics, una cartella o un indirizzo in Impostazioni, «Calendario e posta».",
             ));
         }
-        if !self.is_calendar() && cfg.mail_sources.iter().all(|s| s.trim().is_empty()) {
-            return Ok(ToolOutput::text("Nessuna cartella di posta scelta: aggiungi una cartella Maildir o un file .mbox/.eml in Impostazioni, «Calendario e posta»."));
+        if !self.is_calendar() && cfg.mail_sources.iter().all(|s| s.trim().is_empty()) && cfg.imap.is_empty() {
+            return Ok(ToolOutput::text("Nessuna posta scelta: aggiungi una cartella Maildir, un file .mbox/.eml o un account IMAP in Impostazioni, «Calendario e posta»."));
         }
         Ok(ToolOutput::text(match self.kind {
             Kind::CalendarToday => {
@@ -415,7 +541,7 @@ impl Tool for ConnectorTool {
             }
             Kind::MailRecent => {
                 let hours = int_arg(&args, "hours", 24, 1, 720);
-                let (mails, notes) = self.settings.mail_since(now - Duration::hours(hours), now);
+                let (mails, notes) = self.settings.mail_since(now - Duration::hours(hours), now).await;
                 with_notes(format_mail(&mails, &format!("Posta delle ultime {hours} ore"), 20), &notes)
             }
             Kind::MailSearch => {
@@ -423,7 +549,7 @@ impl Tool for ConnectorTool {
                 if q.is_empty() {
                     return Err(Error::Invalid("argomento `query` mancante".into()));
                 }
-                let (mails, notes) = self.settings.mail_search(&q);
+                let (mails, notes) = self.settings.mail_search(&q).await;
                 with_notes(format_mail(&mails, &format!("Posta con «{q}»"), 10), &notes)
             }
         }))

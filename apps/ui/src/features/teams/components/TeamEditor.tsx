@@ -10,6 +10,7 @@ import { useAgentOptions, useDeleteTeam, useSaveTeam, useTeams } from "../api";
 import { blankTeam, duplicateTeam, hasErrors, idForNew, NEW_TEAM, normalizeTeam, validateTeam } from "../model/teams";
 import { MembersSection } from "./MembersSection";
 
+import { t as tr, tNode } from "../../../shared/i18n";
 /** The detail of `#/teams/:teamId`: a form in sections (identity, members, response, budget). */
 export function TeamEditor({ teamId, from }: { teamId: string; from?: string }) {
   const teams = useTeams();
@@ -60,7 +61,7 @@ export function TeamEditor({ teamId, from }: { teamId: string; from?: string }) 
   if (!draft || !saved) {
     return (
       <Panel>
-        <EmptyState icon="team" title="Team non trovato" description="Questo team non esiste (più). Sceglilo dall'elenco o creane uno nuovo." action={<Link to="/teams" className="btn">Torna ai team</Link>} />
+        <EmptyState icon="team" title={tr("teams.team_non_trovato")} description={tr("teams.questo_team_non_esiste_piu")} action={<Link to="/teams" className="btn">{tr("teams.torna_ai_team")}</Link>} />
       </Panel>
     );
   }
@@ -72,58 +73,58 @@ export function TeamEditor({ teamId, from }: { teamId: string; from?: string }) 
     <div className="stack stack-lg">
       <Panel
         title={<>
-          <Link to="/teams" className="md-back only-phone" aria-label="Torna ai team"><Icon name="back" size={16} /> Team</Link>
-          <span className="agent-title">{draft.name.trim() || (isNew ? "Nuovo team" : "Senza nome")}</span>
+          <Link to="/teams" className="md-back only-phone" aria-label={tr("teams.torna_ai_team")}><Icon name="back" size={16} /> {tr("teams.team")}</Link>
+          <span className="agent-title">{draft.name.trim() || (isNew ? tr("teams.nuovo_team") : tr("teams.senza_nome"))}</span>
         </>}
         actions={!isNew && <div className="detail-actions">
-          <Link to={`/teams/${NEW_TEAM}?from=${encodeURIComponent(teamId)}`} className="btn"><Icon name="copy" size={15} /> Duplica</Link>
-          <Button variant="danger" icon="trash" onClick={() => setConfirmDelete(true)}>Elimina</Button>
+          <Link to={`/teams/${NEW_TEAM}?from=${encodeURIComponent(teamId)}`} className="btn"><Icon name="copy" size={15} /> {tr("teams.duplica")}</Link>
+          <Button variant="danger" icon="trash" onClick={() => setConfirmDelete(true)}>{tr("teams.elimina")}</Button>
         </div>}
       >
-        {from && isNew && <p className="faint text-sm mb-3">Copia di un team esistente: il nuovo team nasce con le stesse impostazioni.</p>}
+        {from && isNew && <p className="faint text-sm mb-3">{tr("teams.copia_di_un_team_esistente")}</p>}
         <FormSections>
-          <FormSection id="identity" title="Identità" hint="Come si chiama e a che cosa serve.">
+          <FormSection id="identity" title={tr("teams.identita")} hint={tr("teams.come_si_chiama_e_a")}>
             <div className="form-grid">
               <div className="cols-2">
-                <Field label="Nome" htmlFor="tm-name" error={nameError} hint={nameWarn}>
-                  <Input id="tm-name" value={draft.name} onChange={(e) => change({ name: e.target.value })} placeholder="Revisione del codice" aria-invalid={!!nameError} autoComplete="off" />
+                <Field label={tr("teams.nome")} htmlFor="tm-name" error={nameError} hint={nameWarn}>
+                  <Input id="tm-name" value={draft.name} onChange={(e) => change({ name: e.target.value })} placeholder={tr("teams.revisione_del_codice")} aria-invalid={!!nameError} autoComplete="off" />
                 </Field>
-                <Field label="Identificativo" htmlFor="tm-id" hint={isNew ? "Si ricava dal nome al primo salvataggio." : "Lo usano le sessioni (team:…): non cambia."}>
+                <Field label={tr("teams.identificativo")} htmlFor="tm-id" hint={isNew ? tr("teams.si_ricava_dal_nome_al") : tr("teams.lo_usano_le_sessioni_team")}>
                   <div className="copyfield-row">
                     <Input id="tm-id" mono readOnly value={draft.id || "—"} />
                     {draft.id && <CopyButton text={draft.id} />}
                   </div>
                 </Field>
               </div>
-              <Field label="Descrizione" htmlFor="tm-desc" hint="Compare nell'elenco e, per un supervisore, nelle istruzioni del team.">
-                <Textarea id="tm-desc" rows={3} value={draft.description} onChange={(e) => change({ description: e.target.value })} placeholder="Che cosa fa il team, in una o due righe" />
+              <Field label={tr("teams.descrizione")} htmlFor="tm-desc" hint={tr("teams.compare_nell_elenco_e_per")}>
+                <Textarea id="tm-desc" rows={3} value={draft.description} onChange={(e) => change({ description: e.target.value })} placeholder={tr("teams.che_cosa_fa_il_team")} />
               </Field>
             </div>
           </FormSection>
-          <FormSection id="members" title="Composizione" hint="Strategia, membri e chi li coordina.">
+          <FormSection id="members" title={tr("teams.composizione")} hint={tr("teams.strategia_membri_e_chi_li")}>
             <MembersSection team={draft} options={options} issues={shown} onChange={change} />
           </FormSection>
-          <FormSection id="output" title="Risposta" hint="Il formato della risposta finale del team.">
+          <FormSection id="output" title={tr("teams.risposta")} hint={tr("teams.il_formato_della_risposta_finale")}>
             <OutputSection key={`${teamId}|${from ?? ""}|${schemaKey}`} agent={draft} onChange={change} onError={setSchemaError} />
           </FormSection>
-          <FormSection id="budget" title="Budget" hint="Quanto può consumare un run del team.">
+          <FormSection id="budget" title={tr("teams.budget")} hint={tr("teams.quanto_puo_consumare_un_run")}>
             <BudgetSection agent={draft} issues={shown} onChange={change} />
           </FormSection>
         </FormSections>
       </Panel>
 
       <SaveBar
-        dirty={dirty} isNew={isNew} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} blocker="Correggi i campi evidenziati"
-        saveLabel={isNew ? "Crea team" : "Salva"} onSave={() => void submit()} onDiscard={discard}
+        dirty={dirty} isNew={isNew} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} blocker={tr("teams.correggi_i_campi_evidenziati")}
+        saveLabel={isNew ? tr("teams.crea_team") : tr("teams.salva")} onSave={() => void submit()} onDiscard={discard}
       />
 
-      <UnsavedChangesDialog guard={guard} subject={`il team «${draft.name.trim() || "senza nome"}»`} onSave={submit} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} />
+      <UnsavedChangesDialog guard={guard} subject={tr("teams.il_team", { name: draft.name.trim() || tr("teams.senza_nome_inline") })} onSave={submit} saving={save.isPending} canSave={!hasErrors(issues) && !schemaError} />
       {confirmDelete && (
         <DecisionDialog
-          title="Elimina il team" confirmLabel="Elimina" icon="trash" pending={del.isPending} error={del.error}
+          title={tr("teams.elimina_il_team")} confirmLabel={tr("teams.elimina")} icon="trash" pending={del.isPending} error={del.error}
           onCancel={() => { setConfirmDelete(false); del.reset(); }} onConfirm={remove}
         >
-          <p>Vuoi eliminare <b>{saved.name}</b>? Gli agenti che ne fanno parte restano; le sessioni create con il team non potranno più proseguire.</p>
+          <p>{tNode("teams.vuoi_eliminare", { name: <b>{saved.name}</b> })}</p>
         </DecisionDialog>
       )}
     </div>

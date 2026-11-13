@@ -26,14 +26,14 @@ pub struct OpenAiBackend {
 impl OpenAiBackend {
     /// `base` is the URL that ends with `/v1` (e.g. `http://127.0.0.1:8080/v1`).
     pub fn new(base: impl Into<String>, api_key: Option<String>, timeout: Duration) -> Self {
-        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).read_timeout(timeout).build().expect("http client");
-        Self {
-            base: base.into().trim_end_matches('/').to_string(),
-            api_key,
-            http,
-            model_override: None,
-            thinking: ThinkingControl::default(),
+        let base: String = base.into();
+        let mut builder = reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).read_timeout(timeout);
+        // A paired device served over TLS is verified against the certificate pinned at pairing.
+        if let Some(cfg) = aiw_core::tlspin::client_config_for(&base) {
+            builder = builder.use_preconfigured_tls(cfg);
         }
+        let http = builder.build().expect("http client");
+        Self { base: base.trim_end_matches('/').to_string(), api_key, http, model_override: None, thinking: ThinkingControl::default() }
     }
 
     /// Sends `model` in every request instead of the one the caller asked for.

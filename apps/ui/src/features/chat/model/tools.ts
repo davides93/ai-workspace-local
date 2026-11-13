@@ -1,6 +1,7 @@
 import type { PillTone } from "../../../shared/ui";
 import type { ToolStatus } from "./items";
 
+import { t } from "../../../shared/i18n";
 export type ToolCategoryId = "read" | "edit" | "search" | "shell" | "web" | "browser" | "computer" | "mcp" | "agent" | "plan" | "ui" | "other";
 
 export interface ToolCategory {
@@ -11,18 +12,18 @@ export interface ToolCategory {
 }
 
 const CATEGORIES: Record<ToolCategoryId, Omit<ToolCategory, "id">> = {
-  read: { label: "File", icon: "file" },
-  edit: { label: "Modifica file", icon: "edit" },
-  search: { label: "Ricerca", icon: "search" },
-  shell: { label: "Comandi", icon: "terminal" },
-  web: { label: "Web", icon: "cloud" },
-  browser: { label: "Browser", icon: "globe" },
-  computer: { label: "Desktop", icon: "mouse" },
-  mcp: { label: "Server MCP", icon: "link" },
-  agent: { label: "Agenti e competenze", icon: "agent" },
-  plan: { label: "Piano", icon: "list" },
-  ui: { label: "Interfaccia", icon: "panel" },
-  other: { label: "Strumento", icon: "tool" },
+  read: { get label() { return t("chat.file"); }, icon: "file" },
+  edit: { get label() { return t("chat.modifica_file"); }, icon: "edit" },
+  search: { get label() { return t("chat.ricerca"); }, icon: "search" },
+  shell: { get label() { return t("chat.comandi"); }, icon: "terminal" },
+  web: { get label() { return t("chat.web"); }, icon: "cloud" },
+  browser: { get label() { return t("chat.browser"); }, icon: "globe" },
+  computer: { get label() { return t("chat.desktop"); }, icon: "mouse" },
+  mcp: { get label() { return t("chat.server_mcp"); }, icon: "link" },
+  agent: { get label() { return t("chat.agenti_e_competenze"); }, icon: "agent" },
+  plan: { get label() { return t("chat.piano"); }, icon: "list" },
+  ui: { get label() { return t("chat.interfaccia_2"); }, icon: "panel" },
+  other: { get label() { return t("chat.strumento"); }, icon: "tool" },
 };
 
 const BY_NAME: Record<string, ToolCategoryId> = {
@@ -30,7 +31,7 @@ const BY_NAME: Record<string, ToolCategoryId> = {
   write_file: "edit", edit_file: "edit", move_file: "edit",
   glob: "search", grep: "search",
   shell: "shell", code: "shell",
-  web_fetch: "web",
+  web_fetch: "web", web_search: "web",
   agent: "agent", skill: "agent",
   todo: "plan",
   render_ui: "ui",
@@ -68,11 +69,11 @@ export function resultStatus(content: string): Exclude<ToolStatus, "running"> {
 }
 
 export const STATUS_INFO: Record<ToolStatus, { label: string; tone: PillTone }> = {
-  running: { label: "In corso", tone: "run" },
-  done: { label: "Completato", tone: "ok" },
-  failed: { label: "Non riuscito", tone: "crit" },
-  denied: { label: "Negato", tone: "crit" },
-  interrupted: { label: "Interrotto", tone: "neutral" },
+  running: { get label() { return t("chat.in_corso_2"); }, tone: "run" },
+  done: { get label() { return t("chat.completato_2"); }, tone: "ok" },
+  failed: { get label() { return t("chat.non_riuscito"); }, tone: "crit" },
+  denied: { get label() { return t("chat.negato"); }, tone: "crit" },
+  interrupted: { get label() { return t("chat.interrotto_2"); }, tone: "neutral" },
 };
 
 /** First non-empty line of a tool result, cut for the card header. */

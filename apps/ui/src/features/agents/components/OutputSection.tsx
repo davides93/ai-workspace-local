@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Field, Textarea } from "../../../shared/ui";
 import { parseSchemaText, schemaToText } from "../model/agents";
 
+import { t } from "../../../shared/i18n";
 /**
  * Optional JSON Schema of the final answer. The text is edited freely; the schema is stored in the draft only
  * while the text is valid JSON, and `onError` tells the editor when saving must wait.
@@ -23,8 +24,8 @@ export function OutputSection({ agent, onChange, onError }: {
   return (
     <div className="form-grid">
       <Field
-        label="Schema della risposta (JSON Schema)" htmlFor="ag-schema" error={error ?? undefined}
-        hint="Facoltativo. Se lo imposti, la risposta finale dell'agente deve essere un JSON conforme (type, properties, required, items, enum, additionalProperties, minItems, maxItems); se non lo è, l'agente ha un tentativo per correggerla."
+        label={t("agents.schema_della_risposta_json_schema")} htmlFor="ag-schema" error={error ?? undefined}
+        hint={t("agents.facoltativo_se_lo_imposti_la")}
       >
         <Textarea
           id="ag-schema" rows={6} className="mono" value={text} onChange={(e) => edit(e.target.value)} spellCheck={false}

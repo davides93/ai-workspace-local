@@ -9,6 +9,7 @@ import { ItemView } from "./ItemView";
 import { RunNote } from "./RunNote";
 import { useStickToBottom } from "./useStickToBottom";
 
+import { t, t as tr } from "../../../shared/i18n";
 export interface ConversationLogHandle {
   scrollToBottom: () => void;
 }
@@ -50,14 +51,14 @@ export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function
 
   return (
     <div className="ws-log-wrap">
-      <div className="ws-log" ref={scrollRef} role="log" aria-label="Conversazione" aria-live="off" tabIndex={0}>
+      <div className="ws-log" ref={scrollRef} role="log" aria-label={t("chat.conversazione")} aria-live="off" tabIndex={0}>
         <div className="ws-log-inner" ref={contentRef}>
           {state.status === "loading" && <SkeletonLines lines={5} />}
-          {state.status === "error" && <ErrorState title={state.title ?? "Impossibile caricare la conversazione"} error={state.error} onRetry={onRetry} />}
+          {state.status === "error" && <ErrorState title={state.title ?? t("chat.impossibile_caricare_la_conversazione")} error={state.error} onRetry={onRetry} />}
           {state.status === "ready" && items.length === 0 && empty}
           {state.status === "ready" && items.map((it, i) => (
             <ItemView
-              key={itemKey(it, i)} it={it} onRespond={onRespond} onAction={onAction} busy={busy} respondingId={respondingId}
+              key={itemKey(it, i)} it={it} sessionId={sessionKey ?? undefined} onRespond={onRespond} onAction={onAction} busy={busy} respondingId={respondingId}
               {...(it.kind === "text" && feedback
                 ? {
                     rateable: feedback.rateable.has(it.id), rating: feedback.ratings.get(it.id), ratePending: feedback.pendingId === it.id,
@@ -72,8 +73,7 @@ export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function
       </div>
       {unseen && (
         <button type="button" className="ws-newmsg" onClick={scrollToBottom}>
-          <Icon name="down" size={14} /> Nuovi messaggi
-        </button>
+          <Icon name="down" size={14} /> {" "}{tr("chat.nuovi_messaggi")}</button>
       )}
     </div>
   );

@@ -3,6 +3,7 @@ import { autoChoices } from "../../models/model/adviser";
 import type { AgentProfile, InferenceProfile, ModelRole } from "../../../shared/api/types";
 import { MODES, ROLE_INFO, ROLE_KEYS, rolesMode, withRole, withRolesMode, type RolesMode } from "../model/roles";
 
+import { t } from "../../../shared/i18n";
 interface Props {
   agent: AgentProfile;
   profiles: InferenceProfile[];
@@ -19,7 +20,7 @@ export function RolesSection({ agent, profiles, onChange }: Props) {
   return (
     <div className="form-grid">
       <fieldset className="tr-sources">
-        <legend className="field-label">Come usare i modelli</legend>
+        <legend className="field-label">{t("agents.come_usare_i_modelli")}</legend>
         {MODES.map((m) => (
           <label key={m.value}>
             <input type="radio" name="ag-roles" value={m.value} checked={mode === m.value} onChange={() => onChange(withRolesMode(agent, m.value as RolesMode))} /> <b>{m.label}</b>
@@ -31,10 +32,10 @@ export function RolesSection({ agent, profiles, onChange }: Props) {
         <Field key={role} label={ROLE_INFO[role].label} htmlFor={`ag-role-${role}`} hint={ROLE_INFO[role].hint}>
           <Select id={`ag-role-${role}`} value={custom[role] ?? ""} onChange={(e) => onChange(withRole(agent, role, e.target.value))}>
             <option value="">{ROLE_INFO[role].empty}</option>
-            <optgroup label="Scelta automatica">
+            <optgroup label={t("agents.scelta_automatica")}>
               {autoChoices("developer", custom[role]).map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </optgroup>
-            <optgroup label="Profili">
+            <optgroup label={t("agents.profili")}>
               {profiles.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.model || p.runtime_id}</option>)}
             </optgroup>
           </Select>
@@ -42,8 +43,7 @@ export function RolesSection({ agent, profiles, onChange }: Props) {
       ))}
       {mode !== "single" && (
         <p className="faint text-sm">
-          Un secondo modello si carica solo se sta in memoria insieme al primo; se il motore regge un solo modello per volta, il run ne usa uno solo e lo scrive tra gli eventi.
-        </p>
+          {t("agents.un_secondo_modello_si_carica")}</p>
       )}
     </div>
   );

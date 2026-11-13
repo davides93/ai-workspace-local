@@ -22,6 +22,7 @@ export const qk = {
     installed: () => ["models", "installed"] as const,
     catalog: () => ["models", "catalog"] as const,
     recommend: () => ["models", "recommend"] as const,
+    route: (model: string, context: number | undefined, remote: boolean) => ["models", "route", model, context ?? 0, remote] as const,
     providers: () => ["models", "providers"] as const,
     search: (p: Omit<ModelSearchParams, "cursor">) => ["models", "search", p] as const,
     remoteAll: () => ["models", "remote"] as const,
@@ -40,6 +41,7 @@ export const qk = {
     list: () => ["sessions", "list"] as const,
     detail: (id: string) => ["sessions", "detail", id] as const,
     messages: (id: string) => ["sessions", "messages", id] as const,
+    attachment: (id: string, attachmentId: string) => ["sessions", "attachment", id, attachmentId] as const,
     feedback: (id: string) => ["sessions", "feedback", id] as const,
     worktree: (id: string) => ["sessions", "worktree", id] as const,
     checkpoints: (id: string) => ["sessions", "checkpoints", id] as const,
@@ -62,6 +64,19 @@ export const qk = {
   memories: {
     all: () => ["memories"] as const,
     list: (query?: { status?: string; kind?: string; q?: string }) => ["memories", "list", query?.status ?? "", query?.kind ?? "", query?.q ?? ""] as const,
+  },
+
+  channels: {
+    all: () => ["channels"] as const,
+    list: () => ["channels", "list"] as const,
+  },
+  mailAccounts: () => ["mail-accounts"] as const,
+
+  kb: {
+    all: () => ["kb"] as const,
+    collections: () => ["kb", "collections"] as const,
+    documents: (collectionId: string) => ["kb", "documents", collectionId] as const,
+    status: () => ["kb", "status"] as const,
   },
 
   workflows: {
@@ -91,9 +106,14 @@ export const qk = {
 
   tools: () => ["tools"] as const,
   mcp: () => ["mcp", "servers"] as const,
+  mcpPrompts: () => ["mcp", "prompts"] as const,
+  mcpElicitations: () => ["mcp", "elicitations"] as const,
 
   mesh: () => ["mesh"] as const,
   pairingQr: (address: string | null, code: string | undefined) => ["mesh", "qr", address, code ?? ""] as const,
+
+  tokens: () => ["tokens"] as const,
+  tls: () => ["tls"] as const,
 
   voice: () => ["voice"] as const,
 

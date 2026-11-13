@@ -5,7 +5,7 @@ export interface Command {
   label: string;
   /** Secondary text (group of the section, shortcut…). */
   hint?: string;
-  group: "Vai a" | "Azioni";
+  group: "go" | "actions";
   icon: string;
   keywords: string[];
   run: () => void;
@@ -26,3 +26,6 @@ export function filterCommands(commands: Command[], query: string): Command[] {
   // Stable sort: equal scores keep the original order (routes first, then actions).
   return scored.sort((a, b) => a.score - b.score).map((x) => x.c);
 }
+
+/** Keywords of a command as written in a message: comma separated words or phrases. */
+export const splitKeywords = (list: string): string[] => list.split(",").map((w) => w.trim()).filter(Boolean);

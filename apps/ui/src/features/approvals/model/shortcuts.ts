@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n";
 // Keyboard shortcuts of the confirmation drawer: A allows, N denies, ↑/↓ move between requests.
 
 export type ApprovalCommand = "allow" | "deny" | "prev" | "next";
@@ -45,4 +46,4 @@ export function isTypingTarget(t: EventTarget | null): boolean {
 }
 
 /** "1 conferma in attesa" / "3 conferme in attesa". */
-export const pendingLabel = (n: number): string => (n === 1 ? "1 conferma in attesa" : `${n} conferme in attesa`);
+export const pendingLabel = (n: number): string => t("approvals.pending_count", { n });

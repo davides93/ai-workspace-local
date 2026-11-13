@@ -3,6 +3,7 @@ import { Field, Icon, Input, RowControls, Segmented, Select } from "../../../sha
 import type { TeamDef } from "../../../shared/api/types";
 import { agentLabel, isRemoteAgent, MAX_MEMBERS, STRATEGIES, type AgentOption, type TeamIssue } from "../model/teams";
 
+import { t } from "../../../shared/i18n";
 const issueOf = (issues: TeamIssue[], field: TeamIssue["field"]) => issues.find((i) => i.field === field && i.level === "error")?.message;
 
 /** One option list: the agents that are not taken yet, remote ones apart. */
@@ -15,9 +16,9 @@ function AgentSelect({ id, value, options, taken, onChange, placeholder, label }
   return (
     <Select id={id} aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="">{placeholder}</option>
-      {value && !options.some((o) => o.id === value) && <option value={value}>{value} (non trovato)</option>}
+      {value && !options.some((o) => o.id === value) && <option value={value}>{t("teams.non_trovato", { value })}</option>}
       {local.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-      {remote.length > 0 && <optgroup label="Agenti remoti">{remote.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</optgroup>}
+      {remote.length > 0 && <optgroup label={t("teams.agenti_remoti")}>{remote.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</optgroup>}
     </Select>
   );
 }
@@ -47,9 +48,9 @@ export function MembersSection({ team, options, issues, onChange }: {
   return (
     <div className="form-grid">
       <div className="field">
-        <span className="field-label" id="tm-strategy-label">Strategia</span>
+        <span className="field-label" id="tm-strategy-label">{t("teams.strategia")}</span>
         <Segmented
-          label="Strategia del team" value={team.strategy}
+          label={t("teams.strategia_del_team")} value={team.strategy}
           options={STRATEGIES.map((s) => ({ id: s.id, label: s.label, title: s.hint }))}
           onChange={(id) => onChange({ strategy: id })}
         />
@@ -57,16 +58,16 @@ export function MembersSection({ team, options, issues, onChange }: {
       </div>
 
       {team.strategy === "supervisor" && (
-        <Field label="Supervisore" htmlFor="tm-supervisor" error={supervisorError} hint="Il suo profilo guida il lavoro: i membri sono i suoi subagenti. Non può essere anche un membro.">
+        <Field label={t("teams.supervisore")} htmlFor="tm-supervisor" error={supervisorError} hint={t("teams.il_suo_profilo_guida_il")}>
           <AgentSelect
-            id="tm-supervisor" label="Supervisore" value={team.supervisor ?? ""} options={options} taken={memberIds} placeholder="Scegli l'agente…"
+            id="tm-supervisor" label={t("teams.supervisore")} value={team.supervisor ?? ""} options={options} taken={memberIds} placeholder={t("teams.scegli_l_agente")}
             onChange={(supervisor) => onChange({ supervisor: supervisor || undefined })}
           />
         </Field>
       )}
 
       <div className="field">
-        <span className="field-label" id="tm-members-label">Membri <span className="faint num">({team.members.length}/{MAX_MEMBERS})</span></span>
+        <span className="field-label" id="tm-members-label">{t("teams.membri")} <span className="faint num">({team.members.length}/{MAX_MEMBERS})</span></span>
         {team.members.length > 0 && (
           <ol className="team-members" aria-labelledby="tm-members-label">
             {team.members.map((m, i) => (
@@ -77,11 +78,11 @@ export function MembersSection({ team, options, issues, onChange }: {
                   <span>{agentLabel(m.agent, options)}</span>
                 </span>
                 <Input
-                  className="team-role" aria-label={`Ruolo di ${agentLabel(m.agent, options)}`} placeholder="Ruolo: che cosa fa nel team" value={m.role}
+                  className="team-role" aria-label={t("teams.ruolo_di", { agent: agentLabel(m.agent, options) })} placeholder={t("teams.ruolo_che_cosa_fa_nel")} value={m.role}
                   onChange={(e) => onChange({ members: team.members.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)) })}
                 />
                 <RowControls
-                  index={i} count={team.members.length} noun={`il membro ${agentLabel(m.agent, options)}`} onMove={(d) => move(i, d)}
+                  index={i} count={team.members.length} noun={t("teams.il_membro", { agent: agentLabel(m.agent, options) })} onMove={(d) => move(i, d)}
                   onRemove={() => onChange({ members: team.members.filter((_, j) => j !== i) })}
                 />
               </li>
@@ -91,22 +92,20 @@ export function MembersSection({ team, options, issues, onChange }: {
         {team.members.length < MAX_MEMBERS && (
           <div className="team-add">
             <AgentSelect
-              id="tm-add" label="Aggiungi un membro" value={adding} options={options} taken={[...memberIds, ...(team.supervisor ? [team.supervisor] : [])]}
-              placeholder="Aggiungi un membro…" onChange={add}
+              id="tm-add" label={t("teams.aggiungi_un_membro")} value={adding} options={options} taken={[...memberIds, ...(team.supervisor ? [team.supervisor] : [])]}
+              placeholder={t("teams.aggiungi_un_membro_2")} onChange={add}
             />
           </div>
         )}
         {membersError && <span className="field-error" role="alert">{membersError}</span>}
         <span className="hint">
-          {team.strategy === "pipeline" ? "I membri lavorano nell'ordine mostrato: ciascuno riceve la richiesta e il risultato del precedente." : "Il ruolo è la descrizione che il supervisore (o l'aggregatore) vede per ciascun membro."}
-          {" "}Si possono usare anche agenti remoti, se registrati in Integrazioni.
-        </span>
+          {team.strategy === "pipeline" ? t("teams.members_hint_pipeline") : t("teams.members_hint_roles")}{" "}{t("teams.si_possono_usare_anche_agenti")}</span>
       </div>
 
       {team.strategy === "parallel" && (
-        <Field label="Aggregatore (facoltativo)" htmlFor="tm-aggregator" error={issueOf(issues, "aggregator")} hint="Un agente che unisce i risultati dei membri in un'unica risposta. Senza, la risposta è l'elenco dei risultati con un'intestazione per ruolo.">
+        <Field label={t("teams.aggregatore_facoltativo")} htmlFor="tm-aggregator" error={issueOf(issues, "aggregator")} hint={t("teams.un_agente_che_unisce_i")}>
           <AgentSelect
-            id="tm-aggregator" label="Aggregatore" value={team.aggregator ?? ""} options={options.filter((o) => !o.remote)} taken={[]} placeholder="Nessun aggregatore"
+            id="tm-aggregator" label={t("teams.aggregatore")} value={team.aggregator ?? ""} options={options.filter((o) => !o.remote)} taken={[]} placeholder={t("teams.nessun_aggregatore")}
             onChange={(aggregator) => onChange({ aggregator: aggregator || undefined })}
           />
         </Field>

@@ -5,6 +5,7 @@ import { Button, Dialog } from "../../../shared/ui";
 import type { CheckpointInfo } from "../../../shared/api/types";
 import { useCheckpoints, useRewind } from "../api";
 
+import { t, tNode } from "../../../shared/i18n";
 /** Files a run changed or created, with the way back: put the originals back and delete what the run created. */
 export function CheckpointPanel({ sessionId, running }: { sessionId: string; running: boolean }) {
   const qc = useQueryClient();
@@ -22,18 +23,18 @@ export function CheckpointPanel({ sessionId, running }: { sessionId: string; run
   return (
     <section className="ws-insp-section ws-ckpt">
       <div className="ws-insp-head">
-        <h3>File modificati dagli agenti</h3>
+        <h3>{t("chat.file_modificati_dagli_agenti")}</h3>
       </div>
-      <ul className="ws-changed" aria-label="Checkpoint dei run">
+      <ul className="ws-changed" aria-label={t("chat.checkpoint_dei_run")}>
         {items.map((c) => (
           <li key={c.run_id}>
             <span className="mono">{c.run_id}</span>
-            <span className="faint text-sm"> · {c.restore.length} da ripristinare, {c.delete.length} da eliminare</span>
-            <Button size="sm" disabled={running} onClick={() => setTarget(c)}>Ripristina i file</Button>
+            <span className="faint text-sm"> {t("chat.da_ripristinare_da_eliminare", { length: c.restore.length, length2: c.delete.length })}</span>
+            <Button size="sm" disabled={running} onClick={() => setTarget(c)}>{t("chat.ripristina_i_file")}</Button>
           </li>
         ))}
       </ul>
-      {running && <span className="faint text-xs">Il ripristino torna disponibile alla fine del run.</span>}
+      {running && <span className="faint text-xs">{t("chat.il_ripristino_torna_disponibile_alla")}</span>}
       {target && <RewindDialog sessionId={sessionId} info={target} onClose={() => setTarget(null)} />}
     </section>
   );
@@ -56,22 +57,22 @@ function RewindDialog({ sessionId, info, onClose }: { sessionId: string; info: C
   const rewind = useRewind(sessionId);
   return (
     <Dialog
-      title="Ripristina i file"
+      title={t("chat.ripristina_i_file")}
       size="sm"
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose} data-autofocus>Annulla</Button>
+          <Button onClick={onClose} data-autofocus>{t("chat.annulla")}</Button>
           <Button variant="danger" disabled={rewind.isPending} onClick={() => rewind.mutate(info.run_id, { onSuccess: onClose })}>
-            {rewind.isPending ? "Ripristino…" : "Ripristina"}
+            {rewind.isPending ? t("chat.ripristino") : t("chat.ripristina")}
           </Button>
         </>
       }
     >
-      <p>Il run <code>{info.run_id}</code> torna com'era prima: le modifiche fatte dopo, a mano o da altri run, a questi file andranno perse.</p>
-      <FileList title="Tornano com'erano" files={info.restore} />
-      <FileList title="Vengono eliminati (li ha creati il run)" files={info.delete} />
-      <FileList title="Fuori dal workspace, non vengono toccati" files={info.external} />
+      <p>{tNode("chat.il_run_torna_com_era_prima", { run: <code>{info.run_id}</code> })}</p>
+      <FileList title={t("chat.tornano_com_erano")} files={info.restore} />
+      <FileList title={t("chat.vengono_eliminati_li_ha_creati")} files={info.delete} />
+      <FileList title={t("chat.fuori_dal_workspace_non_vengono")} files={info.external} />
     </Dialog>
   );
 }

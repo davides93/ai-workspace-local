@@ -1,7 +1,7 @@
 //! Layered configuration (architecture §7): `defaults → global → device → workspace`.
 //! Each layer is a flat JSON object of dotted keys stored in its own file; later layers win.
 
-use crate::api::{ConfigLayerView, ConfigView};
+use crate::api::{ConfigLayerView, ConfigView, SECRET_MASK};
 use crate::schema::SettingsSchema;
 use crate::{Error, Result};
 use serde_json::{json, Map, Value};
@@ -33,6 +33,39 @@ impl Layer {
     }
 }
 
+/// Secret locations hidden from sandboxed commands unless the person removes them
+/// (`sandbox.deny_read`). `~` is the home folder.
+pub const DEFAULT_DENY_READ: &[&str] = &[
+    "~/.ssh",
+    "~/.gnupg",
+    "~/.aws",
+    "~/.azure",
+    "~/.config/gcloud",
+    "~/.config/gh",
+    "~/.kube",
+    "~/.docker/config.json",
+    "~/.netrc",
+    "~/.npmrc",
+    "~/.pypirc",
+    "~/.git-credentials",
+    // Browser profiles (cookies, saved passwords).
+    "~/.mozilla",
+    "~/.config/google-chrome",
+    "~/.config/chromium",
+    "~/.config/BraveSoftware",
+    "~/.config/microsoft-edge",
+    "~/snap/firefox/common/.mozilla",
+    "~/snap/chromium/common/chromium",
+    "~/Library/Application Support/Google/Chrome",
+    "~/Library/Application Support/Firefox",
+    "~/Library/Application Support/BraveSoftware",
+    "~/Library/Application Support/Microsoft Edge",
+    "~/Library/Safari",
+    // Keychains of the operating system.
+    "~/Library/Keychains",
+    "~/.local/share/keyrings",
+];
+
 /// Application-level settings exposed in the UI "Impostazioni" page.
 pub fn app_schema() -> SettingsSchema {
     serde_json::from_value(json!({
@@ -40,7 +73,7 @@ pub fn app_schema() -> SettingsSchema {
         "properties": {
             "ui.mode": {"type": "string", "title": "Modalità dell'interfaccia", "description": "Semplice mostra solo le sezioni di uso quotidiano; Sviluppatore le mostra tutte", "enum": ["simple", "developer"], "default": "simple"},
             "ui.theme": {"type": "string", "title": "Tema", "enum": ["system", "light", "dark"], "default": "system"},
-            "ui.language": {"type": "string", "title": "Lingua", "enum": ["it", "en"], "default": "it"},
+            "ui.language": {"type": "string", "title": "Lingua", "description": "Automatica segue la lingua del dispositivo; vale anche per le risposte degli assistenti nelle nuove conversazioni", "enum": ["auto", "it", "en"], "default": "auto"},
             "app.close_to_tray": {"type": "boolean", "title": "Chiudendo la finestra l'app resta attiva", "description": "Solo nell'app per computer: la finestra si nasconde e l'app continua a lavorare accanto all'orologio; per chiuderla davvero usa «Esci» dal suo menu", "default": true},
             "app.start_at_login": {"type": "boolean", "title": "Avvia l'app all'accesso al computer", "description": "Solo nell'app per computer (non nella versione dell'App Store): parte da sola, nascosta accanto all'orologio, quando accedi", "default": false},
             "app.notifications": {"type": "boolean", "title": "Avvisi sul computer", "description": "Solo nell'app per computer: ti avvisa quando serve una tua conferma, quando un lavoro è finito o un download è completo", "default": true},
@@ -48,15 +81,24 @@ pub fn app_schema() -> SettingsSchema {
             "approvals.timeout_s": {"type": "integer", "title": "Tempo massimo per rispondere a una richiesta di approvazione (secondi)", "description": "0 = nessun limite. Allo scadere la richiesta dell'agente viene rifiutata", "default": 0, "minimum": 0, "maximum": 86400},
             "policy.mode": {"type": "string", "title": "Modalità di approvazione (default)", "enum": ["plan", "ask", "auto-edit", "auto", "yolo"], "default": "ask"},
             "sandbox.mode": {"type": "string", "title": "Sandbox (default)", "enum": ["read-only", "workspace-write", "off"], "default": "workspace-write"},
+            "sandbox.shell_network": {"type": "string", "title": "Rete della shell", "description": "off = i comandi della shell non hanno rete (per installare pacchetti o scaricare file serve «on»); on = rete aperta. Vale per Linux e macOS: su Windows la sandbox non può chiudere la rete. Un repository può solo chiuderla, mai aprirla", "enum": ["off", "on"], "default": "off"},
+            "sandbox.shell_network_notice": {"type": "boolean", "title": "Avviso sulla rete della shell da mostrare", "description": "Messo a true dalla migrazione per le installazioni esistenti (la rete è rimasta accesa); l'interfaccia lo mostra una volta e lo spegne", "default": false},
+            "sandbox.deny_read": {"type": "array", "title": "Cartelle e file nascosti ai comandi", "description": "Percorsi (~ è la tua cartella personale) che i comandi della shell e i server MCP isolati non possono né leggere né scrivere, e che i tool di file rifiutano. Le cartelle dati di AIW sono nascoste sempre. Togli una voce se un flusso di lavoro la richiede (per esempio ~/.ssh per git via ssh). Su Windows non ha effetto", "items": {"type": "string"}, "default": DEFAULT_DENY_READ},
+            "sandbox.env_allow": {"type": "array", "title": "Variabili d'ambiente che i comandi possono ereditare", "description": "I comandi della shell non ereditano le variabili che sembrano segreti (*_TOKEN, *_KEY, *_SECRET, *PASSWORD*, AIW_*, credenziali cloud). Qui elenchi i nomi (o un prefisso che finisce con *) da lasciare passare", "items": {"type": "string"}, "default": []},
             "context.compact_at": {"type": "number", "title": "Compatta il contesto al", "default": 0.8, "minimum": 0.3, "maximum": 0.95, "step": 0.05},
             "agents.max_parallel_subagents": {"type": "integer", "title": "Subagenti in parallelo", "default": 3, "minimum": 1, "maximum": 8},
             "agents.budget.max_tokens": {"type": "integer", "title": "Budget di token per run (0 = nessun limite)", "description": "Somma di prompt e risposta di tutte le chiamate al modello, subagenti compresi; vale se l'agente non ha un suo limite", "default": 0, "minimum": 0},
             "agents.budget.max_turns": {"type": "integer", "title": "Budget di turni per run (0 = nessun limite)", "description": "Chiamate al modello di tutto il run, subagenti compresi; vale se l'agente non ha un suo limite", "default": 0, "minimum": 0},
             "agents.budget.max_seconds": {"type": "integer", "title": "Tempo massimo per run, in secondi (0 = nessun limite)", "description": "Vale se l'agente non ha un suo limite", "default": 0, "minimum": 0},
+            "mcp.sampling.max_calls": {"type": "integer", "title": "Richieste di campionamento MCP per run", "description": "Quante volte, in un run, un server MCP con il campionamento attivo può chiedere una risposta al modello", "default": 5, "minimum": 1, "maximum": 50},
+            "mcp.sampling.max_tokens": {"type": "integer", "title": "Token di campionamento MCP per run", "description": "Token (stimati) che le richieste di campionamento dei server MCP possono usare in un run; contano nel budget del run", "default": 8000, "minimum": 100},
             "routing.bandit": {"type": "boolean", "title": "Router a bandit tra i profili candidati degli agenti", "description": "Per gli agenti con profili candidati sceglie a ogni run il profilo con UCB1, usando i pollici e i task di valutazione superati come reward", "default": false},
             "network.allow_domains": {"type": "array", "title": "Domini consentiti a web/browser (vuoto = tutti i pubblici)", "items": {"type": "string"}, "default": []},
             "server.lan": {"type": "boolean", "title": "Accesso dalla LAN (richiede pairing)", "default": false},
             "server.port": {"type": "integer", "title": "Porta API", "default": 7777, "minimum": 1024, "maximum": 65535},
+            "server.tls": {"type": "string", "title": "Cifratura della rete (TLS)", "description": "Con l'accesso dalla LAN attivo, cifra il traffico verso gli altri dispositivi. off = HTTP in chiaro; self_signed = certificato generato da AIW (il pairing porta l'impronta); files = il tuo certificato. Ha effetto al riavvio del servizio", "enum": ["off", "self_signed", "files"], "default": "off"},
+            "server.tls.cert_file": {"type": "string", "title": "Certificato TLS (file PEM)", "description": "Solo con server.tls = files: percorso del certificato (e dell'eventuale catena) in formato PEM", "default": ""},
+            "server.tls.key_file": {"type": "string", "title": "Chiave privata TLS (file PEM)", "description": "Solo con server.tls = files: percorso della chiave privata in formato PEM", "default": ""},
             "models.dir": {"type": "string", "title": "Cartella modelli", "default": ""},
             "workspace.root": {"type": "string", "title": "Cartella di lavoro degli agenti", "default": ""},
             "telemetry.otlp": {"type": "string", "title": "Endpoint OTLP (vuoto = disattivato)", "default": ""},
@@ -78,10 +120,21 @@ pub fn app_schema() -> SettingsSchema {
             "connectors.calendar.sources": {"type": "array", "title": "Calendari da leggere", "description": "File .ics, cartelle con file .ics o indirizzi di sottoscrizione (https:// o webcal://)", "items": {"type": "string"}, "default": []},
             "connectors.mail.enabled": {"type": "boolean", "title": "Posta: l'assistente può leggere la posta salvata sul computer", "description": "Sola lettura: non invia, non cancella e non segna nulla; legge solo ciò che scegli, e i dati restano sul dispositivo", "default": false},
             "connectors.mail.sources": {"type": "array", "title": "Posta da leggere", "description": "Cartelle Maildir, file .mbox o .eml", "items": {"type": "string"}, "default": []},
+            "connectors.mail.imap": {"type": "array", "title": "Account di posta (IMAP)", "description": "Account letti in sola lettura, sempre con connessione cifrata: i messaggi non vengono mai segnati come letti. Le password non stanno qui: si inseriscono nell'editor degli account e restano nell'archivio dei segreti. Con Gmail e Microsoft serve una password per le app (l'accesso con OAuth non è supportato)", "items": {"type": "object"}, "default": []},
+            "connectors.mail.imap_days": {"type": "integer", "title": "Posta IMAP: quanti giorni indietro", "description": "Quanto indietro legge la posta dei server IMAP", "default": 14, "minimum": 1, "maximum": 60},
+            "connectors.mail.imap_max_messages": {"type": "integer", "title": "Posta IMAP: messaggi per cartella", "description": "Al massimo quanti messaggi (i più recenti) legge da ogni cartella", "default": 100, "minimum": 10, "maximum": 500},
+            "search.provider": {"type": "string", "title": "Motore della ricerca web", "description": "Con «Automatico» usa SearXNG se hai indicato un indirizzo, altrimenti Brave se hai inserito una chiave, altrimenti DuckDuckGo. Il testo cercato viene inviato al motore scelto. «Spenta» toglie lo strumento di ricerca agli agenti", "enum": ["auto", "off", "searxng", "brave", "duckduckgo"], "default": "auto"},
+            "search.searxng_url": {"type": "string", "title": "Indirizzo di SearXNG", "description": "Istanza di SearXNG, anche su questo computer o sulla rete di casa (per esempio http://localhost:8080). Deve consentire il formato json", "default": "", "placeholder": "http://localhost:8080"},
+            "search.brave_api_key": {"type": "string", "title": "Chiave di Brave Search", "description": "Chiave dell'API di Brave Search; resta su questo dispositivo e non viene mai mostrata per intero", "default": "", "secret": true},
             "voice.language": {"type": "string", "title": "Lingua della voce", "description": "Codice ISO 639-1 (it, en…) o auto per riconoscerla", "default": "auto"},
             "voice.stt_runtime": {"type": "string", "title": "Motore di trascrizione", "description": "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", "enum": ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], "default": "auto"},
             "voice.stt_model": {"type": "string", "title": "Modello Whisper", "description": "Vuoto = il più grande installato che sta in memoria", "default": ""},
-            "voice.tts_voice": {"type": "string", "title": "Voce per leggere le risposte", "description": "Nome di una voce locale del sistema; vuoto = la prima per la lingua", "default": ""}
+            "voice.tts_voice": {"type": "string", "title": "Voce del sistema per leggere le risposte", "description": "Nome di una voce locale del sistema; vuoto = la prima per la lingua", "default": ""},
+            "voice.tts.engine": {"type": "string", "title": "Motore della voce", "description": "auto: Piper se è installato con una voce nella lingua della risposta, poi un server compatibile OpenAI se hai indicato l'indirizzo, altrimenti le voci del sistema. «Sistema» usa sempre le voci del sistema operativo", "enum": ["auto", "system", "piper", "openai"], "default": "auto"},
+            "voice.tts.voice": {"type": "object", "title": "Voce neurale per lingua", "description": "Per ogni lingua (it, en…) la voce di Piper o del server; la lingua senza voce scelta usa la prima disponibile", "default": {}},
+            "voice.tts.speed": {"type": "number", "title": "Velocità della voce", "description": "1 = normale, 0.5 = metà, 2 = doppia (solo voci neurali)", "default": 1.0, "minimum": 0.5, "maximum": 2.0, "step": 0.1},
+            "voice.tts.server_url": {"type": "string", "title": "Server della voce (compatibile OpenAI)", "description": "Per esempio Kokoro-FastAPI su http://localhost:8880 o LocalAI: AIW chiama /v1/audio/speech. Il testo da leggere viene inviato a quel server", "default": "", "placeholder": "http://localhost:8880"},
+            "voice.tts.server_model": {"type": "string", "title": "Modello del server della voce", "description": "Nome del modello da chiedere al server (kokoro, tts-1…)", "default": "kokoro"}
         }
     }))
     .expect("static schema")
@@ -89,8 +142,12 @@ pub fn app_schema() -> SettingsSchema {
 
 /// Security keys that the workspace layer (repository content) may only make stricter. The
 /// list is ordered from the strictest value to the loosest.
-const WORKSPACE_TIGHTEN_ONLY: &[(&str, &[&str])] =
-    &[("policy.mode", &["plan", "ask", "auto-edit", "auto", "yolo"]), ("sandbox.mode", &["read-only", "workspace-write", "off"])];
+const WORKSPACE_TIGHTEN_ONLY: &[(&str, &[&str])] = &[
+    ("policy.mode", &["plan", "ask", "auto-edit", "auto", "yolo"]),
+    ("sandbox.mode", &["read-only", "workspace-write", "off"]),
+    // A repository may close the network of the shell, never open it.
+    ("sandbox.shell_network", &["off", "on"]),
+];
 
 /// Machine-level keys the workspace layer cannot set: network reach, the listener, where models
 /// and the working folder live, and where telemetry goes.
@@ -98,10 +155,20 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "network.allow_domains",
     "server.lan",
     "server.port",
+    // How the listener is encrypted and with which certificate is the person's choice: a repository must not
+    // switch the encryption off or point it at its own key.
+    "server.tls",
+    "server.tls.cert_file",
+    "server.tls.key_file",
     "models.dir",
     "workspace.root",
     "telemetry.otlp",
     "approvals.timeout_s",
+    // What stays hidden from commands and which variables they inherit is the person's choice: a
+    // repository must not empty the list of secret locations or let the secrets through.
+    "sandbox.deny_read",
+    "sandbox.env_allow",
+    "sandbox.shell_network_notice",
     "update.channel",
     "update.auto_check",
     "update.auto_download",
@@ -125,7 +192,89 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "connectors.calendar.sources",
     "connectors.mail.enabled",
     "connectors.mail.sources",
+    "connectors.mail.imap",
+    "connectors.mail.imap_days",
+    "connectors.mail.imap_max_messages",
+    // Where the person's searches go, and the key they pay for, are theirs: a repository cannot redirect them
+    // to its own server or supply a key.
+    "search.provider",
+    "search.searxng_url",
+    "search.brave_api_key",
+    // The server that gets the text to read aloud is the person's choice, not a repository's.
+    "voice.tts.engine",
+    "voice.tts.server_url",
+    "voice.tts.server_model",
 ];
+
+/// The address of the SearXNG instance: empty (not set) or an http(s) URL.
+fn check_searxng_url(v: &Value) -> Result<()> {
+    let Some(text) = v.as_str().map(str::trim).filter(|t| !t.is_empty()) else { return Ok(()) };
+    let lower = text.to_ascii_lowercase();
+    let rest = lower.strip_prefix("http://").or_else(|| lower.strip_prefix("https://"));
+    if rest.is_some_and(|r| !r.is_empty() && !r.starts_with('/') && !r.contains(char::is_whitespace)) {
+        Ok(())
+    } else {
+        Err(Error::Invalid(
+            "`search.searxng_url` deve essere un indirizzo che inizia con http:// o https:// (per esempio http://localhost:8080)".into(),
+        ))
+    }
+}
+
+/// An optional http(s) address (the speech server): empty or `http://…` / `https://…`.
+fn check_server_url(v: &Value, key: &str) -> Result<()> {
+    let Some(text) = v.as_str().map(str::trim).filter(|t| !t.is_empty()) else { return Ok(()) };
+    let lower = text.to_ascii_lowercase();
+    let rest = lower.strip_prefix("http://").or_else(|| lower.strip_prefix("https://"));
+    if rest.is_some_and(|r| !r.is_empty() && !r.starts_with('/') && !r.contains(char::is_whitespace)) {
+        Ok(())
+    } else {
+        Err(Error::Invalid(format!(
+            "`{key}` deve essere un indirizzo che inizia con http:// o https:// (per esempio http://localhost:8880)"
+        )))
+    }
+}
+
+/// What [`migrate_shell_network`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellNetworkMigration {
+    /// Already handled on an earlier start.
+    Done,
+    /// A new installation: `sandbox.shell_network` keeps its default (`off`).
+    NewInstall,
+    /// An existing installation: `sandbox.shell_network = "on"` was written (the old behaviour) and
+    /// the notice flag was set.
+    KeptOpen,
+}
+
+/// The shell used to have the network open; the default is now closed. Installations that already
+/// have data keep the old behaviour, written explicitly into the global configuration file the
+/// first time they start with this version, with a notice for the interface; new installations
+/// get the new default. `marker` records that this ran, so that a new installation that is
+/// started a second time is not mistaken for an old one.
+pub fn migrate_shell_network(config_file: &Path, existing_install: bool, marker: &Path) -> Result<ShellNetworkMigration> {
+    if marker.exists() {
+        return Ok(ShellNetworkMigration::Done);
+    }
+    let result = if existing_install {
+        let mut layer = read_layer(config_file);
+        if !layer.contains_key("sandbox.shell_network") {
+            layer.insert("sandbox.shell_network".into(), Value::String("on".into()));
+            layer.insert("sandbox.shell_network_notice".into(), Value::Bool(true));
+            write_layer(config_file, &layer)?;
+        }
+        ShellNetworkMigration::KeptOpen
+    } else {
+        ShellNetworkMigration::NewInstall
+    };
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(
+        marker,
+        if existing_install { "shell_network: kept on for an existing installation\n" } else { "shell_network: new installation (off)\n" },
+    )?;
+    Ok(result)
+}
 
 pub struct LayeredConfig {
     schema: SettingsSchema,
@@ -276,6 +425,16 @@ impl LayeredConfig {
     pub fn set(&self, layer: Layer, key: &str, value: Value) -> Result<()> {
         if let Some(f) = self.schema.properties.get(key) {
             f.validate(key, &value).map_err(Error::Invalid)?;
+            // The mask the API showed comes back unchanged: keep what is stored.
+            if f.secret && value.as_str() == Some(SECRET_MASK) {
+                return Ok(());
+            }
+        }
+        if key == "search.searxng_url" {
+            check_searxng_url(&value)?;
+        }
+        if key == "voice.tts.server_url" {
+            check_server_url(&value, key)?;
         }
         let (lock, path) = match layer {
             Layer::Global => (&self.global, Some(self.global_path.clone())),
@@ -292,6 +451,18 @@ impl LayeredConfig {
         write_layer(&path, &m)
     }
 
+    /// `values` with every non-empty secret setting replaced by [`SECRET_MASK`] (the API never shows one).
+    fn masked(&self, mut values: Map<String, Value>) -> Map<String, Value> {
+        for k in self.schema.properties.iter().filter(|(_, f)| f.secret).map(|(k, _)| k) {
+            if let Some(v) = values.get_mut(k) {
+                if v.as_str().is_some_and(|s| !s.is_empty()) {
+                    *v = Value::String(SECRET_MASK.into());
+                }
+            }
+        }
+        values
+    }
+
     pub fn view(&self) -> ConfigView {
         let defaults = self.schema.defaults();
         ConfigView {
@@ -300,20 +471,20 @@ impl LayeredConfig {
                 ConfigLayerView {
                     name: "global".into(),
                     path: Some(self.global_path.display().to_string()),
-                    values: self.global.read().unwrap().clone(),
+                    values: self.masked(self.global.read().unwrap().clone()),
                 },
                 ConfigLayerView {
                     name: "device".into(),
                     path: Some(self.device_path.display().to_string()),
-                    values: self.device.read().unwrap().clone(),
+                    values: self.masked(self.device.read().unwrap().clone()),
                 },
                 ConfigLayerView {
                     name: "workspace".into(),
                     path: self.workspace_path.read().unwrap().as_ref().map(|p| p.display().to_string()),
-                    values: self.workspace.read().unwrap().clone(),
+                    values: self.masked(self.workspace.read().unwrap().clone()),
                 },
             ],
-            effective: self.effective(),
+            effective: self.masked(self.effective()),
             schema: self.schema.clone(),
             ignored_workspace_keys: self.ignored_workspace_keys(),
         }
@@ -365,6 +536,16 @@ mod tests {
     }
 
     #[test]
+    fn ui_language_defaults_to_auto_and_takes_it_or_en() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = LayeredConfig::load(app_schema(), dir.path().join("config.json"), dir.path().join("dev.json"), None);
+        assert_eq!(cfg.get_str("ui.language").as_deref(), Some("auto"));
+        cfg.set(Layer::Global, "ui.language", json!("en")).unwrap();
+        assert_eq!(cfg.get_str("ui.language").as_deref(), Some("en"));
+        assert!(cfg.set(Layer::Global, "ui.language", json!("fr")).is_err());
+    }
+
+    #[test]
     fn a_repository_cannot_loosen_security_or_touch_machine_keys() {
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
@@ -372,7 +553,7 @@ mod tests {
         // What a hostile repository would ship in its own .aiw/config.json.
         std::fs::write(
             ws.join(".aiw/config.json"),
-            r#"{"policy.mode":"yolo","sandbox.mode":"off","network.allow_domains":["evil.example"],"server.lan":true,"models.dir":"/","context.compact_at":0.5}"#,
+            r#"{"policy.mode":"yolo","sandbox.mode":"off","network.allow_domains":["evil.example"],"server.lan":true,"server.tls":"off","models.dir":"/","context.compact_at":0.5}"#,
         )
         .unwrap();
         let cfg = LayeredConfig::load(app_schema(), dir.path().join("config.json"), dir.path().join("dev.json"), None);
@@ -390,7 +571,7 @@ mod tests {
         assert_eq!(cfg.get_f64("context.compact_at"), Some(0.5));
         let mut ignored = cfg.ignored_workspace_keys();
         ignored.sort();
-        assert_eq!(ignored, ["models.dir", "network.allow_domains", "policy.mode", "sandbox.mode", "server.lan"]);
+        assert_eq!(ignored, ["models.dir", "network.allow_domains", "policy.mode", "sandbox.mode", "server.lan", "server.tls"]);
         // The desktop shell's keys are machine-level too.
         std::fs::write(ws.join(".aiw/config.json"), r#"{"app.start_at_login":true,"app.close_to_tray":false,"app.notifications":false}"#)
             .unwrap();
@@ -408,5 +589,111 @@ mod tests {
         assert_eq!(cfg.get_str("sandbox.mode").as_deref(), Some("read-only"));
         cfg.set(Layer::Workspace, "sandbox.mode", json!("off")).unwrap();
         assert_eq!(cfg.get_str("sandbox.mode").as_deref(), Some("off"), "equal to the user's own choice");
+    }
+
+    #[test]
+    fn search_settings_are_machine_level_and_the_key_is_never_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(ws.join(".aiw")).unwrap();
+        std::fs::write(
+            ws.join(".aiw/config.json"),
+            r#"{"search.provider":"searxng","search.searxng_url":"http://evil.example","search.brave_api_key":"dal-repository"}"#,
+        )
+        .unwrap();
+        let cfg = LayeredConfig::load(app_schema(), dir.path().join("config.json"), dir.path().join("dev.json"), None);
+        cfg.set_workspace_root(Some(&ws));
+        assert_eq!(cfg.get_str("search.provider").as_deref(), Some("auto"));
+        assert_eq!(cfg.get_str("search.searxng_url"), None);
+        assert_eq!(cfg.get_str("search.brave_api_key"), None);
+        let mut ignored = cfg.ignored_workspace_keys();
+        ignored.sort();
+        assert_eq!(ignored, ["search.brave_api_key", "search.provider", "search.searxng_url"]);
+
+        // Values are validated.
+        assert!(cfg.set(Layer::Global, "search.provider", json!("google")).is_err());
+        for bad in ["localhost:8080", "ftp://host", "http://", "http:///x", "http://a b"] {
+            assert!(cfg.set(Layer::Global, "search.searxng_url", json!(bad)).is_err(), "{bad}");
+        }
+        cfg.set(Layer::Global, "search.searxng_url", json!("http://localhost:8080")).unwrap();
+        cfg.set(Layer::Global, "search.searxng_url", json!("")).unwrap();
+
+        // The key is stored, but the view shows the mask; sending the mask back keeps the key.
+        cfg.set(Layer::Global, "search.brave_api_key", json!("chiave-vera")).unwrap();
+        assert_eq!(cfg.get_str("search.brave_api_key").as_deref(), Some("chiave-vera"));
+        let view = serde_json::to_string(&cfg.view()).unwrap();
+        assert!(!view.contains("chiave-vera") && !view.contains("dal-repository"), "{view}");
+        assert_eq!(cfg.view().effective["search.brave_api_key"], json!(SECRET_MASK));
+        assert_eq!(cfg.view().layers[1].values["search.brave_api_key"], json!(SECRET_MASK));
+        cfg.set(Layer::Global, "search.brave_api_key", json!(SECRET_MASK)).unwrap();
+        assert_eq!(cfg.get_str("search.brave_api_key").as_deref(), Some("chiave-vera"));
+        // An empty key shows as empty (there is nothing to hide) and clears the stored one.
+        cfg.set(Layer::Global, "search.brave_api_key", json!("")).unwrap();
+        assert_eq!(cfg.get_str("search.brave_api_key"), None);
+        assert_eq!(cfg.view().effective["search.brave_api_key"], json!(""));
+    }
+
+    #[test]
+    fn shell_network_migration_keeps_the_old_behaviour_only_for_existing_installs() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        let marker = dir.path().join(".shell-network-migrated");
+        // An existing installation with a config of its own: `on` is written, the rest is kept.
+        std::fs::write(&cfg, r#"{"ui.theme":"dark"}"#).unwrap();
+        assert_eq!(migrate_shell_network(&cfg, true, &marker).unwrap(), ShellNetworkMigration::KeptOpen);
+        let c = LayeredConfig::load(app_schema(), cfg.clone(), dir.path().join("dev.json"), None);
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("on"));
+        assert_eq!(c.get_str("ui.theme").as_deref(), Some("dark"));
+        assert!(c.get_bool("sandbox.shell_network_notice"));
+        // It runs once: later starts leave a choice of the person alone.
+        c.set(Layer::Global, "sandbox.shell_network", json!("off")).unwrap();
+        c.set(Layer::Global, "sandbox.shell_network_notice", json!(false)).unwrap();
+        assert_eq!(migrate_shell_network(&cfg, true, &marker).unwrap(), ShellNetworkMigration::Done);
+        let c = LayeredConfig::load(app_schema(), cfg, dir.path().join("dev.json"), None);
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn shell_network_migration_without_a_config_file_still_writes_the_old_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        assert_eq!(migrate_shell_network(&cfg, true, &dir.path().join("m")).unwrap(), ShellNetworkMigration::KeptOpen);
+        let c = LayeredConfig::load(app_schema(), cfg, dir.path().join("dev.json"), None);
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("on"));
+    }
+
+    #[test]
+    fn a_new_install_gets_the_closed_default_and_stays_closed_on_the_next_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        let marker = dir.path().join("m");
+        assert_eq!(migrate_shell_network(&cfg, false, &marker).unwrap(), ShellNetworkMigration::NewInstall);
+        assert!(!cfg.exists());
+        // The second start finds a database and would look like an existing installation.
+        assert_eq!(migrate_shell_network(&cfg, true, &marker).unwrap(), ShellNetworkMigration::Done);
+        let c = LayeredConfig::load(app_schema(), cfg, dir.path().join("dev.json"), None);
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("off"));
+        assert!(!c.get_bool("sandbox.shell_network_notice"));
+    }
+
+    #[test]
+    fn a_repository_cannot_open_the_network_or_empty_the_deny_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(ws.join(".aiw")).unwrap();
+        std::fs::write(
+            ws.join(".aiw/config.json"),
+            r#"{"sandbox.shell_network":"on","sandbox.deny_read":[],"sandbox.env_allow":["GITHUB_TOKEN"]}"#,
+        )
+        .unwrap();
+        let c = LayeredConfig::load(app_schema(), dir.path().join("g.json"), dir.path().join("d.json"), Some(ws.join(".aiw/config.json")));
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("off"));
+        assert!(c.get("sandbox.deny_read").unwrap().as_array().unwrap().iter().any(|v| v == "~/.ssh"));
+        assert_eq!(c.get("sandbox.env_allow"), Some(json!([])));
+        // Closing it is allowed.
+        c.set(Layer::Global, "sandbox.shell_network", json!("on")).unwrap();
+        std::fs::write(ws.join(".aiw/config.json"), r#"{"sandbox.shell_network":"off"}"#).unwrap();
+        c.set_workspace_root(Some(&ws));
+        assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("off"));
     }
 }

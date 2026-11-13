@@ -51,7 +51,12 @@ async fn seeds_defaults_and_lists_everything() {
     assert_eq!(sys.pairing_code.as_ref().map(|c| c.len()), Some(6));
     assert!(e.pair("000000x").is_none());
     let code = e.pairing_code();
-    assert_eq!(e.pair(&code).as_deref(), Some(e.token()));
+    // Pairing hands out the new device's own token, never the owner token of this computer.
+    let issued = e.pair(&code).expect("paired");
+    assert_ne!(issued, e.token());
+    assert!(
+        matches!(e.authenticate_token(&issued, None), crate::tokens::TokenCheck::Valid(a) if a.kind == crate::tokens::TokenKind::Device)
+    );
 }
 
 #[tokio::test]

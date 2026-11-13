@@ -1,0 +1,7 @@
+{
+  "_comment": "Reference build of 2026-11-13: dist 1940196 B on disk / 531126 B gzip, dist-mockup 1982603 B / 720174 B. Budgets = reference + about 15 %, rounded up to 10 kB. Raise a number in the same commit that needs it and say why.",
+  "builds": {
+    "dist": { "total": 2240000, "gzip": 620000 },
+    "dist-mockup": { "total": 2280000, "gzip": 830000 }
+  }
+}

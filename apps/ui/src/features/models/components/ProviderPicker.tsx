@@ -3,6 +3,7 @@ import { Chip, Chips, Icon, Pill } from "../../../shared/ui";
 import type { ModelProviderInfo } from "../../../shared/api/types";
 import { authBadge } from "../model/providers";
 
+import { t } from "../../../shared/i18n";
 /**
  * Where to look for models, as a single-choice group of cards: name, what the provider is, the formats
  * it can supply and the state of its access token. Arrow keys move the selection (roving tabindex),
@@ -23,7 +24,7 @@ export function ProviderPicker({ providers, value, onChange }: { providers: Mode
     ref.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
   };
   return (
-    <div className="mh-providers" role="radiogroup" aria-label="Provider dei modelli" ref={ref}>
+    <div className="mh-providers" role="radiogroup" aria-label={t("models.provider_dei_modelli")} ref={ref}>
       {providers.map((p, i) => {
         const selected = p.id === value;
         const badge = authBadge(p);

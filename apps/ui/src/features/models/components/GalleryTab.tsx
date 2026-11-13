@@ -13,6 +13,7 @@ import { InlineError } from "./HubError";
 import { SystemPreview } from "./InstalledCard";
 import { UseInProfileDialog } from "./UseInProfileDialog";
 
+import { t, t as tr } from "../../../shared/i18n";
 /** Galleria: the models that run on this device, as big cards — download, try, use. */
 export function GalleryTab({ jobs }: { jobs: DownloadProgress[] }) {
   const catalog = useCatalog();
@@ -32,12 +33,11 @@ function Gallery({ list, jobs, installed }: { list: CatalogModel[]; jobs: Downlo
   const [use, setUse] = useState<LocalModel | null>(null);
   return (
     <div className="stack stack-lg">
-      <h2 className="sr-only">Galleria dei modelli</h2>
+      <h2 className="sr-only">{t("models.galleria_dei_modelli")}</h2>
       <p className="muted text-sm">
-        Modelli che girano sul dispositivo, senza cloud. Scarica, prova con un messaggio e usali nei profili. Quelli di sistema non si scaricano.
-      </p>
+        {t("models.modelli_che_girano_sul_dispositivo")}</p>
       {shown.length === 0 ? (
-        <EmptyState icon="cube" title="Nessun modello in galleria" description="Apri il catalogo per vedere tutti i modelli." action={<Button onClick={() => navigate("/models/catalog")}>Apri il catalogo</Button>} />
+        <EmptyState icon="cube" title={t("models.nessun_modello_in_galleria")} description={t("models.apri_il_catalogo_per_vedere")} action={<Button onClick={() => navigate("/models/catalog")}>{t("models.apri_il_catalogo")}</Button>} />
       ) : (
         <div className="mh-grid mh-gallery">
           {shown.map((c) => <GalleryCard key={c.id} model={c} job={findCatalogJob(jobs, c)} local={findInstalled(c, installed) ?? findSystem(c, installed)} onUse={setUse} />)}
@@ -62,7 +62,7 @@ function GalleryCard({ model: c, job, local, onUse }: { model: CatalogModel; job
           <h3 className="ellipsis" title={c.name}>{c.name}</h3>
           <span className="faint text-xs ellipsis">{c.publisher} · {formatParams(c.params_b)} · {formatContext(c.context_length)}</span>
         </div>
-        {system ? <Pill tone="info" title="Fornito dal sistema operativo">Di sistema</Pill> : <FitPill fit={c.fit} detail={c.fit_detail} />}
+        {system ? <Pill tone="info" title={tr("models.fornito_dal_sistema_operativo")}>{t("models.di_sistema")}</Pill> : <FitPill fit={c.fit} detail={c.fit_detail} />}
       </header>
       <p className="mh-desc">{c.description}</p>
       {!system && c.fit_detail && <p className="faint text-xs">{c.fit_detail}</p>}
@@ -70,14 +70,14 @@ function GalleryCard({ model: c, job, local, onUse }: { model: CatalogModel; job
       <footer className="mh-card-foot">
         {state === "downloading" && job ? (
           <div className="grow stack stack-sm">
-            <Meter label={`Download di ${c.name}`} value={job.received} max={job.total} />
+            <Meter label={t("models.download_di", { name: c.name })} value={job.received} max={job.total} />
             <div className="row row-between text-xs faint num">
               <span>
-                {job.status === "queued" ? "In coda" : job.status === "verifying" ? "Verifica…" : formatPercent(progressRatio(job))}
+                {job.status === "queued" ? t("models.in_coda") : job.status === "verifying" ? t("models.verifica") : formatPercent(progressRatio(job))}
                 {job.status === "running" && job.speed_bps > 0 && ` · ${formatSpeed(job.speed_bps)}`}
-                {eta !== null && ` · mancano ${formatEta(eta)}`}
+                {eta !== null && t("models.mancano", { p: formatEta(eta) })}
               </span>
-              <Button size="sm" variant="ghost" onClick={() => cancel.mutate(job.id)} disabled={cancel.isPending}>Annulla</Button>
+              <Button size="sm" variant="ghost" onClick={() => cancel.mutate(job.id)} disabled={cancel.isPending}>{t("models.annulla")}</Button>
             </div>
           </div>
         ) : (
@@ -85,15 +85,15 @@ function GalleryCard({ model: c, job, local, onUse }: { model: CatalogModel; job
             {(state === "ready" || state === "blocked") && (
               <Button
                 variant="primary" icon="download" disabled={state === "blocked" || pull.isPending} title={state === "blocked" ? c.fit_detail : undefined}
-                onClick={() => pull.mutate(c.id, { onSuccess: () => toast(`Download avviato: ${c.name}`) })}
+                onClick={() => pull.mutate(c.id, { onSuccess: () => toast(t("models.download_avviato", { name: c.name })) })}
               >
-                {pull.isPending ? "Avvio…" : state === "blocked" ? "Non compatibile" : `Scarica ${catalogSize(c) ?? ""}`.trim()}
+                {pull.isPending ? t("models.avvio") : state === "blocked" ? t("models.non_compatibile") : `Scarica ${catalogSize(c) ?? ""}`.trim()}
               </Button>
             )}
-            {local && <Button variant="primary" onClick={() => setPreview(true)}>Prova</Button>}
-            {local && <Button icon="link" onClick={() => onUse(local)}>Usa nel profilo</Button>}
-            {state === "installed" && !local && <Pill tone="ok"><Icon name="check" size={13} /> Installato</Pill>}
-            {system && !local && <span className="faint text-xs">Non disponibile su questo dispositivo.</span>}
+            {local && <Button variant="primary" onClick={() => setPreview(true)}>{t("models.prova")}</Button>}
+            {local && <Button icon="link" onClick={() => onUse(local)}>{t("models.usa_nel_profilo")}</Button>}
+            {state === "installed" && !local && <Pill tone="ok"><Icon name="check" size={13} /> {t("models.installato")}</Pill>}
+            {system && !local && <span className="faint text-xs">{t("models.non_disponibile_su_questo_dispositivo")}</span>}
           </>
         )}
       </footer>

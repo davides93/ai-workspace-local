@@ -313,6 +313,70 @@ pub fn parse_message(raw: &[u8], fallback_date: DateTime<Local>) -> Option<Mail>
     })
 }
 
+/// A message as the email channel needs it: who sent it, what it says and the headers that tell whether
+/// it may be answered.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Inbound {
+    /// Lower-case address of the `From` header (the display name is not part of it).
+    pub from_addr: String,
+    pub from_name: String,
+    pub subject: String,
+    pub message_id: String,
+    pub references: String,
+    /// Every `Authentication-Results` header (a receiving server adds its own; there may be several).
+    pub auth_results: Vec<String>,
+    /// `Auto-Submitted` (anything but `no`), `Precedence` bulk/junk/list, a `List-Id` or `List-Unsubscribe`.
+    pub automatic: bool,
+    pub body: String,
+}
+
+/// The address inside `Name <addr>` (or the bare address), lower case.
+pub fn address_of(from: &str) -> String {
+    let f = from.trim();
+    let inner = match (f.rfind('<'), f.rfind('>')) {
+        (Some(a), Some(b)) if a < b => &f[a + 1..b],
+        _ => f,
+    };
+    inner.trim().trim_matches('"').to_ascii_lowercase()
+}
+
+/// Reads the parts of a received message the email channel uses. `None` when it has no sender.
+pub fn parse_inbound(raw: &[u8]) -> Option<Inbound> {
+    let raw = &raw[..raw.len().min(MAX_MESSAGE)];
+    let (head, body) = split_headers(raw);
+    let h = Headers::parse(head);
+    let from = h.text("from");
+    let from_addr = address_of(&from);
+    if from_addr.is_empty() || !from_addr.contains('@') {
+        return None;
+    }
+    let all = |k: &str| h.0.iter().filter(|(n, _)| n == k).map(|(_, v)| v.clone()).collect::<Vec<_>>();
+    let auto_submitted = h.get("auto-submitted").is_some_and(|v| !v.trim().eq_ignore_ascii_case("no"));
+    let precedence =
+        h.get("precedence").is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "bulk" | "junk" | "list" | "auto_reply"));
+    let text = body_text(&h, body, 0).map(|t| t.0).unwrap_or_default();
+    // The reply is what the person wrote: quoted lines and the signature are left out.
+    let mut lines: Vec<&str> = Vec::new();
+    for l in text.lines() {
+        if l.trim_end() == "--" || l.trim_end() == "-- " {
+            break;
+        }
+        if !l.trim_start().starts_with('>') {
+            lines.push(l.trim_end_matches('\r'));
+        }
+    }
+    Some(Inbound {
+        from_name: pretty_sender(&from),
+        from_addr,
+        subject: h.text("subject").trim().to_string(),
+        message_id: h.get("message-id").unwrap_or("").trim().to_string(),
+        references: h.get("references").unwrap_or("").trim().to_string(),
+        auth_results: all("authentication-results"),
+        automatic: auto_submitted || precedence || h.get("list-id").is_some() || h.get("list-unsubscribe").is_some(),
+        body: lines.join("\n").trim().to_string(),
+    })
+}
+
 /// `Mario Rossi <mario@x.it>` → `Mario Rossi`; a bare address stays as it is.
 fn pretty_sender(from: &str) -> String {
     let f = from.trim();
@@ -539,5 +603,22 @@ mod tests {
             assert_eq!(subjects, ["Letta", "Nuova"]);
         }
         assert!(inbox.join("new/1.msg").exists(), "the message is still in new/");
+    }
+
+    #[test]
+    fn an_inbound_message_keeps_what_the_channel_needs() {
+        let raw = b"From: \"Mario Rossi\" <Mario@Example.IT>\r\nSubject: =?UTF-8?Q?Perch=C3=A9?=\r\nMessage-ID: <abc@x>\r\nReferences: <r1@x>\r\nAuthentication-Results: mx.example.it; dkim=pass header.d=example.it\r\n\r\nCiao\r\n> citato\r\nSecondo rigo\r\n-- \r\nFirma\r\n";
+        let m = parse_inbound(raw).unwrap();
+        assert_eq!((m.from_addr.as_str(), m.from_name.as_str(), m.subject.as_str()), ("mario@example.it", "Mario Rossi", "Perché"));
+        assert_eq!(m.body, "Ciao\nSecondo rigo");
+        assert_eq!((m.message_id.as_str(), m.references.as_str()), ("<abc@x>", "<r1@x>"));
+        assert_eq!(m.auth_results.len(), 1);
+        assert!(!m.automatic);
+        for h in ["Auto-Submitted: auto-replied", "Precedence: bulk", "List-Id: <l.example.it>"] {
+            let raw = format!("From: a@b.it\r\n{h}\r\n\r\nx");
+            assert!(parse_inbound(raw.as_bytes()).unwrap().automatic, "{h}");
+        }
+        assert!(!parse_inbound(b"From: a@b.it\r\nAuto-Submitted: no\r\n\r\nx").unwrap().automatic);
+        assert!(parse_inbound(b"Subject: senza mittente\r\n\r\nx").is_none());
     }
 }

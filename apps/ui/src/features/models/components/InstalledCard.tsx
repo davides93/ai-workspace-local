@@ -8,6 +8,7 @@ import type { LocalModel } from "../../../shared/api/types";
 import { originInfo } from "../model/origin";
 import { CapabilityChips, ChipRow, FitPill, OriginChip, RuntimeChips, Stat, Stats } from "./common";
 
+import { t, t as tr } from "../../../shared/i18n";
 /** One installed model as an instrument module: identity, readouts, fit, runtimes and the three actions. */
 export function InstalledCard({ model: m, onUse, onDelete }: { model: LocalModel; onUse: () => void; onDelete: () => void }) {
   const [preview, setPreview] = useState(false);
@@ -24,14 +25,14 @@ export function InstalledCard({ model: m, onUse, onDelete }: { model: LocalModel
         <OriginChip origin={m.origin} />
       </header>
 
-      <ChipRow label="Formato">
+      <ChipRow label={t("models.formato")}>
         <Chip>.{m.format}</Chip>
         {m.quant && <Chip>{m.quant}</Chip>}
       </ChipRow>
       <Stats>
-        <Stat label="Dimensione">{formatBytes(m.size_bytes)}</Stat>
-        <Stat label="Parametri">{formatParams(m.params_b)}</Stat>
-        <Stat label="Contesto">{formatContext(m.context_length)}</Stat>
+        <Stat label={t("models.dimensione")}>{formatBytes(m.size_bytes)}</Stat>
+        <Stat label={t("models.parametri")}>{formatParams(m.params_b)}</Stat>
+        <Stat label={t("models.contesto")}>{formatContext(m.context_length)}</Stat>
       </Stats>
 
       <div className="stack stack-sm">
@@ -42,26 +43,26 @@ export function InstalledCard({ model: m, onUse, onDelete }: { model: LocalModel
       <RuntimeChips runtimes={m.runtime_compat} explain />
 
       <div className="mh-card-foot">
-        {m.origin === "system" && <Button variant="primary" size="sm" onClick={() => setPreview(true)}>Prova in chat</Button>}
+        {m.origin === "system" && <Button variant="primary" size="sm" onClick={() => setPreview(true)}>{t("models.prova_in_chat")}</Button>}
         {preview && <SystemPreview model={m} onClose={() => setPreview(false)} />}
-        <Button variant={m.origin === "system" ? undefined : "primary"} size="sm" icon="link" onClick={onUse}>Usa nel profilo</Button>
+        <Button variant={m.origin === "system" ? undefined : "primary"} size="sm" icon="link" onClick={onUse}>{t("models.usa_nel_profilo")}</Button>
         {m.origin !== "system" && <Button size="sm" icon="file" aria-expanded={details} aria-controls={detailsId} onClick={() => setDetails((v) => !v)}>
-          {details ? "Nascondi percorso" : "Mostra percorso"}
+          {details ? t("models.nascondi_percorso") : t("models.mostra_percorso")}
         </Button>}
         {m.removable ? (
-          <Button size="sm" variant="danger" icon="trash" onClick={onDelete} aria-label={`Elimina ${m.name}`}>Elimina</Button>
+          <Button size="sm" variant="danger" icon="trash" onClick={onDelete} aria-label={tr("models.elimina_2", { name: m.name })}>{t("models.elimina")}</Button>
         ) : (
           <span className="mh-readonly faint text-xs" title={origin.description}>
-            <Icon name="lock" size={13} /> Sola lettura · gestito da {origin.owner}
+            <Icon name="lock" size={13} /> {t("models.sola_lettura_gestito_da", { owner: origin.owner })}
           </span>
         )}
       </div>
 
       {details && (
         <div id={detailsId} className="stack">
-          {m.path ? <CopyField label="Percorso del file" value={m.path} /> : <p className="faint text-sm">Il percorso non è disponibile per questo modello.</p>}
-          <CopyField label="ID da usare nei profili e nella CLI" value={m.id} />
-          {m.source && <CopyField label="Provenienza" value={m.source} />}
+          {m.path ? <CopyField label={t("models.percorso_del_file")} value={m.path} /> : <p className="faint text-sm">{t("models.il_percorso_non_e_disponibile")}</p>}
+          <CopyField label={t("models.id_da_usare_nei_profili")} value={m.id} />
+          {m.source && <CopyField label={t("models.provenienza")} value={m.source} />}
         </div>
       )}
     </article>
@@ -76,17 +77,17 @@ export function SystemPreview({ model, onClose }: { model: LocalModel; onClose: 
     meta: { handled: true },
   });
   return (
-    <Dialog title={`Prova ${model.name}`} onClose={onClose} footer={<Button onClick={onClose}>Chiudi</Button>}>
+    <Dialog title={t("models.prova_2", { name: model.name })} onClose={onClose} footer={<Button onClick={onClose}>{t("models.chiudi")}</Button>}>
       <form className="stack" onSubmit={(event) => {
         event.preventDefault();
         if (prompt.trim() && !run.isPending) run.mutate(prompt.trim());
       }}>
-        <Field label="Messaggio" htmlFor="system-preview-prompt">
+        <Field label={t("models.messaggio")} htmlFor="system-preview-prompt">
           <Input id="system-preview-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)}
             maxLength={2000} data-autofocus />
         </Field>
         <Button type="submit" variant="primary" disabled={!prompt.trim() || run.isPending}>
-          {run.isPending ? "Attendo la risposta…" : "Invia"}
+          {run.isPending ? t("models.attendo_la_risposta") : t("models.invia")}
         </Button>
         {run.isError && <p role="alert" className="crit-text">{errorMessage(run.error)}</p>}
         {run.data && <p className="prewrap" aria-live="polite">{run.data}</p>}

@@ -13,6 +13,7 @@ import { InstalledCard } from "./InstalledCard";
 import { ShowAllToggle, useRunnableFilter } from "./ShowAll";
 import { UseInProfileDialog } from "./UseInProfileDialog";
 
+import { t } from "../../../shared/i18n";
 /** Models on this device: AIW's own downloads plus the ones other apps already have, read in place. */
 export function InstalledTab() {
   const models = useModels();
@@ -22,9 +23,9 @@ export function InstalledTab() {
       isEmpty={(l) => l.length === 0}
       empty={
         <EmptyState
-          icon="cube" title="Nessun modello installato"
-          description="Scarica un modello adatto a questo device dal catalogo consigliato o cercalo su Hugging Face, ModelScope e Ollama. I modelli già presenti in Ollama, LM Studio e nella cache di Hugging Face compaiono qui da soli."
-          action={<><Button variant="primary" icon="download" onClick={() => navigate("/models/catalog")}>Apri il catalogo</Button><Button icon="search" onClick={() => navigate("/models/discover")}>Scopri modelli</Button></>}
+          icon="cube" title={t("models.nessun_modello_installato")}
+          description={t("models.scarica_un_modello_adatto_a")}
+          action={<><Button variant="primary" icon="download" onClick={() => navigate("/models/catalog")}>{t("models.apri_il_catalogo")}</Button><Button icon="search" onClick={() => navigate("/models/discover")}>{t("models.scopri_modelli")}</Button></>}
         />
       }
     >
@@ -57,34 +58,33 @@ function InstalledList({ list: all }: { list: LocalModel[] }) {
 
   return (
     <div className="stack stack-lg">
-      <h2 className="sr-only">Modelli installati</h2>
+      <h2 className="sr-only">{t("models.modelli_installati")}</h2>
       {summary.externalCount > 0 && <ExternalNotice summary={summary} counts={counts} />}
 
       <div className="mh-toolbar" role="search">
-        <Field label="Cerca tra gli installati" htmlFor="inst-q" className="mh-search">
-          <Input id="inst-q" type="search" placeholder="Nome, formato, quantizzazione…" value={text} onChange={(e) => setText(e.target.value)} />
+        <Field label={t("models.cerca_tra_gli_installati")} htmlFor="inst-q" className="mh-search">
+          <Input id="inst-q" type="search" placeholder={t("models.nome_formato_quantizzazione")} value={text} onChange={(e) => setText(e.target.value)} />
         </Field>
-        <Field label="Origine" htmlFor="inst-origin">
+        <Field label={t("models.origine")} htmlFor="inst-origin">
           <Select id="inst-origin" value={origin} onChange={(e) => setQuery({ origin: e.target.value })}>
-            <option value="">Tutte ({list.length})</option>
+            <option value="">{t("models.tutte", { length: list.length })}</option>
             {ORIGIN_ORDER.filter((o) => counts[o]).map((o) => <option key={o} value={o}>{ORIGINS[o].label} ({counts[o]})</option>)}
           </Select>
         </Field>
-        <Field label="Formato" htmlFor="inst-format">
+        <Field label={t("models.formato")} htmlFor="inst-format">
           <Select id="inst-format" value={format} onChange={(e) => setQuery({ format: e.target.value })}>
-            <option value="">Tutti</option>
+            <option value="">{t("models.tutti")}</option>
             {formats.map((f) => <option key={f} value={f}>.{f}</option>)}
           </Select>
         </Field>
         {simple && hiddenCount(all) > 0 && <ShowAllToggle showAll={showAll} hidden={hiddenCount(all)} />}
-        {filtered && <Button variant="ghost" size="sm" icon="close" onClick={clear}>Azzera filtri</Button>}
+        {filtered && <Button variant="ghost" size="sm" icon="close" onClick={clear}>{t("models.azzera_filtri")}</Button>}
       </div>
       <p className="mh-count" role="status" aria-live="polite">
-        {shown.length === list.length ? `${list.length} modelli` : `${shown.length} di ${list.length} modelli`} · {formatBytes(summary.ownBytes)} nella cartella di AIW
-      </p>
+        {t("models.nella_cartella_di_aiw", { p: shown.length === list.length ? `${list.length} modelli` : `${shown.length} di ${list.length} modelli`, p2: formatBytes(summary.ownBytes) })}</p>
 
       {shown.length === 0 ? (
-        <EmptyState icon="search" title="Nessun modello corrisponde" description="Cambia la ricerca o togli un filtro." action={<Button onClick={clear}>Azzera filtri</Button>} />
+        <EmptyState icon="search" title={t("models.nessun_modello_corrisponde")} description={t("models.cambia_la_ricerca_o_togli")} action={<Button onClick={clear}>{t("models.azzera_filtri")}</Button>} />
       ) : (
         <div className="mh-grid">
           {shown.map((m) => <InstalledCard key={m.id} model={m} onUse={() => setUse(m)} onDelete={() => setDel(m)} />)}
@@ -100,11 +100,11 @@ function InstalledList({ list: all }: { list: LocalModel[] }) {
 function ExternalNotice({ summary, counts }: { summary: ReturnType<typeof summarizeInstalled>; counts: Record<string, number> }) {
   const parts = (["ollama", "lmstudio", "hf-cache"] as const).filter((o) => counts[o]).map((o) => `${ORIGINS[o].label} (${counts[o]})`);
   return (
-    <aside className="panel notice mh-notice" aria-label="Modelli di altre app">
+    <aside className="panel notice mh-notice" aria-label={t("models.modelli_di_altre_app")}>
       <Icon name="info" size={18} />
       <p className="text-sm">
-        <b>{summary.externalCount} {summary.externalCount === 1 ? "modello" : "modelli"} di altre app</b> ({formatBytes(summary.externalBytes)}): {parts.join(", ")}.
-        {" "}AIW li legge dove si trovano, senza copiarli né modificarli, e li usa nei profili come gli altri. Per liberare spazio eliminali dall'app che li ha scaricati.
+        <b>{t("models.models_from_other_apps", { n: summary.externalCount })}</b> ({formatBytes(summary.externalBytes)}): {parts.join(", ")}.
+        {" "}{t("models.aiw_li_legge_dove_si_trovano")}
       </p>
     </aside>
   );

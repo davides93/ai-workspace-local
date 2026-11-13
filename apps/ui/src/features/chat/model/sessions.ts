@@ -1,16 +1,17 @@
 import { matchesQuery } from "../../../shared/lib/text";
 import type { Session } from "../../../shared/api/types";
 
+import { t as tr } from "../../../shared/i18n";
 /** Longest title the backend accepts (`MAX_TITLE_CHARS`). */
 export const MAX_TITLE = 200;
 
 export type DayGroupId = "today" | "yesterday" | "week" | "older";
 
 export const DAY_GROUP_LABEL: Record<DayGroupId, string> = {
-  today: "Oggi",
-  yesterday: "Ieri",
-  week: "Questa settimana",
-  older: "Prima",
+  get today() { return tr("chat.oggi"); },
+  get yesterday() { return tr("chat.ieri"); },
+  get week() { return tr("chat.questa_settimana"); },
+  get older() { return tr("chat.prima"); },
 };
 
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -59,7 +60,7 @@ export function filterSessions(sessions: Session[], query: string, agentName: (a
 /** A new title: spaces collapsed, not empty, not longer than the backend allows. */
 export function validateTitle(raw: string): { ok: true; title: string } | { ok: false; error: string } {
   const title = raw.split(/\s+/).filter(Boolean).join(" ");
-  if (!title) return { ok: false, error: "Il titolo non può essere vuoto." };
-  if ([...title].length > MAX_TITLE) return { ok: false, error: `Il titolo supera i ${MAX_TITLE} caratteri.` };
+  if (!title) return { ok: false, error: tr("chat.il_titolo_non_puo_essere") };
+  if ([...title].length > MAX_TITLE) return { ok: false, error: tr("chat.il_titolo_supera_i_caratteri", { max: MAX_TITLE }) };
   return { ok: true, title };
 }

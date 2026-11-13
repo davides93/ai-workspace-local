@@ -8,10 +8,10 @@ use aiw_runtimes::ScriptedBackend;
 use axum::http::HeaderMap;
 use std::sync::Arc;
 
-const LOOPBACK: [u8; 4] = [127, 0, 0, 1];
-const LAN: [u8; 4] = [192, 168, 1, 50];
+pub(super) const LOOPBACK: [u8; 4] = [127, 0, 0, 1];
+pub(super) const LAN: [u8; 4] = [192, 168, 1, 50];
 
-async fn fixture(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
+pub(super) async fn fixture(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Router, Engine, tempfile::TempDir, tempfile::TempDir) {
     let data = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     let e = Engine::new(EngineOptions {
@@ -38,7 +38,7 @@ async fn fixture(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> (Router, Engine, t
 
 /// A request as the listener would hand it to the router: `peer` is the TCP peer (`None` for the
 /// in-process dispatcher of the Tauri shell).
-fn req(method: &str, uri: &str, peer: Option<[u8; 4]>, headers: &[(&str, &str)], body: Option<Value>) -> Request {
+pub(super) fn req(method: &str, uri: &str, peer: Option<[u8; 4]>, headers: &[(&str, &str)], body: Option<Value>) -> Request {
     let mut b = Request::builder().method(method).uri(uri);
     for (k, v) in headers {
         b = b.header(*k, *v);
@@ -57,7 +57,7 @@ fn req(method: &str, uri: &str, peer: Option<[u8; 4]>, headers: &[(&str, &str)],
     r
 }
 
-async fn send(app: &Router, r: Request) -> (StatusCode, HeaderMap, Value) {
+pub(super) async fn send(app: &Router, r: Request) -> (StatusCode, HeaderMap, Value) {
     let res = tower::ServiceExt::oneshot(app.clone(), r).await.unwrap();
     let (status, headers) = (res.status(), res.headers().clone());
     let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
@@ -348,7 +348,12 @@ async fn pairing_from_a_web_page_is_refused_and_does_not_cost_an_attempt() {
     assert_eq!(body["error"], "codice di pairing non valido");
     let (st, _, body) = send(&app, req("POST", "/api/pair", Some(LAN), &h, Some(json!({"code": code})))).await;
     assert_eq!(st, StatusCode::OK, "{body}");
-    assert_eq!(body["token"], e.token());
+    // The token is the paired device's own (not the owner token of this computer): it works, as a device.
+    let issued = body["token"].as_str().unwrap().to_string();
+    assert_ne!(issued, e.token());
+    assert!(
+        matches!(e.authenticate_token(&issued, None), aiw_engine::tokens::TokenCheck::Valid(a) if a.kind == aiw_engine::tokens::TokenKind::Device)
+    );
     // A client that sends no Origin at all (another AIW, curl) works too.
     let code = e.pairing_code();
     let (st, ..) = send(&app, req("POST", "/api/pair", Some([192, 168, 1, 60]), &[host], Some(json!({"code": code})))).await;

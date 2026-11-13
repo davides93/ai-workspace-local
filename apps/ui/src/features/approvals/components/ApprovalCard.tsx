@@ -8,6 +8,7 @@ import { Button, CodeBlock, Icon, Pill } from "../../../shared/ui";
 import type { ApprovalRequest } from "../../../shared/api/types";
 import "../approvals.css";
 
+import { t, t as tr } from "../../../shared/i18n";
 export interface ApprovalCardProps {
   request: ApprovalRequest;
   /** The decision already taken (`true` = allowed). While undefined the card offers the buttons. */
@@ -46,42 +47,41 @@ export function ApprovalCard({ request, resolved, variant = "full", pending, onR
       onFocusCapture={onSelect}
       onClick={onSelect}
     >
-      {!decided && !compact && !onSelect && <span className="apv-eyebrow">Serve la tua conferma</span>}
+      {!decided && !compact && !onSelect && <span className="apv-eyebrow">{t("approvals.serve_la_tua_conferma")}</span>}
       <header className="apv-head">
         <Icon name="shield" size={16} />
         <b id={`${id}-tool`} className="apv-tool mono">{request.tool}</b>
-        <Pill tone={RISK_TONE[request.risk]}>rischio {RISK_LABEL[request.risk]}</Pill>
-        {decided && <Pill tone={resolved ? "ok" : "crit"}><Icon name={resolved ? "check" : "close"} size={12} />{resolved ? "Consentito" : "Negato"}</Pill>}
+        <Pill tone={RISK_TONE[request.risk]}>{t("approvals.rischio", { p: RISK_LABEL[request.risk] })}</Pill>
+        {decided && <Pill tone={resolved ? "ok" : "crit"}><Icon name={resolved ? "check" : "close"} size={12} />{resolved ? t("approvals.consentito") : t("approvals.negato")}</Pill>}
       </header>
       <p className="apv-reason">{request.reason}</p>
       {summary && (
         <details className="apv-args">
           <summary>
             <code className="apv-summary">{summary}</code>
-            <span className="apv-more">Argomenti</span>
+            <span className="apv-more">{t("approvals.argomenti")}</span>
           </summary>
-          <CodeBlock code={prettyJson(request.args)} title="Argomenti" />
+          <CodeBlock code={prettyJson(request.args)} title={t("approvals.argomenti")} />
         </details>
       )}
       {!decided && onRespond && (
         <div className="apv-actions">
           <Button variant="primary" size={size} icon="check" disabled={pending} aria-keyshortcuts={showShortcuts ? "A" : undefined} onClick={() => onRespond("allow")}>
-            Consenti{showShortcuts && <kbd aria-hidden="true">A</kbd>}
+            {t("approvals.allow")}{showShortcuts && <kbd aria-hidden="true">A</kbd>}
           </Button>
           {allowRemember && (
-            <Button size={size} disabled={pending} onClick={() => onRespond("allow", true)} title="Non chiedere più conferma per questo tool finché la sessione resta aperta">
-              Consenti per la sessione
-            </Button>
+            <Button size={size} disabled={pending} onClick={() => onRespond("allow", true)} title={tr("approvals.non_chiedere_piu_conferma_per")}>
+              {t("approvals.consenti_per_la_sessione")}</Button>
           )}
           <Button variant="danger" size={size} disabled={pending} aria-keyshortcuts={showShortcuts ? "N" : undefined} onClick={() => onRespond("deny")}>
-            Nega{showShortcuts && <kbd aria-hidden="true">N</kbd>}
+            {t("approvals.deny")}{showShortcuts && <kbd aria-hidden="true">N</kbd>}
           </Button>
         </div>
       )}
       {!compact && (
         <footer className="apv-meta">
-          <span>Run <code>{request.run_id}</code></span>
-          {chatPath && <Link to={chatPath} className="apv-link">Apri la sessione <Icon name="forward" size={12} /></Link>}
+          <span>{t("approvals.run_label")} <code>{request.run_id}</code></span>
+          {chatPath && <Link to={chatPath} className="apv-link">{t("approvals.apri_la_sessione")}{" "}<Icon name="forward" size={12} /></Link>}
         </footer>
       )}
     </article>
