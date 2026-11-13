@@ -43,15 +43,15 @@
     },
     "android": {
       "minSdkVersion": 26,
-      "versionCode": 5010
+      "versionCode": 5011
     },
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "bundleVersion": "5010"
+      "bundleVersion": "5011"
     },
     "iOS": {
       "minimumSystemVersion": "17.0",
-      "bundleVersion": "5010",
+      "bundleVersion": "5011",
       "frameworks": ["Accelerate"]
     }
   }
