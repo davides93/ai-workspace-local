@@ -138,7 +138,11 @@ export class MockTransport implements Transport {
   private variantByModel = new Map<string, string>();
   private providerAuth = new Map<string, { configured: boolean; endpoint?: string }>();
 
-  constructor(public readonly notice?: string) {}
+  /** What the demo banner says: a string, or a function when the text must follow the language. */
+  constructor(private readonly noticeSource?: string | (() => string)) {}
+  get notice(): string | undefined {
+    return typeof this.noticeSource === "function" ? this.noticeSource() : this.noticeSource;
+  }
 
   async system() { return structuredClone(system); }
   async kill() {

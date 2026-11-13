@@ -305,4 +305,8 @@ export const modelsIt = {
   "models.url_diretto": "URL diretto",
   "models.n_files_mmproj": "{n} file, con mmproj",
   "models.dai_un_nome_al_profilo": "Dai un nome al profilo.",
+  "models.n_downloads": "{n} download",
+  "models.n_likes": "{n} like",
+  "models.n_params": "{n} parametri",
+  "models.updated_when": "aggiornato {when}",
 } as const;

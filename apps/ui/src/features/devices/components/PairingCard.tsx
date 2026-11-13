@@ -22,7 +22,7 @@ export function PairingCard({ code, address, discovery }: { code?: string; addre
         <div className="stack min-w-0">
           <span className="eyebrow">{t("devices.codice_di_pairing")}</span>
           <div className="row nowrap">
-            <span className="mono pair-code" aria-label={t("devices.codice_di_pairing_2", { p: code ? digitsOf(code).split("").join(" ") : "non disponibile" })}>{code ? groupCode(code) : "—"}</span>
+            <span className="mono pair-code" aria-label={t("devices.codice_di_pairing_2", { p: code ? digitsOf(code).split("").join(" ") : t("devices.non_disponibile") })}>{code ? groupCode(code) : "—"}</span>
             {code && <CopyButton text={digitsOf(code)} label={t("devices.copia")} />}
           </div>
           <span className="muted text-sm">

@@ -307,4 +307,8 @@ export const modelsEn: Record<keyof typeof modelsIt, string> = {
   "models.piu_apprezzati": "Most liked",
   "models.aggiornati": "Recently updated",
   "models.nessun_file": "no files",
+  "models.n_downloads": "{n} downloads",
+  "models.n_likes": "{n} likes",
+  "models.n_params": "{n} parameters",
+  "models.updated_when": "updated {when}",
 };

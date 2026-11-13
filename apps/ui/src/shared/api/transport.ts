@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
@@ -357,6 +358,6 @@ export async function createTransport(): Promise<Transport> {
     if ((e as { status?: number }).status === 401) return http;
     // No backend reachable: fall back to the demo so the UI is still explorable.
     const { MockTransport } = await import("./mock");
-    return new MockTransport("Backend non raggiungibile: modalità demo");
+    return new MockTransport(() => t("shell.backend_unreachable_demo"));
   }
 }

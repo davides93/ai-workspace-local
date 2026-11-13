@@ -106,10 +106,10 @@ function ModelSummary({ model: m }: { model: RemoteModel }) {
       <CapabilityChips items={m.capabilities} />
       <p className="faint text-xs num">
         {[
-          m.downloads !== undefined && `${formatCompact(m.downloads)} download`,
-          m.likes !== undefined && m.likes > 0 && `${formatCompact(m.likes)} like`,
-          m.params_b !== undefined && `${formatParams(m.params_b)} parametri`,
-          m.updated_at && `aggiornato ${relTime(m.updated_at)}`,
+          m.downloads !== undefined && t("models.n_downloads", { n: formatCompact(m.downloads) }),
+          m.likes !== undefined && m.likes > 0 && t("models.n_likes", { n: formatCompact(m.likes) }),
+          m.params_b !== undefined && t("models.n_params", { n: formatParams(m.params_b) }),
+          m.updated_at && t("models.updated_when", { when: relTime(m.updated_at) }),
         ].filter(Boolean).join(" · ")}
       </p>
     </div>
