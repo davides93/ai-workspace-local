@@ -100,14 +100,7 @@ jobs:
           path: apps/desktop/src-tauri/gen/apple/**/*.ipa
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-store-pkg
-          path: ${{ env.PKG }}
-          if-no-files-found: error
-          retention-days: 7
       - name: Carica su TestFlight
-        if: github.event_name == 'push' || inputs.upload
         if: github.event_name == 'push' || inputs.upload
         env:
           KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
@@ -198,7 +191,14 @@ jobs:
           codesign -d --entitlements - "$app/Contents/MacOS/aiw-apple-fm" 2>&1 | grep -E "app-sandbox|inherit"
           xcrun productbuild --sign "$PKG_SIGN" --component "$app" /Applications "$RUNNER_TEMP/AIW.pkg"
           echo "PKG=$RUNNER_TEMP/AIW.pkg" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-store-pkg
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+          retention-days: 7
       - name: Carica su TestFlight
+        if: github.event_name == 'push' || inputs.upload
         env:
           KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           ISSUER: ${{ secrets.APPSTORE_API_ISSUER_ID }}
