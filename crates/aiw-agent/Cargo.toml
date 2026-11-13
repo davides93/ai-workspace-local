@@ -24,4 +24,10 @@ chrono.workspace = true
 rhai = { version = "1.27", features = ["serde"] }
 
 [dev-dependencies]
+# Benchmarks (`cargo bench`); the CI only compiles them. Without the default features criterion does not pull rayon or plotters.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 tempfile = "3"
+
+[[bench]]
+name = "shellparse"
+harness = false

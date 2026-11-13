@@ -35,8 +35,14 @@ hyper = { version = "1", features = ["server"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service", "http1", "http2"] }
 
 [dev-dependencies]
+# Benchmarks (`cargo bench`); the CI only compiles them. Without the default features criterion does not pull rayon or plotters.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 aiw-tools.workspace = true
 async-trait.workspace = true
 sha2.workspace = true
 tempfile = "3"
 http-body-util = "0.1"
+
+[[bench]]
+name = "server"
+harness = false
