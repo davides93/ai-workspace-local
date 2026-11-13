@@ -45,7 +45,7 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 22 }
       # The shell embeds the built UI at compile time (frontendDist = apps/ui/dist).
       - run: npm ci --prefix apps/ui && npm ci --prefix apps/desktop
