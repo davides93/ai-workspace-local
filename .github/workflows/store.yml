@@ -182,7 +182,7 @@ jobs:
           # lei (l'estrazione in app_data_dir/bin fallisce), solo uno firmato dentro il bundle.
           # Si usa lo stesso helper compilato da build.rs (slice arm64), lo si firma con sandbox +
           # inherit e poi si firma di nuovo l'app, che altrimenti avrebbe il sigillo rotto.
-          helper=$(find ../../target/aarch64-apple-darwin/release/build -path '*tauri-plugin-aiw-native-*/out/aiw-apple-fm' -type f | head -n1)
+          helper=$(find ../../target/aarch64-apple-darwin/release/build -type f -name aiw-apple-fm | head -n1)
           [ -n "$helper" ] || { echo "::error::helper aiw-apple-fm non trovato (build.rs non l'ha compilato?)"; exit 1; }
           cp "$helper" "$app/Contents/MacOS/aiw-apple-fm"
           codesign --force --sign "$APP_SIGN" --entitlements src-tauri/Entitlements.mas-helper.plist "$app/Contents/MacOS/aiw-apple-fm"
