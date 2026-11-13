@@ -95,6 +95,8 @@ test.describe("keyboard", () => {
   test("the approvals drawer traps the focus and closes with Esc", async ({ page }) => {
     await openApp(page, "/chat");
     await page.getByRole("button", { name: "Nuova", exact: true }).click();
+    // The new session resets the composer: wait for it before typing, or the text can be wiped.
+    await expect(page.getByRole("heading", { name: "Cosa facciamo, in locale?" })).toBeVisible();
     await page.getByRole("textbox", { name: "Messaggio" }).fill("Ordina i PDF in Downloads");
     await page.getByRole("button", { name: "Invia" }).click();
     const banner = page.getByRole("button", { name: /1 conferma in attesa/ });

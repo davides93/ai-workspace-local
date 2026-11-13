@@ -7,6 +7,8 @@ test("approvals: one request approved, one denied", async ({ page }) => {
   const box = page.getByRole("textbox", { name: "Messaggio" });
   const log = page.getByRole("log", { name: "Conversazione" });
   await page.getByRole("button", { name: "Nuova", exact: true }).click();
+  // The new session resets the composer: wait for it before typing, or the text can be wiped.
+  await expect(page.getByRole("heading", { name: "Cosa facciamo, in locale?" })).toBeVisible();
 
   // 1. Approved, from the global drawer.
   await box.fill("Ordina i PDF in Downloads");
