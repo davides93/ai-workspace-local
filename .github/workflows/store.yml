@@ -94,7 +94,7 @@ jobs:
           npx tauri ios init --ci
           npx tauri ios build --export-method app-store-connect --ci \
             --config "{\"version\":\"${{ needs.version.outputs.short }}\"}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ios-ipa
           path: apps/desktop/src-tauri/gen/apple/**/*.ipa
@@ -191,7 +191,7 @@ jobs:
           codesign -d --entitlements - "$app/Contents/MacOS/aiw-apple-fm" 2>&1 | grep -E "app-sandbox|inherit"
           xcrun productbuild --sign "$PKG_SIGN" --component "$app" /Applications "$RUNNER_TEMP/AIW.pkg"
           echo "PKG=$RUNNER_TEMP/AIW.pkg" >> "$GITHUB_ENV"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-store-pkg
           path: ${{ env.PKG }}
@@ -253,7 +253,7 @@ jobs:
           jarsigner -verify "$aab"
           echo "AAB=$aab" >> "$GITHUB_ENV"
           rm -f "$RUNNER_TEMP/upload.jks"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-aab
           path: ${{ env.AAB }}

@@ -91,7 +91,7 @@ jobs:
         env:
           PW_NAME: a11y
       # The report is only kept when something failed.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report
