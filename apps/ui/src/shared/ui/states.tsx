@@ -5,7 +5,7 @@ import { errorMessage } from "../lib/errors";
 import { Button } from "./Button";
 import { Icon } from "./Icon";
 
-import { t } from "../i18n";
+import { t, t as tr } from "../i18n";
 /** Nothing to show yet: say why and offer the next step. */
 export function EmptyState({ icon, title, description, action, className }: {
   icon?: string;
@@ -25,7 +25,7 @@ export function EmptyState({ icon, title, description, action, className }: {
 }
 
 /** A request failed: show the reason and a retry button. */
-export function ErrorState({ error, onRetry, title = "Qualcosa non ha funzionato", retrying }: {
+export function ErrorState({ error, onRetry, title = tr("ui.qualcosa_non_ha_funzionato"), retrying }: {
   error: unknown;
   onRetry?: () => void;
   title?: string;

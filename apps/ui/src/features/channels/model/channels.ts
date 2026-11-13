@@ -34,13 +34,13 @@ export const CHANNEL_KINDS: KindInfo[] = [
     id: "telegram",
     label: "Telegram",
     get blurb() { return t("channels.scrivi_all_assistente_da_telegram"); },
-    steps: [
-      "Apri Telegram e scrivi a @BotFather il comando /newbot.",
-      "Scegli un nome e un indirizzo per il tuo bot: @BotFather ti risponde con un «token».",
-      "Incolla qui sotto il token e salva.",
-      "Premi «Genera il codice» e scrivi al tuo bot il messaggio che compare: da quel momento il bot ti riconosce.",
-      "Accendi il canale.",
-    ],
+    get steps() { return [
+      t("channels.apri_telegram_e_scrivi_a"),
+      t("channels.scegli_un_nome_e_un"),
+      t("channels.incolla_qui_sotto_il_token"),
+      t("channels.premi_genera_il_codice_e"),
+      t("channels.accendi_il_canale"),
+    ]; },
     secrets: [{ key: "bot_token", get label() { return t("channels.token_del_bot"); }, placeholder: "123456:ABC-DEF…" }],
     settings: [],
     get allowedLabel() { return t("channels.chi_puo_scrivere"); },
@@ -51,13 +51,13 @@ export const CHANNEL_KINDS: KindInfo[] = [
     id: "slack",
     label: "Slack",
     get blurb() { return t("channels.scrivi_all_assistente_in_un"); },
-    steps: [
-      "Su api.slack.com/apps crea una nuova app «From scratch» nel tuo spazio di lavoro.",
-      "In «Socket Mode» attiva Socket Mode e crea un token a livello di app con il permesso connections:write: inizia con xapp-.",
-      "In «OAuth & Permissions» aggiungi i permessi del bot chat:write, im:history, app_mentions:read, users:read e installa l'app: il token del bot inizia con xoxb-.",
-      "In «Event Subscriptions» attiva gli eventi message.im e app_mention.",
-      "In «App Home» consenti i messaggi al bot. Incolla qui i due token, scrivi chi può parlare e accendi il canale.",
-    ],
+    get steps() { return [
+      t("channels.su_api_slack_com_apps"),
+      t("channels.in_socket_mode_attiva_socket"),
+      t("channels.in_oauth_permissions_aggiungi_i"),
+      t("channels.in_event_subscriptions_attiva_gli"),
+      t("channels.in_app_home_consenti_i"),
+    ]; },
     secrets: [
       { key: "app_token", get label() { return t("channels.token_dell_app_xapp"); }, placeholder: "xapp-1-…" },
       { key: "bot_token", get label() { return t("channels.token_del_bot_xoxb"); }, placeholder: "xoxb-…" },
@@ -65,19 +65,19 @@ export const CHANNEL_KINDS: KindInfo[] = [
     settings: [],
     get allowedLabel() { return t("channels.chi_puo_scrivere"); },
     get allowedHint() { return t("channels.gli_identificativi_slack_delle_persone"); },
-    allowedPlaceholder: "Per esempio U024BE7LH",
+    get allowedPlaceholder() { return t("channels.per_esempio_u024be7lh"); },
   },
   {
     id: "email",
     label: "Email",
     get blurb() { return t("channels.scrivi_un_email_all_assistente"); },
-    steps: [
-      "Crea una casella dedicata all'assistente (non la tua posta personale).",
-      "Per Gmail e Microsoft serve una «password per le app»: l'accesso con l'account normale (OAuth) non c'è ancora.",
-      "Scrivi i server di posta in arrivo (IMAP) e in uscita (SMTP) e le password.",
-      "Scrivi gli indirizzi che possono scrivere all'assistente: la posta di chiunque altro viene ignorata.",
-      "Accendi il canale e premi «Prova».",
-    ],
+    get steps() { return [
+      t("channels.crea_una_casella_dedicata_all"),
+      t("channels.per_gmail_e_microsoft_serve_2"),
+      t("channels.scrivi_i_server_di_posta"),
+      t("channels.scrivi_gli_indirizzi_che_possono"),
+      t("channels.accendi_il_canale_e_premi"),
+    ]; },
     secrets: [
       { key: "imap_password", get label() { return t("channels.password_della_posta_in_arrivo"); }, get placeholder() { return t("channels.password_per_le_app"); } },
       { key: "smtp_password", get label() { return t("channels.password_della_posta_in_uscita"); }, get placeholder() { return t("channels.password_per_le_app"); } },
@@ -104,20 +104,20 @@ export const MODE_NOTE: Record<ChannelMode, string> = {
   get ask() { return t("channels.l_assistente_puo_agire_ma"); },
 };
 
-export const DOWNGRADE_NOTE = "L'assistente scelto ha la modalità automatica: nei canali non viene mai rispettata, e chiede conferma come negli altri casi.";
+export const downgradeNote = (): string => t("channels.l_assistente_scelto_ha_la");
 
 export const STATE_LABEL: Record<ChannelState, string> = {
   get off() { return t("channels.spento"); },
-  connecting: "Si sta collegando",
+  get connecting() { return t("channels.si_sta_collegando"); },
   get connected() { return t("channels.connesso"); },
   get error() { return t("channels.errore"); },
-  unavailable: "Non disponibile",
+  get unavailable() { return t("channels.non_disponibile"); },
 };
 
 export type StateTone = "ok" | "run" | "crit" | "off" | "warn";
 export const stateTone = (s: ChannelState): StateTone => (s === "connected" ? "ok" : s === "connecting" ? "run" : s === "error" ? "crit" : s === "unavailable" ? "warn" : "off");
 
-export const ALWAYS_ON_NOTE = "I canali funzionano solo mentre l'app (o il servizio sul computer) è acceso. Sul telefono non lavorano in background.";
+export const alwaysOnNote = (): string => t("channels.i_canali_funzionano_solo_mentre");
 
 /** Which secrets still need a value before the channel can be turned on. */
 export function missingSecrets(channel: Pick<ChannelInfo, "kind" | "secrets">): string[] {
@@ -127,7 +127,7 @@ export function missingSecrets(channel: Pick<ChannelInfo, "kind" | "secrets">): 
 /** Why the channel cannot be turned on yet, in plain words; null when it can. */
 export function enableProblem(channel: ChannelInfo): string | null {
   const missing = missingSecrets(channel);
-  if (missing.length > 0) return `Manca: ${missing.join(", ")}.`;
+  if (missing.length > 0) return t("channels.manca_list", { list: missing.join(", ") });
   if (channel.kind === "email") {
     const s = channel.settings;
     const has = (k: string) => typeof s[k] === "string" && (s[k] as string).trim() !== "";

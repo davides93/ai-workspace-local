@@ -6,7 +6,7 @@ import { useDeleteModel } from "../api";
 import { originInfo } from "../model/origin";
 import { profilesUsingModel } from "../model/profile";
 
-import { t, tNode } from "../../../shared/i18n";
+import { t, tNode, t as tr } from "../../../shared/i18n";
 /** Confirmation that spells out what is deleted: the files, the space freed and the profiles that will break. */
 export function DeleteModelDialog({ model, onClose }: { model: LocalModel; onClose: () => void }) {
   const remove = useDeleteModel();
@@ -24,13 +24,13 @@ export function DeleteModelDialog({ model, onClose }: { model: LocalModel; onClo
         </>
       }
     >
-      <p>Stai per eliminare <b>{model.name}</b> dal disco. L'azione non si può annullare, ma potrai riscaricarlo.</p>
+      <p>{tNode("models.stai_per_eliminare_dal_disco", { name: <b>{model.name}</b> })}</p>
       <KeyValue
         items={[
           ["ID", <span className="mono" key="id">{model.id}</span>],
-          ["Origine", originInfo(model.origin).label],
-          ["Spazio liberato", formatBytes(model.size_bytes)],
-          !!model.path && ["File", <span className="mono mh-path" key="p">{model.path}</span>],
+          [tr("models.origine"), originInfo(model.origin).label],
+          [tr("models.spazio_liberato"), formatBytes(model.size_bytes)],
+          !!model.path && [tr("models.file"), <span className="mono mh-path" key="p">{model.path}</span>],
         ]}
       />
       <p className="faint text-sm">

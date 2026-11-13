@@ -2,7 +2,7 @@ import { useId } from "react";
 import { IconButton, Select } from "../../../shared/ui";
 import type { Page } from "../model/filter";
 
-import { t } from "../../../shared/i18n";
+import { t, tNode } from "../../../shared/i18n";
 export const PAGE_SIZES = [25, 50, 100] as const;
 
 /** "Righe 1–50 di 312", previous/next page and the page size. */
@@ -11,7 +11,7 @@ export function Pager({ page, size, onPage, onSize }: { page: Page<unknown>; siz
   return (
     <nav className="act-pager" aria-label={t("activity.pagine_dell_attivita")}>
       <span className="text-sm num" aria-live="polite">
-        {page.total === 0 ? t("activity.nessuna_riga") : <>Righe <b>{page.from}–{page.to}</b> di <b>{page.total}</b></>}
+        {page.total === 0 ? t("activity.nessuna_riga") : tNode("activity.righe_da_a_di_totale", { range: <b>{page.from}–{page.to}</b>, total: <b>{page.total}</b> })}
       </span>
       <div className="row nowrap">
         <label htmlFor={id} className="text-sm faint">{t("activity.per_pagina")}</label>

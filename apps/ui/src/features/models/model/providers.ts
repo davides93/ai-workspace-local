@@ -2,7 +2,7 @@ import type { ModelProviderInfo, RemoteModel } from "../../../shared/api/types";
 import type { PillTone } from "../../../shared/ui";
 import { PROVIDER_FORMATS } from "./fit";
 
-import { t as tr } from "../../../shared/i18n";
+import { t as tr, t } from "../../../shared/i18n";
 /** The curated catalog has its own tab, so it is not offered as a discovery source. */
 export function discoverProviders(all: ModelProviderInfo[]): ModelProviderInfo[] {
   return all.filter((p) => p.id !== "catalog");
@@ -12,11 +12,11 @@ export function discoverProviders(all: ModelProviderInfo[]): ModelProviderInfo[]
 export const FALLBACK_PROVIDER = "hf";
 
 const PROVIDER_NAMES: Record<string, string> = {
-  catalog: "Consigliati",
-  hf: "Hugging Face",
+  get catalog() { return t("models.consigliati"); },
+  get hf() { return t("models.hugging_face"); },
   modelscope: "ModelScope",
-  ollama: "Registry Ollama",
-  url: "URL diretto",
+  get ollama() { return t("models.registry_ollama"); },
+  get url() { return t("models.url_diretto"); },
 };
 
 /** Display name of a provider id (the backend's own name wins when the list is loaded). */
@@ -41,9 +41,9 @@ export function isUrlProvider(id: string): boolean {
 export function providerNote(id: string): string | null {
   switch (id) {
     case "ollama":
-      return "Ollama non ha una ricerca pubblica: qui cerchi in un indice locale dei modelli più popolari. Per gli altri scrivi il nome esatto con il tag, per esempio qwen3:4b oppure utente/nome:tag, e aprilo da lì.";
+      return t("models.ollama_non_ha_una_ricerca");
     case "modelscope":
-      return "La ricerca usa un'API del sito non documentata (best effort). Se un modello non compare, scrivi il nome esatto nella forma proprietario/nome e aprilo da lì.";
+      return t("models.la_ricerca_usa_un_api");
     default:
       return null;
   }
@@ -112,9 +112,9 @@ export function stubModel(provider: string, id: string): RemoteModel {
 
 /** Label of a sort key in the Scopri filter. */
 export const SORT_OPTIONS = [
-  { id: "downloads", label: "Più scaricati" },
-  { id: "likes", label: "Più apprezzati" },
-  { id: "updated", label: "Aggiornati" },
+  { id: "downloads", get label() { return t("models.piu_scaricati"); } },
+  { id: "likes", get label() { return t("models.piu_apprezzati"); } },
+  { id: "updated", get label() { return t("models.aggiornati"); } },
 ] as const;
 
 export type SortKey = (typeof SORT_OPTIONS)[number]["id"];

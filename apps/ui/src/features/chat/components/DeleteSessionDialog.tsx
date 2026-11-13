@@ -2,7 +2,7 @@ import { Button, Dialog } from "../../../shared/ui";
 import type { Session } from "../../../shared/api/types";
 import { useDeleteSession } from "../api";
 
-import { t } from "../../../shared/i18n";
+import { t, tNode } from "../../../shared/i18n";
 /** Asks before a session and its conversation are removed for good. */
 export function DeleteSessionDialog({ session, onClose, onDeleted }: { session: Session; onClose: () => void; onDeleted: (id: string) => void }) {
   const del = useDeleteSession();
@@ -25,10 +25,10 @@ export function DeleteSessionDialog({ session, onClose, onDeleted }: { session: 
         </>
       }
     >
-      <p>Vuoi eliminare <b>{session.title}</b>? La conversazione viene rimossa in modo definitivo.</p>
+      <p>{tNode("chat.vuoi_eliminare_la_conversazione", { title: <b>{session.title}</b> })}</p>
       {session.worktree && (
         <p className="muted text-sm">
-          La sessione lavora nel worktree <code>{session.worktree.branch}</code>: viene rimosso insieme a lei e le modifiche non ancora applicate al workspace andranno perse.
+          {tNode("chat.la_sessione_lavora_nel_worktree", { branch: <code>{session.worktree.branch}</code> })}
         </p>
       )}
       {session.last_status === "running" && <p className="muted text-sm">{t("chat.l_ultimo_run_di_questa")}</p>}

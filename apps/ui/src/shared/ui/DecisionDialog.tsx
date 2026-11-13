@@ -4,12 +4,13 @@ import { Button } from "./Button";
 import { Dialog } from "./Dialog";
 import { Icon } from "./Icon";
 
+import { t } from "../i18n";
 /**
  * Confirmation of an action that cannot be undone (delete, discard). The failure of the action
  * stays visible inside the dialog (`error`), so a backend refusal such as "agente integrato" is
  * read where the decision was taken.
  */
-export function DecisionDialog({ title, children, confirmLabel, cancelLabel = "Annulla", tone = "danger", icon, pending, error, onConfirm, onCancel }: {
+export function DecisionDialog({ title, children, confirmLabel, cancelLabel = t("ui.annulla"), tone = "danger", icon, pending, error, onConfirm, onCancel }: {
   title: string;
   children: ReactNode;
   confirmLabel: string;

@@ -1,9 +1,5 @@
-import { t } from "../../../shared/i18n";
-const SUGGESTIONS = [
-  "Riordina i PDF in Downloads per anno e crea un indice",
-  "Confronta i preventivi nella cartella Fornitori",
-  "Apri il sito del comune e trova gli orari dell'anagrafe",
-];
+import { t, tList } from "../../../shared/i18n";
+const SUGGESTIONS = tList(["chat.riordina_i_pdf_in_downloads", "chat.confronta_i_preventivi_nella_cartella", "chat.apri_il_sito_del_comune"]);
 
 /** A session with no messages yet: what the agent does and a few prompts to start from. */
 export function ChatEmpty({ onPick }: { onPick: (text: string) => void }) {

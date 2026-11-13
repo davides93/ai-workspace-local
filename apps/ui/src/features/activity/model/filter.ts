@@ -89,7 +89,7 @@ export function auditExport(rows: AuditEntry[], filters: AuditFilters, now: Date
   const content = JSON.stringify(
     {
       exported_at: now.toISOString(),
-      source: `Audit trail di AI Workspace Local (le ultime ${BACKEND_LIMIT} voci)`,
+      source: t("activity.audit_export_source", { BACKEND_LIMIT }),
       filters: isFiltering(filters) ? filters : null,
       count: rows.length,
       entries: rows,

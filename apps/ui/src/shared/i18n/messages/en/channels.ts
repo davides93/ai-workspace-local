@@ -102,4 +102,9 @@ export const channelsEn: Record<keyof typeof channelsIt, string> = {
   "channels.scrivi_il_nome_utente": "Enter the username.",
   "channels.la_porta_e_un_numero": "The port is a number between 1 and 65535 (usually 993).",
   "channels.scrivi_la_password_per_gmail": "Enter the password (Gmail and Microsoft need an \"app password\").",
+  "channels.si_sta_collegando": "Connecting",
+  "channels.non_disponibile": "Unavailable",
+  "channels.accendi_il_canale": "Turn the channel on.",
+  "channels.manca_list": "Missing: {list}.",
+  "channels.per_esempio_u024be7lh": "For example U024BE7LH",
 };

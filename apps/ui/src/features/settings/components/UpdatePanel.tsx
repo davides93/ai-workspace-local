@@ -25,9 +25,9 @@ export function UpdatePanel() {
             <div className="panel upd">
               <div className="upd-head">
                 <div className="stack">
-                  <span>Versione installata <b className="mono">{s.current}</b></span>
+                  <span>{tNode("settings.installed_version", { version: <b className="mono">{s.current}</b> })}</span>
                   <span className="faint text-sm">
-                    Canale <Pill tone="info">{CHANNEL_LABEL[s.channel]}</Pill>
+                    {tNode("settings.channel_label", { channel: <Pill tone="info">{CHANNEL_LABEL[s.channel]}</Pill> })}
                     {s.configured === "auto" && t("settings.segue_la_versione_installata")}
                     {s.checked_at && t("settings.ultimo_controllo", { p: new Date(s.checked_at).toLocaleString(currentLocaleTag()) })}
                   </span>

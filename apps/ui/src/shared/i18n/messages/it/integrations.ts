@@ -77,4 +77,10 @@ export const integrationsIt = {
   "integrations.python_requests": "Python (requests)",
   "integrations.webhook_dei_workflow": "Webhook dei workflow",
   "integrations.servizi_esterni_avviano_un_workflow": "Servizi esterni avviano un workflow con una POST: il JSON ricevuto diventa gli input. Sostituisci l'id con quello del workflow; il segreto del workflow è la credenziale.",
+  "integrations.vuoi_eliminare_l_agente_remoto": "Vuoi eliminare {name}? L'agente remoto non viene toccato: smetti solo di poterlo usare da qui.",
+  "integrations.snippet_hello": "Ciao!",
+  "integrations.snippet_workflow_secret": "<segreto-del-workflow>",
+  "integrations.snippet_card_public": "La agent card è pubblica",
+  "integrations.snippet_send_message": "Invia un messaggio",
+  "integrations.snippet_a2a_prompt": "Riordina i PDF in Downloads",
 } as const;

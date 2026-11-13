@@ -129,3 +129,13 @@ export function tNode(key: MessageKey, slots: Record<string, ReactNode>, params?
     ...parts.map((part, i) => (i % 2 === 0 ? part : createElement(Fragment, { key: i }, slots[part]))),
   );
 }
+
+/**
+ * A fixed list of messages (the steps of a guide): every element is read through `t` when it is
+ * accessed, so a module-level list follows the language like `labelMap` does for objects.
+ */
+export function tList(keys: readonly MessageKey[]): readonly string[] {
+  const list: string[] = [];
+  keys.forEach((key, i) => Object.defineProperty(list, i, { get: () => t(key), enumerable: true }));
+  return list;
+}

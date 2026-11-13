@@ -8,7 +8,7 @@ import { Pager } from "./components/Pager";
 import { auditExport, BACKEND_LIMIT, emptyFilters, facets, filterAudit, isFiltering, newestFirst, paginate, type AuditFilters } from "./model/filter";
 import "./activity.css";
 
-import { t, t as tr } from "../../shared/i18n";
+import { t, t as tr, tNode } from "../../shared/i18n";
 /** Attività: the audit trail with filters, search, pagination and a JSON export of what is on screen. */
 export function ActivityView() {
   const audit = useAudit();
@@ -41,7 +41,7 @@ export function ActivityView() {
       <p className={truncated ? "act-note is-warn" : "act-note"} role={truncated ? "status" : undefined}>
         <Icon name="info" size={15} />
         <span>
-          Il workspace restituisce soltanto le <b>{t("activity.ultime_voci", { BACKEND_LIMIT })}</b> dell'audit: la cronologia più vecchia non è raggiungibile da questa pagina.
+          {tNode("activity.il_workspace_restituisce_soltanto_le", { latest: <b>{t("activity.ultime_voci", { BACKEND_LIMIT })}</b> })}
           {truncated && t("activity.l_elenco_e_al_limite")}
         </span>
       </p>

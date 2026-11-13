@@ -5,8 +5,8 @@ import { Button, Icon, Pill } from "../../../shared/ui";
 import type { Session } from "../../../shared/api/types";
 import { useWorktree, useWorktreeApply, useWorktreeDiscard } from "../api";
 
-import { t } from "../../../shared/i18n";
-const FILE_STATUS: Record<string, string> = { A: "aggiunto", M: "modificato", D: "eliminato", R: "rinominato", C: "copiato", T: "tipo cambiato" };
+import { t, t as tr } from "../../../shared/i18n";
+const FILE_STATUS: Record<string, string> = { A: "aggiunto", M: "modificato", D: "eliminato", R: "rinominato", C: "copiato", get T() { return tr("chat.tipo_cambiato"); } };
 
 /** Changes of an isolated session: review the diff, apply it to the workspace or throw it away. */
 export function WorktreePanel({ session, running }: { session: Session; running: boolean }) {

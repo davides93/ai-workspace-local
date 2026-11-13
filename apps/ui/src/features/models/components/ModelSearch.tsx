@@ -79,7 +79,7 @@ export function ModelSearch({ provider, info, onSetToken }: { provider: string; 
           {search.isFetchNextPageError && <HubError error={search.error} title={t("models.non_riesco_a_caricare_altri")} onRetry={() => void search.fetchNextPage()} retrying={search.isFetchingNextPage} />}
           {exact && !items.some((m) => m.id.toLowerCase() === exact.toLowerCase()) && (
             <p className="faint text-sm">
-              Non lo trovi? <Button size="sm" variant="ghost" onClick={() => setOpen(stubModel(provider, exact))}>{t("models.apri_per_nome_esatto", { exact })}</Button>
+              {t("models.non_lo_trovi")} <Button size="sm" variant="ghost" onClick={() => setOpen(stubModel(provider, exact))}>{t("models.apri_per_nome_esatto", { exact })}</Button>
             </p>
           )}
         </>

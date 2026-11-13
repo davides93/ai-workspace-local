@@ -3,6 +3,7 @@
 
 import type { Platform } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 export interface Containment {
   os: Platform;
   label: string;
@@ -24,44 +25,44 @@ export interface Containment {
 
 export const CONTAINMENT: Containment[] = [
   {
-    os: "linux", label: "Linux", mechanism: "bubblewrap (bwrap)", shell: true,
-    writes: "Radice in sola lettura, /tmp privato; la cartella di lavoro è scrivibile solo in «Scrittura nel workspace».",
-    network: "Chiusa di default (--unshare-net). Si apre con l'impostazione «Rete dei comandi».",
-    reads: "Sì: la cartella dei dati dell'app e quelle delle credenziali (.ssh, .aws, …) sembrano vuote ai comandi; /proc del processo principale non è visibile.",
-    mcp: "Sì, con lo stesso meccanismo.",
-    note: "Richiede bubblewrap installato: senza, i comandi girano senza contenimento e la modalità Auto chiede conferma per ognuno.",
+    os: "linux", get label() { return t("security.linux"); }, get mechanism() { return t("security.bubblewrap_bwrap"); }, shell: true,
+    get writes() { return t("security.radice_in_sola_lettura_tmp"); },
+    get network() { return t("security.chiusa_di_default_unshare_net"); },
+    get reads() { return t("security.si_la_cartella_dei_dati"); },
+    get mcp() { return t("security.si_con_lo_stesso_meccanismo"); },
+    get note() { return t("security.richiede_bubblewrap_installato_senza_i"); },
   },
   {
-    os: "macos", label: "macOS", mechanism: "sandbox-exec (profilo Seatbelt)", shell: true,
-    writes: "Scritture negate ovunque tranne la cartella di lavoro (in «Scrittura nel workspace») e le cartelle temporanee.",
-    network: "Chiusa di default ((deny network*)). Si apre con l'impostazione «Rete dei comandi».",
-    reads: "Sì, con regole del profilo Seatbelt. Non è stato verificato su un Mac reale in questa versione.",
-    mcp: "Sì, con lo stesso meccanismo (non verificato su un Mac reale).",
-    note: "Usa lo strumento di sistema /usr/bin/sandbox-exec.",
+    os: "macos", get label() { return t("security.macos"); }, get mechanism() { return t("security.sandbox_exec_profilo_seatbelt"); }, shell: true,
+    get writes() { return t("security.scritture_negate_ovunque_tranne_la"); },
+    get network() { return t("security.chiusa_di_default_deny_network"); },
+    get reads() { return t("security.si_con_regole_del_profilo"); },
+    get mcp() { return t("security.si_con_lo_stesso_meccanismo_2"); },
+    get note() { return t("security.sandbox_exec_note"); },
   },
   {
-    os: "windows", label: "Windows", mechanism: "token a integrità bassa e job object", shell: true,
-    writes: "Scrive solo nella cartella di lavoro (in «Scrittura nel workspace»).",
-    network: "Non isolata: su Windows la rete dei comandi non si può chiudere, qualunque sia l'impostazione.",
-    reads: "No: il token a integrità bassa limita le scritture, non le letture. Le cartelle nascoste valgono solo per i tool di file degli agenti, non per i comandi di shell.",
-    mcp: "No: i server MCP non si possono isolare su Windows; restano «non isolati».",
-    note: "I comandi girano in PowerShell; il contenimento è quello del crate aiw-winsandbox.",
+    os: "windows", get label() { return t("security.windows"); }, get mechanism() { return t("security.token_a_integrita_bassa_e"); }, shell: true,
+    get writes() { return t("security.scrive_solo_nella_cartella_di"); },
+    get network() { return t("security.non_isolata_su_windows_la"); },
+    get reads() { return t("security.no_il_token_a_integrita"); },
+    get mcp() { return t("security.no_i_server_mcp_non"); },
+    get note() { return t("security.i_comandi_girano_in_powershell"); },
   },
   {
-    os: "android", label: "Android", mechanism: null, shell: true,
-    writes: "Nessun contenimento dei comandi.",
+    os: "android", get label() { return t("security.android"); }, mechanism: null, shell: true,
+    get writes() { return t("security.nessun_contenimento_dei_comandi"); },
     network: "Aperta.",
     reads: "No.",
     mcp: "No.",
-    note: "Il backend non rileva una sandbox: i comandi girano con i privilegi dell'app e la modalità Auto chiede conferma per ognuno.",
+    get note() { return t("security.il_backend_non_rileva_una"); },
   },
   {
-    os: "ios", label: "iOS", mechanism: null, shell: false,
+    os: "ios", get label() { return t("security.ios"); }, mechanism: null, shell: false,
     writes: "—",
     network: "—",
     reads: "—",
     mcp: "—",
-    note: "iOS non consente di eseguire processi: il tool di shell non è disponibile.",
+    get note() { return t("security.ios_non_consente_di_eseguire"); },
   },
 ];
 
@@ -70,23 +71,23 @@ export const containmentFor = (os: string | undefined): Containment | undefined 
 /** Limits of the current implementation, stated as the code behaves today. */
 export const KNOWN_LIMITS: { title: string; body: string }[] = [
   {
-    title: "Su Windows la rete dei comandi non si può chiudere",
-    body: "Su Linux e macOS la rete dei comandi è chiusa di default e si apre da qui. Su Windows il contenimento (token a integrità bassa) non isola la rete né nasconde cartelle in lettura: l'interruttore non ha effetto sui comandi. Servirebbe un AppContainer o regole del firewall, che non sono implementati. I domini consentiti valgono per web e browser, non per i comandi.",
+    get title() { return t("security.su_windows_la_rete_dei_2"); },
+    get body() { return t("security.su_linux_e_macos_la"); },
   },
   {
-    title: "Senza sandbox i comandi hanno i tuoi privilegi",
-    body: "Succede con la sandbox «Nessun contenimento», su Linux senza bubblewrap e su Android. In quei casi la sola barriera è la conferma: tieni la modalità su «Chiedi» o «Modifica». Le variabili d'ambiente con chiavi e token sono tolte ai comandi in ogni caso.",
+    get title() { return t("security.senza_sandbox_i_comandi_hanno"); },
+    get body() { return t("security.succede_con_la_sandbox_nessun"); },
   },
   {
-    title: "Le regole della policy leggono il testo del comando",
-    body: "Un comando composto (con ;, &&, |, $(…)) è letto parte per parte: «Consenti» vale solo se ogni parte è consentita, «Nega» se una qualsiasi lo è. Ma wrapper che nascondono il comando vero (ssh host «…», docker run …, interpreti con script propri) non si aprono: una regola «Consenti» non li copre e si ricade su «Chiedi». La policy non sostituisce la sandbox.",
+    get title() { return t("security.le_regole_della_policy_leggono"); },
+    get body() { return t("security.un_comando_composto_con_e"); },
   },
   {
-    title: "Browser controllato, hook e valutatori non passano da questa sandbox",
-    body: "I tool di file sono limitati alla cartella di lavoro da un controllo sui percorsi (anche attraverso i collegamenti simbolici) e rispettano le cartelle nascoste. Il browser controllato, gli hook e i valutatori degli eval sono processi avviati con i tuoi privilegi. I server MCP stdio possono essere isolati (Linux, macOS) ma quelli già presenti restano «non isolati» finché non premi «Isola».",
+    get title() { return t("security.browser_controllato_hook_e_valutatori"); },
+    get body() { return t("security.i_tool_di_file_sono"); },
   },
   {
-    title: "«Senza freni» più «Nessun contenimento» non lascia protezioni",
-    body: "Un agente con entrambe le impostazioni può fare ciò che puoi fare tu, senza chiedere. Solo le regole «Nega» della policy e gli hook di blocco restano in vigore.",
+    get title() { return t("security.senza_freni_piu_nessun_contenimento"); },
+    get body() { return t("security.un_agente_con_entrambe_le"); },
   },
 ];

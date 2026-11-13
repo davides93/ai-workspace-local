@@ -7,7 +7,7 @@ export const TIER_INFO: Record<DeviceTier, { label: string; models: string }> = 
   s: { get label() { return t("devices.piccolo"); }, get models() { return t("devices.fino_a_circa_4b_quantizzati"); } },
   m: { get label() { return t("devices.medio"); }, get models() { return t("devices.7_14b_e_moe_con"); } },
   l: { get label() { return t("devices.grande"); }, get models() { return t("devices.moe_fino_a_circa_35b"); } },
-  xl: { get label() { return t("devices.molto_grande"); }, models: "Densi da 70B, MoE da oltre 100B con offload" },
+  xl: { get label() { return t("devices.molto_grande"); }, get models() { return t("devices.densi_da_70b_moe_da") } },
 };
 
 export const TIER_ORDER: DeviceTier[] = ["xs", "s", "m", "l", "xl"];

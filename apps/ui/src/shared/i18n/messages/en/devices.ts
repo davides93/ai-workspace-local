@@ -79,4 +79,6 @@ export const devicesEn: Record<keyof typeof devicesIt, string> = {
   "devices.indica_l_indirizzo_del_dispositivo": "Enter the device address (host:port)",
   "devices.il_codice_e_di_6": "The code is 6 digits",
   "devices.serve_l_impronta_del_certificato": "The certificate fingerprint is required (64 hex digits), found under Security → Network on the other device",
+  "devices.vuoi_rimuovere_il_dispositivo": "Remove {name}? Its models and agents will no longer be available here; you can pair it again with the code.",
+  "devices.densi_da_70b_moe_da": "Dense 70B, MoE over 100B with offload",
 };

@@ -1,5 +1,6 @@
 import { Led, Pill, type LedTone, type PillTone } from "./Pill";
 
+import { t } from "../i18n";
 /** Maps any status string used by the API (runtime, MCP, run, download, peer) to a tone. */
 export function statusTone(s: string): LedTone {
   switch (s) {
@@ -31,11 +32,11 @@ export function statusTone(s: string): LedTone {
 }
 
 export const statusLabel: Record<string, string> = {
-  running: "In esecuzione", starting: "Avvio…", available: "Disponibile", installable: "Da installare", unsupported: "Non supportato",
-  stopped: "Fermo", error: "Errore", connected: "Connesso", disconnected: "Disconnesso", succeeded: "Completato", completed: "Completato", failed: "Fallito",
-  waiting_approval: "Attende conferma", cancelled: "Annullato", pending: "In coda", done: "Fatto", applied: "Applicato", skipped: "Saltato", waiting: "In attesa",
-  reconnecting: "Riconnessione…", connecting: "Connessione…", unreachable: "Non raggiungibile", auth_required: "Serve l'accesso", approval_required: "Da approvare",
-  online: "Online", offline: "Offline", queued: "In coda", verifying: "Verifica",
+  running: "In esecuzione", starting: "Avvio…", get available() { return t("ui.disponibile"); }, installable: "Da installare", unsupported: "Non supportato",
+  get stopped() { return t("ui.fermo"); }, get error() { return t("ui.errore"); }, get connected() { return t("ui.connesso"); }, get disconnected() { return t("ui.disconnesso"); }, get succeeded() { return t("ui.completato"); }, get completed() { return t("ui.completato"); }, get failed() { return t("ui.fallito"); },
+  get waiting_approval() { return t("ui.attende_conferma"); }, get cancelled() { return t("ui.annullato"); }, pending: "In coda", get done() { return t("ui.fatto"); }, get applied() { return t("ui.applicato"); }, get skipped() { return t("ui.saltato"); }, waiting: "In attesa",
+  reconnecting: "Riconnessione…", connecting: "Connessione…", unreachable: "Non raggiungibile", get auth_required() { return t("ui.serve_l_accesso"); }, approval_required: "Da approvare",
+  get online() { return t("ui.online"); }, get offline() { return t("ui.offline"); }, queued: "In coda", get verifying() { return t("ui.verifica"); },
 };
 
 export function StatusPill({ status }: { status: string }) {

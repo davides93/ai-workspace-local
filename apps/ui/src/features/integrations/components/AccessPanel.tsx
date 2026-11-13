@@ -41,7 +41,7 @@ export function AccessPanel({ audience, onAudience, lanAddress }: {
           </section>
           <section className="int-note" aria-label={t("integrations.da_altri_dispositivi")}>
             <h3>
-              <Icon name="link" size={16} /> Da altri dispositivi
+              <Icon name="link" size={16} /> {t("integrations.da_altri_dispositivi")}
               {lanAddress ? <Pill tone="ok">{t("integrations.lan_attiva")}</Pill> : <Pill>{t("integrations.solo_locale")}</Pill>}
             </h3>
             <p className="muted text-sm">

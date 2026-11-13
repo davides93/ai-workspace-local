@@ -96,7 +96,7 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
           <label htmlFor="tools-all"><b>{tr("agents.tutti_i_tool")}</b> <span className="muted text-sm">{trNode("agents.anche_quelli_aggiunti_in_futuro", { code: <code>*</code> })}</span></label>
         </div>
         <div className="tool-summary" role="status">
-          <span className="num"><b>{summary.count}</b> di {summary.total} tool</span>
+          <span className="num">{trNode("agents.tool_selezionati_di_totale", { count: <b>{summary.count}</b>, total: summary.total })}</span>
           <span className="tool-risks">
             {RISKS.filter((r) => summary.byRisk[r]).map((r) => <Pill key={r} tone={RISK_META[r].tone}>{summary.byRisk[r]} {RISK_META[r].label}</Pill>)}
           </span>

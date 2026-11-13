@@ -5,7 +5,7 @@ import { errorMessage } from "../../../shared/lib/errors";
 import { useDeleteRemoteAgent, useRemoteAgents, useSaveRemoteAgent } from "../api";
 import { blankRemote, hasToken, normalizeRemote, remoteIdFor, validateRemote } from "../model/remote";
 
-import { t, t as tr } from "../../../shared/i18n";
+import { t, t as tr, tNode } from "../../../shared/i18n";
 /**
  * The agents that run elsewhere (another device, an orchestrator, a cloud agent) and speak A2A. Teams and
  * agents delegate to them as `remote:<id>`. Paired devices are listed too, with their pairing token.
@@ -56,7 +56,7 @@ export function RemoteAgentsPanel() {
           onCancel={() => { setDeleting(null); del.reset(); }}
           onConfirm={() => del.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
         >
-          <p>Vuoi eliminare <b>{deleting.name}</b>? L&apos;agente remoto non viene toccato: smetti solo di poterlo usare da qui.</p>
+          <p>{tNode("integrations.vuoi_eliminare_l_agente_remoto", { name: <b>{deleting.name}</b> })}</p>
         </DecisionDialog>
       )}
     </Panel>

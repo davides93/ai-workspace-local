@@ -2,6 +2,7 @@
 // Pure functions only (no React) so they can be unit tested.
 import { currentLocaleTag } from "../../../shared/lib/format";
 
+import { t as tr } from "../../../shared/i18n";
 /**
  * A2UI v0.9 renderer for the basic catalog (https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json).
  * Surfaces are built from server messages (createSurface → updateComponents → updateDataModel),
@@ -244,7 +245,7 @@ export function failingChecks(c: A2uiComponent, scope: Scope): string[] {
   if (typeof c.validationRegexp === "string") {
     try {
       const v = str(resolve(c.value, scope));
-      if (v && !new RegExp(c.validationRegexp).test(v)) out.push("Formato non valido");
+      if (v && !new RegExp(c.validationRegexp).test(v)) out.push(tr("chat.formato_non_valido"));
     } catch {
       /* invalid regexp from the model: ignore */
     }

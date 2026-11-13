@@ -77,4 +77,6 @@ export const devicesIt = {
   "devices.indica_l_indirizzo_del_dispositivo": "Indica l'indirizzo del dispositivo (host:porta)",
   "devices.il_codice_e_di_6": "Il codice è di 6 cifre",
   "devices.serve_l_impronta_del_certificato": "Serve l'impronta del certificato (64 cifre esadecimali), che trovi in Sicurezza → Rete sull'altro dispositivo",
+  "devices.vuoi_rimuovere_il_dispositivo": "Vuoi rimuovere {name}? I suoi modelli e agenti non saranno più disponibili qui; potrai accoppiarlo di nuovo con il codice.",
+  "devices.densi_da_70b_moe_da": "Densi da 70B, MoE da oltre 100B con offload",
 } as const;

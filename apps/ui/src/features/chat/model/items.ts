@@ -1,6 +1,7 @@
 import type { ApprovalRequest, Attachment } from "../../../shared/api/types";
 import type { SurfaceState } from "../a2ui";
 
+import { t } from "../../../shared/i18n";
 /** `interrupted`: the run ended (stopped, crashed) before the tool answered. */
 export type ToolStatus = "running" | "done" | "failed" | "denied" | "interrupted";
 
@@ -40,10 +41,10 @@ export type ApprovalItem = Extract<Item, { kind: "approval" }>;
 
 /** Summary line of a reasoning row: while it goes on, afterwards how long it took (known for live runs only). */
 export function reasoningLabel(it: Extract<Item, { kind: "reasoning" }>): string {
-  if (it.streaming) return "Sta ragionando…";
-  if (it.startedAt === undefined || it.endedAt === undefined) return "Ragionamento";
+  if (it.streaming) return t("chat.sta_ragionando");
+  if (it.startedAt === undefined || it.endedAt === undefined) return t("chat.ragionamento");
   const seconds = Math.max(1, Math.round((it.endedAt - it.startedAt) / 1000));
-  return `Ha ragionato per ${seconds} ${seconds === 1 ? "secondo" : "secondi"}`;
+  return t("chat.ha_ragionato_per", { seconds });
 }
 
 /** Stable React key of a row. */
@@ -64,29 +65,29 @@ export const HANDOFF = "aiw.handoff";
 /** The row for the user message that opens the next agent's run (`[Passaggio da X] summary`). */
 export const handoffText = (content: string) => {
   const m = /^\[Passaggio da ([^\]]+)\]\s*([\s\S]*)$/.exec(content);
-  return m ? `Passaggio di conversazione da ${m[1]}: ${m[2]}` : content;
+  return m ? t("chat.handoff_text", { name: m[1] ?? "", summary: m[2] ?? "" }) : content;
 };
 
 export const formatCheckText = (errors: string[]) =>
-  `Controllo del formato: la risposta non rispettava lo schema richiesto (${errors.slice(0, 3).join("; ")}${errors.length > 3 ? "; …" : ""}). L'agente la corregge.`;
+  t("chat.controllo_del_formato_la_risposta", { errors: errors.slice(0, 3).join("; ") + (errors.length > 3 ? "; …" : "") });
 
 export const selfCheckText = (failed: string[]) =>
-  `Controllo automatico: ${failed.length === 1 ? "un'azione era fallita" : "alcune azioni erano fallite"} (${failed.join(", ")}). L'agente le riprende prima di concludere.`;
+  t(failed.length === 1 ? "chat.self_check_one" : "chat.self_check_many", { list: failed.join(", ") });
 
 /** `name` of the stored user messages that hand the final check's objection back to the model (crates/aiw-agent `CHECK_NAME`). */
 export const CHECK = "aiw.check";
 
-const ROLE_LABEL: Record<string, string> = { plan: "Pianifica", act: "Esegue", check: "Verifica", summarize: "Riassume" };
+const ROLE_LABEL: Record<string, string> = { get plan() { return t("chat.pianifica"); }, get act() { return t("chat.esegue"); }, get check() { return t("chat.verifica"); }, get summarize() { return t("chat.riassume"); } };
 
 /** The small label of a call in a run with model roles: «Pianifica · qwen3-8b». */
 export function modelLabel(role: string | null | undefined, model: string | undefined): string {
   const r = role ? ROLE_LABEL[role] : undefined;
-  return [r, model].filter(Boolean).join(" · ") || "Modello";
+  return [r, model].filter(Boolean).join(" · ") || t("chat.modello");
 }
 
 /** The note for the result of the final check. */
 export const checkText = (passed: boolean, note?: string | null) =>
-  passed ? "Verifica finale: tutto a posto." : `Verifica finale: ${note ?? "qualcosa non torna"}. L'agente corregge prima di concludere.`;
+  passed ? t("chat.verifica_finale_tutto_a_posto") : t("chat.final_check_failed", { note: note ?? t("chat.qualcosa_non_torna") });
 
 /** The note for a run that uses one model although the agent asks for roles (a model does not fit, or the engine holds one at a time). */
 export const rolesNoteText = (notes: string[]) => notes.join(" ");

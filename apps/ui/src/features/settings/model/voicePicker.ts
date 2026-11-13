@@ -2,10 +2,11 @@
 
 import type { TtsStatus, TtsVoice } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 /** Languages the picker always offers, besides what the engine reports. */
 const BASE_LANGUAGES = ["it", "en"];
 
-export const LANGUAGE_NAME: Record<string, string> = { it: "Italiano", en: "Inglese" };
+export const LANGUAGE_NAME: Record<string, string> = { get it() { return t("settings.italiano"); }, get en() { return t("settings.inglese"); } };
 export const languageName = (code: string) => LANGUAGE_NAME[code] ?? code.toUpperCase();
 
 /** What «Prova» reads for a language. */
@@ -41,6 +42,6 @@ export function nextPicks(value: unknown, language: string, id: string): Record<
 
 /** One line on what speaks now, for the status of the section. */
 export function engineLine(tts: TtsStatus): { tone: "ok" | "info"; text: string } {
-  if (tts.neural) return { tone: "ok", text: `Voce neurale: ${tts.backend ?? tts.engine}` };
-  return { tone: "info", text: tts.detail ?? "Si usano le voci del sistema operativo" };
+  if (tts.neural) return { tone: "ok", text: t("settings.voce_neurale_2", { engine: tts.backend ?? tts.engine }) };
+  return { tone: "info", text: tts.detail ?? t("settings.si_usano_le_voci_del") };
 }

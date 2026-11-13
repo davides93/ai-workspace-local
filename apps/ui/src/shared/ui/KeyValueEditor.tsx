@@ -13,7 +13,7 @@ import { t, t as tr } from "../i18n";
  * read-only masked field with a "Cambia" button: there is nothing to reveal, and saving sends the mask back
  * unchanged so the stored value stays. After a change, "Mantieni" puts the mask back.
  */
-export function KeyValueEditor({ idPrefix, label, rows, onChange, keyLabel = "Nome", valueLabel = "Valore", keyPlaceholder, valuePlaceholder, isSecret, mask, addLabel = "Aggiungi riga", emptyText }: {
+export function KeyValueEditor({ idPrefix, label, rows, onChange, keyLabel = t("ui.nome"), valueLabel = t("ui.valore"), keyPlaceholder, valuePlaceholder, isSecret, mask, addLabel = t("ui.aggiungi_riga"), emptyText }: {
   idPrefix: string;
   /** Accessible name of the group. */
   label: string;

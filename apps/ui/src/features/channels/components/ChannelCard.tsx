@@ -4,7 +4,7 @@ import { toast } from "../../../shared/lib/toast";
 import type { AgentProfile, ChannelInfo, ChannelMode, ChannelPairing } from "../../../shared/api/types";
 import { Button, Field, Icon, Input, Led, Pill, Segmented, Select, TagInput, Toggle } from "../../../shared/ui";
 import { useDeleteChannel, usePairChannel, useTestChannel, useUpdateChannel } from "../api";
-import { ALWAYS_ON_NOTE, DOWNGRADE_NOTE, MODE_LABEL, MODE_NOTE, STATE_LABEL, diffPatch, enableProblem, ignoredNote, kindInfo, minutesLeft, stateTone } from "../model/channels";
+import { alwaysOnNote, downgradeNote, MODE_LABEL, MODE_NOTE, STATE_LABEL, diffPatch, enableProblem, ignoredNote, kindInfo, minutesLeft, stateTone } from "../model/channels";
 
 import { t, tNode } from "../../../shared/i18n";
 /** One channel: status, switch, set-up steps, who may talk, mode, briefing, test and (Telegram) pairing. */
@@ -95,7 +95,7 @@ export function ChannelCard({ channel, agents }: { channel: ChannelInfo; agents:
           <span className="chn-label">{t("channels.che_cosa_puo_fare_da")}</span>
           <Segmented<ChannelMode> label={t("channels.modalita_del_canale")} value={mode} onChange={setMode} options={(["read_only", "ask"] as const).map((m) => ({ id: m, label: MODE_LABEL[m] }))} />
           <span className="hint">{MODE_NOTE[mode]}</span>
-          {channel.downgraded && <span className="chn-warn"><Icon name="alert" size={14} /> {DOWNGRADE_NOTE}</span>}
+          {channel.downgraded && <span className="chn-warn"><Icon name="alert" size={14} /> {downgradeNote()}</span>}
         </div>
         <label className="chn-switch">
           <Toggle checked={channel.briefing} label={t("channels.manda_qui_anche_il_riepilogo")} disabled={busy} onChange={(on) => update.mutate({ id: channel.id, patch: { briefing: on } }, { onError: (err) => setError(errorMessage(err)) })} />
@@ -128,7 +128,7 @@ export function ChannelCard({ channel, agents }: { channel: ChannelInfo; agents:
           <Button variant="ghost" icon="trash" onClick={() => setConfirmDelete(true)}>{t("channels.elimina")}</Button>
         )}
       </div>
-      <p className="faint text-xs">{ALWAYS_ON_NOTE}</p>
+      <p className="faint text-xs">{alwaysOnNote()}</p>
       {channel.kind === "email" && <p className="faint text-xs">{tNode("channels.la_posta_da_altri_indirizzi", { pill: <Pill tone="neutral">{t("channels.dkim_spf")}</Pill> })}</p>}
     </article>
   );

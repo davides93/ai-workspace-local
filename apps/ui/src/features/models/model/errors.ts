@@ -1,5 +1,6 @@
 import { errorStatus } from "../../../shared/lib/errors";
 
+import { t } from "../../../shared/i18n";
 /**
  * The failure is about credentials: HTTP 401 (token missing or refused by the provider) or 403, or
  * a download job whose message says the repository is gated. Offers the "Imposta token" shortcut.
@@ -23,16 +24,16 @@ export function shouldRetryHub(failureCount: number, error: unknown): boolean {
 
 /** Heading of a block-level error, by what went wrong. */
 export function errorTitle(error: unknown): string {
-  if (needsToken(error)) return "Accesso negato dal provider";
+  if (needsToken(error)) return t("models.accesso_negato_dal_provider");
   switch (errorStatus(error)) {
     case 404:
-      return "Non trovato";
+      return t("models.non_trovato");
     case 502:
-      return "Provider irraggiungibile";
+      return t("models.provider_irraggiungibile");
     case 507:
-      return "Spazio su disco insufficiente";
+      return t("models.spazio_su_disco_insufficiente");
     default:
-      return "Qualcosa non ha funzionato";
+      return t("models.qualcosa_non_ha_funzionato");
   }
 }
 
@@ -41,15 +42,15 @@ export function errorHint(error: unknown): string | null {
   switch (errorStatus(error)) {
     case 401:
     case 403:
-      return "Imposta il token del provider e riprova.";
+      return t("models.imposta_il_token_del_provider");
     case 404:
-      return "Controlla il nome esatto del modello o del file.";
+      return t("models.controlla_il_nome_esatto_del");
     case 409:
-      return "Lo stesso file è già in scrittura da un altro download: aspetta che finisca.";
+      return t("models.lo_stesso_file_e_gia");
     case 502:
-      return "Il provider non risponde: controlla la connessione o l'endpoint (mirror) nelle impostazioni del provider, poi riprova.";
+      return t("models.il_provider_non_risponde_controlla");
     case 507:
-      return "Non c'è abbastanza spazio su disco: libera spazio o elimina un modello installato.";
+      return t("models.non_c_e_abbastanza_spazio");
     default:
       return null;
   }

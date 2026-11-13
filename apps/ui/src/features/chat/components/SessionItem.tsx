@@ -7,7 +7,7 @@ import { RUN_STATUS_LABEL } from "../model/labels";
 import { MAX_TITLE, validateTitle } from "../model/sessions";
 import { useRenameSession } from "../api";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 const CHANNEL_NAME = { telegram: "Telegram", slack: "Slack", email: "Email" } as const;
 
 const ledTone = (s: Session): LedTone => (s.last_status === "failed" ? "crit" : s.last_status === "running" ? "run" : s.last_status === "cancelled" ? "warn" : s.last_status ? "ok" : "off");
@@ -76,7 +76,7 @@ export function SessionItem({ session, agentName, active, renaming, reflecting, 
   onDelete: () => void;
 }) {
   const titleId = useId();
-  const status = session.last_status ? RUN_STATUS_LABEL[session.last_status] ?? session.last_status : "Nessun run";
+  const status = session.last_status ? RUN_STATUS_LABEL[session.last_status] ?? session.last_status : tr("chat.nessun_run");
   return (
     <li className={cx("ws-session", active && "is-active")}>
       {renaming ? (

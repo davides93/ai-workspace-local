@@ -6,7 +6,7 @@ import { ratingChange } from "../model/feedback";
 import { CopyMessage } from "./CopyMessage";
 import { ReadAloud } from "./ReadAloud";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 interface Props {
   messageId: string;
   text: string;
@@ -90,7 +90,7 @@ export function MessageActions({ messageId, text, rateable, rating, pending, onR
         >
           <Field
             label={t("chat.cosa_non_ha_funzionato_facoltativo")} htmlFor={`${noteId}-t`}
-            error={tooLong ? `La nota supera i ${MAX_FEEDBACK_NOTE_CHARS} caratteri` : undefined}
+            error={tooLong ? tr("chat.la_nota_supera_i_caratteri", { max: MAX_FEEDBACK_NOTE_CHARS }) : undefined}
           >
             <Textarea id={`${noteId}-t`} rows={2} value={draft} autoFocus onChange={(e) => setDraft(e.target.value)} />
           </Field>

@@ -55,29 +55,28 @@ export function jobPercent(j: KbJob): number {
   return j.total <= 0 ? 0 : Math.min(100, Math.round((j.done / j.total) * 100));
 }
 
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** One sentence with the outcome of a finished (or cancelled) job. */
 export function jobSummary(j: KbJob): string {
   const parts: string[] = [];
-  if (j.added > 0) parts.push(`${plural(j.added, t("documents.documento_aggiunto"), t("documents.documenti_aggiunti"))}`);
-  if (j.replaced > 0) parts.push(`${plural(j.replaced, "aggiornato", "aggiornati")}`);
-  if (j.unchanged > 0) parts.push(`${plural(j.unchanged, t("documents.gia_presente"), t("documents.gia_presenti"))}`);
-  if (j.failed > 0) parts.push(`${plural(j.failed, "non riuscito", "non riusciti")}`);
-  if (j.skipped_total > 0) parts.push(`${plural(j.skipped_total, t("documents.file_saltato"), t("documents.file_saltati"))}`);
+  if (j.added > 0) parts.push(t("documents.job_added", { n: j.added }));
+  if (j.replaced > 0) parts.push(t("documents.job_replaced", { n: j.replaced }));
+  if (j.unchanged > 0) parts.push(t("documents.job_unchanged", { n: j.unchanged }));
+  if (j.failed > 0) parts.push(t("documents.job_failed", { n: j.failed }));
+  if (j.skipped_total > 0) parts.push(t("documents.job_skipped", { n: j.skipped_total }));
   const body = parts.length > 0 ? parts.join(", ") : t("documents.nessuna_novita");
-  return j.state === "cancelled" ? `Interrotto: ${body}.` : `${body.charAt(0).toUpperCase()}${body.slice(1)}.`;
+  return j.state === "cancelled" ? t("documents.job_cancelled", { body }) : `${body.charAt(0).toUpperCase()}${body.slice(1)}.`;
 }
 
 /** What the job is doing now, for the progress line. */
 export function jobProgressText(j: KbJob): string {
-  const base = `${j.done} di ${j.total}`;
+  const base = t("documents.job_progress", { done: j.done, total: j.total });
   return j.current ? `${base} · ${j.current}` : base;
 }
 
 export function documentStatusLabel(d: KbDocument): string {
-  if (d.status === "indexing") return "In lavorazione";
-  if (d.status === "failed") return "Non riuscito";
+  if (d.status === "indexing") return t("documents.in_lavorazione");
+  if (d.status === "failed") return t("documents.non_riuscito");
   return t("documents.pronto");
 }
 
@@ -89,7 +88,7 @@ export function coverageText(c: KbCollection): string {
   return t("documents.ricerca_per_significato_pronta_su", { embedded_chunks: c.embedded_chunks, chunks: c.chunks });
 }
 
-export const collectionCounts = (c: KbCollection) => `${plural(c.documents, "documento", "documenti")}`;
+export const collectionCounts = (c: KbCollection) => t("documents.n_documents", { n: c.documents });
 
 /** The id of the collection to show: the wanted one if it still exists, else the first. */
 export function pickCollection(list: readonly KbCollection[] | undefined, wanted: string | null): string | null {

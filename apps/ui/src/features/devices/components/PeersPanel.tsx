@@ -4,7 +4,7 @@ import { Button, Chip, Dialog, Icon, IconButton, Panel, StatusPill } from "../..
 import { useRemovePeer } from "../api";
 import { OS_LABEL } from "../model/mesh";
 
-import { t } from "../../../shared/i18n";
+import { t, tNode } from "../../../shared/i18n";
 const MAX_SHARED = 4;
 
 /** Paired devices: what each shares and its state; removing asks for confirmation. */
@@ -39,7 +39,7 @@ export function PeersPanel({ peers }: { peers: PeerDevice[] }) {
             <Button variant="danger" icon="trash" disabled={remove.isPending} onClick={() => remove.mutate(removing, { onSettled: () => setRemoving(null) })}>{t("devices.rimuovi_2")}</Button>
           </>}
         >
-          <p>Vuoi rimuovere <b>{removing.name}</b>? I suoi modelli e agenti non saranno più disponibili qui; potrai accoppiarlo di nuovo con il codice.</p>
+          <p>{tNode("devices.vuoi_rimuovere_il_dispositivo", { name: <b>{removing.name}</b> })}</p>
         </Dialog>
       )}
     </Panel>

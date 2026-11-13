@@ -4,7 +4,7 @@ import { useAgents } from "../agents/api";
 import { AddChannel } from "./components/AddChannel";
 import { ChannelCard } from "./components/ChannelCard";
 import { useChannels } from "./api";
-import { ALWAYS_ON_NOTE } from "./model/channels";
+import { alwaysOnNote } from "./model/channels";
 import "./channels.css";
 
 import { t } from "../../shared/i18n";
@@ -23,7 +23,7 @@ export function ChannelsView() {
         subtitle={t("channels.parla_con_l_assistente_da")}
         actions={!adding && <Button variant="primary" icon="plus" onClick={() => setAdding(true)}>{t("channels.aggiungi_un_canale")}</Button>}
       />
-      <p className="muted text-sm">{ALWAYS_ON_NOTE}</p>
+      <p className="muted text-sm">{alwaysOnNote()}</p>
       {adding && <AddChannel onDone={() => setAdding(false)} />}
       <QueryState query={channels}>
         {(list) =>

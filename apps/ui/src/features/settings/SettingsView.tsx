@@ -46,9 +46,9 @@ export function SettingsView() {
     // The theme is applied here as well: the choice shows at once, whatever the layer says.
     if (key === "ui.theme" && isTheme(value)) setTheme(value);
   };
-  const chooseTheme = (t: typeof theme) => {
-    setTheme(t);
-    commit("ui.theme", "Tema", t);
+  const chooseTheme = (next: typeof theme) => {
+    setTheme(next);
+    commit("ui.theme", t("settings.tema"), next);
   };
   const wanted = configTheme(cfg.data);
 
@@ -111,7 +111,7 @@ export function SettingsView() {
                     </ul>
                   </div>
                   {section.id === "connectors" && <MailAccountsEditor />}
-                  {section.id === "voice" && <VoiceBlock picks={view.effective["voice.tts.voice"]} onPick={(v) => commit("voice.tts.voice", "Voce neurale", v)} />}
+                  {section.id === "voice" && <VoiceBlock picks={view.effective["voice.tts.voice"]} onPick={(v) => commit("voice.tts.voice", t("settings.voce_neurale"), v)} />}
                   {section.id === "proactive" && <BackgroundBlock os={os} level={view.effective["proactive.level"] as never} />}
                 </Section>
               ))}

@@ -79,4 +79,10 @@ export const integrationsEn: Record<keyof typeof integrationsIt, string> = {
   "integrations.python_requests": "Python (requests)",
   "integrations.webhook_dei_workflow": "Workflow webhooks",
   "integrations.servizi_esterni_avviano_un_workflow": "External services start a workflow with a POST: the received JSON becomes the inputs. Replace the id with the workflow's; the workflow's secret is the credential.",
+  "integrations.vuoi_eliminare_l_agente_remoto": "Delete {name}? The remote agent itself is left untouched: you just stop being able to use it from here.",
+  "integrations.snippet_hello": "Hello!",
+  "integrations.snippet_workflow_secret": "<workflow-secret>",
+  "integrations.snippet_card_public": "The agent card is public",
+  "integrations.snippet_send_message": "Send a message",
+  "integrations.snippet_a2a_prompt": "Sort the PDFs in Downloads",
 };

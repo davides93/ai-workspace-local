@@ -45,4 +45,7 @@ export const activityIt = {
   "activity.conferma_richiesta": "Conferma richiesta",
   "activity.negato": "Negato",
   "activity.rifiutato": "Rifiutato",
+  "activity.il_workspace_restituisce_soltanto_le": "Il workspace restituisce soltanto le {latest} dell'audit: la cronologia più vecchia non è raggiungibile da questa pagina.",
+  "activity.righe_da_a_di_totale": "Righe {range} di {total}",
+  "activity.audit_export_source": "Audit trail di AI Workspace Local (le ultime {BACKEND_LIMIT} voci)",
 } as const;

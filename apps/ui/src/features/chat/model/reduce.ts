@@ -3,7 +3,7 @@ import { applyA2ui, type A2uiMessage } from "../a2ui";
 import { ATTACHMENTS_EVENT, CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, modelLabel, rolesNoteText, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
 import { resultStatus } from "./tools";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 type Of<K extends Item["kind"]> = Extract<Item, { kind: K }>;
 
 /** Index of the row of `kind` with this id, searching from the end (the live rows are the last ones). */
@@ -125,9 +125,9 @@ export function reduceRuntime(items: Item[], value: unknown): Item[] {
 }
 
 function routeLines(v: RuntimeEvent): string[] {
-  const lines = [v.reason ? `Perché: ${v.reason}` : "", v.model ? `Modello: ${v.model}${v.context ? ` · contesto ${v.context}` : ""}` : ""];
-  for (const a of v.alternatives ?? []) lines.push(`Alternativa · ${a.name ?? a.runtime}: ${a.reason ?? ""}`);
-  for (const x of v.excluded ?? []) lines.push(`Escluso · ${x.name ?? x.runtime}: ${x.reason ?? ""}`);
+  const lines = [v.reason ? tr("chat.perche", { reason: v.reason }) : "", v.model ? tr(v.context ? "chat.model_with_context" : "chat.model_line", { model: v.model, context: v.context ?? "" }) : ""];
+  for (const a of v.alternatives ?? []) lines.push(tr("chat.alternativa", { name: a.name ?? a.runtime ?? "", reason: a.reason ?? "" }));
+  for (const x of v.excluded ?? []) lines.push(tr("chat.escluso", { name: x.name ?? x.runtime ?? "", reason: x.reason ?? "" }));
   return lines.filter((l) => l !== "");
 }
 
@@ -172,18 +172,18 @@ function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
       return [...items, { kind: "note", id: `fc-${items.length}`, text: formatCheckText((value as { errors?: string[] }).errors ?? []) }];
     case HANDOFF: {
       const v = value as { to?: string; to_name?: string };
-      return [...items, { kind: "note", id: `ho-${items.length}`, text: `La conversazione passa a ${v.to_name ?? v.to ?? "un altro agente"}.` }];
+      return [...items, { kind: "note", id: `ho-${items.length}`, text: tr("chat.la_conversazione_passa_a", { name: v.to_name ?? v.to ?? tr("chat.un_altro_agente") }) }];
     }
     case "aiw.budget_exceeded": {
       const reason = (value as { reason?: string }).reason;
-      return [...items, { kind: "note", id: `bx-${items.length}`, text: `Budget del run esaurito${reason ? `: ${reason}` : ""}. L'agente si è fermato.` }];
+      return [...items, { kind: "note", id: `bx-${items.length}`, text: tr(reason ? "chat.budget_exhausted_reason" : "chat.budget_del_run_esaurito_l", { reason: reason ?? "" }) }];
     }
     case ATTACHMENTS_EVENT: {
       const warning = (value as { warning?: unknown } | null)?.warning;
       return typeof warning === "string" && warning ? [...items, { kind: "warning", id: `aw-${items.length}`, text: warning }] : items;
     }
     case "aiw.format_error":
-      return [...items, { kind: "note", id: `fe-${items.length}`, text: "La risposta non rispetta lo schema richiesto dall'agente: è mostrata così com'è." }];
+      return [...items, { kind: "note", id: `fe-${items.length}`, text: tr("chat.la_risposta_non_rispetta_lo") }];
     case "aiw.approval_request":
       return [...items, { kind: "approval", req: value as ApprovalRequest }];
     case "aiw.approval_resolved": {

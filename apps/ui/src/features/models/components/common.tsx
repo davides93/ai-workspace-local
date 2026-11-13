@@ -54,8 +54,7 @@ export function RuntimeChips({ runtimes, explain = false }: { runtimes: RuntimeC
       {explain && available.length === 0 && (
         <>
           <p className="mh-note">
-            Nessun runtime pronto su questo device:{" "}
-            {unavailable.map((r) => `${r.name}${r.reason ? ` (${r.reason})` : ""}`).join(", ")}.
+            {t("models.no_runtime_ready_on_device", { list: unavailable.map((r) => `${r.name}${r.reason ? ` (${r.reason})` : ""}`).join(", ") })}
           </p>
           <InstallRuntimeAction candidates={unavailable} />
         </>

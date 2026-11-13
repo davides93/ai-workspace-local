@@ -103,8 +103,8 @@ function ExternalNotice({ summary, counts }: { summary: ReturnType<typeof summar
     <aside className="panel notice mh-notice" aria-label={t("models.modelli_di_altre_app")}>
       <Icon name="info" size={18} />
       <p className="text-sm">
-        <b>{t("models.di_altre_app", { externalCount: summary.externalCount, p: summary.externalCount === 1 ? "modello" : "modelli" })}</b> ({formatBytes(summary.externalBytes)}): {parts.join(", ")}.
-        {" "}AIW li legge dove si trovano, senza copiarli né modificarli, e li usa nei profili come gli altri. Per liberare spazio eliminali dall'app che li ha scaricati.
+        <b>{t("models.models_from_other_apps", { n: summary.externalCount })}</b> ({formatBytes(summary.externalBytes)}): {parts.join(", ")}.
+        {" "}{t("models.aiw_li_legge_dove_si_trovano")}
       </p>
     </aside>
   );

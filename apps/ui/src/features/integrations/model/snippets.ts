@@ -1,6 +1,9 @@
 import { t } from "../../../shared/i18n";
 /** Copyable examples for every endpoint AI Workspace exposes to other programs. Pure, so they are testable. */
 
+const HELLO = (): string => t("integrations.snippet_hello");
+const SECRET = (): string => t("integrations.snippet_workflow_secret");
+
 export type SnippetLang = "curl" | "python" | "javascript" | "config";
 
 export interface Snippet {
@@ -62,7 +65,7 @@ export function buildEndpoints(baseUrl: string, opts: BuildOptions = {}): Endpoi
           lang: "curl", label: "curl",
           code: `curl ${base}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
-${curlAuth}  -d '{"model": "balanced", "messages": [{"role": "user", "content": "Ciao!"}]}'`,
+${curlAuth}  -d '{"model": "balanced", "messages": [{"role": "user", "content": "${HELLO()}"}]}'`,
         },
         {
           lang: "python", label: t("integrations.python_sdk_openai"),
@@ -71,7 +74,7 @@ ${curlAuth}  -d '{"model": "balanced", "messages": [{"role": "user", "content": 
 client = OpenAI(base_url="${base}/v1", api_key="${apiKey}")
 r = client.chat.completions.create(
     model="balanced",
-    messages=[{"role": "user", "content": "Ciao!"}],
+    messages=[{"role": "user", "content": "${HELLO()}"}],
 )
 print(r.choices[0].message.content)`,
         },
@@ -82,7 +85,7 @@ print(r.choices[0].message.content)`,
   headers: ${jsHeaders(withBearer)},
   body: JSON.stringify({
     model: "balanced",
-    messages: [{ role: "user", content: "Ciao!" }],
+    messages: [{ role: "user", content: "${HELLO()}" }],
   }),
 });
 const data = await res.json();
@@ -103,7 +106,7 @@ console.log(data.choices[0].message.content);`,
           code: `curl ${base}/v1/messages \\
   -H "Content-Type: application/json" \\
   -H "anthropic-version: 2023-06-01" \\
-${tok ? `  -H "x-api-key: ${TOKEN_PLACEHOLDER}" \\\n` : ""}  -d '{"model": "balanced", "max_tokens": 256, "messages": [{"role": "user", "content": "Ciao!"}]}'`,
+${tok ? `  -H "x-api-key: ${TOKEN_PLACEHOLDER}" \\\n` : ""}  -d '{"model": "balanced", "max_tokens": 256, "messages": [{"role": "user", "content": "${HELLO()}"}]}'`,
         },
         {
           lang: "python", label: t("integrations.python_sdk_anthropic"),
@@ -113,7 +116,7 @@ client = anthropic.Anthropic(base_url="${base}", api_key="${apiKey}")
 m = client.messages.create(
     model="balanced",
     max_tokens=256,
-    messages=[{"role": "user", "content": "Ciao!"}],
+    messages=[{"role": "user", "content": "${HELLO()}"}],
 )
 print(m.content[0].text)`,
         },
@@ -125,7 +128,7 @@ print(m.content[0].text)`,
   body: JSON.stringify({
     model: "balanced",
     max_tokens: 256,
-    messages: [{ role: "user", content: "Ciao!" }],
+    messages: [{ role: "user", content: "${HELLO()}" }],
   }),
 });
 const data = await res.json();
@@ -178,13 +181,13 @@ console.log(await res.text());`,
       snippets: [
         {
           lang: "curl", label: "curl",
-          code: `# La agent card è pubblica
+          code: `# ${t("integrations.snippet_card_public")}
 curl ${base}/.well-known/agent-card.json
 
-# Invia un messaggio
+# ${t("integrations.snippet_send_message")}
 curl ${base}/a2a \\
   -H "Content-Type: application/json" \\
-${curlAuth}  -d '{"jsonrpc": "2.0", "id": 1, "method": "message/send", "params": {"message": {"role": "user", "parts": [{"text": "Riordina i PDF in Downloads"}], "messageId": "m1"}}}'`,
+${curlAuth}  -d '{"jsonrpc": "2.0", "id": 1, "method": "message/send", "params": {"message": {"role": "user", "parts": [{"text": "${t("integrations.snippet_a2a_prompt")}"}], "messageId": "m1"}}}'`,
         },
         {
           lang: "python", label: t("integrations.python_requests"),
@@ -196,7 +199,7 @@ r = requests.post(
     headers=${tok ? `{"Authorization": "${bearer}"}` : "{}"},
     json={
         "jsonrpc": "2.0", "id": 1, "method": "message/send",
-        "params": {"message": {"role": "user", "parts": [{"text": "Riordina i PDF in Downloads"}], "messageId": "m1"}},
+        "params": {"message": {"role": "user", "parts": [{"text": "${t("integrations.snippet_a2a_prompt")}"}], "messageId": "m1"}},
     },
 )
 print(card["name"], r.json())`,
@@ -209,7 +212,7 @@ const res = await fetch("${base}/a2a", {
   headers: ${jsHeaders(withBearer)},
   body: JSON.stringify({
     jsonrpc: "2.0", id: 1, method: "message/send",
-    params: { message: { role: "user", parts: [{ text: "Riordina i PDF in Downloads" }], messageId: "m1" } },
+    params: { message: { role: "user", parts: [{ text: "${t("integrations.snippet_a2a_prompt")}" }], messageId: "m1" } },
   }),
 });
 console.log(card.name, await res.json());`,
@@ -227,7 +230,7 @@ console.log(card.name, await res.json());`,
           lang: "curl", label: "curl",
           code: `curl -X POST ${base}/hooks/ordine-ricevuto \\
   -H "Content-Type: application/json" \\
-  -H "X-AIW-Secret: <segreto-del-workflow>" \\
+  -H "X-AIW-Secret: ${SECRET()}" \\
   -d '{"order_id": "A-1042", "customer": "Rossi Srl"}'`,
         },
         {
@@ -236,7 +239,7 @@ console.log(card.name, await res.json());`,
 
 r = requests.post(
     "${base}/hooks/ordine-ricevuto",
-    headers={"X-AIW-Secret": "<segreto-del-workflow>"},
+    headers={"X-AIW-Secret": "${SECRET()}"},
     json={"order_id": "A-1042", "customer": "Rossi Srl"},
 )
 print(r.status_code, r.text)`,
@@ -245,7 +248,7 @@ print(r.status_code, r.text)`,
           lang: "javascript", label: t("integrations.javascript_fetch"),
           code: `const res = await fetch("${base}/hooks/ordine-ricevuto", {
   method: "POST",
-  headers: ${jsHeaders([...jsonHeader, ["X-AIW-Secret", "<segreto-del-workflow>"]])},
+  headers: ${jsHeaders([...jsonHeader, ["X-AIW-Secret", SECRET()]])},
   body: JSON.stringify({ order_id: "A-1042", customer: "Rossi Srl" }),
 });
 console.log(res.status, await res.text());`,

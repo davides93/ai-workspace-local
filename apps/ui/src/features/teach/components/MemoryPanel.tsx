@@ -87,7 +87,7 @@ export function MemoryPanel() {
 
       {memories.data && proposed.length > 0 && (
         <section className="th-group proposals" aria-label={tr("teach.da_confermare")}>
-          <h3><Icon name="alert" size={14} /> Da confermare <Pill tone="warn">{proposed.length}</Pill></h3>
+          <h3><Icon name="alert" size={14} /> {tr("teach.da_confermare")} <Pill tone="warn">{proposed.length}</Pill></h3>
           <ul>
             {proposed.map((m) => (
               <MemoryItem key={m.id} memory={m} busy={busyId(m.id)} onSave={(patch) => update.mutate({ id: m.id, patch })} onForget={() => onForget(m)}

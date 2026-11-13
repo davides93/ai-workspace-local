@@ -7,7 +7,7 @@ import { useModelProviders, useSetProviderAuth } from "../api";
 import { authPayload, hasAuthChanges, hostOf, validateEndpoint } from "../model/forms";
 import { authBadge } from "../model/providers";
 
-import { t } from "../../../shared/i18n";
+import { t, tNode } from "../../../shared/i18n";
 const FORM_ID = "provider-auth-form";
 
 /**
@@ -91,8 +91,8 @@ function AuthDialog({ info, onClose }: { info: ModelProviderInfo; onClose: () =>
               aria-describedby="provider-token-hint"
             />
             <span id="provider-token-hint" className="faint text-xs">
-              {host ? <>Salvato solo su questo device e inviato soltanto a <b>{host}</b>. </> : t("models.salvato_solo_su_questo_device")}
-              Una volta salvato non viene più mostrato.
+              {host ? <>{tNode("models.salvato_solo_su_questo_device_e_inviato", { host: <b>{host}</b> })} </> : t("models.salvato_solo_su_questo_device")}
+              {t("models.una_volta_salvato_non_viene_piu")}
               {info.auth === "optional" && t("models.serve_per_i_repository_gated")}
             </span>
             {info.auth_configured && (

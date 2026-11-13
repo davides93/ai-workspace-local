@@ -67,7 +67,7 @@ function ProfileDialog({ model, profiles, onClose }: { model: LocalModel; profil
         </Field>
 
         {target === NEW && (
-          <Field label={t("models.nome_del_nuovo_profilo")} htmlFor="uip-name" error={nameMissing ? "Dai un nome al profilo." : undefined}>
+          <Field label={t("models.nome_del_nuovo_profilo")} htmlFor="uip-name" error={nameMissing ? t("models.dai_un_nome_al_profilo") : undefined}>
             <Input id="uip-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} aria-invalid={nameMissing ? true : undefined} />
           </Field>
         )}
@@ -89,8 +89,7 @@ function ProfileDialog({ model, profiles, onClose }: { model: LocalModel; profil
         )}
         {profile && !noRuntime && (
           <p className="faint text-sm">
-            «{profile.name}» passerà da <span className="mono">{profile.model}</span> ({profile.runtime_id}) a <span className="mono">{model.id}</span>
-            {runtime ? ` (${runtime})` : ""}. I parametri di campionamento restano quelli del profilo.
+            {tNode(runtime ? "models.profile_switches_model_runtime" : "models.profile_switches_model", { name: profile.name, from: <span className="mono">{profile.model}</span>, from_runtime: profile.runtime_id, to: <span className="mono">{model.id}</span>, runtime: runtime ?? "" })}
           </p>
         )}
       </form>

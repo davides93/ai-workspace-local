@@ -283,4 +283,5 @@ export const agentsIt = {
   "agents.cat_web": "Web",
   "agents.cat_computer": "Computer-use",
   "agents.unavailable_default": "non disponibile",
+  "agents.tool_selezionati_di_totale": "{count} di {total} tool",
 } as const;

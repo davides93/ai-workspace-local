@@ -1,6 +1,7 @@
 import type { UpdateChannel, UpdateStatus } from "../../../shared/api/types";
 
-export const CHANNEL_LABEL: Record<UpdateChannel, string> = { stable: "Produzione", rc: "Release candidate", beta: "Beta", alpha: "Alpha" };
+import { t } from "../../../shared/i18n";
+export const CHANNEL_LABEL: Record<UpdateChannel, string> = { get stable() { return t("settings.produzione"); }, get rc() { return t("settings.release_candidate"); }, get beta() { return t("settings.beta"); }, get alpha() { return t("settings.alpha"); } };
 
 /** The next thing the user can do about an update. */
 export type UpdateStep = "none" | "download" | "downloading" | "install" | "manual";

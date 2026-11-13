@@ -3,13 +3,14 @@
 import type { ApprovalRequest } from "../../../shared/api/types";
 import type { Item } from "./items";
 
+import { t } from "../../../shared/i18n";
 export type Convo = "off" | "listening" | "transcribing" | "thinking" | "speaking";
 
 export const CONVO_LABEL: Record<Exclude<Convo, "off">, string> = {
-  listening: "Ti ascolto…",
-  transcribing: "Trascrivo…",
-  thinking: "L'agente sta lavorando…",
-  speaking: "Rispondo…",
+  get listening() { return t("chat.ti_ascolto"); },
+  get transcribing() { return t("chat.trascrivo"); },
+  get thinking() { return t("chat.l_agente_sta_lavorando"); },
+  get speaking() { return t("chat.rispondo"); },
 };
 
 /** The text of the agent's last turn (everything after the last user message), or why it did not finish. */
@@ -22,8 +23,8 @@ export function replyToSpeak(items: readonly Item[]): string {
   const reply = after.filter((i): i is Extract<Item, { kind: "text" }> => i.kind === "text").map((i) => i.text.trim()).filter(Boolean).join("\n\n");
   if (reply) return reply;
   const failed = after.find((i): i is Extract<Item, { kind: "error" }> => i.kind === "error");
-  return failed ? `Non sono riuscito a completare: ${failed.message}` : "";
+  return failed ? t("chat.non_sono_riuscito_a_completare", { message: failed.message }) : "";
 }
 
 /** The sentence read aloud when the agent waits for a confirmation. */
-export const approvalAnnouncement = (req: Pick<ApprovalRequest, "reason">): string => `Serve la tua conferma: ${req.reason}`;
+export const approvalAnnouncement = (req: Pick<ApprovalRequest, "reason">): string => t("chat.approval_announcement", { reason: req.reason });

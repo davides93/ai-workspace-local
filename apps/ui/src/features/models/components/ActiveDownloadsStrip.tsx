@@ -13,7 +13,7 @@ export function ActiveDownloadsStrip({ jobs }: { jobs: DownloadProgress[] }) {
     <section className="mh-strip" aria-label={t("models.download_in_corso")}>
       <div className="mh-strip-head">
         <Icon name="download" size={16} />
-        <h2>In download <span className="faint">({active.length})</span></h2>
+        <h2>{t("models.in_download")} <span className="faint">({active.length})</span></h2>
         <Link to="/models/downloads" className="link-more ml-auto text-sm">{t("models.gestisci")}{" "}<Icon name="forward" size={13} /></Link>
       </div>
       <ul className="mh-strip-list">

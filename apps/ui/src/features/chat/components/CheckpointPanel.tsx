@@ -5,7 +5,7 @@ import { Button, Dialog } from "../../../shared/ui";
 import type { CheckpointInfo } from "../../../shared/api/types";
 import { useCheckpoints, useRewind } from "../api";
 
-import { t } from "../../../shared/i18n";
+import { t, tNode } from "../../../shared/i18n";
 /** Files a run changed or created, with the way back: put the originals back and delete what the run created. */
 export function CheckpointPanel({ sessionId, running }: { sessionId: string; running: boolean }) {
   const qc = useQueryClient();
@@ -69,7 +69,7 @@ function RewindDialog({ sessionId, info, onClose }: { sessionId: string; info: C
         </>
       }
     >
-      <p>Il run <code>{info.run_id}</code> torna com'era prima: le modifiche fatte dopo, a mano o da altri run, a questi file andranno perse.</p>
+      <p>{tNode("chat.il_run_torna_com_era_prima", { run: <code>{info.run_id}</code> })}</p>
       <FileList title={t("chat.tornano_com_erano")} files={info.restore} />
       <FileList title={t("chat.vengono_eliminati_li_ha_creati")} files={info.delete} />
       <FileList title={t("chat.fuori_dal_workspace_non_vengono")} files={info.external} />

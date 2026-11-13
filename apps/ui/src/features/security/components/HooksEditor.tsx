@@ -90,7 +90,7 @@ export function HooksEditor() {
                       </Field>
                       {info && (
                         <p className="hook-info text-xs faint">
-                          <Icon name="info" size={12} /> Riceve <code>{info.stdin}</code>. {info.can}
+                          <Icon name="info" size={12} /> {tNode("security.hook_receives", { stdin: <code>{info.stdin}</code> })} {info.can}
                         </p>
                       )}
                       {mine.length > 0 && (

@@ -5,7 +5,7 @@
 import type { CommandAnalysis, PolicyAction, PolicyMode, PolicyRule, ToolRisk } from "../../../shared/api/types";
 import { globMatches } from "./glob";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 export type DecisionKind = "allow" | "ask" | "deny";
 
 export interface Decision {
@@ -50,7 +50,7 @@ export interface EvaluateInput {
 }
 
 /** Message of an `ask` that comes from a command line the allow rules only cover in part. */
-export const PARTIAL_COVER = "comando composto o non analizzabile: ogni parte deve essere consentita da una regola";
+export const partialCover = (): string => t("security.comando_composto_o_non_analizzabile");
 
 const SHELL_TOOL = "shell";
 
@@ -91,27 +91,27 @@ export function evaluate(input: EvaluateInput): Decision {
   const allow = (reason: string): Decision => ({ kind: "allow", reason, by: "mode" });
   const partial =
     split !== null && rules.some((r) => r.action === "allow" && toolMatches(r) && hasPattern(r)) && (!split.confident || split.commands.length !== 1);
-  const ask = (reason: string): Decision => ({ kind: "ask", reason: partial ? PARTIAL_COVER : reason, by: "mode" });
+  const ask = (reason: string): Decision => ({ kind: "ask", reason: partial ? partialCover() : reason, by: "mode" });
   switch (mode) {
     case "yolo":
-      return allow("modalità senza freni: nessuna conferma");
+      return allow(tr("security.modalita_senza_freni_nessuna_conferma"));
     case "plan":
       return risk === "read" || risk === "network"
-        ? allow("modalità piano: lettura consentita")
+        ? allow(tr("security.modalita_piano_lettura_consentita"))
         : { kind: "deny", reason: t("security.modalita_piano_solo_lettura_proponi"), by: "mode" };
     case "auto":
-      if (risk === "computer") return ask("azione su mouse e tastiera");
-      if (risk === "exec" && !sandboxAvailable) return ask("comando senza sandbox su questo sistema");
-      return allow("modalità auto: dentro la sandbox");
+      if (risk === "computer") return ask(tr("security.mouse_keyboard_action"));
+      if (risk === "exec" && !sandboxAvailable) return ask(tr("security.comando_senza_sandbox_su_questo"));
+      return allow(tr("security.modalita_auto_dentro_la_sandbox"));
     case "auto-edit":
-      if (risk === "exec") return ask("esecuzione di un comando");
-      if (risk === "computer") return ask("azione su mouse e tastiera");
-      return allow("modalità modifica: lettura e scrittura consentite");
+      if (risk === "exec") return ask(tr("security.command_execution"));
+      if (risk === "computer") return ask(tr("security.mouse_keyboard_action"));
+      return allow(tr("security.modalita_modifica_lettura_e_scrittura"));
     default:
-      if (risk === "read" || risk === "network") return allow("lettura consentita");
-      if (risk === "write") return ask("modifica di file");
-      if (risk === "exec") return ask("esecuzione di un comando");
-      return ask("azione su mouse e tastiera");
+      if (risk === "read" || risk === "network") return allow(tr("security.lettura_consentita"));
+      if (risk === "write") return ask(tr("security.file_edit"));
+      if (risk === "exec") return ask(tr("security.command_execution"));
+      return ask(tr("security.mouse_keyboard_action"));
   }
 }
 
@@ -145,9 +145,9 @@ export function runProbe(rules: readonly PolicyRule[], probe: Probe, analysis?: 
   return { decision, matches };
 }
 
-export const DECISION_LABEL: Record<DecisionKind, string> = { allow: "Consentito", ask: "Chiede conferma", deny: "Negato" };
+export const DECISION_LABEL: Record<DecisionKind, string> = { get allow() { return tr("security.consentito"); }, get ask() { return tr("security.chiede_conferma"); }, get deny() { return tr("security.negato"); } };
 
-export const ACTION_LABEL: Record<PolicyAction, string> = { allow: "Consenti", ask: "Chiedi", deny: "Nega" };
+export const ACTION_LABEL: Record<PolicyAction, string> = { get allow() { return tr("security.consenti"); }, get ask() { return tr("security.chiedi"); }, get deny() { return tr("security.nega"); } };
 
 /** Moves the item at `from` by `delta` positions (clamped); returns a new array. */
 export function moveItem<T>(list: readonly T[], from: number, delta: number): T[] {

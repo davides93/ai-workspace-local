@@ -1,3 +1,4 @@
+import { t as tr } from "../../../shared/i18n";
 /**
  * Text side of reading a reply aloud, pure: Markdown to text that reads well, sentence-sized
  * pieces, and the choice of the local voice.
@@ -15,7 +16,7 @@ export function pickVoice<V extends { name: string; lang: string; default?: bool
 /** Markdown → text that reads well aloud (tables become "cell, cell." lines). */
 export function plainText(md: string): string {
   const lines = md
-    .replace(/```[\s\S]*?```/g, "\n(codice omesso)\n")
+    .replace(/```[\s\S]*?```/g, `\n${tr("chat.codice_omesso")}\n`)
     .split("\n")
     .flatMap((line) => {
       const t = line.trim();

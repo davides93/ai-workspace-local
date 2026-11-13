@@ -48,19 +48,19 @@ export function AccessPanel() {
     <div className="stack">
       <Panel icon="device" title={tr("security.dispositivi_accoppiati_a_questo_computer")} padded={false}>
         <ul className="list" aria-label={tr("security.dispositivi_accoppiati_a_questo_computer")}>
-          {devices.map((t) => row(t, "Scollega"))}
+          {devices.map((t) => row(t, tr("security.scollega")))}
           {devices.length === 0 && <li className="list-item faint text-sm">{tr("security.nessun_dispositivo_accoppiato_a_questo")}</li>}
         </ul>
       </Panel>
       {developer && (
-        <Panel icon="key" title={tr("security.token_per_le_app")} padded={false} actions={<Button variant="primary" onClick={() => setCreating(true)}>Nuovo token per un&apos;app</Button>}>
+        <Panel icon="key" title={tr("security.token_per_le_app")} padded={false} actions={<Button variant="primary" onClick={() => setCreating(true)}>{tr("security.nuovo_token_per_un_app")}</Button>}>
           <ul className="list" aria-label={tr("security.token_per_le_app")}>
-            {apps.map((t) => row(t, "Revoca"))}
-            {apps.length === 0 && <li className="list-item faint text-sm">Nessun token per app. Creane uno per usare AI Workspace da un&apos;altra app compatibile OpenAI.</li>}
+            {apps.map((t) => row(t, tr("security.revoca")))}
+            {apps.length === 0 && <li className="list-item faint text-sm">{tr("security.nessun_token_per_app")}</li>}
           </ul>
           {owner && (
             <p className="faint text-xs panel-body">
-              Il token di questo computer ({owner.prefix}) serve all&apos;app e alla riga di comando qui e non si revoca da qui: per cambiarlo ferma il servizio, cancella il file «token» nella cartella dei dati e riavvia.
+              {tr("security.owner_token_note", { prefix: owner.prefix })}
             </p>
           )}
         </Panel>
@@ -81,14 +81,14 @@ export function AccessPanel() {
           </>}
         >
           {confirm.action === "revoke"
-            ? <p><b>{confirm.token.name}</b> smette di funzionare subito e le sue connessioni aperte si chiudono. {confirm.token.kind === "device" ? tr("security.per_usarlo_di_nuovo_dovrai") : tr("security.l_app_che_lo_usa")}</p>
-            : <p>Il valore di <b>{confirm.token.name}</b> viene sostituito: quello vecchio smette di funzionare subito e il nuovo si vede una volta sola.</p>}
+            ? <p>{trNode("security.token_stops_working_now", { name: <b>{confirm.token.name}</b> })} {confirm.token.kind === "device" ? tr("security.per_usarlo_di_nuovo_dovrai") : tr("security.l_app_che_lo_usa")}</p>
+            : <p>{trNode("security.token_value_replaced", { name: <b>{confirm.token.name}</b> })}</p>}
         </Dialog>
       )}
       {creating && <NewTokenDialog onClose={() => setCreating(false)} onCreated={(c) => { setCreating(false); setShown(c); }} />}
       {shown && (
         <Dialog title={tr("security.copia_il_token_adesso")} size="md" onClose={() => setShown(null)} footer={<Button variant="primary" onClick={() => setShown(null)}>{tr("security.fatto")}</Button>}>
-          <p>Questo è l&apos;unico momento in cui il token si vede: AI Workspace ne conserva solo un&apos;impronta e non potrà mostrarlo di nuovo.</p>
+          <p>{tr("security.token_shown_once")}</p>
           <CopyField label={shown.name} value={shown.token} />
           {shown.kind === "gateway" && <CodeBlock code={exampleFor(shown.token)} />}
         </Dialog>

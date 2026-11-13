@@ -61,11 +61,11 @@ export function InspectorBody({ runState, agent, profile, session, pending, runn
       <Section title={tr("chat.run")} aside={running ? <Pill tone="run"><Led tone="run" small />{t("chat.in_esecuzione")}</Pill> : <span className="faint text-xs">{tr("chat.inattivo")}</span>}>
         <KeyValue
           items={[
-            ["Runtime", <span className="mono">{runState.runtime ?? profile?.runtime_id ?? "—"}</span>],
-            ["Modello", <span className="mono">{runState.model ?? profile?.model ?? "—"}</span>],
-            ["Agente", agent?.name ?? "—"],
-            ["Approvazione", <span title={mode.hint}>{mode.label}</span>],
-            ["Sandbox", <span title={sandbox.hint}>{sandbox.label}</span>],
+            [t("chat.runtime_2"), <span className="mono">{runState.runtime ?? profile?.runtime_id ?? "—"}</span>],
+            [t("chat.modello"), <span className="mono">{runState.model ?? profile?.model ?? "—"}</span>],
+            [t("chat.agente"), agent?.name ?? "—"],
+            [t("chat.approvazione"), <span title={mode.hint}>{mode.label}</span>],
+            [t("chat.sandbox"), <span title={sandbox.hint}>{sandbox.label}</span>],
           ]}
         />
       </Section>

@@ -1,6 +1,7 @@
 import type { AdviserTask, CatalogModel, InferenceProfile, ModelChoice, Recommendations } from "../../../shared/api/types";
 import type { UiMode } from "../../../shared/lib/uiMode";
 
+import { t as tr } from "../../../shared/i18n";
 // The model adviser on the UI side: `auto:<task>` inference profiles, what a picker offers for
 // them, and the "only what runs here" filter of the simple Modelli. Pure, tested without a DOM.
 
@@ -12,10 +13,10 @@ export const AUTO_PREFIX = "auto:";
 export const AUTO_RECOMMENDED = "auto:agent";
 
 const AUTO_LABEL: Record<AutoTask, string> = {
-  agent: "Automatico (consigliato)",
-  chat: "Automatico: chat veloce",
-  reasoning: "Automatico: ragionamento",
-  vision: "Automatico: immagini",
+  get agent() { return tr("models.automatico_consigliato"); },
+  get chat() { return tr("models.automatico_chat_veloce"); },
+  get reasoning() { return tr("models.automatico_ragionamento"); },
+  get vision() { return tr("models.automatico_immagini"); },
 };
 
 /** The task of an `auto:<task>` profile id, or undefined for any other id. */
@@ -45,11 +46,11 @@ export function autoChoices(mode: UiMode, current?: string): ProfileChoice[] {
 export function autoSummary(id: string, rec: Recommendations | null | undefined): string | undefined {
   const task = autoTask(id);
   if (!task) return undefined;
-  if (!rec) return "Sceglie da solo il modello più adatto tra quelli installati.";
+  if (!rec) return tr("models.sceglie_da_solo_il_modello");
   const choice = rec[task].installed;
-  if (choice) return `Ora usa ${choice.name}. ${choice.reason}`;
+  if (choice) return tr("models.ora_usa", { name: choice.name, reason: choice.reason });
   const dl = rec[task].download;
-  return dl ? `Nessun modello adatto è installato: scarica ${dl.name} da Modelli.` : "Nessun modello installato è adatto a questo compito.";
+  return dl ? tr("models.nessun_modello_adatto_e_installato", { name: dl.name }) : tr("models.nessun_modello_installato_e_adatto");
 }
 
 /** The profile an `auto:<task>` id stands for right now (what the engine resolves at run start), for screens that show a model. */

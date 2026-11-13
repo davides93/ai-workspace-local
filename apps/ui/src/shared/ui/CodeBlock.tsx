@@ -3,9 +3,9 @@ import { copyText } from "../lib/clipboard";
 import { cx } from "../lib/cx";
 import { Icon } from "./Icon";
 
-import { t } from "../i18n";
+import { t, t as tr } from "../i18n";
 /** Copy button with a short "Copiato" confirmation. */
-export function CopyButton({ text, label = "Copia", className }: { text: string; label?: string; className?: string }) {
+export function CopyButton({ text, label = tr("ui.copia"), className }: { text: string; label?: string; className?: string }) {
   const [done, setDone] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {

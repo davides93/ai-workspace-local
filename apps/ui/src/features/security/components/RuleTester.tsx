@@ -66,9 +66,9 @@ export function RuleTester({ probe, onProbe, result, tools, analysis }: {
             <Pill tone={TONE[result.decision.kind]}>{DECISION_LABEL[result.decision.kind]}</Pill>
             <span>
               {result.decision.by === "rule" && result.decision.ruleIndex !== undefined
-                ? <>Decide la regola <b>{result.decision.ruleIndex + 1}</b> ({result.decision.reason}).</>
+                ? <>{trNode("security.rule_decides", { index: <b>{result.decision.ruleIndex + 1}</b>, reason: result.decision.reason })}</>
                 : <>{tr("security.nessuna_regola_decide", { reason: result.decision.reason })}</>}
-              {result.matches.length > 1 && <> Regole che combaciano: {result.matches.map((i) => i + 1).join(", ")}.</>}
+              {result.matches.length > 1 && <> {tr("security.matching_rules", { list: result.matches.map((i) => i + 1).join(", ") })}</>}
             </span>
           </>
         ) : (

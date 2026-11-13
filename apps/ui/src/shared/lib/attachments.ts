@@ -1,5 +1,6 @@
 import type { AttachmentKind } from "../api/types";
 
+import { t } from "../i18n";
 /** Same limits as the server (crates/aiw-core `MAX_ATTACHMENTS_*`): checked here to answer before sending. */
 export const MAX_ATTACHMENTS = 8;
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -58,13 +59,13 @@ export function addWithLimits<T extends Candidate>(current: T[], incoming: T[]):
   let total = files.reduce((n, f) => n + f.size, 0);
   for (const f of incoming) {
     if (files.length >= MAX_ATTACHMENTS) {
-      errors.push(`Puoi allegare al massimo ${MAX_ATTACHMENTS} file a un messaggio: «${f.name}» è rimasto fuori.`);
+      errors.push(t("lib.puoi_allegare_al_massimo_file", { max: MAX_ATTACHMENTS, name: f.name }));
     } else if (f.size === 0) {
-      errors.push(`«${f.name}» è vuoto: non c'è nulla da allegare.`);
+      errors.push(t("lib.e_vuoto_non_c_e", { name: f.name }));
     } else if (f.size > MAX_ATTACHMENT_BYTES) {
-      errors.push(`«${f.name}» è troppo grande (${humanSize(f.size)}): ogni file può pesare al massimo ${humanSize(MAX_ATTACHMENT_BYTES)}.`);
+      errors.push(t("lib.e_troppo_grande_ogni_file", { name: f.name, size: humanSize(f.size), max: humanSize(MAX_ATTACHMENT_BYTES) }));
     } else if (total + f.size > MAX_ATTACHMENTS_TOTAL_BYTES) {
-      errors.push(`«${f.name}» non entra: in totale gli allegati possono pesare al massimo ${humanSize(MAX_ATTACHMENTS_TOTAL_BYTES)}.`);
+      errors.push(t("lib.non_entra_in_totale_gli", { name: f.name, max: humanSize(MAX_ATTACHMENTS_TOTAL_BYTES) }));
     } else {
       files.push(f);
       total += f.size;

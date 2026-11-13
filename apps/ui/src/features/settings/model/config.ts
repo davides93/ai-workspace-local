@@ -1,5 +1,5 @@
 import type { ConfigLayer, ConfigView, FieldSchema, SettingsSchema } from "../../../shared/api/types";
-import { labelMap } from "../../../shared/i18n";
+import { labelMap, t } from "../../../shared/i18n";
 import type { Theme } from "../../../shared/lib/theme";
 import { isUiMode, type UiMode } from "../../../shared/lib/uiMode";
 
@@ -12,9 +12,9 @@ export const WRITABLE: WritableLayer[] = ["global", "device", "workspace"];
 export const LAYER_LABEL: Record<LayerName, string> = { defaults: "default", global: "globale", device: "device", workspace: "workspace" };
 
 export const LAYER_HINT: Record<WritableLayer, string> = {
-  global: "vale per tutti i workspace di questo utente",
-  device: "vale solo su questo dispositivo",
-  workspace: "vale solo per la cartella di lavoro aperta",
+  get global() { return t("settings.vale_per_tutti_i_workspace"); },
+  get device() { return t("settings.vale_solo_su_questo_dispositivo"); },
+  get workspace() { return t("settings.vale_solo_per_la_cartella"); },
 };
 
 const layerOf = (view: ConfigView, name: LayerName) => view.layers.find((l) => l.name === name);
@@ -64,23 +64,23 @@ export interface SettingsSection {
 }
 
 export const SECTIONS: SettingsSection[] = [
-  { id: "ui", title: "Interfaccia", description: "Modalità, tema e lingua.", prefixes: ["ui"] },
-  { id: "app", title: "Programma", description: "Cosa fa l'app quando chiudi la finestra, all'accesso al computer e per gli avvisi (solo nell'app per computer).", prefixes: ["app"] },
-  { id: "agents", title: "Agenti", description: "Agente predefinito, subagenti, budget dei run e gestione del contesto.", prefixes: ["agent", "agents", "context"] },
-  { id: "security", title: "Sicurezza e rete", description: "Conferme, sandbox e siti raggiungibili da web e browser.", prefixes: ["policy", "sandbox", "network"] },
-  { id: "server", title: "Server e accesso", description: "Come altri dispositivi e programmi raggiungono il workspace.", prefixes: ["server"] },
-  { id: "folders", title: "Cartelle", description: "Dove stanno i modelli e dove lavorano gli agenti.", prefixes: ["models", "workspace"] },
-  { id: "memory", title: "Memoria", description: "Ciò che l'assistente ricorda di te resta su questo dispositivo; lo gestisci dalla sezione Insegna.", prefixes: ["memory"] },
-  { id: "learning", title: "Apprendimento", description: "Lezioni che gli agenti propongono dopo una conversazione e ottimizzazione del prompt: niente cambia senza la tua approvazione.", prefixes: ["learning"] },
-  { id: "proactive", title: "Assistente proattivo", description: "Spento finché non lo accendi. Controlla ogni tanto cosa c'è di nuovo e ti lascia delle proposte nella sezione Proposte: non fa mai nulla da solo.", prefixes: ["proactive"] },
-  { id: "connectors", title: "Calendario e posta", description: "Sola lettura, e i dati restano su questo dispositivo: non scrive, non invia, non cancella.", prefixes: ["connectors"] },
-  { id: "search", title: "Ricerca web", description: "Il testo cercato viene inviato al motore scelto. SearXNG può girare su questo computer, così le ricerche non escono dalla tua rete.", prefixes: ["search"] },
-  { id: "voice", title: "Voce", description: "Dettatura e conversazione a voce: lingua, motore di trascrizione e voce che legge le risposte.", prefixes: ["voice"] },
-  { id: "update", title: "Canale e aggiornamenti", description: "Quale canale seguire (produzione, beta, alpha) e se cercare e scaricare gli aggiornamenti da soli.", prefixes: ["update"] },
-  { id: "telemetry", title: "Telemetria", description: "Esportazione di tracce e metriche.", prefixes: ["telemetry"] },
+  { id: "ui", get title() { return t("settings.interfaccia"); }, get description() { return t("settings.modalita_tema_e_lingua"); }, prefixes: ["ui"] },
+  { id: "app", get title() { return t("settings.programma"); }, get description() { return t("settings.cosa_fa_l_app_quando"); }, prefixes: ["app"] },
+  { id: "agents", get title() { return t("settings.agenti"); }, get description() { return t("settings.agente_predefinito_subagenti_budget_dei"); }, prefixes: ["agent", "agents", "context"] },
+  { id: "security", get title() { return t("settings.sicurezza_e_rete"); }, get description() { return t("settings.conferme_sandbox_e_siti_raggiungibili"); }, prefixes: ["policy", "sandbox", "network"] },
+  { id: "server", get title() { return t("settings.server_e_accesso"); }, get description() { return t("settings.come_altri_dispositivi_e_programmi"); }, prefixes: ["server"] },
+  { id: "folders", get title() { return t("settings.cartelle"); }, get description() { return t("settings.dove_stanno_i_modelli_e"); }, prefixes: ["models", "workspace"] },
+  { id: "memory", get title() { return t("settings.memoria"); }, get description() { return t("settings.cio_che_l_assistente_ricorda"); }, prefixes: ["memory"] },
+  { id: "learning", get title() { return t("settings.apprendimento"); }, get description() { return t("settings.lezioni_che_gli_agenti_propongono"); }, prefixes: ["learning"] },
+  { id: "proactive", get title() { return t("settings.assistente_proattivo"); }, get description() { return t("settings.spento_finche_non_lo_accendi"); }, prefixes: ["proactive"] },
+  { id: "connectors", get title() { return t("settings.calendario_e_posta"); }, get description() { return t("settings.sola_lettura_e_i_dati"); }, prefixes: ["connectors"] },
+  { id: "search", get title() { return t("settings.ricerca_web"); }, get description() { return t("settings.il_testo_cercato_viene_inviato"); }, prefixes: ["search"] },
+  { id: "voice", get title() { return t("settings.voce"); }, get description() { return t("settings.dettatura_e_conversazione_a_voce"); }, prefixes: ["voice"] },
+  { id: "update", get title() { return t("settings.canale_e_aggiornamenti"); }, get description() { return t("settings.quale_canale_seguire_produzione_beta"); }, prefixes: ["update"] },
+  { id: "telemetry", get title() { return t("settings.telemetria"); }, get description() { return t("settings.esportazione_di_tracce_e_metriche"); }, prefixes: ["telemetry"] },
 ];
 
-const OTHER: SettingsSection = { id: "other", title: "Altro", description: "", prefixes: [] };
+const OTHER: SettingsSection = { id: "other", get title() { return t("settings.altro"); }, description: "", prefixes: [] };
 
 export function sectionOf(key: string): SettingsSection {
   const prefix = key.split(".")[0];
@@ -97,18 +97,18 @@ export interface SettingEntry {
 
 /** Help line of a setting: the schema's own description, else a note written here. */
 const FIELD_HINT: Record<string, string> = {
-  "ui.theme": "È la stessa scelta del selettore in alto: cambiando una cambia l'altra.",
-  "network.allow_domains": "Un dominio per etichetta (es. docs.rs). Vuoto vale per tutti i siti pubblici. Riguarda web_fetch e il browser controllato.",
-  "server.lan": "Rende il server raggiungibile dagli altri dispositivi della rete; da fuori serve sempre il token di pairing.",
-  "server.port": "Porta del server API.",
-  "models.dir": "Cartella in cui si scaricano i modelli. Vuoto usa quella predefinita.",
-  "workspace.root": "Cartella su cui lavorano gli agenti. Cambiandola si sposta anche il file dello strato workspace.",
-  "telemetry.otlp": "Indirizzo OTLP (per esempio http://localhost:4318). Vuoto lo disattiva.",
-  "agents.max_parallel_subagents": "Quanti subagenti possono lavorare insieme quando l'agente ne delega più di uno nello stesso turno.",
-  "agents.budget.max_tokens": "Limite per tutti gli agenti che non ne hanno uno proprio. 0 = nessun limite.",
-  "agents.budget.max_turns": "Limite per tutti gli agenti che non ne hanno uno proprio. 0 = nessun limite.",
-  "agents.budget.max_seconds": "Limite per tutti gli agenti che non ne hanno uno proprio. 0 = nessun limite.",
-  "context.compact_at": "Quota di contesto occupato oltre la quale la conversazione viene compattata.",
+  get "ui.theme"() { return t("settings.e_la_stessa_scelta_del"); },
+  get "network.allow_domains"() { return t("settings.un_dominio_per_etichetta_es"); },
+  get "server.lan"() { return t("settings.rende_il_server_raggiungibile_dagli"); },
+  get "server.port"() { return t("settings.porta_del_server_api"); },
+  get "models.dir"() { return t("settings.cartella_in_cui_si_scaricano"); },
+  get "workspace.root"() { return t("settings.cartella_su_cui_lavorano_gli"); },
+  get "telemetry.otlp"() { return t("settings.indirizzo_otlp_per_esempio_http"); },
+  get "agents.max_parallel_subagents"() { return t("settings.quanti_subagenti_possono_lavorare_insieme"); },
+  get "agents.budget.max_tokens"() { return t("settings.limite_per_tutti_gli_agenti"); },
+  get "agents.budget.max_turns"() { return t("settings.limite_per_tutti_gli_agenti"); },
+  get "agents.budget.max_seconds"() { return t("settings.limite_per_tutti_gli_agenti"); },
+  get "context.compact_at"() { return t("settings.quota_di_contesto_occupato_oltre"); },
 };
 
 /** Title without its trailing remark in brackets ("Domini consentiti (vuoto = tutti)" → "Domini consentiti"), for toasts. */
@@ -137,47 +137,47 @@ export type Parsed = { ok: true; value: number } | { ok: false; error: string };
 /** Reads a number field: whole numbers for `integer`, inside `minimum`..`maximum` when the schema has them. */
 export function parseNumber(raw: string, field: Pick<FieldSchema, "type" | "minimum" | "maximum">): Parsed {
   const text = raw.trim().replace(",", ".");
-  if (text === "") return { ok: false, error: "Inserisci un numero" };
+  if (text === "") return { ok: false, error: t("settings.inserisci_un_numero") };
   const n = Number(text);
-  if (!Number.isFinite(n)) return { ok: false, error: "Non è un numero" };
-  if (field.type === "integer" && !Number.isInteger(n)) return { ok: false, error: "Serve un numero intero" };
-  if (field.minimum !== undefined && n < field.minimum) return { ok: false, error: `Il minimo è ${field.minimum}` };
-  if (field.maximum !== undefined && n > field.maximum) return { ok: false, error: `Il massimo è ${field.maximum}` };
+  if (!Number.isFinite(n)) return { ok: false, error: t("settings.non_e_un_numero") };
+  if (field.type === "integer" && !Number.isInteger(n)) return { ok: false, error: t("settings.serve_un_numero_intero") };
+  if (field.minimum !== undefined && n < field.minimum) return { ok: false, error: t("settings.il_minimo_e", { minimum: field.minimum }) };
+  if (field.maximum !== undefined && n > field.maximum) return { ok: false, error: t("settings.il_massimo_e", { maximum: field.maximum }) };
   return { ok: true, value: n };
 }
 
 /** A value as the read-only summary shows it. */
 export function formatValue(v: unknown): string {
-  if (v === undefined || v === null || v === "") return "vuoto";
-  if (Array.isArray(v)) return v.length ? v.join(", ") : "vuoto";
-  if (typeof v === "boolean") return v ? "sì" : "no";
+  if (v === undefined || v === null || v === "") return t("settings.vuoto");
+  if (Array.isArray(v)) return v.length ? v.join(", ") : t("settings.vuoto");
+  if (typeof v === "boolean") return v ? t("settings.si") : t("settings.no");
   return String(v);
 }
 
 /** Readable names of the choices of enum settings; a value without a name is shown as it is. */
 const OPTION_LABEL: Record<string, Record<string, string>> = {
-  "ui.mode": { simple: "Semplice", developer: "Sviluppatore" },
-  "ui.theme": { system: "Sistema", light: "Chiaro", dark: "Scuro" },
-  "proactive.level": { off: "Spento", propose: "Propone", act_readonly: "Propone e legge (anche il web, sola lettura)" },
-  "ui.language": { auto: "Automatica", it: "Italiano", en: "English" },
-  "search.provider": { auto: "Automatico", duckduckgo: "DuckDuckGo", searxng: "SearXNG", brave: "Brave Search", off: "Spenta" },
+  "ui.mode": { get simple() { return t("settings.semplice"); }, get developer() { return t("settings.sviluppatore"); } },
+  "ui.theme": { get system() { return t("settings.sistema"); }, get light() { return t("settings.chiaro"); }, get dark() { return t("settings.scuro"); } },
+  "proactive.level": { get off() { return t("settings.spento"); }, get propose() { return t("settings.propone"); }, get act_readonly() { return t("settings.propone_e_legge_anche_il"); } },
+  "ui.language": { get auto() { return t("settings.automatica"); }, it: "Italiano", en: "English" },
+  "search.provider": { get auto() { return t("settings.automatico"); }, duckduckgo: "DuckDuckGo", searxng: "SearXNG", get brave() { return t("settings.brave_search"); }, get off() { return t("settings.spenta"); } },
   "policy.mode": {
-    plan: "plan · solo lettura",
-    ask: "ask · chiede per modifiche e comandi",
-    "auto-edit": "auto-edit · modifica i file, chiede per i comandi",
-    auto: "auto · chiede solo per computer-use",
-    yolo: "yolo · non chiede mai",
+    get plan() { return t("settings.plan_solo_lettura"); },
+    get ask() { return t("settings.ask_chiede_per_modifiche_e"); },
+    get "auto-edit"() { return t("settings.auto_edit_modifica_i_file"); },
+    get auto() { return t("settings.auto_chiede_solo_per_computer"); },
+    get yolo() { return t("settings.yolo_non_chiede_mai"); },
   },
   "voice.stt_runtime": {
-    auto: "auto · whisper.cpp, poi un server locale, poi un dispositivo accoppiato",
+    get auto() { return t("settings.auto_whisper_cpp_poi_un"); },
     "whisper-server": "whisper.cpp",
     localai: "LocalAI",
-    nexa: "Nexa",
-    "aiw-peer": "Dispositivo accoppiato",
-    "remote-openai": "Endpoint compatibile OpenAI",
+    get nexa() { return t("settings.nexa"); },
+    get "aiw-peer"() { return t("settings.dispositivo_accoppiato"); },
+    get "remote-openai"() { return t("settings.endpoint_compatibile_openai"); },
   },
-  "learning.reflect": { off: "off · mai", on_feedback: "on_feedback · dopo un pollice giù", on_failure: "on_failure · anche dopo un run fallito o fermato dal budget" },
-  "sandbox.mode": { "read-only": "read-only · sola lettura", "workspace-write": "workspace-write · scrive nel workspace", off: "off · nessuna sandbox" },
+  "learning.reflect": { get off() { return t("settings.off_mai"); }, get on_feedback() { return t("settings.on_feedback_dopo_un_pollice"); }, get on_failure() { return t("settings.on_failure_anche_dopo_un"); } },
+  "sandbox.mode": { get "read-only"() { return t("settings.read_only_sola_lettura"); }, get "workspace-write"() { return t("settings.workspace_write_scrive_nel_workspace"); }, get off() { return t("settings.off_nessuna_sandbox"); } },
 };
 
 export const optionLabel = (key: string, value: string | number): string => OPTION_LABEL[key]?.[String(value)] ?? String(value);

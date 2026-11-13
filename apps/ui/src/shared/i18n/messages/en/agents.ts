@@ -285,4 +285,5 @@ export const agentsEn: Record<keyof typeof agentsIt, string> = {
   "agents.cat_web": "Web",
   "agents.cat_computer": "Computer use",
   "agents.unavailable_default": "not available",
+  "agents.tool_selezionati_di_totale": "{count} of {total} tools",
 };

@@ -139,10 +139,10 @@ export function ChatView() {
     setAnnounce("");
   }, [openId]);
   useEffect(() => {
-    if (conv.running && !wasRunning.current) setAnnounce("Risposta in corso");
+    if (conv.running && !wasRunning.current) setAnnounce(t("chat.risposta_in_corso"));
     if (!conv.running && wasRunning.current) {
       const last = conv.items[conv.items.length - 1];
-      setAnnounce(last?.kind === "error" ? describeRunError(last.code).title : "Risposta completata");
+      setAnnounce(last?.kind === "error" ? describeRunError(last.code).title : t("chat.risposta_completata"));
     }
     wasRunning.current = conv.running;
   }, [conv.running, conv.items]);
@@ -260,7 +260,7 @@ export function ChatView() {
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}
           onMcpPrompt={developer && (mcpPrompts.data?.length ?? 0) > 0 ? () => setPromptPicker(true) : undefined}
           focusKey={`${openId}:${focusTick}`} voice={voice} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined}
-          modelLabel={profile ? `${profile.runtime_id} · ${profile.model || "nessun modello"}` : undefined}
+          modelLabel={profile ? `${profile.runtime_id} · ${profile.model || t("chat.nessun_modello")}` : undefined}
           placeholder={!openId ? tr("chat.crea_una_sessione_per_iniziare") : logState.status === "loading" ? tr("chat.carico_la_conversazione") : tr("chat.scrivi_a", { p: agent?.name ?? "l'agente" })}
         />
         {promptPicker && mcpPrompts.data && (

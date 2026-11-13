@@ -7,7 +7,7 @@ import { Icon, Led } from "../../../shared/ui";
 import type { Item } from "../model/items";
 import { traceItems } from "../model/trace";
 
-import { t } from "../../../shared/i18n";
+import { t, tNode } from "../../../shared/i18n";
 type SubagentItem = Extract<Item, { kind: "subagent" }>;
 
 /**
@@ -32,7 +32,7 @@ export function SubagentCard({ it, renderItem }: { it: SubagentItem; renderItem:
     <div className="ws-subagent-wrap">
       <div className="ws-subagent">
         <Icon name="agent" size={15} />
-        <span>Subagente <b>{it.name}</b></span>
+        <span>{tNode("chat.subagent_name", { name: <b>{it.name}</b> })}</span>
         {it.result !== undefined ? <span className="muted">→ {it.result}</span> : it.interrupted ? <span className="muted">{t("chat.interrotto")}</span> : <Led tone="run" />}
         {runId && (
           <button type="button" className="ws-subagent-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((o) => !o)}>
