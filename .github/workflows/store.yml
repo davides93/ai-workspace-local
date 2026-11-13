@@ -45,7 +45,7 @@ jobs:
       full: ${{ steps.v.outputs.full }}
       short: ${{ steps.v.outputs.short }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: v
         run: |
           full=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
@@ -64,7 +64,7 @@ jobs:
     runs-on: macos-15
     environment: app-store
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - uses: dtolnay/rust-toolchain@stable
@@ -109,7 +109,7 @@ jobs:
     runs-on: macos-15
     environment: app-store
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - uses: dtolnay/rust-toolchain@stable
@@ -197,7 +197,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: google-play
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - uses: actions/setup-java@v4

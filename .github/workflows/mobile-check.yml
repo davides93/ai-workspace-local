@@ -44,7 +44,7 @@ jobs:
             platform: ios
             os: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       # The shell embeds the built UI at compile time (frontendDist = apps/ui/dist).
