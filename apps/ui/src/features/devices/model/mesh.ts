@@ -1,5 +1,6 @@
 import type { DiscoveredDevice, PeerDevice } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 export const OS_LABEL: Record<string, string> = { windows: "Windows", macos: "macOS", linux: "Linux", android: "Android", ios: "iOS" };
 
 export const DEFAULT_PORT = 7777;
@@ -42,10 +43,10 @@ export type PairErrors = Partial<Record<keyof PairInput, string>>;
 
 export function validatePair(input: PairInput): PairErrors {
   const e: PairErrors = {};
-  if (!input.address.trim()) e.address = "Indica l'indirizzo del dispositivo (host:porta)";
-  if (digitsOf(input.code).length !== 6) e.code = "Il codice è di 6 cifre";
+  if (!input.address.trim()) e.address = t("devices.indica_l_indirizzo_del_dispositivo");
+  if (digitsOf(input.code).length !== 6) e.code = t("devices.il_codice_e_di_6");
   if (isHttps(input.address) && !/^[0-9a-f]{2}([: -]?[0-9a-f]{2}){31}$/i.test((input.fingerprint ?? "").trim())) {
-    e.fingerprint = "Serve l'impronta del certificato (64 cifre esadecimali), che trovi in Sicurezza → Rete sull'altro dispositivo";
+    e.fingerprint = t("devices.serve_l_impronta_del_certificato");
   }
   return e;
 }

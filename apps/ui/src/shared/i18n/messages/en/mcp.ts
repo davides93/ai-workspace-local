@@ -13,4 +13,10 @@ export const mcpEn: Record<keyof typeof mcpIt, string> = {
   "mcp.prompt": "Prompt",
   "mcp.il_testo_viene_inserito_nel": "The text is inserted in the message field: you can edit it before sending.",
   "mcp.risposta_non_inviata": "Answer not sent",
+  "mcp.compila": "Fill in \"{name}\"",
+  "mcp.il_server_non_ha_dato": "The server didn't return the prompt",
+  "mcp.compila_2": "Fill in \"{label}\"",
+  "mcp.deve_essere_un_numero": "\"{label}\" must be a number",
+  "mcp.deve_essere_un_numero_intero": "\"{label}\" must be a whole number",
+  "mcp.scegli_uno_dei_valori_proposti": "\"{label}\": pick one of the suggested values",
 };

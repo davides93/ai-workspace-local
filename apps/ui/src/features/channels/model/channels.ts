@@ -1,6 +1,7 @@
 import type { ChannelInfo, ChannelKind, ChannelMode, ChannelPatch, ChannelState, MailAccount } from "../../../shared/api/types";
 import { SECRET_MASK } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 export interface SecretField {
   key: string;
   label: string;
@@ -32,7 +33,7 @@ export const CHANNEL_KINDS: KindInfo[] = [
   {
     id: "telegram",
     label: "Telegram",
-    blurb: "Scrivi all'assistente da Telegram, come a un amico.",
+    get blurb() { return t("channels.scrivi_all_assistente_da_telegram"); },
     steps: [
       "Apri Telegram e scrivi a @BotFather il comando /newbot.",
       "Scegli un nome e un indirizzo per il tuo bot: @BotFather ti risponde con un «token».",
@@ -40,16 +41,16 @@ export const CHANNEL_KINDS: KindInfo[] = [
       "Premi «Genera il codice» e scrivi al tuo bot il messaggio che compare: da quel momento il bot ti riconosce.",
       "Accendi il canale.",
     ],
-    secrets: [{ key: "bot_token", label: "Token del bot", placeholder: "123456:ABC-DEF…" }],
+    secrets: [{ key: "bot_token", get label() { return t("channels.token_del_bot"); }, placeholder: "123456:ABC-DEF…" }],
     settings: [],
-    allowedLabel: "Chi può scrivere",
-    allowedHint: "Il numero di Telegram di chi può parlare con l'assistente. Di solito basta il codice qui sotto: aggiunge te in automatico. Chiunque altro viene ignorato.",
-    allowedPlaceholder: "Numero (per esempio 123456789)",
+    get allowedLabel() { return t("channels.chi_puo_scrivere"); },
+    get allowedHint() { return t("channels.il_numero_di_telegram_di"); },
+    get allowedPlaceholder() { return t("channels.numero_per_esempio_123456789"); },
   },
   {
     id: "slack",
     label: "Slack",
-    blurb: "Scrivi all'assistente in un messaggio privato o citandolo in un canale.",
+    get blurb() { return t("channels.scrivi_all_assistente_in_un"); },
     steps: [
       "Su api.slack.com/apps crea una nuova app «From scratch» nel tuo spazio di lavoro.",
       "In «Socket Mode» attiva Socket Mode e crea un token a livello di app con il permesso connections:write: inizia con xapp-.",
@@ -58,18 +59,18 @@ export const CHANNEL_KINDS: KindInfo[] = [
       "In «App Home» consenti i messaggi al bot. Incolla qui i due token, scrivi chi può parlare e accendi il canale.",
     ],
     secrets: [
-      { key: "app_token", label: "Token dell'app (xapp-…)", placeholder: "xapp-1-…" },
-      { key: "bot_token", label: "Token del bot (xoxb-…)", placeholder: "xoxb-…" },
+      { key: "app_token", get label() { return t("channels.token_dell_app_xapp"); }, placeholder: "xapp-1-…" },
+      { key: "bot_token", get label() { return t("channels.token_del_bot_xoxb"); }, placeholder: "xoxb-…" },
     ],
     settings: [],
-    allowedLabel: "Chi può scrivere",
-    allowedHint: "Gli identificativi Slack delle persone (iniziano con U o W): su Slack, profilo → «Copia ID membro». Chiunque altro viene ignorato.",
+    get allowedLabel() { return t("channels.chi_puo_scrivere"); },
+    get allowedHint() { return t("channels.gli_identificativi_slack_delle_persone"); },
     allowedPlaceholder: "Per esempio U024BE7LH",
   },
   {
     id: "email",
     label: "Email",
-    blurb: "Scrivi un'email all'assistente e ricevi la risposta nella stessa conversazione.",
+    get blurb() { return t("channels.scrivi_un_email_all_assistente"); },
     steps: [
       "Crea una casella dedicata all'assistente (non la tua posta personale).",
       "Per Gmail e Microsoft serve una «password per le app»: l'accesso con l'account normale (OAuth) non c'è ancora.",
@@ -78,38 +79,38 @@ export const CHANNEL_KINDS: KindInfo[] = [
       "Accendi il canale e premi «Prova».",
     ],
     secrets: [
-      { key: "imap_password", label: "Password della posta in arrivo", placeholder: "password per le app" },
-      { key: "smtp_password", label: "Password della posta in uscita", placeholder: "password per le app" },
+      { key: "imap_password", get label() { return t("channels.password_della_posta_in_arrivo"); }, get placeholder() { return t("channels.password_per_le_app"); } },
+      { key: "smtp_password", get label() { return t("channels.password_della_posta_in_uscita"); }, get placeholder() { return t("channels.password_per_le_app"); } },
     ],
     settings: [
-      { key: "imap_host", label: "Server IMAP", placeholder: "imap.example.com" },
-      { key: "imap_user", label: "Utente IMAP", placeholder: "assistente@example.com" },
-      { key: "smtp_host", label: "Server SMTP", placeholder: "smtp.example.com" },
-      { key: "smtp_user", label: "Utente SMTP", placeholder: "come l'utente IMAP, se vuoto" },
-      { key: "from", label: "Indirizzo da cui rispondere", placeholder: "assistente@example.com" },
+      { key: "imap_host", get label() { return t("channels.server_imap"); }, placeholder: "imap.example.com" },
+      { key: "imap_user", get label() { return t("channels.utente_imap"); }, placeholder: "assistente@example.com" },
+      { key: "smtp_host", get label() { return t("channels.server_smtp"); }, placeholder: "smtp.example.com" },
+      { key: "smtp_user", get label() { return t("channels.utente_smtp"); }, get placeholder() { return t("channels.come_l_utente_imap_se"); } },
+      { key: "from", get label() { return t("channels.indirizzo_da_cui_rispondere"); }, placeholder: "assistente@example.com" },
     ],
-    allowedLabel: "Indirizzi che possono scrivere",
-    allowedHint: "Solo la posta da questi indirizzi, e solo se il server di posta ne garantisce l'autenticità (DKIM o SPF), arriva all'assistente.",
+    get allowedLabel() { return t("channels.indirizzi_che_possono_scrivere"); },
+    get allowedHint() { return t("channels.solo_la_posta_da_questi"); },
     allowedPlaceholder: "nome@example.com",
   },
 ];
 
 export const kindInfo = (kind: ChannelKind): KindInfo => CHANNEL_KINDS.find((k) => k.id === kind) ?? CHANNEL_KINDS[0];
 
-export const MODE_LABEL: Record<ChannelMode, string> = { read_only: "Solo lettura", ask: "Chiede conferma" };
+export const MODE_LABEL: Record<ChannelMode, string> = { get read_only() { return t("channels.solo_lettura"); }, get ask() { return t("channels.chiede_conferma"); } };
 
 export const MODE_NOTE: Record<ChannelMode, string> = {
-  read_only: "L'assistente può rispondere e consultare, ma non scrive file, non esegue comandi e non chiede nulla.",
-  ask: "L'assistente può agire, ma ogni azione delicata chiede conferma: nell'app e nel canale stesso (sì o no). Con un assistente in modalità automatica o «yolo» le conferme restano comunque attive.",
+  get read_only() { return t("channels.l_assistente_puo_rispondere_e"); },
+  get ask() { return t("channels.l_assistente_puo_agire_ma"); },
 };
 
 export const DOWNGRADE_NOTE = "L'assistente scelto ha la modalità automatica: nei canali non viene mai rispettata, e chiede conferma come negli altri casi.";
 
 export const STATE_LABEL: Record<ChannelState, string> = {
-  off: "Spento",
+  get off() { return t("channels.spento"); },
   connecting: "Si sta collegando",
-  connected: "Connesso",
-  error: "Errore",
+  get connected() { return t("channels.connesso"); },
+  get error() { return t("channels.errore"); },
   unavailable: "Non disponibile",
 };
 
@@ -130,17 +131,17 @@ export function enableProblem(channel: ChannelInfo): string | null {
   if (channel.kind === "email") {
     const s = channel.settings;
     const has = (k: string) => typeof s[k] === "string" && (s[k] as string).trim() !== "";
-    if (!has("imap_host") || !has("imap_user")) return "Mancano il server e l'utente della posta in arrivo.";
-    if (!has("smtp_host")) return "Manca il server della posta in uscita.";
+    if (!has("imap_host") || !has("imap_user")) return t("channels.mancano_il_server_e_l");
+    if (!has("smtp_host")) return t("channels.manca_il_server_della_posta");
   }
-  if (channel.kind !== "telegram" && channel.allowed.length === 0) return "Scrivi chi può parlare con l'assistente.";
+  if (channel.kind !== "telegram" && channel.allowed.length === 0) return t("channels.scrivi_chi_puo_parlare_con");
   return null;
 }
 
 /** The sentence under the counters: how many messages from strangers were dropped. */
 export function ignoredNote(n: number): string {
-  if (n === 0) return "Nessun messaggio ignorato.";
-  return n === 1 ? "1 messaggio ignorato da sconosciuti." : `${n} messaggi ignorati da sconosciuti.`;
+  if (n === 0) return t("channels.nessun_messaggio_ignorato");
+  return n === 1 ? t("channels.1_messaggio_ignorato_da_sconosciuti") : t("channels.messaggi_ignorati_da_sconosciuti", { n });
 }
 
 /** The body of a save: only the secrets the person actually typed (an untouched field stays masked and is kept). */
@@ -184,10 +185,10 @@ export const emptyAccount = (): MailAccount => ({ id: "", host: "", port: 993, u
 
 /** Plain-words problem with an account form; null when it can be saved. */
 export function accountProblem(a: MailAccount): string | null {
-  if (!a.host.trim()) return "Scrivi il server (per esempio imap.example.com).";
-  if (!a.username.trim()) return "Scrivi il nome utente.";
-  if (!Number.isInteger(a.port) || a.port < 1 || a.port > 65535) return "La porta è un numero tra 1 e 65535 (di solito 993).";
-  if (!a.password) return "Scrivi la password (per Gmail e Microsoft serve una «password per le app»).";
+  if (!a.host.trim()) return t("channels.scrivi_il_server_per_esempio");
+  if (!a.username.trim()) return t("channels.scrivi_il_nome_utente");
+  if (!Number.isInteger(a.port) || a.port < 1 || a.port > 65535) return t("channels.la_porta_e_un_numero");
+  if (!a.password) return t("channels.scrivi_la_password_per_gmail");
   return null;
 }
 

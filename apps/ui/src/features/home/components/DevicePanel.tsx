@@ -16,7 +16,7 @@ export function DevicePanel() {
           const pct = device.memory_mb > 0 ? used / device.memory_mb : 0;
           return (
             <div className="stack stack-lg">
-              <KeyValue items={[["Nome", <b>{device.name}</b>], ["Sistema", `${device.os_version} · ${device.arch}`], ["CPU", `${device.cpu.brand} · ${device.cpu.threads} thread`]]} />
+              <KeyValue items={[[t("home.nome"), <b>{device.name}</b>], [t("home.sistema"), `${device.os_version} · ${device.arch}`], ["CPU", t("home.thread", { brand: device.cpu.brand, threads: device.cpu.threads })]]} />
               <div className="stack stack-sm">
                 <div className="row row-between">
                   <span className="text-sm">{t("home.memoria")}</span>

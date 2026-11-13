@@ -3,7 +3,7 @@ import { useApi } from "../../shared/api/context";
 import type { McpPromptInfo } from "../../shared/api/types";
 import { Button, Dialog, Field, Input, Select } from "../../shared/ui";
 
-import { t } from "../../shared/i18n";
+import { t, t as tr } from "../../shared/i18n";
 /**
  * «Prompt MCP» (developer mode): pick a prompt of a connected server, fill its arguments, and the text it renders
  * goes into the message box. Nothing is sent: the person reads and edits it first.
@@ -22,7 +22,7 @@ export function McpPromptPicker({ prompts, onInsert, onClose }: {
 
   const insert = async () => {
     const missing = p.arguments.find((a) => a.required && !(args[a.name] ?? "").trim());
-    if (missing) return setError(`Compila «${missing.name}»`);
+    if (missing) return setError(tr("mcp.compila", { name: missing.name }));
     setBusy(true);
     setError(null);
     try {
@@ -31,7 +31,7 @@ export function McpPromptPicker({ prompts, onInsert, onClose }: {
       onInsert(r.text);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Il server non ha dato il prompt");
+      setError(e instanceof Error ? e.message : tr("mcp.il_server_non_ha_dato"));
       setBusy(false);
     }
   };

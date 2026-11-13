@@ -1,5 +1,6 @@
 import type { InferenceProfile, LocalModel } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 /** Quick actions of the simple Panoramica: only what a person does every day. */
 export type SimpleActionId = "new-chat" | "download-model";
 
@@ -10,8 +11,8 @@ export interface SimpleAction {
 }
 
 export const SIMPLE_ACTIONS: SimpleAction[] = [
-  { id: "new-chat", title: "Nuova chat", hint: "inizia una conversazione" },
-  { id: "download-model", title: "Scarica un modello", hint: "scegline uno dal catalogo" },
+  { id: "new-chat", get title() { return t("home.nuova_chat"); }, get hint() { return t("home.inizia_una_conversazione_2"); } },
+  { id: "download-model", get title() { return t("home.scarica_un_modello"); }, get hint() { return t("home.scegline_uno_dal_catalogo"); } },
 ];
 
 /** Human name of the model the default profile uses ("Il tuo assistente"); undefined when none is chosen or it is not on disk. */

@@ -30,4 +30,11 @@ export const inboxEn: Record<keyof typeof inboxIt, string> = {
   "inbox.ho_trovato_qualcosa_da_proporti": "I found something to suggest",
   "inbox.niente_di_nuovo": "Nothing new",
   "inbox.il_controllo_non_e_riuscito": "The check failed: {error}",
+  "inbox.fatta": "Done",
+  "inbox.scartata": "Dismissed",
+  "inbox.scaduta": "Expired",
+  "inbox.l_assistente_proattivo_e_spento": "The proactive assistant is off: turn it on in settings.",
+  "inbox.fermato_dal_pulsante_di_emergenza": "Stopped by the emergency button: it resumes when you turn it back on in settings.",
+  "inbox.riguarda_tra_circa_minuti": "Check again in about {min} minutes.",
+  "inbox.riguarda_piu_tardi": "Check again later.",
 };

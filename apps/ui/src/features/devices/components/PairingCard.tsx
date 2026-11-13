@@ -3,7 +3,7 @@ import { Pill, Panel, CopyButton, KeyValue } from "../../../shared/ui";
 import { usePairingQr } from "../api";
 import { digitsOf, groupCode } from "../model/mesh";
 
-import { t, tNode } from "../../../shared/i18n";
+import { t, tNode, t as tr } from "../../../shared/i18n";
 /** This device's side of pairing: the QR for a phone, the 6-digit code and where the device is reachable. */
 export function PairingCard({ code, address, discovery }: { code?: string; address: string | null; discovery?: boolean }) {
   const qr = usePairingQr(address);
@@ -28,8 +28,8 @@ export function PairingCard({ code, address, discovery }: { code?: string; addre
           <span className="muted text-sm">
             {t("devices.inquadra_il_qr_con_la")}</span>
           <KeyValue items={[
-            ["Indirizzo", <span className="mono">{address ?? t("devices.solo_locale")}</span>],
-            ["Scoperta", discovery ? <Pill tone="ok">{t("devices.mdns_attivo")}</Pill> : <Pill>{t("devices.spenta")}</Pill>],
+            [tr("devices.indirizzo"), <span className="mono">{address ?? t("devices.solo_locale")}</span>],
+            [tr("devices.scoperta"), discovery ? <Pill tone="ok">{t("devices.mdns_attivo")}</Pill> : <Pill>{t("devices.spenta")}</Pill>],
           ]} />
           {!address && (
             <span className="faint text-xs">

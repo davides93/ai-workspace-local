@@ -5,7 +5,7 @@ import { qk } from "../../shared/query/keys";
 import type { Lesson, LessonStatus } from "../../shared/api/types";
 import { approvedMessage, withDecided } from "./model/lessons";
 
-import { t } from "../../shared/i18n";
+import { t, t as tr } from "../../shared/i18n";
 /** Lessons proposed by the agents; a new thumbs down can add one, so the list is refreshed now and then. */
 export function useLessons(status?: LessonStatus) {
   const api = useApi();
@@ -36,7 +36,7 @@ export function useApproveLesson() {
 
 export function useRejectLesson() {
   const api = useApi();
-  return useDecision((id: string) => api.rejectLesson(id), (l) => `Lezione scartata: «${l.title}»`);
+  return useDecision((id: string) => api.rejectLesson(id), (l) => tr("learning.lezione_scartata", { title: l.title }));
 }
 
 /** Asks the agent for a lesson on a conversation now; the answer waits for the model, which can take a while. */

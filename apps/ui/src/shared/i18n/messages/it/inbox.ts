@@ -28,4 +28,11 @@ export const inboxIt = {
   "inbox.ho_trovato_qualcosa_da_proporti": "Ho trovato qualcosa da proporti",
   "inbox.niente_di_nuovo": "Niente di nuovo",
   "inbox.il_controllo_non_e_riuscito": "Il controllo non è riuscito: {error}",
+  "inbox.fatta": "Fatta",
+  "inbox.scartata": "Scartata",
+  "inbox.scaduta": "Scaduta",
+  "inbox.l_assistente_proattivo_e_spento": "L'assistente proattivo è spento: lo accendi dalle impostazioni.",
+  "inbox.fermato_dal_pulsante_di_emergenza": "Fermato dal pulsante di emergenza: riparte quando lo riaccendi dalle impostazioni.",
+  "inbox.riguarda_tra_circa_minuti": "Riguarda tra circa {min} minuti.",
+  "inbox.riguarda_piu_tardi": "Riguarda più tardi.",
 } as const;

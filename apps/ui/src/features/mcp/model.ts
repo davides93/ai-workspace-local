@@ -1,5 +1,6 @@
 import type { McpElicitation } from "../../shared/api/types";
 
+import { t } from "../../shared/i18n";
 export type FormValues = Record<string, string | boolean>;
 type Props = McpElicitation["schema"]["properties"];
 
@@ -29,15 +30,15 @@ export function toContent(schema: McpElicitation["schema"], values: FormValues):
     }
     const text = typeof v === "string" ? v.trim() : "";
     if (text === "") {
-      if (required) return { error: `Compila «${label}»` };
+      if (required) return { error: t("mcp.compila_2", { label }) };
       continue;
     }
     if (p.type === "number" || p.type === "integer") {
       const n = Number(text);
-      if (!Number.isFinite(n) || (p.type === "integer" && !Number.isInteger(n))) return { error: `«${label}» deve essere un numero${p.type === "integer" ? " intero" : ""}` };
+      if (!Number.isFinite(n) || (p.type === "integer" && !Number.isInteger(n))) return { error: t(p.type === "integer" ? "mcp.deve_essere_un_numero_intero" : "mcp.deve_essere_un_numero", { label }) };
       content[name] = n;
     } else {
-      if (p.enum && !p.enum.includes(text)) return { error: `«${label}»: scegli uno dei valori proposti` };
+      if (p.enum && !p.enum.includes(text)) return { error: t("mcp.scegli_uno_dei_valori_proposti", { label }) };
       content[name] = text;
     }
   }

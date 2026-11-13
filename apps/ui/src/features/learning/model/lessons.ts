@@ -1,16 +1,17 @@
 import { MAX_LESSON_CONTENT_CHARS, MAX_LESSON_TITLE_CHARS, type Lesson, type LessonKind } from "../../../shared/api/types";
 
-export const KIND_LABEL: Record<LessonKind, string> = { memory: "Memoria", skill: "Skill" };
+import { t as tr } from "../../../shared/i18n";
+export const KIND_LABEL: Record<LessonKind, string> = { get memory() { return tr("learning.memoria"); }, skill: "Skill" };
 
 /** Where an approved lesson ends up, in words the user can check. */
 export const KIND_DESTINATION: Record<LessonKind, string> = {
-  memory: "Verrà aggiunta a ~/.aiw/AGENTS.md, sotto «Lezioni apprese».",
-  skill: "Diventerà una nuova skill in ~/.aiw/skills.",
+  get memory() { return tr("learning.verra_aggiunta_a_aiw_agents"); },
+  get skill() { return tr("learning.diventera_una_nuova_skill_in"); },
 };
 
 /** The toast after an approval. */
 export const approvedMessage = (l: Pick<Lesson, "kind" | "title">): string =>
-  l.kind === "skill" ? `Lezione approvata: «${l.title}» è una nuova skill` : `Lezione approvata: «${l.title}» è in AGENTS.md`;
+  l.kind === "skill" ? tr("learning.lezione_approvata_e_una_nuova", { title: l.title }) : tr("learning.lezione_approvata_e_in_agents", { title: l.title });
 
 export type LessonEditCheck = { ok: true; title: string; content: string } | { ok: false; error: string };
 
@@ -18,10 +19,10 @@ export type LessonEditCheck = { ok: true; title: string; content: string } | { o
 export function checkLessonEdit(title: string, content: string): LessonEditCheck {
   const t = title.trim();
   const c = content.trim();
-  if (!t) return { ok: false, error: "Il titolo non può essere vuoto." };
-  if (!c) return { ok: false, error: "Il contenuto non può essere vuoto." };
-  if ([...t].length > MAX_LESSON_TITLE_CHARS) return { ok: false, error: `Il titolo supera i ${MAX_LESSON_TITLE_CHARS} caratteri.` };
-  if ([...c].length > MAX_LESSON_CONTENT_CHARS) return { ok: false, error: `Il contenuto supera i ${MAX_LESSON_CONTENT_CHARS} caratteri.` };
+  if (!t) return { ok: false, error: tr("learning.il_titolo_non_puo_essere") };
+  if (!c) return { ok: false, error: tr("learning.il_contenuto_non_puo_essere") };
+  if ([...t].length > MAX_LESSON_TITLE_CHARS) return { ok: false, error: tr("learning.il_titolo_supera_i_caratteri", { max: MAX_LESSON_TITLE_CHARS }) };
+  if ([...c].length > MAX_LESSON_CONTENT_CHARS) return { ok: false, error: tr("learning.il_contenuto_supera_i_caratteri", { max: MAX_LESSON_CONTENT_CHARS }) };
   return { ok: true, title: t, content: c };
 }
 

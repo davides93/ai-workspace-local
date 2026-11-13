@@ -24,9 +24,9 @@ export function ModelPanel() {
             <div className="stack stack-lg">
               <KeyValue
                 items={[
-                  ["Profilo", <b>{profile.name}</b>],
-                  ["Modello", profile.model ? <span className="mono">{profile.model}</span> : <span className="faint">{t("home.non_scelto")}</span>],
-                  ["Runtime", <span className="row"><span className="mono">{profile.runtime_id}</span>{runtime && <StatusPill status={runtime.status} />}</span>],
+                  [t("home.profilo"), <b>{profile.name}</b>],
+                  [t("home.modello"), profile.model ? <span className="mono">{profile.model}</span> : <span className="faint">{t("home.non_scelto")}</span>],
+                  [t("home.runtime"), <span className="row"><span className="mono">{profile.runtime_id}</span>{runtime && <StatusPill status={runtime.status} />}</span>],
                 ]}
               />
               <Link to="/models" className="link-more">{tr("home.gestisci_i_modelli")}{" "}<Icon name="forward" size={14} /></Link>

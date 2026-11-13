@@ -66,7 +66,7 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [working, state, agentId]);
 
-  const failedDownload = working && !job && lastJob?.status === "error" ? lastJob.error ?? "Download non riuscito." : null;
+  const failedDownload = working && !job && lastJob?.status === "error" ? lastJob.error ?? t("home.download_non_riuscito") : null;
 
   const go = () => {
     setFailure(null);
@@ -77,20 +77,19 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
     }
   };
 
-  const where = device ? ` per ${device.name}` : " per questo dispositivo";
   let sentence: string;
   let action: "go" | "developer" | "models" | "none" = "go";
   switch (state.kind) {
-    case "chat": sentence = "Il tuo assistente è pronto: puoi iniziare una conversazione."; break;
-    case "prepare": sentence = `Ti consiglio ${state.model.name} (${formatBytes(state.model.size_bytes)}), il modello più adatto${where}. ${state.model.fit_detail}`; break;
-    case "connect": sentence = `Hai già ${state.model.name} sul disco: lo preparo e apro una conversazione.`; break;
-    case "no-runtime": sentence = "Su questo dispositivo non c'è ancora nulla in grado di far funzionare un modello. La vista Sviluppatore permette di sistemarlo."; action = "developer"; break;
-    case "no-model": sentence = "Nessun modello del catalogo è adatto a questo dispositivo: puoi cercarne uno a mano."; action = "models"; break;
-    case "loading": sentence = "Cerco il modello più adatto a questo dispositivo…"; action = "none"; break;
+    case "chat": sentence = t("home.il_tuo_assistente_e_pronto"); break;
+    case "prepare": sentence = t(device ? "home.ti_consiglio_per_dispositivo" : "home.ti_consiglio_per_questo_dispositivo", { model: state.model.name, size: formatBytes(state.model.size_bytes), device: device?.name ?? "", detail: state.model.fit_detail }); break;
+    case "connect": sentence = t("home.hai_gia_sul_disco_lo", { name: state.model.name }); break;
+    case "no-runtime": sentence = t("home.su_questo_dispositivo_non_c"); action = "developer"; break;
+    case "no-model": sentence = t("home.nessun_modello_del_catalogo_e"); action = "models"; break;
+    case "loading": sentence = t("home.cerco_il_modello_piu_adatto"); action = "none"; break;
   }
 
   const busy = working || pull.isPending || saveProfile.isPending || createSession.isPending;
-  const label = state.kind === "chat" ? "Inizia una chat" : "Prepara tutto";
+  const label = state.kind === "chat" ? t("home.inizia_una_chat") : t("home.prepara_tutto");
   const error = failure ?? failedDownload;
 
   return (

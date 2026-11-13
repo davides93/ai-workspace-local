@@ -1,12 +1,13 @@
 import type { DeviceProfile, DeviceTier } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 /** What each device class can run, as the catalog recommends it (DESIGN §Dispositivi). */
 export const TIER_INFO: Record<DeviceTier, { label: string; models: string }> = {
-  xs: { label: "Molto piccolo", models: "Modelli di sistema e fino a 1–2B (Gemma 4 E2B, Qwen3 0.6B)" },
-  s: { label: "Piccolo", models: "Fino a circa 4B quantizzati (Gemma 4 E4B, Phi-4 mini)" },
-  m: { label: "Medio", models: "7–14B e MoE con pochi parametri attivi" },
-  l: { label: "Grande", models: "MoE fino a circa 35B (A3B) e densi fino a 27–32B" },
-  xl: { label: "Molto grande", models: "Densi da 70B, MoE da oltre 100B con offload" },
+  xs: { get label() { return t("devices.molto_piccolo"); }, get models() { return t("devices.modelli_di_sistema_e_fino"); } },
+  s: { get label() { return t("devices.piccolo"); }, get models() { return t("devices.fino_a_circa_4b_quantizzati"); } },
+  m: { get label() { return t("devices.medio"); }, get models() { return t("devices.7_14b_e_moe_con"); } },
+  l: { get label() { return t("devices.grande"); }, get models() { return t("devices.moe_fino_a_circa_35b"); } },
+  xl: { get label() { return t("devices.molto_grande"); }, models: "Densi da 70B, MoE da oltre 100B con offload" },
 };
 
 export const TIER_ORDER: DeviceTier[] = ["xs", "s", "m", "l", "xl"];
@@ -39,12 +40,12 @@ export function modelBudgetMb(d: Pick<DeviceProfile, "os" | "arch" | "accelerato
 
 /** One sentence that says where the budget comes from. */
 export function budgetRule(d: Pick<DeviceProfile, "os" | "arch" | "accelerators" | "memory_mb">): string {
-  if (isUnifiedMemory(d)) return `Memoria unificata: i modelli possono usare al massimo il ${UNIFIED_MEMORY_PERCENT}% della RAM.`;
+  if (isUnifiedMemory(d)) return t("devices.memoria_unificata_i_modelli_possono", { percent: UNIFIED_MEMORY_PERCENT });
   const vram = vramMb(d);
-  if (vram === 0) return "Nessuna GPU dedicata: i modelli girano su CPU e possono usare metà della RAM.";
+  if (vram === 0) return t("devices.nessuna_gpu_dedicata_i_modelli");
   return vram >= d.memory_mb / 2
-    ? "La memoria della GPU è il limite: i modelli che ci stanno girano interamente su GPU."
-    : "Poca memoria sulla GPU: i modelli più grandi vanno in parte su CPU, usando metà della RAM.";
+    ? t("devices.la_memoria_della_gpu_e")
+    : t("devices.poca_memoria_sulla_gpu_i");
 }
 
 export type MemoryTone = "ok" | "warn" | "crit";

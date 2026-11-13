@@ -4,8 +4,9 @@
 import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, humanSize } from "../../../shared/lib/attachments";
 import type { KbCollection, KbDocument, KbJob, KbStatus } from "../../../shared/api/types";
 
+import { t } from "../../../shared/i18n";
 /** Shown while no embedding model is running: search still works, by keywords. */
-export const KEYWORDS_ONLY_BANNER = "La ricerca funziona per parole chiave. Per trovare anche per significato scarica un modello di embedding in Modelli.";
+export const keywordsOnlyBanner = (): string => t("documents.la_ricerca_funziona_per_parole");
 
 export interface Batches<T extends { name: string; size: number }> {
   /** Groups to send one call each: at most 8 files and 25 MB in a group. */
@@ -22,11 +23,11 @@ export function splitBatches<T extends { name: string; size: number }>(files: T[
   let total = 0;
   for (const f of files) {
     if (f.size === 0) {
-      errors.push(`«${f.name}» è vuoto: non c'è nulla da indicizzare.`);
+      errors.push(t("documents.e_vuoto_non_c_e", { name: f.name }));
       continue;
     }
     if (f.size > MAX_ATTACHMENT_BYTES) {
-      errors.push(`«${f.name}» è troppo grande (${humanSize(f.size)}): ogni file può pesare al massimo ${humanSize(MAX_ATTACHMENT_BYTES)}.`);
+      errors.push(t("documents.e_troppo_grande_ogni_file", { name: f.name, size: humanSize(f.size), max: humanSize(MAX_ATTACHMENT_BYTES) }));
       continue;
     }
     if (cur.length >= MAX_ATTACHMENTS || total + f.size > MAX_ATTACHMENTS_TOTAL_BYTES) {
@@ -59,12 +60,12 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 /** One sentence with the outcome of a finished (or cancelled) job. */
 export function jobSummary(j: KbJob): string {
   const parts: string[] = [];
-  if (j.added > 0) parts.push(`${plural(j.added, "documento aggiunto", "documenti aggiunti")}`);
+  if (j.added > 0) parts.push(`${plural(j.added, t("documents.documento_aggiunto"), t("documents.documenti_aggiunti"))}`);
   if (j.replaced > 0) parts.push(`${plural(j.replaced, "aggiornato", "aggiornati")}`);
-  if (j.unchanged > 0) parts.push(`${plural(j.unchanged, "già presente", "già presenti")}`);
+  if (j.unchanged > 0) parts.push(`${plural(j.unchanged, t("documents.gia_presente"), t("documents.gia_presenti"))}`);
   if (j.failed > 0) parts.push(`${plural(j.failed, "non riuscito", "non riusciti")}`);
-  if (j.skipped_total > 0) parts.push(`${plural(j.skipped_total, "file saltato", "file saltati")}`);
-  const body = parts.length > 0 ? parts.join(", ") : "nessuna novità";
+  if (j.skipped_total > 0) parts.push(`${plural(j.skipped_total, t("documents.file_saltato"), t("documents.file_saltati"))}`);
+  const body = parts.length > 0 ? parts.join(", ") : t("documents.nessuna_novita");
   return j.state === "cancelled" ? `Interrotto: ${body}.` : `${body.charAt(0).toUpperCase()}${body.slice(1)}.`;
 }
 
@@ -77,15 +78,15 @@ export function jobProgressText(j: KbJob): string {
 export function documentStatusLabel(d: KbDocument): string {
   if (d.status === "indexing") return "In lavorazione";
   if (d.status === "failed") return "Non riuscito";
-  return "Pronto";
+  return t("documents.pronto");
 }
 
 /** How much of the collection can be searched by meaning, as a sentence (empty when nothing is indexed). */
 export function coverageText(c: KbCollection): string {
   if (c.chunks === 0) return "";
-  if (c.embedded_chunks === 0) return "Ricerca per parole chiave";
-  if (c.embedded_chunks >= c.chunks) return "Ricerca anche per significato";
-  return `Ricerca per significato pronta su ${c.embedded_chunks} passaggi su ${c.chunks}`;
+  if (c.embedded_chunks === 0) return t("documents.ricerca_per_parole_chiave");
+  if (c.embedded_chunks >= c.chunks) return t("documents.ricerca_anche_per_significato");
+  return t("documents.ricerca_per_significato_pronta_su", { embedded_chunks: c.embedded_chunks, chunks: c.chunks });
 }
 
 export const collectionCounts = (c: KbCollection) => `${plural(c.documents, "documento", "documenti")}`;

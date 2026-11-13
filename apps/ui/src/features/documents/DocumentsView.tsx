@@ -7,7 +7,7 @@ import { AddDocuments } from "./components/AddDocuments";
 import { CollectionList } from "./components/CollectionList";
 import { DocumentList } from "./components/DocumentList";
 import { SearchBox } from "./components/SearchBox";
-import { KEYWORDS_ONLY_BANNER, coverageText, pickCollection, runningJobs } from "./model/kb";
+import { coverageText, keywordsOnlyBanner, pickCollection, runningJobs } from "./model/kb";
 import "./documents.css";
 
 import { t } from "../../shared/i18n";
@@ -36,7 +36,7 @@ export function DocumentsView() {
       </header>
       {keywordsOnly && (
         <div className="banner" role="status">
-          <span>{KEYWORDS_ONLY_BANNER}</span>
+          <span>{keywordsOnlyBanner()}</span>
           <Link to="/models" className="btn btn-sm banner-cta">{t("documents.vai_a_modelli")}</Link>
         </div>
       )}

@@ -25,7 +25,7 @@ import { assistantModelName, simpleSections } from "./model/simple";
 import { checklist, defaultProfile, firstRunPending, followsAdviser, simpleFirstRun, simpleFirstRunPending } from "./model/overview";
 import "./home.css";
 
-import { t } from "../../shared/i18n";
+import { t, t as tr } from "../../shared/i18n";
 const DISMISSED_KEY = "aiw.home.firstrun";
 
 function readDismissed(): boolean {
@@ -79,7 +79,7 @@ export function HomeView() {
 
   return (
     <Page className="hm">
-      <PageHeader eyebrow="Panoramica" title={t("home.il_tuo_workspace")} subtitle={mode === "simple" ? t("home.il_tuo_assistente_e_il") : t("home.dispositivo_runtime_modelli_e_lavoro")} />
+      <PageHeader eyebrow={tr("home.panoramica")} title={t("home.il_tuo_workspace")} subtitle={mode === "simple" ? t("home.il_tuo_assistente_e_il") : t("home.dispositivo_runtime_modelli_e_lavoro")} />
       <QuickActions simple={mode === "simple"} />
       {showFirstRun && mode === "simple" && simple && (
         <SimpleFirstRunPanel state={simple} models={models.data!} runtimes={runtimes.data!} profile={profile} device={system.data?.device} onDismiss={dismiss} followsAdviser={auto} />

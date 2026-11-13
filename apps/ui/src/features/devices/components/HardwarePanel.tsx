@@ -4,11 +4,11 @@ import { formatMb } from "../../../shared/lib/format";
 import { Chip, Chips, DataTable, Icon, KeyValue, Led, Meter, Pill, type Column } from "../../../shared/ui";
 import { budgetRule, memoryUsage, modelBudgetMb, vramMb } from "../model/hardware";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 const ACCEL_COLUMNS: Column<Accelerator>[] = [
-  { key: "kind", header: "Tipo", nowrap: true, render: (a) => <Chip hot>{a.kind}</Chip> },
+  { key: "kind", get header() { return tr("devices.tipo"); }, nowrap: true, render: (a) => <Chip hot>{a.kind}</Chip> },
   {
-    key: "name", header: "Dispositivo",
+    key: "name", get header() { return tr("devices.dispositivo"); },
     render: (a) => (
       <>
         <div>{a.name}</div>
@@ -16,7 +16,7 @@ const ACCEL_COLUMNS: Column<Accelerator>[] = [
       </>
     ),
   },
-  { key: "mem", header: "Memoria", className: "num mono", nowrap: true, render: (a) => (a.memory_mb ? formatMb(a.memory_mb) : "—") },
+  { key: "mem", get header() { return tr("devices.memoria"); }, className: "num mono", nowrap: true, render: (a) => (a.memory_mb ? formatMb(a.memory_mb) : "—") },
 ];
 
 /** Memory of this device and the share of it that models can use. */
@@ -55,15 +55,15 @@ export function HardwarePanel({ system }: { system: SystemInfo }) {
           <h2>{d.name}</h2>
           <span className="muted text-sm">{d.os_version} · {d.arch} · {d.form_factor}</span>
         </div>
-        <Pill tone="ok"><Led tone="ok" small /> {" "}{t("devices.questo_device")}</Pill>
+        <Pill tone="ok"><Led tone="ok" small /> {t("devices.questo_device")}</Pill>
       </div>
       <div className="panel-body stack stack-lg">
         <KeyValue items={[
-          ["CPU", `${d.cpu.brand} · ${d.cpu.cores} core / ${d.cpu.threads} thread`],
-          ["Istruzioni", <Chips label={t("devices.istruzioni_della_cpu")}>{d.cpu.features.map((f) => <Chip key={f}>{f}</Chip>)}</Chips>],
-          ["Dati", <span className="mono">{system.data_dir}</span>],
-          ["Workspace", <span className="mono">{system.workspace_root}</span>],
-          system.sandboxed && ["Versione", "Mac App Store (sandbox): nessun programma esterno, cartella di lavoro dell'app"],
+          ["CPU", tr("devices.core_thread", { brand: d.cpu.brand, cores: d.cpu.cores, threads: d.cpu.threads })],
+          [tr("devices.istruzioni"), <Chips label={t("devices.istruzioni_della_cpu")}>{d.cpu.features.map((f) => <Chip key={f}>{f}</Chip>)}</Chips>],
+          [tr("devices.dati"), <span className="mono">{system.data_dir}</span>],
+          [tr("devices.workspace"), <span className="mono">{system.workspace_root}</span>],
+          system.sandboxed && [tr("devices.versione"), tr("devices.mac_app_store_sandbox_nessun")],
         ]} />
         <MemoryBudget device={d} />
         <section className="stack stack-sm" aria-label={t("devices.acceleratori")}>

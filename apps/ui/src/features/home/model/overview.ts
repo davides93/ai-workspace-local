@@ -2,7 +2,7 @@ import type { AgentProfile, CatalogModel, Fit, InferenceProfile, LocalModel, Rec
 import { catalogForChoice, isAutoProfile } from "../../models/model/adviser";
 import { applyModelToProfile, newProfileFor, pickRuntime } from "../../models/model/profile";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 export type ChecklistId = "runtime" | "model" | "profile" | "chat";
 
 export interface ChecklistStep {
@@ -151,5 +151,5 @@ export const simpleFirstRunPending = (state: SimpleFirstRun, sessions: number): 
 
 /** Profile to save so the default agent talks to `model`: the existing one with the new model, or a new "default". */
 export function profileForModel(profile: InferenceProfile | undefined, model: LocalModel, runtimeId: string): InferenceProfile {
-  return profile ? applyModelToProfile(profile, model, runtimeId) : { ...newProfileFor(model, runtimeId, "Predefinito", []), id: "default" };
+  return profile ? applyModelToProfile(profile, model, runtimeId) : { ...newProfileFor(model, runtimeId, tr("home.predefinito"), []), id: "default" };
 }

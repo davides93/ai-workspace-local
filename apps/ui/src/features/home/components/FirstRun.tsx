@@ -33,7 +33,7 @@ function stepBody(id: ChecklistId, c: StepContext, done: boolean): { detail: Rea
     case "runtime": {
       const live = c.runtimes.find((r) => r.status === "running") ?? c.runtimes.find((r) => r.status === "available");
       return {
-        detail: live ? `${live.name}: ${live.status === "running" ? "in esecuzione" : "rilevato, parte al primo uso"}` : t("home.nessun_runtime_e_pronto_rileva"),
+        detail: live ? t(live.status === "running" ? "home.runtime_in_esecuzione_2" : "home.runtime_rilevato_parte_al_primo_uso", { name: live.name }) : t("home.nessun_runtime_e_pronto_rileva"),
         actions: live ? <Link to="/runtimes" className="btn sm ghost">{t("home.vedi_i_runtime")}</Link> : (
           <>
             <Button size="sm" variant="primary" icon="refresh" disabled={c.busy.refresh} onClick={c.refresh}>{t("home.rileva_runtime")}</Button>
@@ -66,7 +66,7 @@ function stepBody(id: ChecklistId, c: StepContext, done: boolean): { detail: Rea
     }
     case "profile":
       return {
-        detail: c.profile ? `${c.profile.name}${c.profile.model ? ` · ${c.profile.model}` : " · ancora senza modello"}` : t("home.un_profilo_collega_un_runtime"),
+        detail: c.profile ? (c.profile.model ? `${c.profile.name} · ${c.profile.model}` : t("home.profilo_ancora_senza_modello", { name: c.profile.name })) : t("home.un_profilo_collega_un_runtime"),
         actions: <Link to="/agents" className="btn sm ghost">{t("home.apri_i_profili")}</Link>,
       };
     case "chat":

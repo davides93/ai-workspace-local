@@ -11,4 +11,10 @@ export const mcpIt = {
   "mcp.prompt": "Prompt",
   "mcp.il_testo_viene_inserito_nel": "Il testo viene inserito nel campo del messaggio: puoi modificarlo prima di inviarlo.",
   "mcp.risposta_non_inviata": "Risposta non inviata",
+  "mcp.compila": "Compila «{name}»",
+  "mcp.il_server_non_ha_dato": "Il server non ha dato il prompt",
+  "mcp.compila_2": "Compila «{label}»",
+  "mcp.deve_essere_un_numero": "«{label}» deve essere un numero",
+  "mcp.deve_essere_un_numero_intero": "«{label}» deve essere un numero intero",
+  "mcp.scegli_uno_dei_valori_proposti": "«{label}»: scegli uno dei valori proposti",
 } as const;
