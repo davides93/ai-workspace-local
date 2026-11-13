@@ -8,6 +8,7 @@ import { blankSuite, parseSuiteText, suiteText } from "../model/evals";
 import { OptimizeDialog } from "./OptimizeDialog";
 import { RunDialog } from "./RunDialog";
 
+import { t as tr, tNode as trNode, t } from "../../../shared/i18n";
 export const NEW_SUITE = "new";
 
 /** Free id for a new suite: `nuova-suite`, `nuova-suite-2`… */
@@ -31,7 +32,7 @@ export function SuiteDetail({ suiteId, suites }: { suiteId: string; suites: Eval
   const [deleting, setDeleting] = useState(false);
 
   if (!isNew && !saved) {
-    return <EmptyState icon="check" title="Suite non trovata" description="Potrebbe essere stata eliminata da un altro dispositivo." />;
+    return <EmptyState icon="check" title={tr("evals.suite_non_trovata")} description={tr("evals.potrebbe_essere_stata_eliminata_da")} />;
   }
   const dirty = text !== initial;
   const parsed = parseSuiteText(text);
@@ -51,17 +52,17 @@ export function SuiteDetail({ suiteId, suites }: { suiteId: string; suites: Eval
   return (
     <div className="stack stack-lg ev-detail">
       <Panel
-        title={saved?.name ?? "Nuova suite"} icon="check"
+        title={saved?.name ?? tr("evals.nuova_suite")} icon="check"
         actions={
           <>
-            {saved && <Button variant="primary" icon="play" onClick={() => setRunning(true)} disabled={dirty} title={dirty ? "Salva le modifiche prima di eseguire" : undefined}>Esegui</Button>}
-            {saved && <Button icon="sparkle" onClick={() => setOptimizing(true)} disabled={dirty} title={dirty ? "Salva le modifiche prima di ottimizzare" : "Prova varianti del prompt di un agente su questa suite"}>Ottimizza il prompt</Button>}
-            {saved && <Button variant="ghost" icon="trash" onClick={() => setDeleting(true)}>Elimina</Button>}
+            {saved && <Button variant="primary" icon="play" onClick={() => setRunning(true)} disabled={dirty} title={dirty ? t("evals.salva_le_modifiche_prima_di") : undefined}>{tr("evals.esegui_2")}</Button>}
+            {saved && <Button icon="sparkle" onClick={() => setOptimizing(true)} disabled={dirty} title={dirty ? t("evals.salva_le_modifiche_prima_di_2") : t("evals.prova_varianti_del_prompt_di")}>{tr("evals.ottimizza_il_prompt")}</Button>}
+            {saved && <Button variant="ghost" icon="trash" onClick={() => setDeleting(true)}>{tr("evals.elimina")}</Button>}
           </>
         }
       >
         {saved?.description && <p className="muted text-sm">{saved.description}</p>}
-        <ol className="ev-tasks" aria-label="Task della suite">
+        <ol className="ev-tasks" aria-label={tr("evals.task_della_suite")}>
           {(shown?.tasks ?? []).map((t) => (
             <li key={t.id}>
               <b className="mono text-sm">{t.id}</b>
@@ -71,20 +72,20 @@ export function SuiteDetail({ suiteId, suites }: { suiteId: string; suites: Eval
         </ol>
       </Panel>
 
-      <Panel title="Definizione (JSON)" icon="file">
+      <Panel title={tr("evals.definizione_json")} icon="file">
         <Field
-          label="Suite" htmlFor="ev-json" error={error}
-          hint="Id, nome, task con prompt, file di partenza e grader (file_exists, file_contains, output_matches, json_schema, judge). Il server controlla agenti e profili."
+          label={tr("evals.suite")} htmlFor="ev-json" error={error}
+          hint={tr("evals.id_nome_task_con_prompt")}
         >
           <Textarea
             id="ev-json" className="mono ev-json" rows={18} spellCheck={false} value={text}
             onChange={(e) => { setText(e.target.value); setLocalError(undefined); save.reset(); }}
           />
         </Field>
-        <p className="faint text-xs row"><Icon name="shield" size={13} /> I grader <code>command</code> eseguono comandi con i tuoi permessi: non si possono scrivere da qui, solo in un file in <code>~/.aiw/evals</code>.</p>
+        <p className="faint text-xs row"><Icon name="shield" size={13} /> {trNode("evals.i_grader_eseguono_comandi_con", { code: <code>{tr("evals.command")}</code>, code2: <code>~/.aiw/evals</code> })}</p>
         <div className="row ev-actions">
-          <Button variant="primary" onClick={submit} disabled={save.isPending || (!dirty && !isNew)}>{save.isPending ? "Salvataggio…" : isNew ? "Crea suite" : "Salva"}</Button>
-          <Button variant="ghost" onClick={() => { setText(initial); setLocalError(undefined); save.reset(); }} disabled={!dirty || save.isPending}>Annulla modifiche</Button>
+          <Button variant="primary" onClick={submit} disabled={save.isPending || (!dirty && !isNew)}>{save.isPending ? tr("evals.salvataggio") : isNew ? tr("evals.crea_suite") : tr("evals.salva")}</Button>
+          <Button variant="ghost" onClick={() => { setText(initial); setLocalError(undefined); save.reset(); }} disabled={!dirty || save.isPending}>{tr("evals.annulla_modifiche")}</Button>
         </div>
       </Panel>
 
@@ -92,12 +93,11 @@ export function SuiteDetail({ suiteId, suites }: { suiteId: string; suites: Eval
       {optimizing && saved && <OptimizeDialog suite={saved} onClose={() => setOptimizing(false)} />}
       {deleting && saved && (
         <DecisionDialog
-          title={`Eliminare «${saved.name}»?`} confirmLabel="Elimina" pending={remove.isPending} error={remove.error}
+          title={t("evals.eliminare", { name: saved.name })} confirmLabel={t("evals.elimina")} pending={remove.isPending} error={remove.error}
           onCancel={() => { setDeleting(false); remove.reset(); }}
           onConfirm={() => remove.mutate(saved.id, { onSuccess: () => { setDeleting(false); navigate("/evals/suites", { replace: true }); } })}
         >
-          La suite sparisce; i report già fatti restano.
-        </DecisionDialog>
+          {tr("evals.la_suite_sparisce_i_report")}</DecisionDialog>
       )}
     </div>
   );

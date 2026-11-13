@@ -17,6 +17,7 @@ import { chatEn } from "./messages/en/chat";
 import { commonEn } from "./messages/en/common";
 import { devicesEn } from "./messages/en/devices";
 import { documentsEn } from "./messages/en/documents";
+import { evalsEn } from "./messages/en/evals";
 import { homeEn } from "./messages/en/home";
 import { inboxEn } from "./messages/en/inbox";
 import { integrationsEn } from "./messages/en/integrations";
@@ -43,6 +44,7 @@ export const en: Record<MessageKey, string> = {
   ...commonEn,
   ...devicesEn,
   ...documentsEn,
+  ...evalsEn,
   ...homeEn,
   ...inboxEn,
   ...integrationsEn,

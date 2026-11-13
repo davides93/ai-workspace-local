@@ -6,6 +6,7 @@ import type { EvalReport, EvalRunRequest, EvalSuite, OptimizeRequest, PromptOpti
 import { EVAL_POLL_MS, isRunning } from "./model/evals";
 import { isOptimizing, OPT_POLL_MS } from "./model/optimizations";
 
+import { t } from "../../shared/i18n";
 export function useEvalSuites() {
   const api = useApi();
   return useQuery({ queryKey: qk.evals.suites(), queryFn: () => api.evalSuites() });
@@ -48,7 +49,7 @@ export function useSaveEvalSuite() {
     mutationFn: (s: EvalSuite) => api.saveEvalSuite(s),
     meta: { handled: true },
     onSuccess: (s) => {
-      toast("Suite salvata");
+      toast(t("evals.suite_salvata"));
       qc.setQueryData<EvalSuite[]>(qk.evals.suites(), (list) => {
         const all = list ?? [];
         return all.some((x) => x.id === s.id) ? all.map((x) => (x.id === s.id ? s : x)) : [...all, s];
@@ -65,7 +66,7 @@ export function useDeleteEvalSuite() {
     mutationFn: (id: string) => api.deleteEvalSuite(id),
     meta: { handled: true },
     onSuccess: (_void, id) => {
-      toast("Suite eliminata");
+      toast(t("evals.suite_eliminata"));
       qc.setQueryData<EvalSuite[]>(qk.evals.suites(), (list) => list?.filter((s) => s.id !== id));
       void qc.invalidateQueries({ queryKey: qk.evals.suites() });
     },
@@ -83,7 +84,7 @@ export function useStartEval() {
     },
     meta: { handled: true },
     onSuccess: (report) => {
-      toast("Valutazione avviata");
+      toast(t("evals.valutazione_avviata"));
       qc.setQueryData<EvalReport[]>(qk.evals.reports(), (list) => [report, ...(list ?? []).filter((r) => r.id !== report.id)]);
       void qc.invalidateQueries({ queryKey: qk.evals.reports() });
     },
@@ -111,7 +112,7 @@ export function useStartOptimization() {
     },
     meta: { handled: true },
     onSuccess: (o) => {
-      toast("Ottimizzazione avviata");
+      toast(t("evals.ottimizzazione_avviata"));
       qc.setQueryData<PromptOptimization[]>(qk.evals.optimizations(), (list) => [o, ...(list ?? []).filter((x) => x.id !== o.id)]);
       void qc.invalidateQueries({ queryKey: qk.evals.optimizations() });
     },
@@ -126,7 +127,7 @@ export function useApplyOptimization() {
     mutationFn: (v: { id: string; variant: number }) => api.applyPromptOptimization(v.id, v.variant),
     meta: { handled: true },
     onSuccess: (o) => {
-      toast("Prompt applicato all'agente");
+      toast(t("evals.prompt_applicato_all_agente"));
       qc.setQueryData<PromptOptimization[]>(qk.evals.optimizations(), (list) => list?.map((x) => (x.id === o.id ? o : x)));
       void qc.invalidateQueries({ queryKey: qk.evals.optimizations() });
       void qc.invalidateQueries({ queryKey: qk.agents() });

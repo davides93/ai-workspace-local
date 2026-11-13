@@ -8,6 +8,7 @@ import { chatIt } from "./messages/it/chat";
 import { commonIt } from "./messages/it/common";
 import { devicesIt } from "./messages/it/devices";
 import { documentsIt } from "./messages/it/documents";
+import { evalsIt } from "./messages/it/evals";
 import { homeIt } from "./messages/it/home";
 import { inboxIt } from "./messages/it/inbox";
 import { integrationsIt } from "./messages/it/integrations";
@@ -34,6 +35,7 @@ export const it = {
   ...commonIt,
   ...devicesIt,
   ...documentsIt,
+  ...evalsIt,
   ...homeIt,
   ...inboxIt,
   ...integrationsIt,

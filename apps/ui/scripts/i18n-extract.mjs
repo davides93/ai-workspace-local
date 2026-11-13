@@ -2,7 +2,7 @@
 // Italian catalog (src/shared/i18n/messages/it/<area>.ts) and rewrites the code to `t("key")`.
 // The Italian wording is copied verbatim, so the Italian interface does not change.
 //
-//   node scripts/i18n-extract.mjs src/features/home src/app   (files or folders)
+//   node scripts/i18n-extract.mjs src/features/home src/app   (files or folders; .ts and .tsx)
 //   node scripts/i18n-extract.mjs --dry ...                   (report only)
 //
 // Handled: text between tags (also text mixed with `{expressions}` -> `{name}` parameters),
@@ -26,14 +26,14 @@ const dry = args.includes("--dry");
 const targets = args.filter((a) => !a.startsWith("--"));
 
 const TEXT_ATTRS = new Set(["aria-label", "aria-description", "placeholder", "title", "alt", "label", "hint", "description", "subtitle", "legend", "emptyText", "empty", "confirmLabel", "addLabel", "saveLabel", "valuePlaceholder", "blocker", "subject", "noun"]);
-const TEXT_PROPS = new Set(["label", "title", "description", "hint", "placeholder", "empty", "emptyText", "subtitle", "caption", "heading"]);
+const TEXT_PROPS = new Set(["label", "title", "description", "hint", "placeholder", "empty", "emptyText", "subtitle", "caption", "heading", "header", "message", "summary", "detail", "reason"]);
 const SKIP_TAGS = new Set(["code", "kbd", "pre", "samp", "style", "script"]);
 const letters = /\p{L}/u;
 
 const files = [];
 const walk = (p) => {
   if (statSync(p).isDirectory()) readdirSync(p).forEach((f) => walk(join(p, f)));
-  else if (p.endsWith(".tsx") && !p.endsWith(".test.tsx") && !p.includes(`${sep}i18n${sep}`) && !p.includes(`${sep}mock${sep}`)) files.push(p);
+  else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p) && !p.endsWith(".d.ts") && !p.includes(`${sep}i18n${sep}`) && !p.includes(`${sep}mock${sep}`)) files.push(p);
 };
 targets.forEach((t) => walk(resolve(t)));
 
@@ -121,7 +121,7 @@ let totalEdits = 0;
 const report = [];
 for (const file of files) {
   const src = readFileSync(file, "utf8");
-  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const area = areaOf(file);
   const usesT = (() => { let u = false; (function v(n) { if (ts.isIdentifier(n) && n.text === "t") u = true; ts.forEachChild(n, v); })(sf); return u; })();
   const fn = usesT && !/import\s*\{[^}]*\bt as tr\b/.test(src) ? "tr" : "t";
