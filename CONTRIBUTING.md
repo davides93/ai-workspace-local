@@ -3,7 +3,7 @@
 **English summary.** AI Workspace Local (AIW) is a Rust workspace (daemon/CLI `aiw`, Tauri 2 desktop and mobile shell) with a
 React UI. Build the daemon with `cargo build --release -p aiw-cli`; run the UI in dev mode with `npm ci && npm run dev` in
 `apps/ui` (it proxies `/api` to a daemon on `127.0.0.1:7777`). CI runs `cargo fmt --all --check`, `cargo clippy --all-targets`,
-`cargo test`, and in `apps/ui` `npm run typecheck`, `npm test`, `npm run build`, `npm run build:mockup`, `npm run test:smoke`:
+`cargo test`, and in `apps/ui` `npm run typecheck`, `npm test`, `npm run build`, `npm run build:mockup`, `npm run test:smoke`, `npm run test:e2e`, `npm run test:a11y`:
 please run the same before opening a pull request. Code comments are in English; user-visible strings are in Italian **and**
 English through the i18n catalog under `apps/ui/src/shared/i18n/`. Update `CHANGELOG.md` ("Non rilasciato") and keep
 `docs/STATUS.md` honest: "written" is not "tested". Security problems go to [SECURITY.md](SECURITY.md), privately. **The
@@ -93,9 +93,33 @@ npm run build                               # tsc -b + vite build + controllo «
 npm run build:mockup                        # la demo a file unico
 npx playwright install --with-deps chromium   # una volta sola
 npm run test:smoke                          # ogni pagina della demo a 1440 e 390 px, tema chiaro e scuro (serve build:mockup)
+npm run test:e2e                            # i flussi principali contro la demo (Playwright Test; serve build:mockup)
+npm run test:a11y                           # axe-core su ogni rotta, chiaro/scuro, 390/1440 px, più la prova da tastiera (serve build:mockup)
+npm run check:bundle                        # la dimensione di dist e dist-mockup resta sotto il budget (serve build e build:mockup)
+npm run bench:startup                       # tempo fino alla prima schermata utilizzabile della demo (solo misura, nessuna soglia)
 ```
 
 Il test di fumo accetta `-- --route=<percorso>` per una sola pagina e `-- --shots=<cartella>` per salvare le schermate.
+
+I test E2E e di accessibilità sono in `apps/ui/e2e/` (`flows/` e `a11y/`), si lanciano con Playwright Test contro
+`dist-mockup/index.html` aperto da file: niente server, niente rete, dati di esempio sempre uguali. Per un solo test:
+`npm run test:e2e -- -g "chat"` (oppure `npx playwright test --project=e2e e2e/flows/chat.spec.ts`); `--ui` apre l'interfaccia
+di Playwright. Per partire da un'installazione vuota la demo accetta `?scenario=first-run` (vedi
+`src/shared/api/mock/scenario.ts`). Regole: selettori per ruolo e nome accessibile (`getByRole`), mai per classe CSS, mai
+`waitForTimeout`. Se il Chromium installato da Playwright non è quello da usare, `AIW_CHROMIUM=/percorso/chromium`. Il rapporto
+HTML finisce in `apps/ui/playwright-report/`. Il test di accessibilità fallisce sulle violazioni `critical` e `serious`; le
+regole eventualmente disattivate stanno, con il motivo, in `e2e/support/axe.ts`.
+
+I benchmark Rust (criterion) non girano con `cargo test`; si lanciano uno per volta, e la CI li compila soltanto:
+
+```bash
+cargo bench -p aiw-agent  --bench shellparse    # il lexer della policy della shell
+cargo bench -p aiw-engine --bench hot_paths     # ricerca nei documenti, chunking, store di sessioni e messaggi
+cargo bench -p aiw-server --bench server        # avvio a freddo e latenza di GET /api/system
+cargo bench --no-run -p aiw-agent -p aiw-engine -p aiw-server   # solo compilare
+```
+
+Come leggere i numeri, su che macchina sono stati presi e cosa NON misurano: `docs/benchmarks.md`.
 
 Test **ignorati** (`#[ignore]`) che servono risorse vere e non girano in CI:
 

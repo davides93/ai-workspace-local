@@ -198,6 +198,16 @@ Facoltativi, scritti ma **mai eseguiti su GitHub** (`release.yml`, target `arm64
   hardware reale; lo stesso vale per il router automatico dei runtime.
 - Piper e Kokoro non sono mai stati eseguiti dall'ambiente di sviluppo (solo un eseguibile e un server finti); le dimensioni delle voci Piper nel catalogo sono indicative.
 
+### 2.10 Prove automatiche della UI, benchmark e CI mobile (13 novembre 2026)
+
+| Cosa | Stato |
+|---|---|
+| E2E Playwright (`apps/ui/e2e/flows`) | ✅ 8 test sui flussi principali: primo avvio con download simulato e prima chat in streaming, chat (allegato, stop, nuova sessione), documenti (aggiunta e ricerca), approvazioni (una approvata, una negata), impostazioni (lingua it→en, modalità Sviluppatore, backup scaricato), token delle app (creazione e revoca). **Provati solo contro la demo** (trasporto finto, dati in memoria): non dicono nulla sul server vero, sui modelli veri o sull'app Tauri. Provati due volte di fila in locale; in CI (job `ui-e2e`) mai ancora eseguiti. |
+| Accessibilità (`e2e/a11y`) | ✅ axe-core su tutte le rotte dello smoke, chiaro e scuro, 390 e 1440 px, più schermate con overlay, la prima esecuzione, la chat in attesa di conferma e sei pagine in inglese; prova da tastiera (Tab, focus visibile, dialoghi che intrappolano il focus e si chiudono con Esc, palette comandi). Falliscono le violazioni `critical` e `serious`. Nessuna regola disattivata. Non è una verifica con uno screen reader vero; axe segnala anche contrasti «da rivedere» (testo su sfondi non uniformi) che non sono verificabili in automatico. |
+| Benchmark | ✅ criterion in `aiw-agent`, `aiw-engine`, `aiw-server` (`docs/benchmarks.md`); numeri di una sola macchina Linux virtuale, indicativi. Non misurati: token/s dei modelli veri, embedding, Windows, macOS, telefoni. |
+| Budget del bundle | ✅ `npm run check:bundle`, +15 % sulla build del 13/11. |
+| `mobile-check.yml` | 🟡 **mai eseguito su GitHub.** Compila Kotlin/Android (APK debug arm64) e Swift/iOS (debug senza firma, e un tentativo per il simulatore) con `continue-on-error`. I progetti Android e Xcode non sono nel repository: li genera `tauri android init` / `tauri ios init` nel job, come `store.yml`. I comandi sono quelli già provati a mano il 12/11 (`docs/mobile/BACKGROUND.md`); il target simulatore non è provato e potrebbe fallire per l'SDK non rilevato. |
+
 ## 3. Come procedere
 
 Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer agentici mancanti.
