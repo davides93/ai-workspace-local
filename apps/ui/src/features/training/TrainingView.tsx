@@ -7,6 +7,7 @@ import { useAdapters, useDatasets, useTrainDoctor, useTrainJobs } from "./api";
 import { isActive } from "./model/training";
 import "./training.css";
 
+import { t as tr } from "../../shared/i18n";
 type Tab = "jobs" | "datasets" | "adapters";
 
 /** `#/training/jobs` (device, trainers and fine-tunings), `#/training/datasets` and `#/training/adapters`. */
@@ -19,17 +20,17 @@ export function TrainingView() {
   const adapters = useAdapters();
   const running = (jobs.data ?? []).filter(isActive).length;
   const tabs: TabItem<Tab>[] = [
-    { id: "jobs", label: running ? `Addestramenti · ${running} in corso` : "Addestramenti", count: jobs.data?.length },
-    { id: "datasets", label: "Dataset", count: datasets.data?.length },
-    { id: "adapters", label: "Adapter", count: adapters.data?.length },
+    { id: "jobs", label: running ? tr("training.addestramenti_in_corso", { running }) : tr("training.addestramenti"), count: jobs.data?.length },
+    { id: "datasets", label: tr("training.dataset"), count: datasets.data?.length },
+    { id: "adapters", label: tr("training.adapter"), count: adapters.data?.length },
   ];
   return (
     <Page className="tr-page">
       <PageHeader
-        eyebrow="Inferenza" title="Addestramento"
-        subtitle="Affina un modello locale con LoRA sulle tue conversazioni approvate. L'addestramento lo fa un programma esterno (MLX LM, TRL, Unsloth); AIW prepara i dati, lo segue e registra l'adapter."
+        eyebrow={tr("nav.group_inference")} title={tr("training.addestramento")}
+        subtitle={tr("training.affina_un_modello_locale_con")}
       />
-      <Tabs tabs={tabs} value={tab} onChange={(t) => navigate(`/training/${t}`)} label="Sezioni dell'addestramento" idPrefix="tr" />
+      <Tabs tabs={tabs} value={tab} onChange={(t) => navigate(`/training/${t}`)} label={tr("training.sezioni_dell_addestramento")} idPrefix="tr" />
       <TabPanel idPrefix="tr" id={tab}>
         {tab === "jobs" && <JobsTab doctor={doctor} jobs={jobs} datasets={datasets.data ?? []} />}
         {tab === "datasets" && <DatasetsTab datasets={datasets} doctor={doctor.data} />}

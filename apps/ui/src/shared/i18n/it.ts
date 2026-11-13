@@ -23,6 +23,7 @@ import { settingsIt } from "./messages/it/settings";
 import { shellIt } from "./messages/it/shell";
 import { teachIt } from "./messages/it/teach";
 import { teamsIt } from "./messages/it/teams";
+import { trainingIt } from "./messages/it/training";
 import { uiIt } from "./messages/it/ui";
 
 export const it = {
@@ -50,6 +51,7 @@ export const it = {
   ...shellIt,
   ...teachIt,
   ...teamsIt,
+  ...trainingIt,
   ...uiIt,
 } as const;
 

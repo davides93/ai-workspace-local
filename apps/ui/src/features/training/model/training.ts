@@ -1,3 +1,4 @@
+import { labelMap, t as tr } from "../../../shared/i18n";
 import type { AdapterInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest, TrainMethod, TrainerInfo } from "../../../shared/api/types";
 
 /** Poll interval of jobs and log, used only while a job is going. */
@@ -18,27 +19,20 @@ export const METHOD_SOURCES: Record<TrainMethod, string[]> = {
   grpo: [],
 };
 
-export const METHOD_HINT: Record<TrainMethod, string> = {
-  sft: "Impara dalle conversazioni approvate.",
-  dpo: "Impara dalle coppie risposta buona / risposta scartata.",
-  grpo: "Impara dai punteggi dei grader di una suite.",
-};
+export const METHOD_HINT: Record<TrainMethod, string> = labelMap({ sft: "training.hint_sft", dpo: "training.hint_dpo", grpo: "training.hint_grpo" });
 
-export const SOURCE_LABEL: Record<string, string> = {
-  import: "File JSONL importato",
-  feedback: "Pollice in su",
-  succeeded: "Sessioni riuscite",
-  eval: "Task superati nelle valutazioni",
-};
+export const SOURCE_LABEL: Record<string, string> = labelMap({
+  import: "training.source_import",
+  feedback: "training.source_feedback",
+  succeeded: "training.source_succeeded",
+  eval: "training.source_eval",
+});
 
 /** A source as the list shows it: `suite:<id>` is the suite a GRPO dataset takes its prompts from. */
-export const sourceLabel = (s: string): string => (s.startsWith("suite:") ? `Suite ${s.slice(6)}` : SOURCE_LABEL[s] ?? s);
+export const sourceLabel = (s: string): string => (s.startsWith("suite:") ? tr("training.source_suite", { id: s.slice(6) }) : SOURCE_LABEL[s] ?? s);
 
 /** What a source means for DPO: a pair needs both sides. */
-export const DPO_SOURCE_LABEL: Record<string, string> = {
-  feedback: "Pollice in su e in giù sulla stessa domanda",
-  eval: "Tentativi riusciti e falliti degli stessi task (valutazioni con ripetizioni)",
-};
+export const DPO_SOURCE_LABEL: Record<string, string> = labelMap({ feedback: "training.dpo_feedback", eval: "training.dpo_eval" });
 
 /** The job is still going: the page polls it. */
 export const isActive = (j: Pick<TrainJob, "status">): boolean => j.status === "queued" || j.status === "running";
@@ -59,11 +53,11 @@ export function methodBlocker(doctor: TrainDoctor | undefined, method: TrainMeth
   if (!doctor) return null;
   if (readyTrainers(doctor, method).length > 0) return null;
   const knowing = doctor.trainers.filter((t) => t.methods.some((m) => m.method === method));
-  if (knowing.length === 0) return `Nessun trainer conosce ${METHOD_LABEL[method]}.`;
+  if (knowing.length === 0) return tr("training.no_trainer_knows", { method: METHOD_LABEL[method] });
   const missing = knowing.find((t) => t.state === "missing" && t.methods.some((m) => m.method === method && !m.blocked));
-  if (missing) return `${missing.name} non è installato.`;
+  if (missing) return tr("training.not_installed", { name: missing.name });
   const why = knowing.map((t) => t.methods.find((m) => m.method === method)?.blocked ?? t.reason).find(Boolean);
-  return why ?? `Questo dispositivo non può fare ${METHOD_LABEL[method]}.`;
+  return why ?? tr("training.device_cannot", { method: METHOD_LABEL[method] });
 }
 
 /** `0.84` → "0,84"; text and other values are shown as they are. */
@@ -71,14 +65,14 @@ export function metricText(v: unknown): string {
   return typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toFixed(2).replace(".", ",")) : String(v);
 }
 
-const METRIC_LABEL: Record<string, string> = { train_loss: "loss", val_loss: "loss di validazione", steps: "passi", duration_s: "secondi" };
+const METRIC_LABEL: Record<string, string> = labelMap({ train_loss: "training.metric_train_loss", val_loss: "training.metric_val_loss", steps: "training.metric_steps", duration_s: "training.metric_seconds" });
 
 /** "loss 0,84 · loss di validazione 0,97 · 51 passi" for the metrics a job or adapter reports. */
 export function metricsLine(metrics: Record<string, unknown> | undefined): string {
   if (!metrics) return "";
   const parts: string[] = [];
   for (const k of ["train_loss", "val_loss"]) if (typeof metrics[k] === "number") parts.push(`${METRIC_LABEL[k]} ${metricText(metrics[k])}`);
-  if (typeof metrics.steps === "number") parts.push(`${metrics.steps} passi`);
+  if (typeof metrics.steps === "number") parts.push(tr("training.n_steps", { n: metrics.steps }));
   if (typeof metrics.duration_s === "number") parts.push(`${Math.round(metrics.duration_s)} s`);
   return parts.join(" · ");
 }
@@ -104,15 +98,15 @@ export const blankDatasetForm = (method: TrainMethod = "sft"): DatasetForm => ({
 /** The request for the form, or the first thing wrong with it. */
 export function datasetSpec(f: DatasetForm): { spec: DatasetSpec; error?: undefined } | { spec?: undefined; error: string } {
   const limit = f.limit.trim();
-  if (limit && !(Number.isInteger(Number(limit)) && Number(limit) >= 1)) return { error: "Il limite deve essere un numero intero da 1 in su." };
-  if (METHOD_SOURCES[f.method].length > 0 && f.sources.length === 0) return { error: "Scegli almeno una sorgente." };
+  if (limit && !(Number.isInteger(Number(limit)) && Number(limit) >= 1)) return { error: tr("training.limit_error") };
+  if (METHOD_SOURCES[f.method].length > 0 && f.sources.length === 0) return { error: tr("training.pick_source") };
   const repeat = f.repeat.trim();
   if (f.method === "grpo") {
-    if (!f.suite) return { error: "Scegli la suite da cui prendere i prompt e le reward." };
-    if (repeat && !(Number.isInteger(Number(repeat)) && Number(repeat) >= 1)) return { error: "Le ripetizioni devono essere un numero intero da 1 in su." };
+    if (!f.suite) return { error: tr("training.pick_suite") };
+    if (repeat && !(Number.isInteger(Number(repeat)) && Number(repeat) >= 1)) return { error: tr("training.repeat_error") };
   }
   const reports = f.evalReports.split(/[\s,]+/).filter(Boolean);
-  if (f.sources.includes("eval") && reports.length === 0) return { error: "Per la sorgente delle valutazioni indica almeno un report di valutazione." };
+  if (f.sources.includes("eval") && reports.length === 0) return { error: tr("training.eval_needs_report") };
   const spec: DatasetSpec = { method: f.method };
   if (f.name.trim()) spec.name = f.name.trim();
   if (f.agent) spec.agent = f.agent;
@@ -152,20 +146,20 @@ function optionalNumber(text: string, label: string, check: (n: number) => boole
   const t = text.trim().replace(",", ".");
   if (!t) return {};
   const n = Number(t);
-  return Number.isFinite(n) && check(n) ? { value: n } : { error: `${label}: ${rule}.` };
+  return Number.isFinite(n) && check(n) ? { value: n } : { error: tr("training.field_error", { label, rule }) };
 }
 
 /** The request for the form, or the first thing wrong with it. The engine checks the same ranges again. */
 export function jobRequest(f: JobForm): { req: TrainJobRequest; error?: undefined } | { req?: undefined; error: string } {
-  if (!f.base.trim()) return { error: "Indica il modello base." };
-  if (!f.dataset) return { error: "Scegli un dataset." };
-  if (f.evalSuite && !f.evalProfile) return { error: "Per confrontare l'adapter serve anche il profilo da cui partire." };
+  if (!f.base.trim()) return { error: tr("training.need_base") };
+  if (!f.dataset) return { error: tr("training.need_dataset") };
+  if (f.evalSuite && !f.evalProfile) return { error: tr("training.need_profile") };
   const fields = [
-    optionalNumber(f.iters, "Passi", (n) => Number.isInteger(n) && n >= 1 && n <= 1_000_000, "un intero da 1 a 1.000.000"),
-    optionalNumber(f.epochs, "Epoche", (n) => n > 0 && n <= 100, "un numero tra 0 (escluso) e 100"),
-    optionalNumber(f.rank, "Rango", (n) => Number.isInteger(n) && n >= 1 && n <= 256, "un intero da 1 a 256"),
-    optionalNumber(f.lr, "Learning rate", (n) => n > 0 && n < 1, "un numero tra 0 e 1 (esclusi)"),
-    optionalNumber(f.batch, "Batch", (n) => Number.isInteger(n) && n >= 1 && n <= 1024, "un intero da 1 a 1024"),
+    optionalNumber(f.iters, tr("training.passi"), (n) => Number.isInteger(n) && n >= 1 && n <= 1_000_000, tr("training.rule_int_1_1m")),
+    optionalNumber(f.epochs, tr("training.epoche"), (n) => n > 0 && n <= 100, tr("training.rule_epochs")),
+    optionalNumber(f.rank, tr("training.rank"), (n) => Number.isInteger(n) && n >= 1 && n <= 256, tr("training.rule_int_1_256")),
+    optionalNumber(f.lr, tr("training.learning_rate"), (n) => n > 0 && n < 1, tr("training.rule_lr")),
+    optionalNumber(f.batch, tr("training.batch"), (n) => Number.isInteger(n) && n >= 1 && n <= 1024, tr("training.rule_int_1_1024")),
   ];
   const bad = fields.find((x) => x.error);
   if (bad) return { error: bad.error! };
