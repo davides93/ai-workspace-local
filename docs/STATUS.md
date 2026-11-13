@@ -100,8 +100,8 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 |---|---|---|
 | CPU (AVX2/AVX-512/NEON/dotprod/i8mm) | tutti i backend | ✅ |
 | Metal | llama.cpp embedded (automatico su macOS/iOS), llama-server, mlx-lm | ✅ **v0.4** (prima il motore embedded non veniva registrato); non eseguito su hardware reale |
-| CUDA | sidecar con `-ngl 999`, vLLM/SGLang/TRT-LLM, embedded con feature `llama-cuda` | 🟡 le release non abilitano CUDA |
-| Vulkan | sidecar, embedded con `llama-vulkan` | 🟡 **v0.4** job di release opzionale `daemon-gpu` (Linux e Windows), non ancora eseguito |
+| CUDA | sidecar con `-ngl 999`, vLLM/SGLang/TRT-LLM, embedded con feature `llama-cuda` | 🟡 il lavoro facoltativo `cuda` di `release.yml` (daemon, Linux e Windows x64, CUDA 12.8) è scritto ma mai eseguito; nessun binario CUDA provato su una GPU; le release di default non lo includono |
+| Vulkan | sidecar, embedded con `llama-vulkan` | 🟡 **v0.4** il job `daemon-gpu` è stato tolto dalla release con il commit 3cb23ae (recuperabile dalla storia); oggi nessun flusso costruisce Vulkan |
 | ROCm | solo sidecar | 🟡 **v0.4** rilevamento con `rocm-smi`/`rocminfo` |
 | MLX | solo sidecar `mlx-lm` (Python) | 🟡 MLX Swift in-process assente; **v0.4** MLX riservato ai Mac Apple Silicon, repository MLX scaricabili |
 | DirectML, QNN, OpenVINO, Core ML | tramite gli execution provider di ORT GenAI o i server che li gestiscono (Foundry, Lemonade, OVMS) | 🟡 AIW non li pilota direttamente |
@@ -153,7 +153,7 @@ sezioni a cinque e la prima esecuzione a un solo pulsante; `developer` (vista «
 | Computer-use | ✅ | ✅ | ❌ escluso in CI | ❌ | ❌ |
 | Firma e notarizzazione | 🟡 flusso pronto, attivo solo con i segreti (PFX o Azure), mai eseguito | 🟡 flusso pronto (Developer ID + notarizzazione), attivo solo con i segreti, mai eseguito | — | ❌ | ❌ (lo store firma a parte, `store.yml`) |
 
-Non costruiti: Windows arm64, Linux arm64, Android x86_64/armv7.
+Facoltativi, scritti ma **mai eseguiti su GitHub** (`release.yml`, target `arm64` o `all`): app Linux arm64 (deb/AppImage/rpm) e Windows arm64 (NSIS, solo CPU, senza computer-use), daemon arm64 e daemon CUDA 12; `release-check.yml` compila arm64 sulle pull request. Non costruiti: Android x86_64/armv7 (`store.yml` fa solo aarch64). Dalla release non escono più l'app Linux x64 né i daemon x64/macOS (commit 3cb23ae).
 
 ### 2.8 Correzioni dopo la bozza
 
@@ -201,8 +201,7 @@ Non costruiti: Windows arm64, Linux arm64, Android x86_64/armv7.
 Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer agentici mancanti.
 
 **P0 · Verifica su hardware reale**
-1. Eseguire il job `daemon-gpu` (Vulkan) e aggiungere CUDA nella matrice di release desktop
-   (Windows, Linux). Verificare llama.cpp Metal su un Mac Apple Silicon e su iPhone.
+1. Eseguire una volta i lavori facoltativi di `release.yml` (targets = `arm64`, `cuda`) e correggere ciò che l'immagine `windows-11-arm` o l'installazione di CUDA non permettono; poi provare una build CUDA su una GPU NVIDIA vera. (Il job `daemon-gpu`/Vulkan non è più nel flusso: vedi §2.4.) Verificare llama.cpp Metal su un Mac Apple Silicon e su iPhone.
 2. Provare i provider del model hub contro i servizi reali (HF, ModelScope, Ollama) e
    rigenerare l'indice Ollama da CI. Le build GPU e i percorsi nativi Apple e Android vanno
    provati su hardware reale (vedi §2.9).
@@ -242,7 +241,7 @@ Ordine consigliato: prima ciò che sblocca l'uso reale su hardware, poi i layer 
     rete chiusa e nascondiglio su Windows (AppContainer o firewall), isolare hook, valutatori e browser controllato,
     socket dell'agente SSH, protezione SSRF anche dietro proxy.
 14. Token per dispositivo con revoca e TLS per la LAN: **fatti** (vedi riga «API locale» e §2.9). Restano: prova su due computer e telefoni reali, installazione guidata dell'autorità nei browser, fissaggio per i server MCP e gli agenti A2A inseriti a mano, token `owner` ruotabile senza riavvio, migrazione dei dispositivi già accoppiati (oggi si accoppiano di nuovo).
-15. Firma e notarizzazione delle release (il flusso c'è, mancano i segreti e una prima prova: `docs/release/FIRMA.md`), pubblicazione su GitHub Releases, target arm64.
+15. Firma e notarizzazione delle release (il flusso c'è, mancano i segreti e una prima prova: `docs/release/FIRMA.md`), pubblicazione su GitHub Releases (procedura in `docs/release/RELEASE.md`); target arm64 e CUDA scritti ma mai eseguiti (`release.yml`, `release-check.yml`).
 16. Font inclusi nell'app invece di Google Fonts: **fatto** (woff2 latin e latin-ext nella build, CSP senza origini esterne, controllo `scripts/check-no-external.mjs` nella build). i18n it/en: **parziale**. Il livello c'è (`shared/i18n`, impostazione `ui.language`, selettore in Impostazioni, «Altro» e primo avvio, test di parità dei cataloghi, smoke in entrambe le lingue a 390 px senza scroll orizzontale), ma `npm run i18n:scan` conta ancora 642 letterali JSX non migrati (erano 1878): Workflow 193, Addestramento 110, Valutazioni 100, Runtime 62, Team 54, più code sparse in Sicurezza (29), Capacità (21) e Modelli (19). Restano in italiano anche le stringhe fuori dal JSX (etichette dei moduli `model/*.ts`, note del run nella chat, titoli e descrizioni delle impostazioni che arrivano dal backend), gli errori e i testi del backend (prompt degli agenti, nomi degli agenti predefiniti, riepilogo, avvisi), il menu e le notifiche del guscio desktop e i dati demo. L'inglese non è stato rivisto da un madrelingua e non è stato provato su dispositivo.
 
 ## iOS e iPadOS (v0.5)

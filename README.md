@@ -22,6 +22,8 @@ conferme umane.
 | Architettura della UI: struttura, router, data layer, design system | [docs/design/UI-ARCHITECTURE.md](docs/design/UI-ARCHITECTURE.md) |
 | Parlare con l'assistente da Telegram, Slack e email: guida all'attivazione e alla sicurezza | [docs/channels.md](docs/channels.md) |
 | Mockup interattivo (file unico, si apre offline) | [docs/design/mockup/index.html](docs/design/mockup/index.html) |
+| Contribuire: prerequisiti, prove, convenzioni | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Come si fa una release (tag, lavori di CI, arm64 e CUDA, canali) | [docs/release/RELEASE.md](docs/release/RELEASE.md) |
 
 ## Struttura
 
