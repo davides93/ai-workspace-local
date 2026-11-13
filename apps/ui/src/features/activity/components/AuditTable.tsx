@@ -6,7 +6,7 @@ import { Icon, Pill } from "../../../shared/ui";
 import type { AuditEntry } from "../../../shared/api/types";
 import { ACTOR_LABEL, decisionInfo } from "../model/filter";
 
-import { t } from "../../../shared/i18n";
+import { t, t as tr } from "../../../shared/i18n";
 function RunCell({ runId }: { runId?: string }) {
   if (!runId) return <>—</>;
   const to = chatPathForRun(runId);
@@ -43,12 +43,12 @@ export function AuditTable({ rows, empty }: { rows: AuditEntry[]; empty: ReactNo
             const d = a.decision ? decisionInfo(a.decision) : null;
             return (
               <tr key={a.id}>
-                <td data-label="Quando" className="num act-when"><time dateTime={a.ts}>{formatDateTime(a.ts)}</time></td>
-                <td data-label="Attore">{ACTOR_LABEL[a.actor] ?? a.actor}</td>
-                <td data-label="Azione" className="mono act-action">{a.tool ? `${a.action}:${a.tool}` : a.action}</td>
-                <td data-label="Decisione">{d ? <Pill tone={d.tone}>{d.label}</Pill> : <span className="faint">—</span>}</td>
-                <td data-label="Dettaglio" className="mono text-xs act-detail">{a.detail || "—"}</td>
-                <td data-label="Run" className="mono text-xs faint"><RunCell runId={a.run_id} /></td>
+                <td data-label={tr("activity.quando")} className="num act-when"><time dateTime={a.ts}>{formatDateTime(a.ts)}</time></td>
+                <td data-label={tr("activity.attore")}>{ACTOR_LABEL[a.actor] ?? a.actor}</td>
+                <td data-label={tr("activity.azione")} className="mono act-action">{a.tool ? `${a.action}:${a.tool}` : a.action}</td>
+                <td data-label={tr("activity.decisione")}>{d ? <Pill tone={d.tone}>{d.label}</Pill> : <span className="faint">—</span>}</td>
+                <td data-label={tr("activity.dettaglio")} className="mono text-xs act-detail">{a.detail || "—"}</td>
+                <td data-label={tr("activity.run")} className="mono text-xs faint"><RunCell runId={a.run_id} /></td>
               </tr>
             );
           })}

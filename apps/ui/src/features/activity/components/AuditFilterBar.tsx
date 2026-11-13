@@ -2,8 +2,8 @@ import { useId } from "react";
 import { Button, Icon, Segmented, Select } from "../../../shared/ui";
 import { ACTOR_LABEL, ALL, decisionInfo, isFiltering, type AuditFilters } from "../model/filter";
 
-import { t as tr } from "../../../shared/i18n";
-const ACTORS = [{ id: ALL, label: "Tutto" }, ...Object.entries(ACTOR_LABEL).map(([id, label]) => ({ id, label: id === "agent" ? tr("activity.agenti") : label }))];
+import { t as tr, t } from "../../../shared/i18n";
+const ACTORS = [{ id: ALL, get label() { return t("activity.tutto"); } }, ...Object.entries(ACTOR_LABEL).map(([id, label]) => ({ id, label: id === "agent" ? tr("activity.agenti") : label }))];
 
 /** Filters of the audit trail: actor, decision, tool and free text. */
 export function AuditFilterBar({ filters, onChange, decisions, tools, hasUndecided }: {

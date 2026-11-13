@@ -23,9 +23,19 @@ const SRC = resolve(new URL("../src", import.meta.url).pathname);
 const MSG = join(SRC, "shared/i18n/messages");
 const args = process.argv.slice(2);
 const dry = args.includes("--dry");
+// --sweep: also converts any user-facing string literal (multi-word or capitalised) that the targeted rules above miss.
+// In function scope it becomes `t("key")`; as a property of a module-level object it becomes a getter, so it follows the
+// language; anything else at module level is only reported. --skip=regex leaves matching texts alone.
+const sweep = args.includes("--sweep");
+const skipArg = args.find((a) => a.startsWith("--skip="));
+const skipText = skipArg ? new RegExp(skipArg.slice(7)) : null;
 const targets = args.filter((a) => !a.startsWith("--"));
 
-const TEXT_ATTRS = new Set(["aria-label", "aria-description", "placeholder", "title", "alt", "label", "hint", "description", "subtitle", "legend", "emptyText", "empty", "confirmLabel", "addLabel", "saveLabel", "valuePlaceholder", "blocker", "subject", "noun"]);
+const SKIP_ATTRS = new Set(["className", "key", "id", "htmlFor", "to", "href", "name", "type", "role", "variant", "tone", "size", "icon", "value", "data-testid", "style", "target", "rel", "autoComplete", "inputMode", "method", "kind", "mode", "align", "dir", "viewBox", "d", "fill", "stroke", "width", "height", "idPrefix", "tag", "as", "accept", "pattern", "src", "lang", "format", "layout"]);
+const SKIP_PROPS = new Set(["id", "key", "kind", "type", "tone", "icon", "to", "href", "path", "url", "value", "method", "className", "class", "lang", "scope", "field", "route", "selector", "event", "format", "mode", "status", "state", "group", "level", "source", "origin", "category", "role"]);
+const SKIP_CALLEES = /^(t|tr|tNode|trNode|labelMap|tFields|useT|console\.\w+|describe|it|test|expect|require|cx|clsx|classNames|fetch|invoke|open|setItem|getItem|removeItem|querySelector|querySelectorAll|setAttribute|getAttribute|addEventListener|removeEventListener|URL|RegExp|Symbol|isoDate|JSON\.parse|JSON\.stringify|encodeURIComponent|decodeURIComponent|navigate|go|setQuery|splitKeywords)$/;
+const SKIP_METHODS = new Set(["includes", "startsWith", "endsWith", "indexOf", "lastIndexOf", "split", "join", "replace", "replaceAll", "match", "matchAll", "test", "localeCompare", "get", "set", "has", "add", "delete", "append", "padStart", "padEnd", "repeat", "toLowerCase", "normalize", "concat", "getItem", "setItem", "removeItem", "querySelector", "closest", "contains", "setAttribute", "getAttribute", "addEventListener", "removeEventListener", "toLocaleString", "toLocaleDateString", "toLocaleTimeString", "DateTimeFormat", "NumberFormat", "PluralRules", "ListFormat", "RelativeTimeFormat", "invalidateQueries", "setQueryData", "getQueryData", "prefetchQuery", "ensureQueryData", "open", "log", "warn", "error"]);
+const TEXT_ATTRS = new Set(["data-label", "aria-label", "aria-description", "placeholder", "title", "alt", "label", "hint", "description", "subtitle", "legend", "emptyText", "empty", "confirmLabel", "addLabel", "saveLabel", "valuePlaceholder", "blocker", "subject", "noun"]);
 const TEXT_PROPS = new Set(["label", "title", "description", "hint", "placeholder", "empty", "emptyText", "subtitle", "caption", "heading", "header", "message", "summary", "detail", "reason"]);
 const SKIP_TAGS = new Set(["code", "kbd", "pre", "samp", "style", "script"]);
 const letters = /\p{L}/u;
@@ -127,6 +137,7 @@ for (const file of files) {
   const fn = usesT && !/import\s*\{[^}]*\bt as tr\b/.test(src) ? "tr" : "t";
   const edits = [];
   let usesNode = false;
+  let usesGetter = false;
   let skippedModule = 0;
 
   const paramName = (e, used) => {
@@ -176,7 +187,68 @@ for (const file of files) {
   }
   const replace = (node, text) => edits.push({ start: node.getStart(sf), end: node.getEnd(), text });
 
+  // ---- sweep: strings the rules above do not reach --------------------------------------------
+  const moduleLeft = [];
+  const hasWorthyString = (n) => {
+    let found = false;
+    (function v(x) {
+      if (found) return;
+      if ((ts.isStringLiteral(x) || ts.isNoSubstitutionTemplateLiteral(x)) && sweepText(x.text)) found = true;
+      else ts.forEachChild(x, v);
+    })(n);
+    return found;
+  };
+  function sweepText(text) {
+    if (!worthy(text)) return false;
+    const clean = text.trim();
+    if (skipText && skipText.test(clean)) return false;
+    if (/\s/.test(clean)) return !/^[\w.\/:@#~=&?%$<>,|*+-]+(\s[\w.\/:@#~=&?%$<>,|*+-]+)*$/.test(clean) || /[A-Za-zÀ-ÿ]{4,}\s+[A-Za-zÀ-ÿ]{3,}/.test(clean);
+    return /^[A-ZÀ-Ù][a-zà-ù]{3,}$/.test(clean);
+  }
+  function sweepOk(node, text) {
+    if (!sweepText(text)) return false;
+    for (let p = node.parent; p; p = p.parent) {
+      if (ts.isCallExpression(p) || ts.isNewExpression(p)) {
+        const callee = p.expression.getText(sf);
+        if (SKIP_CALLEES.test(callee)) return false;
+        if (ts.isPropertyAccessExpression(p.expression) && SKIP_METHODS.has(p.expression.name.text)) return false;
+      }
+      if (ts.isImportDeclaration(p) || ts.isExportDeclaration(p) || ts.isTypeNode(p) || ts.isLiteralTypeNode(p)) return false;
+      if (ts.isJsxAttribute(p) && SKIP_ATTRS.has(p.name.getText(sf))) return false;
+      if (ts.isTaggedTemplateExpression(p)) return false;
+    }
+    const par = node.parent;
+    if (ts.isBinaryExpression(par) && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken].includes(par.operatorToken.kind)) return false;
+    if (ts.isElementAccessExpression(par) || ts.isCaseClause(par) || ts.isEnumMember(par)) return false;
+    if (ts.isPropertyAssignment(par) && (par.name === node || SKIP_PROPS.has(par.name.getText(sf)))) return false;
+    if (ts.isTemplateSpan(par)) return false;
+    return true;
+  }
+  function trySweep(node) {
+    let text;
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) text = node.text;
+    else if (ts.isTemplateExpression(node)) text = node.head.text + node.templateSpans.map((x) => "x" + x.literal.text).join("");
+    else return false;
+    if (!sweepOk(node, text)) return false;
+    if (ts.isTemplateExpression(node) && node.templateSpans.some((x) => hasWorthyString(x.expression))) {
+      moduleLeft.push(`${relative(SRC, file)}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1} template with nested text`);
+      return false;
+    }
+    const r = convertExpr(node);
+    if (r === null) return false;
+    const mod = !insideFunction(node);
+    if (!mod) { replace(node, r); return true; }
+    const par = node.parent;
+    if (ts.isPropertyAssignment(par) && par.initializer === node && (ts.isIdentifier(par.name) || ts.isStringLiteral(par.name))) {
+      edits.push({ start: par.getStart(sf), end: par.getEnd(), text: `get ${par.name.getText(sf)}() { return ${r}; }` });
+      return true;
+    }
+    moduleLeft.push(`${relative(SRC, file)}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1} ${JSON.stringify(text.slice(0, 60))}`);
+    return false;
+  }
+
   function visit(node) {
+    if (sweep && trySweep(node)) { if (!insideFunction(node) && ts.isPropertyAssignment(node.parent)) usesGetter = true; return; }
     const fnScope = insideFunction(node);
     if ((ts.isJsxElement(node) || ts.isJsxFragment(node)) && fnScope) {
       const tag = ts.isJsxElement(node) ? node.openingElement.tagName.getText(sf) : "";
@@ -277,6 +349,7 @@ for (const file of files) {
   }
   visit(sf);
 
+  for (const m of moduleLeft) report.push(`MANUAL ${m}`);
   if (skippedModule) report.push(`${relative(SRC, file)}: ${skippedModule} module-level literal(s) left (convert to a function by hand)`);
   if (!edits.length) continue;
   // drop edits nested in others
