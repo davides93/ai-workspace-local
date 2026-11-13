@@ -51,7 +51,7 @@ function LessonCard({ lesson, busy, onApprove, onReject, error }: {
           </Field>
         </div>
       ) : (
-        <div className="ln-preview"><Markdown text={lesson.content} /></div>
+        <div className="ln-preview" tabIndex={0} role="region" aria-label={t("learning.anteprima_della_lezione")}><Markdown text={lesson.content} /></div>
       )}
       <p className="faint text-xs">{t("learning.finche_non_approvi_non_viene", { p: KIND_DESTINATION[lesson.kind] })}</p>
       {error !== undefined && error !== null && <p className="field-error" role="alert">{errorMessage(error)}</p>}

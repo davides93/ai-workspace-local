@@ -77,6 +77,8 @@ export function TagInput({ id, label, value, onChange, parse = splitList, liveSp
       <input
         ref={inputRef}
         id={id}
+        // The placeholder goes away with the first tag, so the field needs a name of its own.
+        aria-label={label}
         className="taginput-field"
         value={draft}
         placeholder={value.length === 0 ? placeholder : undefined}

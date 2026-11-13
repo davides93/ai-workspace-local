@@ -27,4 +27,5 @@ export const learningEn: Record<keyof typeof learningIt, string> = {
   "learning.il_contenuto_non_puo_essere": "The content can't be empty.",
   "learning.il_titolo_supera_i_caratteri": "The title is over {max} characters.",
   "learning.il_contenuto_supera_i_caratteri": "The content is over {max} characters.",
+  "learning.anteprima_della_lezione": "Lesson preview",
 };

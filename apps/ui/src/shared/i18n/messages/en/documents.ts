@@ -35,6 +35,7 @@ export const documentsEn: Record<keyof typeof documentsIt, string> = {
   "documents.ancora_nessun_documento": "No documents yet",
   "documents.aggiungi_file_di_testo_markdown": "Add text files, Markdown, code or PDFs: I split them into passages and the assistant searches them when needed.",
   "documents.passaggi": "{p} · {chunks} passages{p2}",
+  "documents.passaggio": "{p} · 1 passage{p2}",
   "documents.elimina_3": "Delete {name}",
   "documents.togliere_il_documento": "Remove the document?",
   "documents.togli": "Remove",

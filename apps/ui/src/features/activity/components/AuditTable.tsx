@@ -26,7 +26,7 @@ function RunCell({ runId }: { runId?: string }) {
  */
 export function AuditTable({ rows, empty }: { rows: AuditEntry[]; empty: ReactNode }) {
   return (
-    <div className="table-wrap act-wrap">
+    <div className="table-wrap act-wrap" tabIndex={0} role="region" aria-label={t("activity.audit_trail")}>
       <table className="data act-table" aria-label={t("activity.audit_trail")}>
         <thead>
           <tr>

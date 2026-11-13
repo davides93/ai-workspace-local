@@ -17,3 +17,8 @@ apps/desktop/src-tauri/target
 !.env.example
 !.env.sample
 !.env.template
+
+# Playwright reports and artefacts (apps/ui)
+apps/ui/playwright-report
+apps/ui/test-results
+apps/ui/e2e/.out

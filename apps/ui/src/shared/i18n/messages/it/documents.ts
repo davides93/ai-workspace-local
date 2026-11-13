@@ -33,6 +33,7 @@ export const documentsIt = {
   "documents.ancora_nessun_documento": "Ancora nessun documento",
   "documents.aggiungi_file_di_testo_markdown": "Aggiungi file di testo, Markdown, codice o PDF: li divido in passaggi e l'assistente li cerca quando serve.",
   "documents.passaggi": "{p} · {chunks} passaggi{p2}",
+  "documents.passaggio": "{p} · 1 passaggio{p2}",
   "documents.elimina_3": "Elimina {name}",
   "documents.togliere_il_documento": "Togliere il documento?",
   "documents.togli": "Togli",

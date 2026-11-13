@@ -31,7 +31,7 @@ export function App() {
   const commands = useCommands();
   const [moreOpen, setMoreOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const mainRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
   const current = resolved?.route.id;
   // Remember the open chat before the rail renders, so its Workspace link always points at it.
   if (resolved?.route.id === "chat" && resolved.params.sessionId) rememberChatSession(resolved.params.sessionId);
@@ -66,7 +66,7 @@ export function App() {
       <button type="button" className="skip-link" onClick={() => mainRef.current?.focus()}>{t("shell.vai_al_contenuto")}</button>
       <Rail current={current} onOpenPalette={() => setPaletteOpen(true)} />
 
-      <div className="main" ref={mainRef} tabIndex={-1} id="main">
+      <main className="main" ref={mainRef} tabIndex={-1} id="main">
         <DemoBanner />
         <ConnectionBanner />
         <ApprovalsCenter />
@@ -86,7 +86,7 @@ export function App() {
             )}
           </Suspense>
         </ErrorBoundary>
-      </div>
+      </main>
 
       <TabBar current={current} moreOpen={moreOpen} onMore={() => setMoreOpen(true)} />
       {moreOpen && <MoreSheet current={current} onClose={() => setMoreOpen(false)} onOpenPalette={() => setPaletteOpen(true)} />}

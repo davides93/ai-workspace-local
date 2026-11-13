@@ -23,8 +23,9 @@ export function DataTable<T>({ columns, rows, rowKey, onRowClick, empty, label, 
   label: string;
   className?: string;
 }) {
+  // The wrapper scrolls sideways, so it takes the focus: the keyboard can scroll it too.
   return (
-    <div className={cx("table-wrap", className)}>
+    <div className={cx("table-wrap", className)} tabIndex={0} role="region" aria-label={label}>
       <table className="data" aria-label={label}>
         <thead>
           <tr>

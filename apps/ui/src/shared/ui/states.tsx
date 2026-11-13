@@ -7,9 +7,11 @@ import { Icon } from "./Icon";
 
 import { t, t as tr } from "../i18n";
 /** Nothing to show yet: say why and offer the next step. */
-export function EmptyState({ icon, title, description, action, className }: {
+export function EmptyState({ icon, title, description, action, className, headingLevel = 3 }: {
   icon?: string;
   title: string;
+  /** `2` when the state sits straight under the page title (no section heading in between), so no level is skipped. */
+  headingLevel?: 2 | 3;
   description?: ReactNode;
   action?: ReactNode;
   className?: string;
@@ -17,7 +19,7 @@ export function EmptyState({ icon, title, description, action, className }: {
   return (
     <div className={cx("empty", className)}>
       {icon && <Icon name={icon} size={22} />}
-      <h3>{title}</h3>
+      {headingLevel === 2 ? <h2>{title}</h2> : <h3>{title}</h3>}
       {description && <p className="muted">{description}</p>}
       {action && <div className="row">{action}</div>}
     </div>

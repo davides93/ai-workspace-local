@@ -25,4 +25,5 @@ export const learningIt = {
   "learning.il_contenuto_non_puo_essere": "Il contenuto non può essere vuoto.",
   "learning.il_titolo_supera_i_caratteri": "Il titolo supera i {max} caratteri.",
   "learning.il_contenuto_supera_i_caratteri": "Il contenuto supera i {max} caratteri.",
+  "learning.anteprima_della_lezione": "Anteprima della lezione",
 } as const;

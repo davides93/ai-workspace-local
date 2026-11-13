@@ -24,7 +24,7 @@ export function DocumentList({ collectionId }: { collectionId: string }) {
                 <li key={d.id} className="kb-doc">
                   <div className="kb-doc-main">
                     <b className="kb-doc-name">{d.name}</b>
-                    <span className="faint text-xs">{t("documents.passaggi", { p: humanSize(d.size), chunks: d.chunks, p2: d.source !== "caricato" ? ` · ${d.source}` : "" })}</span>
+                    <span className="faint text-xs">{t(d.chunks === 1 ? "documents.passaggio" : "documents.passaggi", { p: humanSize(d.size), chunks: d.chunks, p2: d.source !== "caricato" ? ` · ${d.source}` : "" })}</span>
                     {d.status === "failed" && d.error && <span className="kb-doc-error text-sm">{d.error}</span>}
                   </div>
                   <Pill tone={d.status === "ready" ? "ok" : d.status === "failed" ? "crit" : "info"}>{documentStatusLabel(d)}</Pill>

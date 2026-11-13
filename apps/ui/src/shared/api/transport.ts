@@ -318,6 +318,10 @@ export async function createTransport(): Promise<Transport> {
   const forceMock = typeof __AIW_FORCE_MOCK__ !== "undefined" && __AIW_FORCE_MOCK__;
   if (forceMock || params.get("demo") === "1") {
     const { MockTransport } = await import("./mock");
+    const { applyMockScenario, isMockScenario } = await import("./mock/scenario");
+    // `?scenario=first-run`: a demo that starts empty (used by the end-to-end tests).
+    const scenario = params.get("scenario");
+    if (isMockScenario(scenario)) applyMockScenario(scenario);
     return new MockTransport();
   }
   if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {

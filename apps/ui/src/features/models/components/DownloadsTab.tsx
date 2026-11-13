@@ -25,7 +25,7 @@ export function DownloadsTab({ jobs }: { jobs: DownloadProgress[] }) {
   if (jobs.length === 0) {
     return (
       <EmptyState
-        icon="download" title={t("models.nessun_download")}
+        headingLevel={2} icon="download" title={t("models.nessun_download")}
         description={t("models.i_download_avviati_da_scopri")}
         action={<><Button variant="primary" icon="search" onClick={() => navigate("/models/discover")}>{t("models.scopri_modelli")}</Button><Button onClick={() => navigate("/models/catalog")}>{t("models.apri_il_catalogo")}</Button></>}
       />

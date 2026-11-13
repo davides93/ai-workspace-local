@@ -28,7 +28,7 @@ export function ChannelsView() {
       <QueryState query={channels}>
         {(list) =>
           list.length === 0 && !adding ? (
-            <EmptyState icon="send" title={t("channels.nessun_canale_collegato")} description={t("channels.collega_telegram_slack_o_una")} action={<Button variant="primary" onClick={() => setAdding(true)}>{t("channels.aggiungi_un_canale")}</Button>} />
+            <EmptyState headingLevel={2} icon="send" title={t("channels.nessun_canale_collegato")} description={t("channels.collega_telegram_slack_o_una")} action={<Button variant="primary" onClick={() => setAdding(true)}>{t("channels.aggiungi_un_canale")}</Button>} />
           ) : (
             <div className="stack stack-lg">
               {list.map((c) => <ChannelCard key={c.id} channel={c} agents={agents.data ?? []} />)}

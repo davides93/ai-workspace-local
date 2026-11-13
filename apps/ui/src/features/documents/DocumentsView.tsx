@@ -46,7 +46,7 @@ export function DocumentsView() {
             <aside className="kb-side" aria-label={t("documents.raccolte")}>
               <CollectionList collections={list} selected={selectedId} onSelect={setWanted} />
             </aside>
-            <main className="kb-main">
+            <section className="kb-main">
               {selected ? (
                 <>
                   <div className="kb-title">
@@ -61,7 +61,7 @@ export function DocumentsView() {
               ) : (
                 <p className="muted">{t("documents.crea_la_prima_raccolta_qui")}</p>
               )}
-            </main>
+            </section>
           </div>
         )}
       </QueryState>

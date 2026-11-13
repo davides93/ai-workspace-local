@@ -9,7 +9,7 @@ export function DeviceChip({ onNavigate }: { onNavigate?: () => void }) {
   const { data: system } = useSystem();
   const accel = system?.device.accelerators.find((a) => a.kind !== "cpu");
   return (
-    <Link to="/devices" className="device-chip" title={t("shell.dispositivo_corrente")} aria-label={t("shell.dispositivo_corrente_2", { name: system?.device.name ?? t("shell.detecting_device") })} onClick={onNavigate}>
+    <Link to="/devices" className="device-chip" title={t("shell.dispositivo_corrente")} aria-label={t("shell.dispositivo_corrente_2", { p: system?.device.name ?? t("shell.detecting_device") })} onClick={onNavigate}>
       <Led tone={system ? "ok" : "off"} />
       <b className="ellipsis chip-text">{system?.device.name ?? t("shell.rilevamento")}</b>
       <span className="muted mono ellipsis chip-text text-xs">

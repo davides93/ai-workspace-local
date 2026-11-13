@@ -109,7 +109,7 @@ export function SandboxPanel() {
       </Section>
 
       <Section title={t("security.cosa_contiene_un_comando_per")} hint={t("security.cosa_fa_davvero_il_backend")}>
-        <div className="table-wrap">
+        <div className="table-wrap" tabIndex={0} role="region" aria-label={t("security.contenimento_dei_comandi_per_sistema")}>
           <table className="data" aria-label={t("security.contenimento_dei_comandi_per_sistema")}>
             <thead><tr><th scope="col">{t("security.sistema")}</th><th scope="col">{t("security.meccanismo")}</th><th scope="col">{t("security.scritture")}</th><th scope="col">{t("security.rete")}</th><th scope="col">{t("security.cartelle_nascoste")}</th><th scope="col">{t("security.server_mcp")}</th><th scope="col">{t("security.nota")}</th></tr></thead>
             <tbody>
