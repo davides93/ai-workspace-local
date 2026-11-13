@@ -208,6 +208,18 @@ li scrive `publish` dai file già rinominati).
   `…_aarch64.AppImage` è scelto da Linux arm64 (prima di questo target non c'era e l'aggiornamento mostrava solo la pagina
   della release); i `.deb` e i `.rpm` non si scaricano mai dall'app; i file `aiw-…` (daemon arm64 e CUDA) **sono sempre
   saltati**, perché `pick_asset` ignora ogni nome che comincia per `aiw-`. Quindi chiamare un installer `aiw-…` lo nasconderebbe.
+- Cosa riceve chi, con `auto`, `stable` e `beta` (provato da un test in `update.rs`, con release `v0.4.1`, `v0.5.0-beta.8`,
+  `v0.5.0-beta.9`, `v0.5.0-rc.1`, `v0.6.0-alpha.1`; ogni canale vede anche i più stabili, vince la versione più alta, mai un downgrade):
+
+  | Installato | `auto` | `stable` | `beta` |
+  |---|---|---|---|
+  | stabile (0.4.0) | `v0.4.1` (non vede beta, rc né alpha) | `v0.4.1` | `v0.5.0-rc.1` |
+  | stabile aggiornata (0.4.1) | niente | niente | `v0.5.0-rc.1` |
+  | beta (0.5.0-beta.8) | `v0.5.0-rc.1` (beta, rc e stabili, mai alpha) | niente (non scende alla 0.4.1) | `v0.5.0-rc.1` |
+  | rc (0.5.0-rc.1) | niente | niente | niente |
+
+  Quando esce `v0.5.0`, tutti la ricevono, beta comprese e anche con `stable`. Una stabile con `auto` non riceve l'alpha
+  della versione dopo. Il suffisso si riconosce solo come `-rc` o `-beta` seguiti da punto o da niente: `-beta8` conta come alpha.
 - Se una release non ha un installer per la piattaforma, l'app la segnala lo stesso (con il collegamento alla pagina).
 
 ## 7. Cosa non è stato provato

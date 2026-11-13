@@ -6,7 +6,7 @@ import type {
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  CommandAnalysis, PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode,
+  CommandAnalysis, PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
 
 export class ApiError extends Error {
@@ -107,6 +107,9 @@ export class HttpTransport implements Transport {
   updateStatus = () => this.req<UpdateStatus>("GET", "/update");
   checkUpdate = () => this.req<UpdateStatus>("POST", "/update/check", {});
   downloadUpdate = () => this.req<UpdateStatus>("POST", "/update/download", {});
+  createBackup = (includeSecrets: boolean) => this.req<BackupFile>("POST", "/backup", { include_secrets: includeSecrets });
+  inspectBackup = (data: string) => this.req<BackupInspect>("POST", "/backup/inspect", { data });
+  diagnostics = () => this.req<Record<string, unknown>>("GET", "/diagnostics");
   installUpdate = () => this.req<UpdateStatus>("POST", "/update/install", {});
 
   models = () => this.req<LocalModel[]>("GET", "/models");

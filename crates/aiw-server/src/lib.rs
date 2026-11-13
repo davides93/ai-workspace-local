@@ -3,6 +3,7 @@
 
 mod a2a;
 mod anthropic;
+mod backup_api;
 mod extract;
 mod gateway;
 mod kb_api;
@@ -248,6 +249,9 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/tls", get(tokens_api::tls_status))
         .route("/api/tls/ca.pem", get(tokens_api::tls_ca))
         .route("/api/tls/ca", get(tokens_api::tls_ca_json))
+        .route("/api/backup", post(backup_api::create))
+        .route("/api/backup/inspect", post(backup_api::inspect).layer(DefaultBodyLimit::max(backup_api::INSPECT_BODY_LIMIT)))
+        .route("/api/diagnostics", get(backup_api::diagnostics))
         .route("/api/update", get(update_status))
         .route("/api/update/check", post(update_check))
         .route("/api/update/download", post(update_download))
@@ -1766,6 +1770,8 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_backup;
 #[cfg(test)]
 mod tests_channels;
 #[cfg(test)]

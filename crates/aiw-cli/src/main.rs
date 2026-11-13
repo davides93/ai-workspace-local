@@ -122,6 +122,45 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<KbCmd>,
     },
+    /// Copia di sicurezza e ripristino dei dati (la cartella ~/.aiw): crea un archivio, lo controlla, lo ripristina
+    Backup {
+        #[command(subcommand)]
+        cmd: BackupCmd,
+    },
+    /// Esporta la diagnostica in un file JSON da allegare a una segnalazione: versione, sistema, hardware, runtime,
+    /// impostazioni (segreti mascherati), schema del database, controlli di salute, ultime righe dei log.
+    /// Non contiene chat, documenti o posta.
+    Diagnostics {
+        /// File di destinazione (di serie: stampa sul terminale)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackupCmd {
+    /// Crea un archivio .tar.gz dei dati con un manifesto (versioni, file, SHA-256). Funziona anche a daemon acceso.
+    /// Esclusi sempre: modelli (non si includono mai), runtime, cache, log, browser, checkpoint. Esclusi di serie: chiavi
+    /// e certificati TLS, token, e tutti i segreti (password IMAP, token dei canali, chiavi dei provider, header dei
+    /// server MCP, chiavi API nelle impostazioni).
+    Create {
+        /// File di destinazione (di serie: aiw-backup-<data>.tar.gz nella cartella corrente; non si sovrascrive)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Include anche i segreti: l'archivio diventa sensibile e va custodito come la cartella dei dati
+        #[arg(long)]
+        include_secrets: bool,
+    },
+    /// Ripristina un archivio. Solo con l'app chiusa e il daemon fermo. Prima controlla tutto (manifesto, SHA-256,
+    /// percorsi, versione dello schema), poi salva una copia dei dati attuali in <dati>/backups/ e solo allora sostituisce.
+    Restore {
+        file: PathBuf,
+        /// Non chiede conferma
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Controlla un archivio senza ripristinarlo e mostra cosa contiene
+    Inspect { file: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -508,7 +547,12 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();
-    let serve_mode = matches!(cli.cmd, Cmd::Serve { .. });
+    // Backup commands never start the engine: restoring must not have the database open, and inspecting needs no data.
+    let cmd = match cli.cmd {
+        Cmd::Backup { cmd } => return backup_cmd(cli.data.clone(), cmd),
+        other => other,
+    };
+    let serve_mode = matches!(cmd, Cmd::Serve { .. });
     let engine = Engine::new(EngineOptions {
         data_dir: cli.data.clone(),
         workspace_root: cli.workspace.clone(),
@@ -517,7 +561,7 @@ async fn main() -> Result<()> {
     })
     .await
     .context("avvio del motore")?;
-    match cli.cmd {
+    match cmd {
         Cmd::Serve { port, lan, ui } => {
             let lan = lan || engine.config().effective.get("server.lan").and_then(|v| v.as_bool()).unwrap_or(false);
             let ui = ui_dir(ui);
@@ -550,6 +594,23 @@ async fn main() -> Result<()> {
                     eprintln!("\nArresto: fermo i runtime avviati…");
                     e2.kill().await;
                 }
+            }
+        }
+        Cmd::Backup { .. } => unreachable!("handled before the engine starts"),
+        Cmd::Diagnostics { output } => {
+            let doc = serde_json::to_string_pretty(&engine.diagnostics().await?)?;
+            match output {
+                Some(path) => {
+                    if path.exists() {
+                        bail!("{} esiste già: scegli un altro nome", path.display());
+                    }
+                    std::fs::write(&path, doc + "\n").with_context(|| format!("scrittura di {}", path.display()))?;
+                    eprintln!(
+                        "Diagnostica scritta in {}. Non contiene chat, documenti o posta; i segreti sono mascherati.",
+                        path.display()
+                    );
+                }
+                None => println!("{doc}"),
             }
         }
         Cmd::Doctor => doctor(&engine).await,
@@ -1253,6 +1314,88 @@ async fn eval_run_one(engine: &Engine, suite: &aiw_eval::Suite, req: aiw_engine:
             Ok(report)
         }
     }
+}
+
+fn backup_cmd(data: Option<PathBuf>, cmd: BackupCmd) -> Result<()> {
+    use aiw_engine::backup::{self, BackupManifest, BackupOptions};
+    let dirs = data.map(aiw_core::paths::DataDirs::at).unwrap_or_else(aiw_core::paths::DataDirs::resolve);
+    let describe = |m: &BackupManifest| {
+        println!("  Creato il {} da AI Workspace Local {} ({}, {})", m.created_at, m.app_version, m.os, m.arch);
+        println!("  Schema del database: {} · {} file · {}", m.schema_version, m.files.len(), size(m.total_bytes()));
+        if m.sensitive {
+            println!("  SENSIBILE: contiene segreti (chiavi, token, certificati TLS). Conservalo come la cartella dei dati.");
+        }
+        for e in &m.excluded {
+            println!("  Escluso: {e}");
+        }
+        for s in &m.skipped {
+            println!("  Non salvato: {s}");
+        }
+    };
+    match cmd {
+        BackupCmd::Create { output, include_secrets } => {
+            let out = output.unwrap_or_else(|| {
+                let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                PathBuf::from(format!("aiw-backup-{stamp}{}.tar.gz", if include_secrets { "-con-segreti" } else { "" }))
+            });
+            let m = backup::create(&dirs, &BackupOptions { include_secrets }, &out)?;
+            println!("Backup creato: {} ({})", out.display(), size(std::fs::metadata(&out)?.len()));
+            describe(&m);
+            if include_secrets {
+                eprintln!("ATTENZIONE: l'archivio contiene i segreti in chiaro. Non caricarlo su servizi condivisi e non allegarlo a una segnalazione.");
+            } else {
+                eprintln!("I segreti non sono inclusi: dopo un ripristino vanno inseriti di nuovo (chiavi dei provider, password IMAP, token dei canali e dei server MCP).");
+            }
+        }
+        BackupCmd::Inspect { file } => {
+            let m = backup::inspect(&file)?;
+            println!("{}: archivio valido (manifesto, percorsi, dimensioni e SHA-256 di ogni file controllati)", file.display());
+            describe(&m);
+            if m.schema_version > aiw_engine::store::SCHEMA_VERSION {
+                println!(
+                    "  NON ripristinabile qui: lo schema {} è più recente di quello che questa versione conosce ({}).",
+                    m.schema_version,
+                    aiw_engine::store::SCHEMA_VERSION
+                );
+            }
+        }
+        BackupCmd::Restore { file, yes } => {
+            if backup::data_in_use(&dirs)? {
+                bail!(
+                    "i dati in {} sono in uso: chiudi l'app e ferma il daemon (`aiw serve`), poi riprova. Il ripristino non gira a programma acceso",
+                    dirs.root.display()
+                );
+            }
+            let m = backup::inspect(&file)?;
+            println!("Ripristino di {} in {}", file.display(), dirs.root.display());
+            describe(&m);
+            if !yes {
+                eprint!(
+                    "Sostituire i dati con quelli del backup? Prima salvo una copia di quelli attuali in {}. [s/N] ",
+                    dirs.root.join("backups").display()
+                );
+                std::io::stderr().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                if !(line.trim().eq_ignore_ascii_case("s") || line.trim().eq_ignore_ascii_case("y")) {
+                    bail!("annullato: non ho toccato nulla");
+                }
+            }
+            let r = backup::restore(&dirs, &file)?;
+            match &r.safety_copy {
+                Some(p) => println!("Copia di sicurezza dei dati di prima (con i segreti, trattala come sensibile): {}", p.display()),
+                None => println!("Non c'erano dati da salvare prima."),
+            }
+            if r.schema_from != r.schema_to {
+                println!("Database migrato dallo schema {} al {}.", r.schema_from, r.schema_to);
+            }
+            println!("Ripristinati {} file. Riavvia l'app.", r.restored.len());
+            if !r.manifest.sensitive {
+                println!("Il backup non conteneva i segreti: reinserisci chiavi dei provider, password IMAP, token dei canali e dei server MCP, e accoppia di nuovo i dispositivi.");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn size(bytes: u64) -> String {

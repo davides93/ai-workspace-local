@@ -46,6 +46,8 @@ sha2.workspace = true
 semver.workspace = true
 reqwest.workspace = true
 dirs.workspace = true
+# gzip of the backup archive (pure Rust backend; already in the tree through reqwest).
+flate2 = "1"
 base64.workspace = true
 tokio-tungstenite.workspace = true
 rustls.workspace = true

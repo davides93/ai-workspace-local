@@ -11,6 +11,7 @@ import { useBackgroundActions, useConfig, useSetConfig } from "./api";
 import { BackgroundBlock } from "./components/BackgroundBlock";
 import { LayerBar } from "./components/LayerBar";
 import { MailAccountsEditor } from "../channels/components/MailAccountsEditor";
+import { BackupPanel } from "./components/BackupPanel";
 import { UpdatePanel } from "./components/UpdatePanel";
 import { SettingRow } from "./components/SettingRow";
 import { changesSchedule, isPhoneOs, shouldAskNotifications } from "./model/background";
@@ -86,6 +87,7 @@ export function SettingsView() {
       </div>
 
       <UpdatePanel />
+      <BackupPanel />
 
       <QueryState query={cfg}>
         {(view) => {

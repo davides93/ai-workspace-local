@@ -316,6 +316,42 @@ export interface UpdateStatus {
   error?: string | null;
 }
 
+// ---------- Backup and diagnostics ----------
+export interface BackupManifestFile { path: string; size: number; sha256: string }
+/** `manifest.json` of a backup archive. */
+export interface BackupManifest {
+  format: number;
+  app: string;
+  app_version: string;
+  /** Schema of the database inside the archive. */
+  schema_version: number;
+  created_at: string;
+  os: string;
+  arch: string;
+  /** The archive holds secrets: keep it like the data folder itself. */
+  sensitive: boolean;
+  /** What was left out, in words. */
+  excluded: string[];
+  skipped: string[];
+  files: BackupManifestFile[];
+}
+/** POST /api/backup — the archive itself travels as base64 in `data`. */
+export interface BackupFile {
+  file_name: string;
+  size: number;
+  sensitive: boolean;
+  manifest: BackupManifest;
+  data: string;
+}
+/** POST /api/backup/inspect — every file, size, SHA-256 and path was checked (a bad archive is an error). */
+export interface BackupInspect {
+  manifest: BackupManifest;
+  verified: boolean;
+  current_schema_version: number;
+  /** False when the database comes from a newer version of the app. */
+  restorable_here: boolean;
+}
+
 // ---------- Models ----------
 export type Fit = "great" | "ok" | "tight" | "no";
 

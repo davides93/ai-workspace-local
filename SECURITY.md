@@ -44,6 +44,8 @@ Senza sandbox (modalità «Nessun contenimento», Linux senza bubblewrap, Androi
 
 **Token e TLS.** L'API usa token con ambiti: `owner` (questo computer), `device` (dispositivi accoppiati), `gateway`, `a2a`, `mcp`. Nel database restano solo gli hash con sale; il token `owner` sta nel file `token` (permessi 0600). Con la LAN accesa conviene `server.tls`: il pairing porta l'impronta SHA-256 del certificato e i client Rust verso un dispositivo accoppiato verificano solo quella. Senza TLS in LAN, codice di pairing e token viaggiano in chiaro.
 
+**Backup e diagnostica.** Un backup di default non contiene chiavi e certificati TLS, token, segreti e credenziali né modelli; con `--include-secrets` l'archivio è marcato `sensitive` ed è sensibile quanto la cartella dei dati (non è cifrato). Creare un backup, ispezionarlo e scaricare la diagnostica richiede il token `owner` (un token `device` riceve 403); il ripristino è solo da CLI con il demone fermo e rifiuta percorsi assoluti, `..`, collegamenti e archivi con schema più nuovo. La diagnostica maschera tutti i segreti e non contiene chat, documenti o posta.
+
 ## Limiti noti
 
 Elenco completo e aggiornato in [docs/STATUS.md](docs/STATUS.md) §2.9. In sintesi:

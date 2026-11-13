@@ -761,6 +761,72 @@ mod tests {
         assert!(pick_release(&drafts, &v("0.1.0"), Channel::Alpha, "macos", "aarch64").is_none());
     }
 
+    /// What an installation is offered, by what it has installed and what `update.channel` says (`auto` included): the
+    /// table that `docs/release/RELEASE.md` §6 documents. `None` is "nothing to offer".
+    #[test]
+    fn what_each_installation_is_offered_by_installed_version_and_channel_setting() {
+        let offered = |rels: &[GhRelease], installed: &str, setting: &str| {
+            let current = v(installed);
+            let channel = Channel::parse(setting, &current).unwrap();
+            pick_release(rels, &current, channel, "linux", "x86_64").map(|r| r.tag)
+        };
+        // Only betas and a release candidate ahead of the last stable release (where the project is today).
+        let betas = vec![
+            release("v0.4.1", ALL),
+            release("v0.5.0-beta.8", ALL),
+            release("v0.5.0-beta.9", ALL),
+            release("v0.5.0-rc.1", ALL),
+            release("v0.6.0-alpha.1", ALL),
+        ];
+        let cases: [(&str, &str, Option<&str>); 12] = [
+            // A stable install: `auto` is `stable`, and it does not see the betas, the candidate or the alpha.
+            ("0.4.0", "auto", Some("v0.4.1")),
+            ("0.4.0", "stable", Some("v0.4.1")),
+            ("0.4.1", "auto", None),
+            // Opting in from a stable install: beta also gets the candidate (more stable than a beta; 0.5.0-rc.1 is the highest).
+            ("0.4.0", "beta", Some("v0.5.0-rc.1")),
+            ("0.4.1", "beta", Some("v0.5.0-rc.1")),
+            ("0.4.1", "alpha", Some("v0.6.0-alpha.1")),
+            // A beta install: `auto` stays on beta (betas, candidates, stable), never the alpha.
+            ("0.5.0-beta.8", "auto", Some("v0.5.0-rc.1")),
+            ("0.5.0-beta.8", "beta", Some("v0.5.0-rc.1")),
+            ("0.5.0-rc.1", "auto", None),
+            // A beta install that asks for `stable` is not downgraded to the older stable release.
+            ("0.5.0-beta.8", "stable", None),
+            ("0.5.0-beta.9", "auto", Some("v0.5.0-rc.1")),
+            ("0.5.0-beta.9", "stable", None),
+        ];
+        for (installed, setting, want) in cases {
+            assert_eq!(offered(&betas, installed, setting).as_deref(), want, "installed {installed}, channel `{setting}`");
+        }
+        // Once 0.5.0 is out: everybody is offered it, and a beta install is moved to stable whatever the setting says.
+        let mut with_final = betas;
+        with_final.push(release("v0.5.0", ALL));
+        for (installed, setting) in [
+            ("0.4.1", "auto"),
+            ("0.4.1", "stable"),
+            ("0.4.1", "beta"),
+            ("0.5.0-beta.8", "auto"),
+            ("0.5.0-beta.8", "stable"),
+            ("0.5.0-rc.1", "beta"),
+        ] {
+            assert_eq!(offered(&with_final, installed, setting).as_deref(), Some("v0.5.0"), "installed {installed}, channel `{setting}`");
+        }
+        assert_eq!(offered(&with_final, "0.5.0", "auto"), None, "a stable install on `auto` does not get the alpha of the next version");
+        assert_eq!(offered(&with_final, "0.5.0", "beta"), None);
+        assert_eq!(offered(&with_final, "0.5.0", "alpha").as_deref(), Some("v0.6.0-alpha.1"));
+        // `auto` resolves from the installed version alone: the label decides, and only `rc`/`beta` followed by a dot or nothing.
+        assert_eq!(Channel::parse("auto", &v("0.5.0-beta.8")).unwrap(), Channel::Beta);
+        assert_eq!(Channel::parse("auto", &v("0.5.0-rc.2")).unwrap(), Channel::Rc);
+        assert_eq!(Channel::parse("auto", &v("0.5.0-beta")).unwrap(), Channel::Beta);
+        assert_eq!(
+            Channel::parse("auto", &v("0.5.0-beta8")).unwrap(),
+            Channel::Alpha,
+            "`beta8` has no dot: it is not recognised as a beta"
+        );
+        assert_eq!(Channel::parse("auto", &v("0.5.0")).unwrap(), Channel::Stable);
+    }
+
     #[test]
     fn release_info_carries_installer_notes_and_checksums() {
         let rels = vec![release("v0.5.0", ALL)];

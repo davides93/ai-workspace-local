@@ -11,7 +11,7 @@ import type {
   AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
   ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody,
+  ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, maskConfigSecrets, mcp, models, nid, now, policyRules, profiles,
@@ -858,6 +858,20 @@ export class MockTransport implements Transport {
     if (!u.file) throw new ApiError(400, "nessun installer scaricato e verificato");
     u.message = "Trascina AI Workspace Local nella cartella Applicazioni, poi riapri l'app.";
     return this.updateStatus();
+  }
+  async createBackup(includeSecrets: boolean): Promise<BackupFile> {
+    await sleep(300);
+    const manifest = {
+      format: 1, app: "ai-workspace-local", app_version: this.update.current, schema_version: 6, created_at: new Date().toISOString(), os: "linux", arch: "x86_64",
+      sensitive: includeSecrets, excluded: includeSecrets ? [] : ["chiavi e certificati TLS", "token", "segreti e credenziali", "modelli", "cache e log"], skipped: [], files: [],
+    };
+    return { file_name: "aiw-backup-demo.tar.gz", size: 1024, sensitive: includeSecrets, manifest, data: btoa("demo") };
+  }
+  async inspectBackup(_data: string): Promise<BackupInspect> {
+    throw new ApiError(400, "demo: nessun archivio reale");
+  }
+  async diagnostics(): Promise<Record<string, unknown>> {
+    return { app_version: this.update.current, note: "demo" };
   }
   private installs = new Map<string, InstallJob>();
   async runtimeInstallPlan(id: string): Promise<InstallPlan> {

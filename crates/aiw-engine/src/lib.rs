@@ -4,9 +4,11 @@ pub mod a2a_client;
 pub mod adviser;
 pub mod attachments;
 pub mod background;
+pub mod backup;
 pub mod channels;
 mod dataset;
 pub mod defaults;
+pub mod diagnostics;
 pub mod eval;
 mod host;
 pub mod kb;
@@ -2715,6 +2717,8 @@ mod tests_attachments;
 mod tests_auto;
 #[cfg(test)]
 mod tests_background;
+#[cfg(test)]
+mod tests_backup;
 #[cfg(test)]
 mod tests_channels;
 #[cfg(test)]

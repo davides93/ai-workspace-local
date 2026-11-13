@@ -55,3 +55,8 @@
   .set-voice-row { grid-template-columns: minmax(0, 1fr) auto; }
   .set-voice-row > label { grid-column: 1 / -1; }
 }
+
+/* Backup and diagnostics panel. */
+.bkp { gap: var(--space-3); padding: var(--space-4); }
+.bkp-check { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.bkp-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }

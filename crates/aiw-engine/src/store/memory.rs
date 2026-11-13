@@ -121,6 +121,11 @@ pub(super) fn migrate(conn: &Connection) -> Result<bool> {
     Ok(fts)
 }
 
+/// Is the full-text index there (it is created by [`migrate`] when this SQLite has FTS5)?
+pub(super) fn has_fts(conn: &Connection) -> Result<bool> {
+    Ok(conn.query_row("SELECT 1 FROM sqlite_master WHERE name = 'memories_fts'", [], |_| Ok(true)).optional().map_err(db)?.unwrap_or(false))
+}
+
 impl Store {
     /// Does the bundled SQLite have the FTS5 index? When not, [`crate::memory`] scores in Rust.
     pub fn memory_has_fts(&self) -> bool {

@@ -139,6 +139,21 @@ pub(super) fn migrate(conn: &Connection) -> Result<bool> {
     Ok(fts)
 }
 
+/// What the knowledge base does at every start, whatever the schema version: documents left `indexing` by a previous
+/// run are marked failed (no job survives a restart). Returns whether the full-text index is there.
+pub(super) fn start(conn: &Connection) -> Result<bool> {
+    conn.execute(
+        "UPDATE kb_documents SET status = 'failed', error = 'Interrotto da un riavvio: aggiungilo di nuovo.' WHERE status = 'indexing'",
+        [],
+    )
+    .map_err(db)?;
+    Ok(conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE name = 'kb_chunks_fts'", [], |_| Ok(true))
+        .optional()
+        .map_err(db)?
+        .unwrap_or(false))
+}
+
 impl Store {
     // ------------------------------------------------------------ collections
     pub fn kb_collection_insert(&self, c: &KbCollection) -> Result<()> {

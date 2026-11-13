@@ -5,7 +5,7 @@ import type {
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
-  PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode,
+  PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
 
 /** What the current carrier can do; the UI branches on this instead of sniffing `kind`. */
@@ -62,6 +62,13 @@ export interface Transport {
   downloadUpdate(): Promise<UpdateStatus>;
   /** Hands the verified installer to the operating system. */
   installUpdate(): Promise<UpdateStatus>;
+
+  /** Backup of the data folder as a `.tar.gz` (base64). Restoring is only `aiw backup restore`, with the app closed. */
+  createBackup(includeSecrets: boolean): Promise<BackupFile>;
+  /** Checks a backup (`data` is the file as base64) without restoring it. */
+  inspectBackup(data: string): Promise<BackupInspect>;
+  /** The diagnostics document: system, hardware, runtimes, settings without secrets, database; no chats, documents or mail. */
+  diagnostics(): Promise<Record<string, unknown>>;
 
   models(): Promise<LocalModel[]>;
   catalog(): Promise<CatalogModel[]>;

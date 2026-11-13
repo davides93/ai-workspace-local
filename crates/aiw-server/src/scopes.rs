@@ -8,7 +8,7 @@
 //!   settings and `config` writes, secrets and provider keys, MCP server / hook / policy / agent /
 //!   profile edits, channel and mail configuration, running and installing runtimes, downloads,
 //!   training, anything that takes a path on this computer (the documents «path» import checks it
-//!   again), token management and TLS.
+//!   again), token management and TLS, backups and diagnostics.
 //! * `Device`: what a paired phone or computer does: chat and sessions, approvals, memories,
 //!   knowledge base, voice, the lists of models, agents, workflows and settings (read-only), and the
 //!   surfaces of the next three scopes too.
@@ -56,6 +56,10 @@ const RULES: &[(&str, &str, Required)] = &[
     ("POST", "/api/kill", DEVICE),
     ("GET", "/api/update", DEVICE),
     ("*", "/api/update/**", FULL),
+    // Backup and diagnostics: the owner only (a backup holds every chat and, if asked, the secrets; there is no restore route).
+    ("*", "/api/backup", FULL),
+    ("*", "/api/backup/**", FULL),
+    ("*", "/api/diagnostics", FULL),
     // Runtimes.
     ("GET", "/api/runtimes", DEVICE),
     ("POST", "/api/runtimes/refresh", DEVICE),
