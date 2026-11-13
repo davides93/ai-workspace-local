@@ -9,6 +9,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      upload:
+        description: "Carica negli store (false = solo artefatti firmati)"
+        type: boolean
+        default: true
       ios:
         description: "iOS/iPadOS -> TestFlight"
         type: boolean
@@ -90,7 +94,21 @@ jobs:
           npx tauri ios init --ci
           npx tauri ios build --export-method app-store-connect --ci \
             --config "{\"version\":\"${{ needs.version.outputs.short }}\"}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: apps/desktop/src-tauri/gen/apple/**/*.ipa
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-store-pkg
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+          retention-days: 7
       - name: Carica su TestFlight
+        if: github.event_name == 'push' || inputs.upload
+        if: github.event_name == 'push' || inputs.upload
         env:
           KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           ISSUER: ${{ secrets.APPSTORE_API_ISSUER_ID }}
@@ -235,7 +253,14 @@ jobs:
           jarsigner -verify "$aab"
           echo "AAB=$aab" >> "$GITHUB_ENV"
           rm -f "$RUNNER_TEMP/upload.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-aab
+          path: ${{ env.AAB }}
+          if-no-files-found: error
+          retention-days: 7
       - name: Carica su Google Play
+        if: github.event_name == 'push' || inputs.upload
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
