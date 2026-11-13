@@ -175,4 +175,5 @@ export const trainingEn: Record<keyof typeof trainingIt, string> = {
   "training.adapter_profile_description": "{base} with the adapter {name}",
   "training.metric_train_loss": "loss",
   "training.metric_seconds": "seconds",
+  "training.summary_line": "{method} on {base} · {dataset}",
 };

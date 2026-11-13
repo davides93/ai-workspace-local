@@ -121,7 +121,7 @@ export function JobDialog({ doctor, datasets, onClose }: { doctor: TrainDoctor |
           </details>
         </>}
         {step === 3 && <>
-          <p className="text-sm"><b>{METHOD_LABEL[f.method]}</b> su <b>{f.base}</b> · {forMethod.find((d) => d.id === f.dataset)?.name}</p>
+          <p className="text-sm">{trNode("training.summary_line", { method: <b>{METHOD_LABEL[f.method]}</b>, base: <b>{f.base}</b>, dataset: forMethod.find((d) => d.id === f.dataset)?.name })}</p>
           <p className="faint text-sm">{tr("training.al_termine_troverai_l_adapter")}</p>
         <Field label={tr("training.confronto_a_fine_addestramento")} htmlFor="tr-suite" hint={tr("training.esegue_la_suite_con_e")}>
           <Select id="tr-suite" value={f.evalSuite} onChange={(e) => set("evalSuite", e.target.value)}>

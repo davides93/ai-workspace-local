@@ -173,4 +173,5 @@ export const trainingIt = {
   "training.adapter_profile_description": "{base} con l'adapter {name}",
   "training.metric_train_loss": "loss",
   "training.metric_seconds": "secondi",
+  "training.summary_line": "{method} su {base} · {dataset}",
 } as const;
