@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cx } from "../lib/cx";
 
+import { t } from "../i18n";
 export interface Column<T> {
   key: string;
   header: ReactNode;
@@ -42,7 +43,7 @@ export function DataTable<T>({ columns, rows, rowKey, onRowClick, empty, label, 
           ))}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={columns.length} className="table-empty">{empty ?? "Nessun dato."}</td>
+              <td colSpan={columns.length} className="table-empty">{empty ?? t("ui.nessun_dato")}</td>
             </tr>
           )}
         </tbody>

@@ -6,6 +6,7 @@ import { ratingChange } from "../model/feedback";
 import { CopyMessage } from "./CopyMessage";
 import { ReadAloud } from "./ReadAloud";
 
+import { t } from "../../../shared/i18n";
 interface Props {
   messageId: string;
   text: string;
@@ -59,18 +60,18 @@ export function MessageActions({ messageId, text, rateable, rating, pending, onR
           <>
             <IconButton
               icon="thumbup" size={15} disabled={pending} aria-pressed={value === 1}
-              aria-label="Risposta utile" title={value === 1 ? "Valutata utile: tocca per togliere" : "Risposta utile"}
+              aria-label={t("chat.risposta_utile")} title={value === 1 ? t("chat.valutata_utile_tocca_per_togliere") : t("chat.risposta_utile")}
               className={cx("ws-rate", value === 1 && "on")} onClick={() => click(1)}
             />
             <IconButton
               icon="thumbdown" size={15} disabled={pending} aria-pressed={value === -1}
-              aria-label="Risposta da migliorare" title={value === -1 ? "Valutata da migliorare: tocca per togliere" : "Risposta da migliorare"}
+              aria-label={t("chat.risposta_da_migliorare")} title={value === -1 ? t("chat.valutata_da_migliorare_tocca_per") : t("chat.risposta_da_migliorare")}
               className={cx("ws-rate", value === -1 && "on")} onClick={() => click(-1)}
             />
             {value === -1 && (
               <IconButton
                 icon="edit" size={15} aria-expanded={noteOpen} aria-controls={noteId}
-                aria-label={rating?.note ? "Modifica la nota" : "Aggiungi una nota"} title={rating?.note ? "Modifica la nota" : "Aggiungi una nota"}
+                aria-label={rating?.note ? t("chat.modifica_la_nota") : t("chat.aggiungi_una_nota")} title={rating?.note ? t("chat.modifica_la_nota") : t("chat.aggiungi_una_nota")}
                 onClick={openNote}
               />
             )}
@@ -88,14 +89,14 @@ export function MessageActions({ messageId, text, rateable, rating, pending, onR
           }}
         >
           <Field
-            label="Cosa non ha funzionato? (facoltativo)" htmlFor={`${noteId}-t`}
+            label={t("chat.cosa_non_ha_funzionato_facoltativo")} htmlFor={`${noteId}-t`}
             error={tooLong ? `La nota supera i ${MAX_FEEDBACK_NOTE_CHARS} caratteri` : undefined}
           >
             <Textarea id={`${noteId}-t`} rows={2} value={draft} autoFocus onChange={(e) => setDraft(e.target.value)} />
           </Field>
           <div className="ws-rate-note-actions">
-            <Button size="sm" variant="primary" type="submit" disabled={tooLong || pending}>Salva nota</Button>
-            <Button size="sm" variant="ghost" onClick={() => setNoteOpen(false)}>Chiudi</Button>
+            <Button size="sm" variant="primary" type="submit" disabled={tooLong || pending}>{t("chat.salva_nota")}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setNoteOpen(false)}>{t("chat.chiudi")}</Button>
           </div>
         </form>
       )}

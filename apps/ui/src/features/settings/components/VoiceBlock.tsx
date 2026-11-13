@@ -4,6 +4,7 @@ import { useReader } from "../../chat/useReader";
 import { useVoiceStatus } from "../../chat/api";
 import { engineLine, languageName, nextPicks, pickerLanguages, SAMPLE, savedPick, voicesFor } from "../model/voicePicker";
 
+import { t } from "../../../shared/i18n";
 /** «Voce» section: what reads the replies aloud and a voice for each language, with a button to listen to it. */
 export function VoiceBlock({ picks, onPick }: {
   /** The current value of `voice.tts.voice`. */
@@ -28,9 +29,9 @@ export function VoiceBlock({ picks, onPick }: {
   };
   return (
     <div className="panel set-voice" data-testid="voice-block">
-      <h3 className="set-bg-title">Voce che legge le risposte</h3>
+      <h3 className="set-bg-title">{t("settings.voce_che_legge_le_risposte")}</h3>
       <p className="set-bg-line">
-        <Pill tone={line.tone}>{tts.neural ? "Neurale" : "Sistema"}</Pill>
+        <Pill tone={line.tone}>{tts.neural ? t("settings.neurale") : t("settings.sistema")}</Pill>
         <span>{line.text}</span>
       </p>
       <ul className="set-voice-list">
@@ -44,17 +45,17 @@ export function VoiceBlock({ picks, onPick }: {
                 id={id} value={savedPick(picks, lang) ?? ""} disabled={voices.length === 0}
                 onChange={(e) => onPick(nextPicks(picks, lang, e.target.value))}
               >
-                <option value="">{voices.length ? `Automatica (${voices.find((v) => v.id === tts.picks[lang])?.name ?? voices[0].name})` : "Nessuna voce neurale"}</option>
+                <option value="">{voices.length ? `Automatica (${voices.find((v) => v.id === tts.picks[lang])?.name ?? voices[0].name})` : t("settings.nessuna_voce_neurale")}</option>
                 {voices.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
               </Select>
               <Button size="sm" icon={testing === lang && speaking ? "stop" : "play"} onClick={() => void test(lang)} disabled={testing !== null && testing !== lang}>
-                {testing === lang ? "Ferma" : "Prova"}
+                {testing === lang ? t("settings.ferma") : t("settings.prova")}
               </Button>
             </li>
           );
         })}
       </ul>
-      <p className="set-hint">«Prova» legge una frase con la voce scelta; se il motore neurale non è disponibile usa la voce del sistema.</p>
+      <p className="set-hint">{t("settings.prova_legge_una_frase_con")}</p>
     </div>
   );
 }

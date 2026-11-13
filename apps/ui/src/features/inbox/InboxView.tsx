@@ -4,6 +4,7 @@ import { DoneRow, ProposalCard } from "./components/ProposalCard";
 import { decided, latestBriefing, statusLine, waiting } from "./model/proposals";
 import "./inbox.css";
 
+import { t } from "../../shared/i18n";
 /** `#/inbox` — "Proposte": what the assistant noticed on its own. It never acts alone: Approva starts a normal run. */
 export function InboxView() {
   const proposals = useProposals();
@@ -16,9 +17,9 @@ export function InboxView() {
   return (
     <Page className="ib">
       <PageHeader
-        eyebrow="Lavoro" title="Proposte"
-        subtitle="Cose che l'assistente ha notato mentre non c'eri. Non fa nulla da solo: parte solo se approvi."
-        actions={!off && <Button size="sm" icon="refresh" disabled={tick.isPending} onClick={() => tick.mutate()}>Controlla adesso</Button>}
+        eyebrow="Lavoro" title={t("inbox.proposte")}
+        subtitle={t("inbox.cose_che_l_assistente_ha")}
+        actions={!off && <Button size="sm" icon="refresh" disabled={tick.isPending} onClick={() => tick.mutate()}>{t("inbox.controlla_adesso")}</Button>}
       />
       {status.data && <p className="muted text-sm ib-status" role="status">{statusLine(status.data)}</p>}
       <QueryState query={proposals}>
@@ -29,17 +30,17 @@ export function InboxView() {
           return (
             <>
               {briefing && (
-                <Panel title={briefing.title} icon="bulb" actions={<Button size="sm" variant="ghost" icon="close" disabled={busyId === briefing.id} onClick={() => dismiss.mutate(briefing.id)}>Fatto</Button>}>
+                <Panel title={briefing.title} icon="bulb" actions={<Button size="sm" variant="ghost" icon="close" disabled={busyId === briefing.id} onClick={() => dismiss.mutate(briefing.id)}>{t("inbox.fatto")}</Button>}>
                   <p className="text-sm">{briefing.noticed}</p>
                 </Panel>
               )}
               {open.length === 0 ? (
                 <EmptyState
-                  icon="check" title="Nessuna proposta per ora"
-                  description={off ? "Accendi l'assistente proattivo dalle impostazioni e comincerà a guardarsi intorno." : "Quando l'assistente nota qualcosa di utile lo trovi qui."}
+                  icon="check" title={t("inbox.nessuna_proposta_per_ora")}
+                  description={off ? t("inbox.accendi_l_assistente_proattivo_dalle") : t("inbox.quando_l_assistente_nota_qualcosa")}
                 />
               ) : (
-                <div className="stack" aria-label="Da guardare">
+                <div className="stack" aria-label={t("inbox.da_guardare")}>
                   {open.map((p) => (
                     <ProposalCard
                       key={p.id} proposal={p} busy={busyId === p.id}
@@ -49,7 +50,7 @@ export function InboxView() {
                 </div>
               )}
               {done.length > 0 && (
-                <Panel title="Fatte" icon="check">
+                <Panel title={t("inbox.fatte")} icon="check">
                   <ul className="ib-done-list">{done.slice(0, 20).map((p) => <DoneRow key={p.id} proposal={p} />)}</ul>
                 </Panel>
               )}

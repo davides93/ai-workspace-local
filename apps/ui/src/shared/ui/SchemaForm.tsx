@@ -3,6 +3,7 @@ import { splitShellWords } from "../lib/tokens";
 import { TagInput } from "./TagInput";
 import { Toggle } from "./Toggle";
 
+import { t } from "../i18n";
 // Generated settings form (JSON Schema subset).
 export function SchemaForm({ schema, value, onChange, showAdvanced, idPrefix }: {
   schema: SettingsSchema;
@@ -12,7 +13,7 @@ export function SchemaForm({ schema, value, onChange, showAdvanced, idPrefix }: 
   idPrefix: string;
 }) {
   const entries = Object.entries(schema.properties).filter(([, f]) => showAdvanced || !f.advanced);
-  if (entries.length === 0) return <p className="muted">Questo componente non ha impostazioni.</p>;
+  if (entries.length === 0) return <p className="muted">{t("ui.questo_componente_non_ha_impostazioni")}</p>;
   const set = (k: string, v: unknown) => onChange({ ...value, [k]: v });
   return (
     <div className="form-grid">
@@ -72,7 +73,7 @@ function SchemaField({ id, name, field, value, onChange }: { id: string; name: s
       <div className="field">
         <label htmlFor={id}>{label}</label>
         <TagInput id={id} label={label} value={arr} onChange={onChange} parse={splitShellWords}
-          placeholder={field.placeholder ?? "un argomento, poi Invio"} />
+          placeholder={field.placeholder ?? t("ui.un_argomento_poi_invio")} />
         {hint && <span className="hint">{hint}</span>}
       </div>
     );

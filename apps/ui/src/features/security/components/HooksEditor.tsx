@@ -8,6 +8,7 @@ import { useHooks, useSetHooks } from "../api";
 import { globProblem } from "../model/glob";
 import { blankHook, checkHooks, HOOK_EVENTS, hookEvent, normalizeHooks } from "../model/hooks";
 
+import { t, tNode } from "../../../shared/i18n";
 /** Shell commands run on lifecycle events; exit code 2 blocks the action. */
 export function HooksEditor() {
   const hooks = useHooks();
@@ -44,27 +45,25 @@ export function HooksEditor() {
     <QueryState query={hooks}>
       {() => (
         <div className="stack stack-lg">
-          <Panel className="caution" title="Gli hook eseguono comandi sul tuo computer" icon="alert">
+          <Panel className="caution" title={t("security.gli_hook_eseguono_comandi_sul")} icon="alert">
             <p className="text-sm">
-              Ogni hook è un comando di shell avviato con i tuoi privilegi, come se lo lanciassi tu: non passa dalla sandbox né dalle regole di policy.
-              Aggiungi solo comandi e script di cui ti fidi.
-            </p>
+              {t("security.ogni_hook_e_un_comando")}</p>
             <ul className="how-list text-sm">
-              <li>Il comando riceve l'evento in JSON su stdin. Uscire con codice <code>2</code> blocca l'azione (il messaggio su stderr diventa il motivo).</li>
-              <li>Se il comando non parte o supera il timeout viene ignorato e l'azione prosegue: per bloccare serve l'uscita con codice 2.</li>
-              <li>Gli hook dello stesso evento girano nell'ordine dell'elenco; il primo che blocca ferma gli altri.</li>
+              <li>{tNode("security.il_comando_riceve_l_evento", { code: <code>2</code> })}</li>
+              <li>{t("security.se_il_comando_non_parte")}</li>
+              <li>{t("security.gli_hook_dello_stesso_evento")}</li>
             </ul>
           </Panel>
 
           {rows.length === 0 ? (
             <EmptyState
-              icon="terminal" title="Nessun hook"
-              description="Un hook esegue un comando quando succede qualcosa: puoi controllare, modificare o bloccare le azioni degli agenti."
-              action={<Button variant="primary" icon="plus" onClick={add}>Aggiungi un hook</Button>}
+              icon="terminal" title={t("security.nessun_hook")}
+              description={t("security.un_hook_esegue_un_comando")}
+              action={<Button variant="primary" icon="plus" onClick={add}>{t("security.aggiungi_un_hook")}</Button>}
             />
           ) : (
             <div className="stack">
-              <ol className="hook-list" aria-label="Hook">
+              <ol className="hook-list" aria-label={t("security.hook")}>
                 {rows.map(({ uid, value: h }, i) => {
                   const info = hookEvent(h.event);
                   const n = i + 1;
@@ -72,21 +71,21 @@ export function HooksEditor() {
                   return (
                     <li key={uid} className="hook-row">
                       <span className="rule-n" aria-hidden="true">{n}</span>
-                      <Field label={`Evento dell'hook ${n}`} htmlFor={`hook-event-${uid}`} className="hook-event">
+                      <Field label={t("security.evento_dell_hook", { n })} htmlFor={`hook-event-${uid}`} className="hook-event">
                         <Select id={`hook-event-${uid}`} value={h.event} onChange={(e) => change(uid, { event: e.target.value as HookEvent })}>
-                          {HOOK_EVENTS.map((e) => <option key={e.id} value={e.id}>{e.label}{e.active ? "" : " (non ancora attivo)"}</option>)}
+                          {HOOK_EVENTS.map((e) => <option key={e.id} value={e.id}>{e.label}{e.active ? "" : t("security.non_ancora_attivo")}</option>)}
                         </Select>
                       </Field>
-                      <Field label={`Filtro sul tool dell'hook ${n}`} htmlFor={`hook-matcher-${uid}`} className="hook-matcher">
-                        <Input id={`hook-matcher-${uid}`} mono disabled={!info?.tools} placeholder={info?.tools ? "tutti · shell, write_*" : "non si applica"} value={info?.tools ? h.matcher ?? "" : ""} onChange={(e) => change(uid, { matcher: e.target.value })} />
+                      <Field label={t("security.filtro_sul_tool_dell_hook", { n })} htmlFor={`hook-matcher-${uid}`} className="hook-matcher">
+                        <Input id={`hook-matcher-${uid}`} mono disabled={!info?.tools} placeholder={info?.tools ? t("security.tutti_shell_write") : t("security.non_si_applica")} value={info?.tools ? h.matcher ?? "" : ""} onChange={(e) => change(uid, { matcher: e.target.value })} />
                       </Field>
-                      <Field label={`Timeout in secondi dell'hook ${n}`} htmlFor={`hook-timeout-${uid}`} className="hook-timeout">
+                      <Field label={t("security.timeout_in_secondi_dell_hook", { n })} htmlFor={`hook-timeout-${uid}`} className="hook-timeout">
                         <Input id={`hook-timeout-${uid}`} className="num" type="number" min={1} max={600} value={Number.isNaN(h.timeout_s) ? "" : h.timeout_s} onChange={(e) => change(uid, { timeout_s: e.target.value === "" ? Number.NaN : Number(e.target.value) })} />
                       </Field>
                       <div className="rule-buttons">
-                        <RowControls index={i} count={rows.length} noun={`l'hook ${n}`} onMove={(d) => setDraft((r) => moveRow(r, uid, d))} onRemove={() => setDraft((r) => r.filter((x) => x.uid !== uid))} />
+                        <RowControls index={i} count={rows.length} noun={t("security.l_hook", { n })} onMove={(d) => setDraft((r) => moveRow(r, uid, d))} onRemove={() => setDraft((r) => r.filter((x) => x.uid !== uid))} />
                       </div>
-                      <Field label={`Comando dell'hook ${n}`} htmlFor={`hook-command-${uid}`} className="hook-command">
+                      <Field label={t("security.comando_dell_hook", { n })} htmlFor={`hook-command-${uid}`} className="hook-command">
                         <Input id={`hook-command-${uid}`} mono placeholder="./.aiw/hooks/check.sh" value={h.command} onChange={(e) => change(uid, { command: e.target.value })} autoComplete="off" spellCheck={false} />
                       </Field>
                       {info && (
@@ -103,17 +102,17 @@ export function HooksEditor() {
                   );
                 })}
               </ol>
-              <div><Button icon="plus" onClick={add}>Aggiungi hook</Button></div>
+              <div><Button icon="plus" onClick={add}>{t("security.aggiungi_hook")}</Button></div>
             </div>
           )}
 
           <SaveBar
-            dirty={dirty} saving={save.isPending} canSave={!hasError} blocker="Correggi gli hook evidenziati"
-            saveLabel="Salva hook"
+            dirty={dirty} saving={save.isPending} canSave={!hasError} blocker={t("security.correggi_gli_hook_evidenziati")}
+            saveLabel={t("security.salva_hook")}
             onSave={() => void submit()}
             onDiscard={reset}
           />
-          <UnsavedChangesDialog guard={guard} subject="gli hook" onSave={submit} saving={save.isPending} canSave={!hasError} />
+          <UnsavedChangesDialog guard={guard} subject={t("security.gli_hook")} onSave={submit} saving={save.isPending} canSave={!hasError} />
         </div>
       )}
     </QueryState>

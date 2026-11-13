@@ -8,6 +8,7 @@ import { useAgents } from "../../agents/api";
 import { useCreateSession, useSessions } from "../../chat/api";
 import { useConfig } from "../../settings/api";
 
+import { t } from "../../../shared/i18n";
 const ledTone = (s: Session): LedTone => (s.last_status === "failed" ? "crit" : s.last_status === "running" ? "run" : s.last_status === "cancelled" ? "warn" : s.last_status ? "ok" : "off");
 
 /** The five most recently updated sessions. */
@@ -19,14 +20,14 @@ export function RecentSessions({ simple = false }: { simple?: boolean }) {
   const recent = useMemo(() => [...(sessions.data ?? [])].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 5), [sessions.data]);
   const agentId = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
   return (
-    <Panel title={simple ? "Conversazioni recenti" : "Sessioni recenti"} icon="chat" actions={<Link to="/chat" className="btn sm ghost">{simple ? "Apri la chat" : "Apri il Workspace"}</Link>}>
+    <Panel title={simple ? t("home.conversazioni_recenti") : t("home.sessioni_recenti")} icon="chat" actions={<Link to="/chat" className="btn sm ghost">{simple ? t("home.apri_la_chat") : t("home.apri_il_workspace")}</Link>}>
       <QueryState
         query={sessions}
         isEmpty={(l) => l.length === 0}
         empty={
           <EmptyState
-            icon="chat" title="Ancora nessuna sessione" description="Una sessione è una conversazione con un agente."
-            action={<Button size="sm" variant="primary" icon="plus" disabled={!agentId || createSession.isPending} onClick={() => createSession.mutate({ agent_id: agentId }, { onSuccess: (s) => navigate(`/chat/${encodeURIComponent(s.id)}`) })}>Inizia una conversazione</Button>}
+            icon="chat" title={t("home.ancora_nessuna_sessione")} description={t("home.una_sessione_e_una_conversazione")}
+            action={<Button size="sm" variant="primary" icon="plus" disabled={!agentId || createSession.isPending} onClick={() => createSession.mutate({ agent_id: agentId }, { onSuccess: (s) => navigate(`/chat/${encodeURIComponent(s.id)}`) })}>{t("home.inizia_una_conversazione")}</Button>}
           />
         }
       >

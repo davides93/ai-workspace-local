@@ -8,7 +8,8 @@ import { navigate } from "../router";
 import { groupLabel, routeLabel, visibleRoutes } from "../navigation";
 import { GROUPS, ROUTES, routeHref } from "../routes";
 import { useUiMode } from "../useUiMode";
-import type { Command } from "./commands";
+import { splitKeywords, type Command } from "./commands";
+import { t } from "../../shared/i18n";
 
 /**
  * Sections and actions of the command palette. Called by the shell (which never unmounts), so a
@@ -23,27 +24,27 @@ export function useCommands(): Command[] {
   return useMemo<Command[]>(() => {
     const groupHint = (id: string) => { const g = GROUPS.find((x) => x.id === id); return g ? groupLabel(g, mode) : undefined; };
     const nav: Command[] = visibleRoutes(ROUTES, mode).map((r) => ({
-      id: `go-${r.id}`, label: routeLabel(r, mode), hint: groupHint(r.group), group: "Vai a", icon: r.icon, keywords: r.keywords,
+      id: `go-${r.id}`, label: routeLabel(r, mode), hint: groupHint(r.group), group: "go", icon: r.icon, keywords: splitKeywords(t(r.keywords)),
       run: () => navigate(routeHref(r)),
     }));
     const actions: Command[] = [
       {
-        id: "new-session", label: "Nuova sessione", group: "Azioni", icon: "plus", keywords: ["chat", "conversazione", "inizia"],
+        id: "new-session", label: t("shell.cmd_new_session"), group: "actions", icon: "plus", keywords: splitKeywords(t("shell.cmd_new_session_kw")),
         run: () => {
           const agent = agents.data?.find((a) => a.id === "operator") ?? agents.data?.[0];
           if (!agent) return navigate("/agents");
           createSession.mutate({ agent_id: agent.id }, { onSuccess: (s) => navigate(`/chat/${encodeURIComponent(s.id)}`) });
         },
       },
-      { id: "download-model", label: "Scarica un modello", group: "Azioni", icon: "download", keywords: ["modello", "scopri", "hugging face", "ollama", "gguf"], run: () => navigate("/models/discover") },
-      ...(mode === "developer" ? [{ id: "detect-runtimes", label: "Rileva runtime", group: "Azioni" as const, icon: "refresh", keywords: ["runtime", "cerca", "aggiorna"], run: () => refresh.mutate() }] : []),
+      { id: "download-model", label: t("shell.cmd_download_model"), group: "actions", icon: "download", keywords: splitKeywords(t("shell.cmd_download_model_kw")), run: () => navigate("/models/discover") },
+      ...(mode === "developer" ? [{ id: "detect-runtimes", label: t("shell.cmd_detect_runtimes"), group: "actions" as const, icon: "refresh", keywords: splitKeywords(t("shell.cmd_detect_runtimes_kw")), run: () => refresh.mutate() }] : []),
       mode === "simple"
-        ? { id: "mode-developer", label: "Mostra tutte le sezioni", group: "Azioni" as const, icon: "settings", keywords: ["sviluppatore", "avanzate", "modalità", "interfaccia", "tutto"], run: () => setMode("developer") }
-        : { id: "mode-simple", label: "Passa all'interfaccia semplice", group: "Azioni" as const, icon: "settings", keywords: ["semplice", "modalità", "interfaccia", "meno sezioni"], run: () => setMode("simple") },
-      { id: "kill", label: "Kill switch", hint: "ferma tutti i run", group: "Azioni", icon: "power", keywords: ["stop", "emergenza", "ferma", "arresta"], run: () => kill.mutate() },
-      { id: "theme-light", label: "Tema chiaro", group: "Azioni", icon: "sun", keywords: ["aspetto", "colori"], run: () => setTheme("light") },
-      { id: "theme-dark", label: "Tema scuro", group: "Azioni", icon: "moon", keywords: ["aspetto", "colori", "notte"], run: () => setTheme("dark") },
-      { id: "theme-system", label: "Tema del sistema", group: "Azioni", icon: "settings", keywords: ["aspetto", "automatico"], run: () => setTheme("system") },
+        ? { id: "mode-developer", label: t("shell.mostra_tutte_le_sezioni"), group: "actions" as const, icon: "settings", keywords: splitKeywords(t("shell.cmd_developer_kw")), run: () => setMode("developer") }
+        : { id: "mode-simple", label: t("shell.cmd_simple_mode"), group: "actions" as const, icon: "settings", keywords: splitKeywords(t("shell.cmd_simple_kw")), run: () => setMode("simple") },
+      { id: "kill", label: "Kill switch", hint: t("shell.cmd_kill_hint"), group: "actions", icon: "power", keywords: splitKeywords(t("shell.cmd_kill_kw")), run: () => kill.mutate() },
+      { id: "theme-light", label: t("shell.cmd_theme_light"), group: "actions", icon: "sun", keywords: splitKeywords(t("shell.cmd_theme_kw")), run: () => setTheme("light") },
+      { id: "theme-dark", label: t("shell.cmd_theme_dark"), group: "actions", icon: "moon", keywords: splitKeywords(t("shell.cmd_theme_dark_kw")), run: () => setTheme("dark") },
+      { id: "theme-system", label: t("shell.cmd_theme_system"), group: "actions", icon: "settings", keywords: splitKeywords(t("shell.cmd_theme_system_kw")), run: () => setTheme("system") },
     ];
     return [...nav, ...actions];
   }, [agents.data, createSession, refresh, kill, mode, setMode]);

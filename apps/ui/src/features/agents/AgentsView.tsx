@@ -6,6 +6,7 @@ import { AgentList } from "./components/AgentList";
 import { ProfilesPanel } from "./components/ProfilesPanel";
 import "./agents.css";
 
+import { t as tr } from "../../shared/i18n";
 type Tab = "agents" | "profiles";
 
 /** `#/agents` and `#/agents/:agentId` (`new` opens a blank form, `?from=` a copy); `?tab=profiles` lists the inference profiles. */
@@ -21,14 +22,14 @@ export function AgentsView() {
   return (
     <Page className="agents-page">
       <PageHeader
-        eyebrow="Lavoro" title="Agenti"
-        subtitle="Un agente unisce un profilo di inferenza, un set di tool e una politica di approvazione."
-        actions={tab === "agents" && <Link to="/agents/new" className="btn primary"><Icon name="plus" size={15} /> Nuovo agente</Link>}
+        eyebrow="Lavoro" title={tr("agents.agenti")}
+        subtitle={tr("agents.un_agente_unisce_un_profilo")}
+        actions={tab === "agents" && <Link to="/agents/new" className="btn primary"><Icon name="plus" size={15} /> {" "}{tr("agents.nuovo_agente")}</Link>}
       />
       <div className="agents-tabs" data-detail={agentId ? "open" : "closed"}>
         <Tabs
-          idPrefix="ag" label="Agenti e profili" value={tab} onChange={(t) => navigate(t === "profiles" ? "/agents?tab=profiles" : "/agents")}
-          tabs={[{ id: "agents", label: "Agenti", count: agents.data?.length }, { id: "profiles", label: "Profili di inferenza" }]}
+          idPrefix="ag" label={tr("agents.agenti_e_profili")} value={tab} onChange={(t) => navigate(t === "profiles" ? "/agents?tab=profiles" : "/agents")}
+          tabs={[{ id: "agents", label: tr("agents.agenti"), count: agents.data?.length }, { id: "profiles", label: tr("agents.profili_di_inferenza") }]}
         />
       </div>
       <TabPanel idPrefix="ag" id={tab}>
@@ -37,7 +38,7 @@ export function AgentsView() {
         ) : (
           <QueryState
             query={agents} isEmpty={(a) => a.length === 0 && !agentId}
-            empty={<EmptyState icon="agent" title="Nessun agente" description="Crea il primo agente: scegli un profilo di inferenza, i tool e la modalità di approvazione." action={<Link to="/agents/new" className="btn primary">Nuovo agente</Link>} />}
+            empty={<EmptyState icon="agent" title={tr("agents.nessun_agente")} description={tr("agents.crea_il_primo_agente_scegli")} action={<Link to="/agents/new" className="btn primary">{tr("agents.nuovo_agente")}</Link>} />}
           >
             {(all) => (
               <MasterDetail

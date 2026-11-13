@@ -20,10 +20,14 @@ import { MoreSheet } from "./shell/MoreSheet";
 import { Rail } from "./shell/Rail";
 import { TabBar } from "./shell/TabBar";
 
+import { t, useLocale } from "../shared/i18n";
+import { useLanguage } from "./useLanguage";
 export function App() {
   const resolved = useRoute(ROUTES);
   const { needsPairing } = useConnection();
   const [mode] = useUiMode();
+  const locale = useLocale();
+  useLanguage();
   const commands = useCommands();
   const [moreOpen, setMoreOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -53,13 +57,13 @@ export function App() {
 
   // Announce the page to assistive tech and in the tab title.
   useEffect(() => {
-    document.title = resolved ? `${routeLabel(resolved.route, mode)} · AI Workspace` : "Pagina non trovata · AI Workspace";
-  }, [resolved, mode]);
+    document.title = resolved ? t("shell.page_title", { section: routeLabel(resolved.route, mode) }) : t("shell.page_title_not_found");
+  }, [resolved, mode, locale]);
 
   const View = resolved?.route.View;
   return (
     <div className="shell">
-      <button type="button" className="skip-link" onClick={() => mainRef.current?.focus()}>Vai al contenuto</button>
+      <button type="button" className="skip-link" onClick={() => mainRef.current?.focus()}>{t("shell.vai_al_contenuto")}</button>
       <Rail current={current} onOpenPalette={() => setPaletteOpen(true)} />
 
       <div className="main" ref={mainRef} tabIndex={-1} id="main">
@@ -77,7 +81,7 @@ export function App() {
               </RouteProvider>
             ) : (
               <div className="page">
-                <EmptyState icon="search" title="Pagina non trovata" description="Questo indirizzo non corrisponde a nessuna sezione." action={<Link to="/" className="btn primary">Vai alla Panoramica</Link>} />
+                <EmptyState icon="search" title={t("shell.pagina_non_trovata")} description={t("shell.questo_indirizzo_non_corrisponde_a")} action={<Link to="/" className="btn primary">{t("shell.vai_alla_panoramica")}</Link>} />
               </div>
             )}
           </Suspense>

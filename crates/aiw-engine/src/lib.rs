@@ -1443,6 +1443,16 @@ impl Engine {
         self.0.session_allow.lock().unwrap().entry(session_id.to_string()).or_default().clone()
     }
 
+    /// One line that makes the assistant answer in the language chosen in `ui.language`. With
+    /// `auto` (the default) nothing is added: the generic rule "answer in the user's language" applies.
+    fn language_line(&self) -> String {
+        match self.0.config.get_str("ui.language").as_deref() {
+            Some("it") => "Lingua scelta dall'utente: rispondi in italiano, salvo che l'utente scriva in un'altra lingua.".into(),
+            Some("en") => "Language chosen by the user: reply in English, unless the user writes in another language.".into(),
+            _ => String::new(),
+        }
+    }
+
     fn agents_md(&self) -> String {
         let mut out = String::new();
         for (label, p) in [("globali", self.0.dirs.root.join("AGENTS.md")), ("del workspace", self.workspace_root().join("AGENTS.md"))] {
@@ -1557,7 +1567,7 @@ impl Engine {
             history,
             user_input,
             user_extra: Default::default(),
-            system_extra: vec![env, self.agents_md()],
+            system_extra: vec![env, self.agents_md(), self.language_line()],
             tool_ctx,
             hooks: self.hooks(),
             compact_at: self.0.config.get_f64("context.compact_at").unwrap_or(0.8),

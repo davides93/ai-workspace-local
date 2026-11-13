@@ -3,6 +3,7 @@ import type { FieldSchema } from "../../../shared/api/types";
 import { Input, Select, Toggle, TagInput } from "../../../shared/ui";
 import { parseNumber } from "../model/config";
 
+import { t } from "../../../shared/i18n";
 /** Draft text of an input: follows the saved value whenever that changes (another layer, a reset, a save). */
 function useDraft(shown: string) {
   const [draft, setDraft] = useState(shown);
@@ -31,7 +32,7 @@ function TextSetting({ id, field, value, onCommit }: { id: string; field: FieldS
           else if (e.key === "Escape") setDraft(shown);
         }}
       />
-      {dirty && <span className="hint">Invio per salvare, Esc per annullare</span>}
+      {dirty && <span className="hint">{t("settings.invio_per_salvare_esc_per")}</span>}
     </>
   );
 }
@@ -94,7 +95,7 @@ export function SettingControl({ id, field, value, onCommit, optionLabel = Strin
     return (
       <TagInput
         id={id} label={label} value={Array.isArray(value) ? value.map(String) : []} onChange={onCommit} unique liveSplit
-        placeholder={field.placeholder ?? "scrivi un valore e premi Invio"}
+        placeholder={field.placeholder ?? t("settings.scrivi_un_valore_e_premi")}
       />
     );
   }

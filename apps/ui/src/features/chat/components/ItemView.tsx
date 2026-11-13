@@ -12,6 +12,7 @@ import { RunNote } from "./RunNote";
 import { SubagentCard } from "./SubagentCard";
 import { ToolCard } from "./ToolCard";
 
+import { t } from "../../../shared/i18n";
 interface Props {
   it: Item;
   /** The open session: where the attachments of a message are read from. */
@@ -45,7 +46,7 @@ export const ItemView = memo(function ItemView({ it, sessionId, onRespond, onAct
     case "action":
       return (
         <div className="ws-msg ws-user">
-          <div className="ws-action" title="Azione inviata dall'interfaccia">
+          <div className="ws-action" title={t("chat.azione_inviata_dall_interfaccia")}>
             <Icon name="play" size={13} /> <b>{it.name}</b>
             {Object.keys(it.context).length > 0 && <span className="mono">{contextText(it.context)}</span>}
           </div>

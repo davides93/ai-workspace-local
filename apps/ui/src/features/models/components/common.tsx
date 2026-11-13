@@ -7,6 +7,7 @@ import { FIT, isFit } from "../model/fit";
 import { originInfo } from "../model/origin";
 import { splitRuntimes } from "../model/variants";
 
+import { t } from "../../../shared/i18n";
 /** Row of chips; with a `label` it is a named group (an `aria-label` needs a role to be valid). */
 export function ChipRow({ label, children }: { label?: string; children: ReactNode }) {
   return label ? <div className="chips" role="group" aria-label={label}>{children}</div> : <div className="chips">{children}</div>;
@@ -31,22 +32,22 @@ export function OriginChip({ origin }: { origin: string | undefined }) {
  */
 export function RuntimeChips({ runtimes, explain = false }: { runtimes: RuntimeCompat[]; explain?: boolean }) {
   if (runtimes.length === 0) {
-    return <p className="mh-note">Nessun runtime dichiara di poter aprire questo formato.</p>;
+    return <p className="mh-note">{t("models.nessun_runtime_dichiara_di_poter")}</p>;
   }
   const { available, unavailable } = splitRuntimes(runtimes);
   return (
     <div className="mh-runtimes">
-      <ChipRow label="Runtime compatibili">
+      <ChipRow label={t("models.runtime_compatibili")}>
         {available.map((r) => (
-          <Chip key={r.id} hot title="Pronto su questo device">
+          <Chip key={r.id} hot title={t("models.pronto_su_questo_device")}>
             <Led tone="ok" small />
             {r.name}
           </Chip>
         ))}
         {unavailable.map((r) => (
-          <Chip key={r.id} className="mh-chip-off" title={r.reason || "Non disponibile su questo device"}>
+          <Chip key={r.id} className="mh-chip-off" title={r.reason || t("models.non_disponibile_su_questo_device")}>
             {r.name}
-            <span className="sr-only">: non disponibile{r.reason ? `, ${r.reason}` : ""}</span>
+            <span className="sr-only">{t("models.non_disponibile_2", { p: r.reason ? `, ${r.reason}` : "" })}</span>
           </Chip>
         ))}
       </ChipRow>
@@ -78,7 +79,7 @@ function InstallRuntimeAction({ candidates }: { candidates: RuntimeCompat[] }) {
         variant="primary" size="sm" icon="download" disabled={install.isPending}
         onClick={() => install.mutate(target, { onSuccess: () => navigate(`/runtimes/${target.id}`) })}
       >
-        {install.isPending ? "Avvio l'installazione…" : `Installa ${target.name}`}
+        {install.isPending ? t("models.avvio_l_installazione") : t("models.installa", { name: target.name })}
       </Button>
     </div>
   );
@@ -87,7 +88,7 @@ function InstallRuntimeAction({ candidates }: { candidates: RuntimeCompat[] }) {
 /** Capabilities (chat, tools, vision…) as chips. */
 export function CapabilityChips({ items }: { items: string[] }) {
   if (items.length === 0) return null;
-  return <ChipRow label="Capacità">{items.map((c) => <Chip key={c}>{c}</Chip>)}</ChipRow>;
+  return <ChipRow label={t("models.capacita")}>{items.map((c) => <Chip key={c}>{c}</Chip>)}</ChipRow>;
 }
 
 /** One labeled readout of an instrument-style row (size, parameters, context window…). */

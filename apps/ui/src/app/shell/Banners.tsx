@@ -2,6 +2,7 @@ import { useApi } from "../../shared/api/context";
 import { useConnection } from "../../shared/query/system";
 import { Button, Icon } from "../../shared/ui";
 
+import { t, tNode } from "../../shared/i18n";
 /** Shown on a demo transport (mockup or fallback), driven by `capabilities.demo`, not by the system mode. */
 export function DemoBanner() {
   const api = useApi();
@@ -10,7 +11,7 @@ export function DemoBanner() {
     <div className="banner" role="status">
       <Icon name="sparkle" size={16} />
       <span>
-        <b>Demo interattiva</b> · {api.notice ?? <>dati di esempio; avvia <code>aiw serve</code> o apri l'app desktop per usare i tuoi runtime e modelli</>}
+        <b>{t("shell.demo_interattiva")}</b> · {api.notice ?? tNode("shell.demo_text", { cmd: <code>aiw serve</code> })}
       </span>
     </div>
   );
@@ -23,8 +24,8 @@ export function ConnectionBanner() {
   return (
     <div className="banner banner-crit" role="alert">
       <Icon name="alert" size={16} />
-      <span><b>Connessione al workspace persa</b> · i dati mostrati potrebbero non essere aggiornati.</span>
-      <Button size="sm" className="banner-cta" icon="refresh" onClick={retry} disabled={retrying}>{retrying ? "Provo…" : "Riprova"}</Button>
+      <span><b>{t("shell.connessione_al_workspace_persa")}</b> · {t("shell.connection_lost_text")}</span>
+      <Button size="sm" className="banner-cta" icon="refresh" onClick={retry} disabled={retrying}>{retrying ? t("shell.provo") : t("shell.riprova")}</Button>
     </div>
   );
 }

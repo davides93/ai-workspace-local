@@ -1,3 +1,4 @@
+import { currentLocaleTag } from "../../../shared/lib/format";
 // Inference profiles: which models a runtime can serve, defaults, ids and checks. Pure logic.
 
 import type { InferenceProfile, LocalModel, RuntimeInfo } from "../../../shared/api/types";
@@ -110,7 +111,7 @@ export function validateProfile(p: InferenceProfile, ctx: { runtimes: readonly R
     if (why) issues.push({ field: "model", level: "warn", message: `Il modello non è compatibile con il runtime: ${why}` });
   }
   if (model?.context_length && c !== undefined && Number.isFinite(c) && c > model.context_length) {
-    issues.push({ field: "context", level: "warn", message: `Il modello supporta al massimo ${model.context_length.toLocaleString("it-IT")} token di contesto.` });
+    issues.push({ field: "context", level: "warn", message: `Il modello supporta al massimo ${model.context_length.toLocaleString(currentLocaleTag())} token di contesto.` });
   }
   return issues;
 }

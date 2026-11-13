@@ -7,6 +7,7 @@ import { draftFromServer, draftToPayload } from "../model/mcpForm";
 import { McpServerCard } from "./McpServerCard";
 import { McpServerDrawer } from "./McpServerDrawer";
 
+import { t, tNode } from "../../../shared/i18n";
 /** MCP servers: list with state and tools, add/edit drawer, remove with confirmation. */
 export function McpTab() {
   const servers = useMcpServers();
@@ -29,17 +30,15 @@ export function McpTab() {
 
   return (
     <Section
-      title="Server MCP"
-      hint={<>stdio o streamable HTTP; i loro tool diventano <code>mcp__server__tool</code>.</>}
-      actions={<Button variant="primary" icon="plus" onClick={() => setEditing("new")}>Aggiungi server</Button>}
+      title={t("capabilities.server_mcp")}
+      hint={<>{tNode("capabilities.stdio_o_streamable_http_i", { code: <code>mcp__server__tool</code> })}</>}
+      actions={<Button variant="primary" icon="plus" onClick={() => setEditing("new")}>{t("capabilities.aggiungi_server")}</Button>}
     >
       <div className="panel cap-notice">
         <div className="row nowrap cap-notice-body">
           <Icon name="alert" size={20} />
           <p className="text-sm">
-            <b>Un server stdio è un processo sul tuo computer.</b> {isolationAvailable
-              ? "I nuovi server partono isolati (scrivono solo nel workspace, non vedono la cartella dei dati dell'app né le tue credenziali); quelli «non isolati» girano con i tuoi permessi."
-              : "Su questo sistema l'isolamento non è disponibile: i server girano con i tuoi permessi."}
+            <b>{t("capabilities.un_server_stdio_e_un_2")}</b> {isolationAvailable ? t("capabilities.i_nuovi_server_partono_isolati") : t("capabilities.su_questo_sistema_l_isolamento")}
             {" "}Prima di avviare un comando nuovo o modificato ti chiediamo conferma. Aggiungi solo comandi di cui ti fidi; i tool che espongono restano soggetti alla conferma in base al rischio.
           </p>
         </div>
@@ -50,9 +49,9 @@ export function McpTab() {
         isEmpty={(l) => l.length === 0}
         empty={(
           <EmptyState
-            icon="plug" title="Nessun server MCP"
-            description="Un server MCP aggiunge tool agli agenti: file, GitHub, database, browser. Per esempio npx -y @modelcontextprotocol/server-filesystem."
-            action={<Button variant="primary" icon="plus" onClick={() => setEditing("new")}>Aggiungi il primo server</Button>}
+            icon="plug" title={t("capabilities.nessun_server_mcp")}
+            description={t("capabilities.un_server_mcp_aggiunge_tool")}
+            action={<Button variant="primary" icon="plus" onClick={() => setEditing("new")}>{t("capabilities.aggiungi_il_primo_server")}</Button>}
           />
         )}
       >
@@ -85,10 +84,10 @@ export function McpTab() {
       )}
       {removing && (
         <Dialog
-          title="Rimuovi il server MCP" size="sm" onClose={() => setRemoving(null)}
+          title={t("capabilities.rimuovi_il_server_mcp")} size="sm" onClose={() => setRemoving(null)}
           footer={<>
-            <Button onClick={() => setRemoving(null)}>Annulla</Button>
-            <Button variant="danger" icon="trash" disabled={remove.isPending} onClick={() => remove.mutate(removing, { onSettled: () => setRemoving(null) })}>Rimuovi</Button>
+            <Button onClick={() => setRemoving(null)}>{t("capabilities.annulla")}</Button>
+            <Button variant="danger" icon="trash" disabled={remove.isPending} onClick={() => remove.mutate(removing, { onSettled: () => setRemoving(null) })}>{t("capabilities.rimuovi_2")}</Button>
           </>}
         >
           <p>Vuoi rimuovere <b>{removing.name}</b>? Il server viene scollegato e i suoi {removing.tools.length} tool non saranno più disponibili agli agenti. Potrai aggiungerlo di nuovo.</p>

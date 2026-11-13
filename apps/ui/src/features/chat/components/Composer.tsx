@@ -7,6 +7,7 @@ import type { PendingFile } from "../model/pending";
 import { PendingAttachments } from "./Attachments";
 import { VoiceBar } from "./VoiceBar";
 
+import { t, t as tr, tNode as trNode } from "../../../shared/i18n";
 const MAX_HEIGHT = 200;
 
 const finePointer = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: fine)").matches;
@@ -108,18 +109,18 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
               }}
             />
             <IconButton
-              icon="paperclip" className="ws-attach" aria-label="Allega un file o un'immagine"
-              title="Allega un file o un'immagine (puoi anche trascinarli qui o incollarli)" disabled={disabled} onClick={() => picker.current?.click()}
+              icon="paperclip" className="ws-attach" aria-label={t("chat.allega_un_file_o_un")}
+              title={t("chat.allega_un_file_o_un_2")} disabled={disabled} onClick={() => picker.current?.click()}
             />
           </>
         )}
         {onMcpPrompt && (
-          <IconButton icon="plug" aria-label="Prompt MCP" title="Inserisci un prompt di un server MCP" disabled={disabled} onClick={onMcpPrompt} />
+          <IconButton icon="plug" aria-label={t("chat.prompt_mcp")} title={t("chat.inserisci_un_prompt_di_un")} disabled={disabled} onClick={onMcpPrompt} />
         )}
         <textarea
           ref={ref}
           id="composer"
-          aria-label="Messaggio"
+          aria-label={t("chat.messaggio")}
           aria-describedby={hintId}
           rows={1}
           placeholder={placeholder}
@@ -143,9 +144,9 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
             <IconButton
               icon={voice.dictation === "busy" ? "more" : "mic"}
               className={`ws-mic ${voice.dictation}`}
-              aria-label={voice.dictation === "rec" ? "Ferma la dettatura" : "Detta il messaggio"}
+              aria-label={voice.dictation === "rec" ? t("chat.ferma_la_dettatura") : t("chat.detta_il_messaggio")}
               aria-pressed={voice.dictation === "rec"}
-              title={!voice.available ? `Voce non disponibile: ${voice.status?.detail ?? ""}` : voice.dictation === "rec" ? "Ferma la dettatura" : `Detta (${voice.status?.backend ?? "trascrizione locale"})`}
+              title={!voice.available ? t("chat.voce_non_disponibile", { p: voice.status?.detail ?? "" }) : voice.dictation === "rec" ? t("chat.ferma_la_dettatura") : t("chat.detta", { p: voice.status?.backend ?? "trascrizione locale" })}
               disabled={disabled || voice.dictation === "busy" || converse}
               style={voice.dictation === "rec" ? { "--mic-level": voice.level } as CSSProperties : undefined}
               onClick={voice.toggleDictation}
@@ -153,38 +154,38 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
             <IconButton
               icon="wave"
               className={`ws-talk ${converse ? "on" : ""}`}
-              aria-label={converse ? "Termina la conversazione a voce" : "Conversazione a voce"}
+              aria-label={converse ? t("chat.termina_la_conversazione_a_voce") : t("chat.conversazione_a_voce")}
               aria-pressed={converse}
-              title={converse ? "Termina la conversazione a voce (Esc)" : "Conversazione a voce: parli, l'agente risponde ad alta voce"}
+              title={converse ? t("chat.termina_la_conversazione_a_voce_2") : t("chat.conversazione_a_voce_parli_l")}
               disabled={disabled || voice.dictation !== "off"}
               onClick={voice.toggleConvo}
             />
           </>
         )}
         {running ? (
-          <Button variant="danger" icon="stop" onClick={onStop} aria-keyshortcuts="Escape">Ferma</Button>
+          <Button variant="danger" icon="stop" onClick={onStop} aria-keyshortcuts="Escape">{t("chat.ferma")}</Button>
         ) : (
-          <Button variant="primary" icon="send" onClick={onSend} disabled={!canSend}>Invia</Button>
+          <Button variant="primary" icon="send" onClick={onSend} disabled={!canSend}>{t("chat.invia")}</Button>
         )}
       </div>
       <div className="ws-composer-meta">
         {thinking && (
           <label className="ws-think" title={THINKING_HINT[thinking.value]}>
-            <span>Ragionamento:</span>
+            <span>{tr("chat.ragionamento_2")}</span>
             <Select
-              aria-label="Ragionamento" value={thinking.value}
+              aria-label={t("chat.ragionamento")} value={thinking.value}
               onChange={(e) => isThinkingMode(e.target.value) && thinking.onChange(e.target.value)}
             >
               {THINKING_MODES.map((m) => <option key={m} value={m}>{THINKING_LABEL[m]}</option>)}
             </Select>
           </label>
         )}
-        {modelLabel && <span className="mono ws-composer-model" title="Runtime e modello della sessione">{modelLabel}</span>}
+        {modelLabel && <span className="mono ws-composer-model" title={t("chat.runtime_e_modello_della_sessione")}>{modelLabel}</span>}
         <span id={hintId} className="ws-composer-hint">
           {running ? (
-            <>Risposta in corso · <kbd>Esc</kbd> per fermarla</>
+            <>{trNode("chat.risposta_in_corso_per_fermarla", { kbd: <kbd>{tr("chat.esc")}</kbd> })}</>
           ) : (
-            <><kbd>Invio</kbd> per inviare · <kbd>Maiusc</kbd>+<kbd>Invio</kbd> per andare a capo</>
+            <>{trNode("chat.per_inviare_per_andare_a", { kbd: <kbd>{tr("chat.invio")}</kbd>, kbd2: <kbd>{tr("chat.maiusc")}</kbd>, kbd3: <kbd>{tr("chat.invio")}</kbd> })}</>
           )}
         </span>
       </div>

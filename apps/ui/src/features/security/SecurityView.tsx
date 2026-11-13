@@ -7,6 +7,7 @@ import { PolicyEditor } from "./components/PolicyEditor";
 import { SandboxPanel } from "./components/SandboxPanel";
 import "./security.css";
 
+import { t as tr } from "../../shared/i18n";
 type Tab = "policy" | "hooks" | "sandbox" | "access" | "network";
 const TABS: Tab[] = ["policy", "hooks", "sandbox", "access", "network"];
 
@@ -16,32 +17,32 @@ export function SecurityView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Controllo" title="Sicurezza"
-        subtitle="Cosa può fare un agente senza chiedere: regole sui tool, hook di controllo, contenimento dei comandi, accessi dei dispositivi e cifratura della rete."
+        eyebrow="Controllo" title={tr("security.sicurezza")}
+        subtitle={tr("security.cosa_puo_fare_un_agente")}
       />
       <Tabs
-        idPrefix="sec" label="Sicurezza" value={tab} onChange={(t) => navigate(t === "policy" ? "/security" : `/security/${t}`)}
-        tabs={[{ id: "policy", label: "Policy" }, { id: "hooks", label: "Hook" }, { id: "sandbox", label: "Sandbox" }, { id: "access", label: "Accessi" }, { id: "network", label: "Rete" }]}
+        idPrefix="sec" label={tr("security.sicurezza")} value={tab} onChange={(t) => navigate(t === "policy" ? "/security" : `/security/${t}`)}
+        tabs={[{ id: "policy", label: tr("security.policy") }, { id: "hooks", label: tr("security.hook") }, { id: "sandbox", label: tr("security.sandbox") }, { id: "access", label: tr("security.accessi") }, { id: "network", label: tr("security.rete") }]}
       />
       <TabPanel idPrefix="sec" id={tab}>
         {tab === "policy" && (
-          <Section title="Regole sui tool" hint="Valgono per tutti gli agenti, sopra la loro modalità di approvazione.">
+          <Section title={tr("security.regole_sui_tool")} hint={tr("security.valgono_per_tutti_gli_agenti")}>
             <PolicyEditor />
           </Section>
         )}
         {tab === "hooks" && (
-          <Section title="Hook del ciclo di vita" hint="Comandi di shell che ricevono l'evento in JSON e possono bloccarlo.">
+          <Section title={tr("security.hook_del_ciclo_di_vita")} hint={tr("security.comandi_di_shell_che_ricevono")}>
             <HooksEditor />
           </Section>
         )}
         {tab === "sandbox" && <SandboxPanel />}
         {tab === "access" && (
-          <Section title="Accessi" hint="Chi può usare questo computer dalla rete: ogni dispositivo ha il suo token e si può scollegare da solo.">
+          <Section title={tr("security.accessi")} hint={tr("security.chi_puo_usare_questo_computer")}>
             <AccessPanel />
           </Section>
         )}
         {tab === "network" && (
-          <Section title="Rete" hint="Come questo computer è raggiungibile e se il traffico è cifrato.">
+          <Section title={tr("security.rete")} hint={tr("security.come_questo_computer_e_raggiungibile")}>
             <NetworkPanel />
           </Section>
         )}

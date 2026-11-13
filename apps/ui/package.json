@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:smoke": "node scripts/smoke.mjs",
-    "check:offline": "node scripts/check-no-external.mjs dist dist-mockup"
+    "check:offline": "node scripts/check-no-external.mjs dist dist-mockup",
+    "i18n:scan": "node scripts/i18n-scan.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "5.104.2",

@@ -1,6 +1,6 @@
 // A2UI v0.9 protocol: surfaces, JSON Pointer data model, expression evaluation.
 // Pure functions only (no React) so they can be unit tested.
-import { LOCALE } from "../../../shared/lib/format";
+import { currentLocaleTag } from "../../../shared/lib/format";
 
 /**
  * A2UI v0.9 renderer for the basic catalog (https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json).
@@ -216,17 +216,17 @@ function callFn(name: string, rawArgs: Obj, scope: Scope): unknown {
       return str(a("value")).replace(/\$\{([^}]+)\}/g, (_, p: string) => str(getPath(scope.data, abs(p.trim(), scope))));
     case "formatNumber": {
       const d = (a("decimals") as number | undefined) ?? undefined;
-      return Number(a("value")).toLocaleString(LOCALE, { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: a("grouping") !== false });
+      return Number(a("value")).toLocaleString(currentLocaleTag(), { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: a("grouping") !== false });
     }
     case "formatCurrency":
       try {
-        return Number(a("value")).toLocaleString(LOCALE, { style: "currency", currency: str(a("currency")) || "EUR" });
+        return Number(a("value")).toLocaleString(currentLocaleTag(), { style: "currency", currency: str(a("currency")) || "EUR" });
       } catch {
         return str(a("value"));
       }
     case "formatDate": {
       const d = new Date(str(a("value")));
-      return Number.isNaN(d.getTime()) ? str(a("value")) : d.toLocaleString(LOCALE);
+      return Number.isNaN(d.getTime()) ? str(a("value")) : d.toLocaleString(currentLocaleTag());
     }
     case "pluralize": {
       const n = Number(a("value"));

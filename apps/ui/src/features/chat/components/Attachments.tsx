@@ -11,6 +11,7 @@ import type { UserAttachment } from "../model/items";
 import type { PendingFile } from "../model/pending";
 import { ImageThumb } from "./ImageThumb";
 
+import { t } from "../../../shared/i18n";
 const iconFor = (kind: AttachmentKind) => (kind === "image" ? "image" : "file");
 
 /** A temporary address for a chosen file, released when the chip goes away. */
@@ -32,7 +33,7 @@ function PendingChip({ item, onRemove }: { item: PendingFile; onRemove: (key: st
       {preview ? <img className="ws-att-thumb" src={preview} alt="" /> : <span className="ws-att-icon" aria-hidden="true"><Icon name={iconFor(item.kind)} size={16} /></span>}
       <span className="ws-att-name" title={item.name}>{item.name}</span>
       <span className="ws-att-size">{humanSize(item.size)}</span>
-      <IconButton icon="close" size={14} className="ws-att-remove" aria-label={`Rimuovi l'allegato ${item.name}`} onClick={() => onRemove(item.key)} />
+      <IconButton icon="close" size={14} className="ws-att-remove" aria-label={t("chat.rimuovi_l_allegato", { name: item.name })} onClick={() => onRemove(item.key)} />
     </li>
   );
 }
@@ -41,7 +42,7 @@ function PendingChip({ item, onRemove }: { item: PendingFile; onRemove: (key: st
 export function PendingAttachments({ items, onRemove }: { items: PendingFile[]; onRemove: (key: string) => void }) {
   if (items.length === 0) return null;
   return (
-    <ul className="ws-att-chips" aria-label="Allegati del messaggio">
+    <ul className="ws-att-chips" aria-label={t("chat.allegati_del_messaggio")}>
       {items.map((f) => <PendingChip key={f.key} item={f} onRemove={onRemove} />)}
     </ul>
   );
@@ -56,7 +57,7 @@ function MessageImage({ sessionId, att }: { sessionId?: string; att: UserAttachm
     <span className="ws-att-chip ws-att-loading" role={stored.isError ? undefined : "status"}>
       <span className="ws-att-icon" aria-hidden="true"><Icon name="image" size={16} /></span>
       <span className="ws-att-name">{att.name}</span>
-      <span className="ws-att-size">{stored.isError ? "non disponibile" : "carico…"}</span>
+      <span className="ws-att-size">{stored.isError ? t("chat.non_disponibile") : t("chat.carico")}</span>
     </span>
   );
 }
@@ -70,13 +71,13 @@ function MessageFile({ sessionId, att }: { sessionId?: string; att: UserAttachme
       const d = att.data ? { name: att.name, mime: att.mime, data: att.data } : sessionId ? await api.getAttachment(sessionId, att.id) : null;
       if (d) downloadBase64(d.name, d.data, d.mime);
     } catch (e) {
-      toast(isNotFound(e) ? `Il file «${att.name}» non c'è più.` : `Non riesco a scaricare «${att.name}»: ${errorMessage(e)}`, "crit");
+      toast(isNotFound(e) ? t("chat.il_file_non_c_e", { name: att.name }) : t("chat.non_riesco_a_scaricare", { name: att.name, p: errorMessage(e) }), "crit");
     } finally {
       setBusy(false);
     }
   };
   return (
-    <button type="button" className="ws-att-chip ws-att-file" onClick={() => void save()} disabled={busy} aria-label={`Scarica ${att.name} (${humanSize(att.size)})`}>
+    <button type="button" className="ws-att-chip ws-att-file" onClick={() => void save()} disabled={busy} aria-label={t("chat.scarica", { name: att.name, p: humanSize(att.size) })}>
       <span className="ws-att-icon" aria-hidden="true"><Icon name={iconFor(att.kind)} size={16} /></span>
       <span className="ws-att-name">{att.name}</span>
       <span className="ws-att-size">{humanSize(att.size)}</span>
@@ -88,7 +89,7 @@ function MessageFile({ sessionId, att }: { sessionId?: string; att: UserAttachme
 /** The attachments of a user message: thumbnails that open larger, chips that download the file. */
 export function MessageAttachments({ items, sessionId }: { items: UserAttachment[]; sessionId?: string }) {
   return (
-    <div className="ws-user-atts" role="group" aria-label="Allegati del messaggio">
+    <div className="ws-user-atts" role="group" aria-label={t("chat.allegati_del_messaggio")}>
       {items.map((a) => (a.kind === "image" ? <MessageImage key={a.id} sessionId={sessionId} att={a} /> : <MessageFile key={a.id} sessionId={sessionId} att={a} />))}
     </div>
   );

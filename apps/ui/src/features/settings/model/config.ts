@@ -1,4 +1,5 @@
 import type { ConfigLayer, ConfigView, FieldSchema, SettingsSchema } from "../../../shared/api/types";
+import { labelMap } from "../../../shared/i18n";
 import type { Theme } from "../../../shared/lib/theme";
 import { isUiMode, type UiMode } from "../../../shared/lib/uiMode";
 
@@ -97,7 +98,6 @@ export interface SettingEntry {
 /** Help line of a setting: the schema's own description, else a note written here. */
 const FIELD_HINT: Record<string, string> = {
   "ui.theme": "È la stessa scelta del selettore in alto: cambiando una cambia l'altra.",
-  "ui.language": "Per ora l'interfaccia è disponibile solo in italiano.",
   "network.allow_domains": "Un dominio per etichetta (es. docs.rs). Vuoto vale per tutti i siti pubblici. Riguarda web_fetch e il browser controllato.",
   "server.lan": "Rende il server raggiungibile dagli altri dispositivi della rete; da fuori serve sempre il token di pairing.",
   "server.port": "Porta del server API.",
@@ -159,7 +159,7 @@ const OPTION_LABEL: Record<string, Record<string, string>> = {
   "ui.mode": { simple: "Semplice", developer: "Sviluppatore" },
   "ui.theme": { system: "Sistema", light: "Chiaro", dark: "Scuro" },
   "proactive.level": { off: "Spento", propose: "Propone", act_readonly: "Propone e legge (anche il web, sola lettura)" },
-  "ui.language": { it: "Italiano", en: "English" },
+  "ui.language": { auto: "Automatica", it: "Italiano", en: "English" },
   "search.provider": { auto: "Automatico", duckduckgo: "DuckDuckGo", searxng: "SearXNG", brave: "Brave Search", off: "Spenta" },
   "policy.mode": {
     plan: "plan · solo lettura",
@@ -183,7 +183,7 @@ const OPTION_LABEL: Record<string, Record<string, string>> = {
 export const optionLabel = (key: string, value: string | number): string => OPTION_LABEL[key]?.[String(value)] ?? String(value);
 
 export const THEMES: Theme[] = ["system", "light", "dark"];
-export const THEME_LABEL: Record<Theme, string> = { system: "Sistema", light: "Chiaro", dark: "Scuro" };
+export const THEME_LABEL: Record<Theme, string> = labelMap({ system: "shell.sistema", light: "shell.chiaro", dark: "shell.scuro" });
 export const isTheme = (v: unknown): v is Theme => typeof v === "string" && (THEMES as string[]).includes(v);
 
 /** The theme the configuration asks for, when it is a valid one. */

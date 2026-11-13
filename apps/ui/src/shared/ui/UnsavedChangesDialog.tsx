@@ -2,6 +2,7 @@ import type { UnsavedGuard } from "../lib/useUnsavedGuard";
 import { Button } from "./Button";
 import { Dialog } from "./Dialog";
 
+import { t } from "../i18n";
 /** Prompt shown by `useUnsavedGuard` when the user tries to leave a form with unsaved changes. */
 export function UnsavedChangesDialog({ guard, subject, onSave, saving, canSave = true }: {
   guard: UnsavedGuard;
@@ -20,17 +21,17 @@ export function UnsavedChangesDialog({ guard, subject, onSave, saving, canSave =
   };
   return (
     <Dialog
-      title="Modifiche non salvate"
+      title={t("ui.modifiche_non_salvate")}
       size="sm"
       onClose={guard.stay}
       footer={<>
-        <Button onClick={guard.stay} data-autofocus>Continua a modificare</Button>
-        <Button variant="danger" onClick={guard.leave}>Scarta</Button>
-        {onSave && <Button variant="primary" onClick={() => void saveAndGo()} disabled={saving || !canSave}>Salva e continua</Button>}
+        <Button onClick={guard.stay} data-autofocus>{t("ui.continua_a_modificare")}</Button>
+        <Button variant="danger" onClick={guard.leave}>{t("ui.scarta")}</Button>
+        {onSave && <Button variant="primary" onClick={() => void saveAndGo()} disabled={saving || !canSave}>{t("ui.salva_e_continua")}</Button>}
       </>}
     >
-      <p>Hai modifiche non salvate per {subject}. Se esci ora andranno perse.</p>
-      {onSave && !canSave && <p className="faint text-sm">Non si possono salvare così come sono: correggi prima gli errori indicati nel modulo.</p>}
+      <p>{t("ui.hai_modifiche_non_salvate_per", { subject })}</p>
+      {onSave && !canSave && <p className="faint text-sm">{t("ui.non_si_possono_salvare_cosi")}</p>}
     </Dialog>
   );
 }

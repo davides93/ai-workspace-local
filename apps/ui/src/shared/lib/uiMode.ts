@@ -1,11 +1,12 @@
 import { useSyncExternalStore } from "react";
+import { labelMap } from "../i18n";
 
 /** `simple` shows a handful of sections; `developer` shows everything (setting `ui.mode`). */
 export type UiMode = "simple" | "developer";
 
 export const UI_MODES: UiMode[] = ["simple", "developer"];
 export const DEFAULT_UI_MODE: UiMode = "simple";
-export const UI_MODE_LABEL: Record<UiMode, string> = { simple: "Semplice", developer: "Sviluppatore" };
+export const UI_MODE_LABEL: Record<UiMode, string> = labelMap({ simple: "shell.mode_simple", developer: "shell.mode_developer" });
 
 export const isUiMode = (v: unknown): v is UiMode => v === "simple" || v === "developer";
 

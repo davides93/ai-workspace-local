@@ -7,6 +7,7 @@ import { useChannels } from "./api";
 import { ALWAYS_ON_NOTE } from "./model/channels";
 import "./channels.css";
 
+import { t } from "../../shared/i18n";
 /**
  * `#/channels` — "Canali": talk to the assistant from Telegram, Slack or email. Off by default; only the people
  * on the list are heard; by default the assistant can only read.
@@ -18,16 +19,16 @@ export function ChannelsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Lavoro" title="Canali"
-        subtitle="Parla con l'assistente da Telegram, Slack o email. Risponde solo a chi hai scritto nella lista; tutti gli altri vengono ignorati."
-        actions={!adding && <Button variant="primary" icon="plus" onClick={() => setAdding(true)}>Aggiungi un canale</Button>}
+        eyebrow="Lavoro" title={t("channels.canali")}
+        subtitle={t("channels.parla_con_l_assistente_da")}
+        actions={!adding && <Button variant="primary" icon="plus" onClick={() => setAdding(true)}>{t("channels.aggiungi_un_canale")}</Button>}
       />
       <p className="muted text-sm">{ALWAYS_ON_NOTE}</p>
       {adding && <AddChannel onDone={() => setAdding(false)} />}
       <QueryState query={channels}>
         {(list) =>
           list.length === 0 && !adding ? (
-            <EmptyState icon="send" title="Nessun canale collegato" description="Collega Telegram, Slack o una casella email per scrivere all'assistente anche quando non sei davanti al computer." action={<Button variant="primary" onClick={() => setAdding(true)}>Aggiungi un canale</Button>} />
+            <EmptyState icon="send" title={t("channels.nessun_canale_collegato")} description={t("channels.collega_telegram_slack_o_una")} action={<Button variant="primary" onClick={() => setAdding(true)}>{t("channels.aggiungi_un_canale")}</Button>} />
           ) : (
             <div className="stack stack-lg">
               {list.map((c) => <ChannelCard key={c.id} channel={c} agents={agents.data ?? []} />)}

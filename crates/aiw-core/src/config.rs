@@ -73,7 +73,7 @@ pub fn app_schema() -> SettingsSchema {
         "properties": {
             "ui.mode": {"type": "string", "title": "Modalità dell'interfaccia", "description": "Semplice mostra solo le sezioni di uso quotidiano; Sviluppatore le mostra tutte", "enum": ["simple", "developer"], "default": "simple"},
             "ui.theme": {"type": "string", "title": "Tema", "enum": ["system", "light", "dark"], "default": "system"},
-            "ui.language": {"type": "string", "title": "Lingua", "enum": ["it", "en"], "default": "it"},
+            "ui.language": {"type": "string", "title": "Lingua", "description": "Automatica segue la lingua del dispositivo; vale anche per le risposte degli assistenti nelle nuove conversazioni", "enum": ["auto", "it", "en"], "default": "auto"},
             "app.close_to_tray": {"type": "boolean", "title": "Chiudendo la finestra l'app resta attiva", "description": "Solo nell'app per computer: la finestra si nasconde e l'app continua a lavorare accanto all'orologio; per chiuderla davvero usa «Esci» dal suo menu", "default": true},
             "app.start_at_login": {"type": "boolean", "title": "Avvia l'app all'accesso al computer", "description": "Solo nell'app per computer (non nella versione dell'App Store): parte da sola, nascosta accanto all'orologio, quando accedi", "default": false},
             "app.notifications": {"type": "boolean", "title": "Avvisi sul computer", "description": "Solo nell'app per computer: ti avvisa quando serve una tua conferma, quando un lavoro è finito o un download è completo", "default": true},
@@ -533,6 +533,16 @@ mod tests {
         cfg.set(Layer::Global, "ui.mode", json!("developer")).unwrap();
         assert_eq!(cfg.get_str("ui.mode").as_deref(), Some("developer"));
         assert!(cfg.set(Layer::Global, "ui.mode", json!("expert")).is_err());
+    }
+
+    #[test]
+    fn ui_language_defaults_to_auto_and_takes_it_or_en() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = LayeredConfig::load(app_schema(), dir.path().join("config.json"), dir.path().join("dev.json"), None);
+        assert_eq!(cfg.get_str("ui.language").as_deref(), Some("auto"));
+        cfg.set(Layer::Global, "ui.language", json!("en")).unwrap();
+        assert_eq!(cfg.get_str("ui.language").as_deref(), Some("en"));
+        assert!(cfg.set(Layer::Global, "ui.language", json!("fr")).is_err());
     }
 
     #[test]

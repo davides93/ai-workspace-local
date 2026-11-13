@@ -1,3 +1,4 @@
+import { currentLocaleTag } from "../../../shared/lib/format";
 import type { ApiTokenInfo } from "../../../shared/api/types";
 
 export const EXPIRY_CHOICES = [
@@ -15,7 +16,7 @@ export function tokenState(t: Pick<ApiTokenInfo, "revoked_at" | "expires_at">, n
   return "active";
 }
 
-const fmt = (iso: string) => new Date(iso).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" });
+const fmt = (iso: string) => new Date(iso).toLocaleString(currentLocaleTag(), { dateStyle: "short", timeStyle: "short" });
 
 export const describeLastUse = (t: Pick<ApiTokenInfo, "last_used_at" | "last_used_ip">) =>
   t.last_used_at ? `ultimo uso ${fmt(t.last_used_at)}${t.last_used_ip ? ` da ${t.last_used_ip}` : ""}` : "mai usato";

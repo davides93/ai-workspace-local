@@ -9,6 +9,7 @@ import { RemoteAgentsPanel } from "./components/RemoteAgentsPanel";
 import { buildEndpoints, lanBaseUrl, type SnippetLang } from "./model/snippets";
 import "./integrations.css";
 
+import { t } from "../../shared/i18n";
 /** `#/integrations` — the endpoints other programs use to reach models, tools and agents, with copyable examples. */
 export function IntegrationsView() {
   const api = useApi();
@@ -21,8 +22,8 @@ export function IntegrationsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Capacità" title="Integrazioni"
-        subtitle="Gli endpoint con cui altri programmi usano i tuoi modelli, i tuoi tool e i tuoi agenti."
+        eyebrow="Capacità" title={t("integrations.integrazioni")}
+        subtitle={t("integrations.gli_endpoint_con_cui_altri")}
       />
       <AccessPanel audience={audience} onAudience={setAudience} lanAddress={lan.data} />
       <div className="stack stack-lg">

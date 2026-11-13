@@ -3,6 +3,7 @@ import { APPROVAL_MODES, RISK_META } from "../../../shared/lib/policyModes";
 import type { CommandAnalysis, PolicyMode, ToolInfo, ToolRisk } from "../../../shared/api/types";
 import { DECISION_LABEL, type DecisionKind, type Probe, type ProbeResult } from "../model/policy";
 
+import { t as tr, tNode as trNode } from "../../../shared/i18n";
 const TONE: Record<DecisionKind, PillTone> = { allow: "ok", ask: "warn", deny: "crit" };
 const RISKS = Object.keys(RISK_META) as ToolRisk[];
 
@@ -24,39 +25,39 @@ export function RuleTester({ probe, onProbe, result, tools, analysis }: {
   const needsSandbox = probe.mode === "auto" && probe.risk === "exec";
 
   return (
-    <Panel title="Prova una chiamata" icon="search">
-      <p className="muted text-sm mb-3">Indica cosa farebbe un agente: la prova usa le regole qui sopra, anche non salvate, e la stessa logica del backend.</p>
+    <Panel title={tr("security.prova_una_chiamata")} icon="search">
+      <p className="muted text-sm mb-3">{tr("security.indica_cosa_farebbe_un_agente")}</p>
       <div className="tester-grid">
-        <Field label="Tool" htmlFor="probe-tool">
-          <Input id="probe-tool" mono list="probe-tools" placeholder="shell" value={probe.tool} onChange={(e) => pickTool(e.target.value)} autoComplete="off" />
+        <Field label={tr("security.tool")} htmlFor="probe-tool">
+          <Input id="probe-tool" mono list="probe-tools" placeholder={tr("security.shell")} value={probe.tool} onChange={(e) => pickTool(e.target.value)} autoComplete="off" />
           <datalist id="probe-tools">{tools.map((t) => <option key={t.name} value={t.name} />)}</datalist>
         </Field>
-        <Field label="Soggetto" htmlFor="probe-subject" hint="Comando, percorso o URL della chiamata">
-          <Input id="probe-subject" mono placeholder="git status --short" value={probe.subject} onChange={(e) => set({ subject: e.target.value })} autoComplete="off" />
+        <Field label={tr("security.soggetto")} htmlFor="probe-subject" hint={tr("security.comando_percorso_o_url_della")}>
+          <Input id="probe-subject" mono placeholder={tr("security.git_status_short")} value={probe.subject} onChange={(e) => set({ subject: e.target.value })} autoComplete="off" />
         </Field>
-        <Field label="Modalità dell'agente" htmlFor="probe-mode">
+        <Field label={tr("security.modalita_dell_agente")} htmlFor="probe-mode">
           <Select id="probe-mode" value={probe.mode} onChange={(e) => set({ mode: e.target.value as PolicyMode })}>
             {APPROVAL_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
           </Select>
         </Field>
-        <Field label="Rischio del tool" htmlFor="probe-risk" hint={known ? "Preso dal catalogo dei tool" : "Tool sconosciuto: scegli il rischio"}>
+        <Field label={tr("security.rischio_del_tool")} htmlFor="probe-risk" hint={known ? tr("security.preso_dal_catalogo_dei_tool") : tr("security.tool_sconosciuto_scegli_il_rischio")}>
           <Select id="probe-risk" value={probe.risk} disabled={!!known} onChange={(e) => set({ risk: e.target.value as ToolRisk })}>
             {RISKS.map((r) => <option key={r} value={r}>{RISK_META[r].label}</option>)}
           </Select>
         </Field>
       </div>
       <div className="row tester-flags">
-        <label className="check-inline"><input type="checkbox" checked={probe.sessionAllowed} onChange={(e) => set({ sessionAllowed: e.target.checked })} /> Già consentito per la sessione</label>
+        <label className="check-inline"><input type="checkbox" checked={probe.sessionAllowed} onChange={(e) => set({ sessionAllowed: e.target.checked })} /> {" "}{tr("security.gia_consentito_per_la_sessione")}</label>
         {needsSandbox && (
-          <label className="check-inline"><input type="checkbox" checked={probe.sandboxAvailable} onChange={(e) => set({ sandboxAvailable: e.target.checked })} /> Sandbox disponibile su questo sistema</label>
+          <label className="check-inline"><input type="checkbox" checked={probe.sandboxAvailable} onChange={(e) => set({ sandboxAvailable: e.target.checked })} /> {" "}{tr("security.sandbox_disponibile_su_questo_sistema")}</label>
         )}
       </div>
 
       {analysis && (
         <p className="text-sm muted" aria-live="polite">
-          {analysis.commands.length === 0 ? "Nessun comando da eseguire." : analysis.commands.length === 1 ? "Letto come un comando: " : `Letto come ${analysis.commands.length} comandi: `}
+          {analysis.commands.length === 0 ? tr("security.nessun_comando_da_eseguire") : analysis.commands.length === 1 ? tr("security.letto_come_un_comando") : tr("security.letto_come_comandi", { length: analysis.commands.length })}
           {analysis.commands.map((c, i) => <span key={`${i}-${c}`}>{i > 0 && " · "}<code>{c}</code></span>)}
-          {!analysis.confident && <> — <b>non analizzabile con certezza</b>: nessuna regola Consenti può valere.</>}
+          {!analysis.confident && <> {" "}{trNode("security.nessuna_regola_consenti_puo_valere", { b: <b>{tr("security.non_analizzabile_con_certezza")}</b> })}</>}
         </p>
       )}
       <div className="verdict" role="status" aria-live="polite" data-kind={result?.decision.kind}>
@@ -66,12 +67,12 @@ export function RuleTester({ probe, onProbe, result, tools, analysis }: {
             <span>
               {result.decision.by === "rule" && result.decision.ruleIndex !== undefined
                 ? <>Decide la regola <b>{result.decision.ruleIndex + 1}</b> ({result.decision.reason}).</>
-                : <>Nessuna regola decide: {result.decision.reason}.</>}
+                : <>{tr("security.nessuna_regola_decide", { reason: result.decision.reason })}</>}
               {result.matches.length > 1 && <> Regole che combaciano: {result.matches.map((i) => i + 1).join(", ")}.</>}
             </span>
           </>
         ) : (
-          <span className="faint">Indica un tool per vedere l'esito.</span>
+          <span className="faint">{tr("security.indica_un_tool_per_vedere")}</span>
         )}
       </div>
     </Panel>

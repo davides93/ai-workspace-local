@@ -224,8 +224,13 @@ Dettagli, limiti noti e prossimi passi in [docs/STATUS.md](docs/STATUS.md).
 | Agenti e workflow | Loop con subagenti, hook, skill; workflow con trigger manuale, cron, intervallo, file, webhook |
 | API | REST + SSE, gateway OpenAI e Anthropic, server MCP, A2A; token, CORS ristretto, controllo di Origin/Host |
 | UI | React unica per desktop, mobile e web; 629 test Vitest e smoke test Playwright (29 rotte, 2 larghezze, 2 temi) |
+| Lingue | Interfaccia in italiano e inglese (`ui.language`: automatica, `it`, `en`); la traduzione inglese è parziale, vedi `docs/STATUS.md` §3 |
 | Piattaforme | Tauri su Windows, macOS, Linux, Android; iOS: app per simulatore (senza firma), costruita in CI |
 | Non verificato | Build GPU (CUDA, Vulkan), percorsi nativi Apple e Android su hardware reale, provider contro i servizi reali |
 
 Il reverse engineering usa solo artefatti pubblici e scaricabili e ne estrae idee e architettura
 (metodo clean-room descritto nel documento di ricerca): nessun codice proprietario è copiato.
+
+## Crediti dei font
+
+I font dell'interfaccia sono inclusi nell'app e distribuiti con licenza SIL Open Font License 1.1: Bricolage Grotesque, IBM Plex Sans e IBM Plex Mono. Testi delle licenze in `licenses/`.

@@ -5,6 +5,7 @@ import { useSetToolsEnabled, useTools } from "../api";
 import { capabilityStatus, isBrowserTool, isComputerTool, type CapabilityStatus } from "../model/tools";
 import { ToolRow } from "./ToolRow";
 
+import { t as tr, tNode as trNode } from "../../../shared/i18n";
 const STATUS: Record<CapabilityStatus, { label: string; tone: PillTone }> = {
   ready: { label: "Disponibile", tone: "ok" },
   partial: { label: "Parziale", tone: "warn" },
@@ -37,7 +38,7 @@ function ApprovalMatrix() {
     { key: "risk", header: "Azione", render: (r) => r.risk },
     ...MODES.map((m, i) => ({ key: m, header: <span className="mono">{m}</span>, nowrap: true, render: (r: (typeof MATRIX)[number]) => <Pill tone={r.cells[i].tone}>{r.cells[i].label}</Pill> })),
   ];
-  return <DataTable label="Approvazione per modalità" columns={columns} rows={MATRIX} rowKey={(r) => r.risk} />;
+  return <DataTable label={tr("capabilities.approvazione_per_modalita")} columns={columns} rows={MATRIX} rowKey={(r) => r.risk} />;
 }
 
 /** What this build can do with the browser and the desktop, how it does it, and when it asks. */
@@ -49,7 +50,7 @@ export function BrowserTab() {
       {(all) => {
         const caps: Capability[] = [
           {
-            id: "browser", title: "Browser controllato", icon: "globe", tools: all.filter(isBrowserTool),
+            id: "browser", title: tr("capabilities.browser_controllato"), icon: "globe", tools: all.filter(isBrowserTool),
             how: [
               "Avvia un profilo dedicato di Chrome, Edge o Chromium già installato sul computer e lo guida con il Chrome DevTools Protocol (CDP).",
               "Lo snapshot è testo con gli elementi numerati: funziona anche con modelli senza visione. Lo screenshot serve ai modelli con visione.",
@@ -57,7 +58,7 @@ export function BrowserTab() {
             ],
           },
           {
-            id: "computer", title: "Computer-use", icon: "mouse", tools: all.filter(isComputerTool),
+            id: "computer", title: tr("capabilities.computer_use"), icon: "mouse", tools: all.filter(isComputerTool),
             how: [
               "Cattura lo schermo principale e invia clic, testo e tasti sintetici alla finestra attiva.",
               "Le coordinate si riferiscono all'ultimo screenshot, scalato a 1280 px di larghezza al massimo.",
@@ -88,19 +89,17 @@ export function BrowserTab() {
               })}
             </div>
 
-            <Section title="Quando chiedono conferma" hint="Dipende dalla modalità di approvazione dell'agente; le regole della policy hanno la precedenza.">
+            <Section title={tr("capabilities.quando_chiedono_conferma")} hint={tr("capabilities.dipende_dalla_modalita_di_approvazione")}>
               <ApprovalMatrix />
               <p className="muted text-sm">
-                «Consenti sempre per la sessione» salta la richiesta fino alla fine della sessione. Il kill switch chiude il browser controllato e ferma i run.
-                Modalità e regole si cambiano in <Link to="/agents">Agenti</Link> e <Link to="/security">Sicurezza</Link>.
-              </p>
+                {trNode("capabilities.consenti_sempre_per_la_sessione", { link: <Link to="/agents">{tr("capabilities.agenti")}</Link>, link2: <Link to="/security">{tr("capabilities.sicurezza")}</Link> })}</p>
             </Section>
 
-            <Section title="Ultime catture" hint="Gli screenshot prodotti da browser e computer-use.">
+            <Section title={tr("capabilities.ultime_catture")} hint={tr("capabilities.gli_screenshot_prodotti_da_browser")}>
               <EmptyState
-                icon="mouse" title="Le catture appaiono nella chat"
-                description="Mentre un run usa browser_screenshot o computer_screenshot, l'immagine compare nella scheda del tool, sotto la riga del messaggio. Questa pagina non conserva uno storico delle catture."
-                action={<Link to="/chat" className="btn"><Icon name="chat" size={14} /> Apri il Workspace</Link>}
+                icon="mouse" title={tr("capabilities.le_catture_appaiono_nella_chat")}
+                description={tr("capabilities.mentre_un_run_usa_browser")}
+                action={<Link to="/chat" className="btn"><Icon name="chat" size={14} /> {" "}{tr("capabilities.apri_il_workspace")}</Link>}
               />
             </Section>
           </>

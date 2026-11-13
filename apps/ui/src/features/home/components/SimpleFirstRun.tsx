@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { LanguageSelect } from "../../../app/LanguageSelect";
 import { navigate } from "../../../app/router";
 import { useUiMode } from "../../../app/useUiMode";
 import { defaultAgentId } from "../../../shared/lib/agents";
@@ -12,6 +13,7 @@ import { isActiveDownload, useDownloads, usePullModel } from "../../models/api";
 import { useConfig } from "../../settings/api";
 import { downloadFraction, isUsableProfile, profileForModel, type SimpleFirstRun } from "../model/overview";
 
+import { t, t as tr } from "../../../shared/i18n";
 /**
  * First run of the simple interface: one sentence and one button. "Prepara tutto" downloads the
  * model the adviser recommends (progress stays here), makes sure the default agent uses it once it
@@ -93,23 +95,24 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
 
   return (
     <Panel
-      title="Per iniziare" icon="sparkle" className="hm-firstrun"
-      actions={<Button size="sm" variant="ghost" onClick={onDismiss} title="Nasconde questo riquadro">Nascondi</Button>}
+      title={t("home.per_iniziare")} icon="sparkle" className="hm-firstrun"
+      actions={<Button size="sm" variant="ghost" onClick={onDismiss} title={tr("home.nasconde_questo_riquadro")}>{t("home.nascondi")}</Button>}
     >
       <div className="stack stack-lg">
+        <LanguageSelect />
         <p className="hm-simple-text">{sentence}</p>
         {job && (
           <span className="hm-step-progress" role="status">
-            <span>Scarico {rec?.name ?? job.model_ref} · {formatPercent(downloadFraction(job.received, job.total))}</span>
-            <Meter label={`Avanzamento di ${rec?.name ?? job.model_ref}`} value={job.received} max={job.total} />
+            <span>{t("home.scarico", { p: rec?.name ?? job.model_ref, p2: formatPercent(downloadFraction(job.received, job.total)) })}</span>
+            <Meter label={t("home.avanzamento_di", { p: rec?.name ?? job.model_ref })} value={job.received} max={job.total} />
           </span>
         )}
-        {working && !job && !error && <span className="faint text-sm" role="status">Preparo la chat…</span>}
+        {working && !job && !error && <span className="faint text-sm" role="status">{t("home.preparo_la_chat")}</span>}
         {error && <p className="mh-alert warn" role="alert">{error}</p>}
         <div className="row">
-          {action === "go" && <Button variant="primary" icon={state.kind === "chat" ? "plus" : "download"} disabled={busy && !error} onClick={go}>{error && working ? "Riprova" : label}</Button>}
-          {action === "developer" && <Button onClick={() => setMode("developer")}>Mostra tutte le sezioni</Button>}
-          {action === "models" && <Button variant="primary" onClick={() => navigate("/models/discover")}>Cerca un modello</Button>}
+          {action === "go" && <Button variant="primary" icon={state.kind === "chat" ? "plus" : "download"} disabled={busy && !error} onClick={go}>{error && working ? t("home.riprova") : label}</Button>}
+          {action === "developer" && <Button onClick={() => setMode("developer")}>{t("home.mostra_tutte_le_sezioni")}</Button>}
+          {action === "models" && <Button variant="primary" onClick={() => navigate("/models/discover")}>{t("home.cerca_un_modello")}</Button>}
         </div>
       </div>
     </Panel>

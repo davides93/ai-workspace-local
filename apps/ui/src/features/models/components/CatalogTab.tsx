@@ -11,6 +11,7 @@ import { CatalogCard } from "./CatalogCard";
 import { ShowAllToggle, useRunnableFilter } from "./ShowAll";
 import { useProviderAuthDialog } from "./ProviderAuthDialog";
 
+import { t } from "../../../shared/i18n";
 /** Catalogo (Consigliati): curated models with the fit computed for this device. */
 export function CatalogTab({ jobs }: { jobs: DownloadProgress[] }) {
   const catalog = useCatalog();
@@ -34,29 +35,28 @@ function CatalogList({ list, jobs }: { list: CatalogModel[]; jobs: DownloadProgr
 
   return (
     <div className="stack stack-lg">
-      <h2 className="sr-only">Catalogo consigliato</h2>
+      <h2 className="sr-only">{t("models.catalogo_consigliato")}</h2>
       <p className="muted text-sm">
-        Modelli scelti e provati. La compatibilità è calcolata su RAM, VRAM e acceleratori di questo device: quelli che ci stanno meglio vengono prima.
-      </p>
+        {t("models.modelli_scelti_e_provati_la")}</p>
       <div className="mh-toolbar" role="search">
-        <Field label="Cerca nel catalogo" htmlFor="cat-q" className="mh-search">
-          <Input id="cat-q" type="search" placeholder="agent, vision, mobile, coding…" value={text} onChange={(e) => setText(e.target.value)} />
+        <Field label={t("models.cerca_nel_catalogo")} htmlFor="cat-q" className="mh-search">
+          <Input id="cat-q" type="search" placeholder={t("models.agent_vision_mobile_coding")} value={text} onChange={(e) => setText(e.target.value)} />
         </Field>
         {simple ? (
           <ShowAllToggle showAll={showAll} hidden={hiddenCount(list)} />
         ) : (
           <div className="field">
-            <span className="field-label">Mostra</span>
+            <span className="field-label">{t("models.mostra")}</span>
             <Segmented
-              label="Filtro di compatibilità" value={fitOnly ? "fit" : "all"} onChange={(v) => setQuery({ compat: v === "fit" ? "1" : "" })}
-              options={[{ id: "all", label: "Tutti" }, { id: "fit", label: "Che ci stanno" }]}
+              label={t("models.filtro_di_compatibilita")} value={fitOnly ? "fit" : "all"} onChange={(v) => setQuery({ compat: v === "fit" ? "1" : "" })}
+              options={[{ id: "all", label: t("models.tutti") }, { id: "fit", label: t("models.che_ci_stanno") }]}
             />
           </div>
         )}
       </div>
-      <p className="mh-count" role="status" aria-live="polite">{shown.length === list.length ? `${list.length} modelli` : `${shown.length} di ${list.length} modelli`}</p>
+      <p className="mh-count" role="status" aria-live="polite">{shown.length === list.length ? t("models.modelli_2", { length: list.length }) : t("models.di_modelli", { length: shown.length, length2: list.length })}</p>
       {shown.length === 0 ? (
-        <EmptyState icon="search" title="Nessun modello corrisponde" description="Cambia la ricerca o mostra anche quelli che non ci stanno su questo device." />
+        <EmptyState icon="search" title={t("models.nessun_modello_corrisponde")} description={t("models.cambia_la_ricerca_o_mostra")} />
       ) : (
         <div className="mh-grid">
           {shown.map((c) => <CatalogCard key={c.id} model={c} job={findCatalogJob(jobs, c)} onSetToken={() => auth.open("hf")} />)}

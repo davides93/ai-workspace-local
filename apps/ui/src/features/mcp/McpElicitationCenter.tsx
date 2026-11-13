@@ -4,6 +4,7 @@ import { Button, Dialog, Field, Icon, Input, Select, Toggle } from "../../shared
 import { useMcpElicitations, useRespondMcpElicitation } from "./api";
 import { initialValues, toContent, type FormValues } from "./model";
 
+import { t } from "../../shared/i18n";
 /**
  * A question an MCP server asks during a run: shown as a form with accept, decline and cancel. It stays until the
  * person answers (or the run ends). The server is named, and what it asks is its own text: nothing in it is a command.
@@ -27,18 +28,18 @@ function ElicitationDialog({ request }: { request: McpElicitation }) {
   };
   return (
     <Dialog
-      title={`Il server ${request.server} ha una domanda`}
+      title={t("mcp.il_server_ha_una_domanda", { server: request.server })}
       size="md"
       onClose={() => answer("cancel")}
       footer={<>
-        <Button onClick={() => answer("decline")} disabled={respond.isPending}>Rifiuta</Button>
-        <Button onClick={() => answer("cancel")} disabled={respond.isPending}>Annulla</Button>
-        <Button variant="primary" onClick={accept} disabled={respond.isPending}>Invia</Button>
+        <Button onClick={() => answer("decline")} disabled={respond.isPending}>{t("mcp.rifiuta")}</Button>
+        <Button onClick={() => answer("cancel")} disabled={respond.isPending}>{t("mcp.annulla")}</Button>
+        <Button variant="primary" onClick={accept} disabled={respond.isPending}>{t("mcp.invia")}</Button>
       </>}
     >
       <p className="cap-note cap-note-warn text-sm">
         <Icon name="alert" size={15} />
-        <span>La domanda viene dal server MCP, non da AI Workspace. Non inserire password, chiavi o altri segreti.</span>
+        <span>{t("mcp.la_domanda_viene_dal_server")}</span>
       </p>
       <p style={{ whiteSpace: "pre-wrap" }}>{request.message}</p>
       <form className="form-grid" onSubmit={(e) => { e.preventDefault(); accept(); }} noValidate>

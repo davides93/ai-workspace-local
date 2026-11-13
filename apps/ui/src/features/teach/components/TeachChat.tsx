@@ -8,6 +8,7 @@ import { useConversation } from "../../chat/useConversation";
 import { useRefreshMemories } from "../api";
 import { EXAMPLES } from "../model/memories";
 
+import { t as tr } from "../../../shared/i18n";
 /** The name of the CUSTOM event the engine sends after a memory tool ran (crates/aiw-agent/src/runner.rs `MEMORY_EVENT`). */
 export const MEMORY_EVENT = "aiw.memory";
 
@@ -42,9 +43,9 @@ export function TeachChat({ sessionId }: { sessionId: string }) {
         onRespond={conv.respond} onAction={conv.sendAction} notice={null} sessionKey={sessionId}
         empty={
           <div className="ws-hero">
-            <h2>Cosa devo ricordare?</h2>
-            <p className="muted">Scrivimi cose su di te, su come preferisci lavorare o da non dimenticare. Le ricordo anche nelle altre conversazioni.</p>
-            <ul className="ws-suggestions" aria-label="Frasi di esempio">
+            <h2>{tr("teach.cosa_devo_ricordare")}</h2>
+            <p className="muted">{tr("teach.scrivimi_cose_su_di_te")}</p>
+            <ul className="ws-suggestions" aria-label={tr("teach.frasi_di_esempio")}>
               {EXAMPLES.map((s) => (
                 <li key={s}><button type="button" className="btn" disabled={!ready || conv.running} onClick={() => send(s)}>{s}</button></li>
               ))}
@@ -60,7 +61,7 @@ export function TeachChat({ sessionId }: { sessionId: string }) {
           setFocusTick((n) => n + 1);
           send(text, () => setInput(text));
         }}
-        placeholder={ready ? "Scrivi cosa devo ricordare…" : "Carico la conversazione…"}
+        placeholder={ready ? tr("teach.scrivi_cosa_devo_ricordare") : tr("teach.carico_la_conversazione")}
       />
     </>
   );

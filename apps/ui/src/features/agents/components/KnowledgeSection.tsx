@@ -3,6 +3,7 @@ import { Link } from "../../../app/router";
 import type { AgentProfile } from "../../../shared/api/types";
 import { withKnowledge } from "../model/agents";
 
+import { t, tNode } from "../../../shared/i18n";
 interface Props {
   agent: AgentProfile;
   onChange: (next: AgentProfile) => void;
@@ -18,11 +19,11 @@ export function KnowledgeSection({ agent, onChange }: Props) {
   const list = collections.data ?? [];
   const gone = chosen.filter((id) => !list.some((c) => c.id === id));
   if (list.length === 0 && gone.length === 0) {
-    return <p className="faint text-sm">Non c'è ancora nessuna raccolta. Creane una in <Link to="/documents">Documenti</Link>.</p>;
+    return <p className="faint text-sm">{tNode("agents.non_c_e_ancora_nessuna", { link: <Link to="/documents">{t("agents.documenti")}</Link> })}</p>;
   }
   return (
     <fieldset className="kb-know">
-      <legend className="field-label">Raccolte che può consultare</legend>
+      <legend className="field-label">{t("agents.raccolte_che_puo_consultare")}</legend>
       {list.map((c) => (
         <label key={c.id}>
           <input type="checkbox" checked={chosen.includes(c.id)} onChange={(e) => onChange(withKnowledge(agent, c.id, e.target.checked))} />
@@ -32,10 +33,10 @@ export function KnowledgeSection({ agent, onChange }: Props) {
       {gone.map((id) => (
         <label key={id}>
           <input type="checkbox" checked onChange={() => onChange(withKnowledge(agent, id, false))} />
-          <span className="faint">Raccolta non più disponibile ({id})</span>
+          <span className="faint">{t("agents.raccolta_non_piu_disponibile", { id })}</span>
         </label>
       ))}
-      <p className="faint text-xs">Se non ne scegli nessuna, può consultarle tutte.</p>
+      <p className="faint text-xs">{t("agents.se_non_ne_scegli_nessuna")}</p>
     </fieldset>
   );
 }

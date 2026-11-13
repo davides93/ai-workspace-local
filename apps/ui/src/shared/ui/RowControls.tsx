@@ -2,6 +2,7 @@ import { useId, useLayoutEffect, useState, type ReactNode } from "react";
 import { IconButton } from "./Button";
 import "./RowControls.css";
 
+import { t } from "../i18n";
 /**
  * "Sposta su", "Sposta giù" and "Rimuovi" of a row of an editable list. After a move the focus stays
  * on the same button (or its twin when the row reached an end), so a row can be pushed several
@@ -36,9 +37,9 @@ export function RowControls({ index, count, noun, onMove, onRemove, children }: 
   return (
     <div className="row-controls">
       {children}
-      <IconButton id={upId} aria-label={`Sposta su ${noun}`} icon="down" className="flip" size={16} disabled={index === 0} onClick={() => move(-1)} />
-      <IconButton id={downId} aria-label={`Sposta giù ${noun}`} icon="down" size={16} disabled={index === count - 1} onClick={() => move(1)} />
-      <IconButton aria-label={`Rimuovi ${noun}`} icon="trash" size={16} onClick={onRemove} />
+      <IconButton id={upId} aria-label={t("ui.sposta_su", { noun })} icon="down" className="flip" size={16} disabled={index === 0} onClick={() => move(-1)} />
+      <IconButton id={downId} aria-label={t("ui.sposta_giu", { noun })} icon="down" size={16} disabled={index === count - 1} onClick={() => move(1)} />
+      <IconButton aria-label={t("ui.rimuovi", { noun })} icon="trash" size={16} onClick={onRemove} />
     </div>
   );
 }

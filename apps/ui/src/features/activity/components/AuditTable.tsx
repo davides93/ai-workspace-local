@@ -6,15 +6,16 @@ import { Icon, Pill } from "../../../shared/ui";
 import type { AuditEntry } from "../../../shared/api/types";
 import { ACTOR_LABEL, decisionInfo } from "../model/filter";
 
+import { t } from "../../../shared/i18n";
 function RunCell({ runId }: { runId?: string }) {
   if (!runId) return <>—</>;
   const to = chatPathForRun(runId);
   const label = <span className="act-run-id" title={runId}>{runId}</span>;
   return to ? (
-    <Link to={to} className="act-run-link" title="Apri la sessione di questo run">
+    <Link to={to} className="act-run-link" title={t("activity.apri_la_sessione_di_questo")}>
       {label}
       <Icon name="forward" size={12} />
-      <span className="sr-only">Apri la sessione di questo run</span>
+      <span className="sr-only">{t("activity.apri_la_sessione_di_questo")}</span>
     </Link>
   ) : label;
 }
@@ -26,15 +27,15 @@ function RunCell({ runId }: { runId?: string }) {
 export function AuditTable({ rows, empty }: { rows: AuditEntry[]; empty: ReactNode }) {
   return (
     <div className="table-wrap act-wrap">
-      <table className="data act-table" aria-label="Audit trail">
+      <table className="data act-table" aria-label={t("activity.audit_trail")}>
         <thead>
           <tr>
-            <th scope="col">Quando</th>
-            <th scope="col">Attore</th>
-            <th scope="col">Azione</th>
-            <th scope="col">Decisione</th>
-            <th scope="col">Dettaglio</th>
-            <th scope="col">Run</th>
+            <th scope="col">{t("activity.quando")}</th>
+            <th scope="col">{t("activity.attore")}</th>
+            <th scope="col">{t("activity.azione")}</th>
+            <th scope="col">{t("activity.decisione")}</th>
+            <th scope="col">{t("activity.dettaglio")}</th>
+            <th scope="col">{t("activity.run")}</th>
           </tr>
         </thead>
         <tbody>

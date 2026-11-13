@@ -3,6 +3,7 @@ import { useApi } from "../../shared/api/context";
 import type { McpPromptInfo } from "../../shared/api/types";
 import { Button, Dialog, Field, Input, Select } from "../../shared/ui";
 
+import { t } from "../../shared/i18n";
 /**
  * «Prompt MCP» (developer mode): pick a prompt of a connected server, fill its arguments, and the text it renders
  * goes into the message box. Nothing is sent: the person reads and edits it first.
@@ -37,14 +38,14 @@ export function McpPromptPicker({ prompts, onInsert, onClose }: {
 
   return (
     <Dialog
-      title="Prompt MCP" size="md" onClose={onClose}
+      title={t("mcp.prompt_mcp")} size="md" onClose={onClose}
       footer={<>
-        <Button onClick={onClose}>Annulla</Button>
-        <Button variant="primary" disabled={busy} onClick={() => void insert()}>{busy ? "Carico…" : "Inserisci nel messaggio"}</Button>
+        <Button onClick={onClose}>{t("mcp.annulla")}</Button>
+        <Button variant="primary" disabled={busy} onClick={() => void insert()}>{busy ? t("mcp.carico") : t("mcp.inserisci_nel_messaggio")}</Button>
       </>}
     >
       <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void insert(); }} noValidate>
-        <Field label="Prompt" htmlFor="mcp-prompt" hint={p.description || "Il testo viene inserito nel campo del messaggio: puoi modificarlo prima di inviarlo."}>
+        <Field label={t("mcp.prompt")} htmlFor="mcp-prompt" hint={p.description || t("mcp.il_testo_viene_inserito_nel")}>
           <Select id="mcp-prompt" value={index} onChange={(e) => { setIndex(Number(e.target.value)); setArgs({}); setError(null); }}>
             {prompts.map((x, i) => <option key={`${x.server_id}:${x.name}`} value={i}>{x.server} · {x.name}</option>)}
           </Select>

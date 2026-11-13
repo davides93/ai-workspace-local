@@ -5,6 +5,7 @@ import type { KbJob } from "../../../shared/api/types";
 import { useAddFiles, useAddPath, useCancelJob, useReindex } from "../api";
 import { isRunning, jobPercent, jobProgressText, jobSummary } from "../model/kb";
 
+import { t } from "../../../shared/i18n";
 interface Props {
   collectionId: string;
   jobs: KbJob[];
@@ -37,7 +38,7 @@ export function AddDocuments({ collectionId, jobs, developer }: Props) {
   const running = mine.some(isRunning);
 
   return (
-    <section className="kb-add" aria-label="Aggiungi documenti">
+    <section className="kb-add" aria-label={t("documents.aggiungi_documenti")}>
       <div
         className={`kb-drop${dragging ? " is-dragging" : ""}`}
         onDragOver={(e) => { if (carriesFiles(e)) { e.preventDefault(); setDragging(true); } }}
@@ -45,44 +46,44 @@ export function AddDocuments({ collectionId, jobs, developer }: Props) {
         onDrop={onDrop}
       >
         <Icon name="file" size={20} />
-        <p>Trascina qui i file, oppure scegli dal computer.</p>
-        <p className="faint text-xs">Testo, Markdown, codice e PDF: fino a 10 MB ciascuno.</p>
+        <p>{t("documents.trascina_qui_i_file_oppure")}</p>
+        <p className="faint text-xs">{t("documents.testo_markdown_codice_e_pdf")}</p>
         <input ref={picker} type="file" multiple hidden tabIndex={-1} aria-hidden="true" data-testid="kb-picker" onChange={(e) => { send(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
-        <Button icon="plus" disabled={add.isPending} onClick={() => picker.current?.click()}>{add.isPending ? "Invio in corso…" : "Scegli file"}</Button>
+        <Button icon="plus" disabled={add.isPending} onClick={() => picker.current?.click()}>{add.isPending ? t("documents.invio_in_corso") : t("documents.scegli_file")}</Button>
       </div>
       {add.isError && <p className="kb-error text-sm" role="alert">{errorMessage(add.error)}</p>}
       {notes.length > 0 && (
-        <ul className="kb-notes text-sm" aria-label="File lasciati fuori">
+        <ul className="kb-notes text-sm" aria-label={t("documents.file_lasciati_fuori")}>
           {notes.map((n) => <li key={n}>{n}</li>)}
         </ul>
       )}
 
       {developer && (
         <form className="kb-path" onSubmit={(e) => { e.preventDefault(); if (path.trim()) addPath.mutate({ collectionId, path }, { onSuccess: () => setPath("") }); }}>
-          <Field label="Aggiungi una cartella o un file dal computer" htmlFor="kb-path" hint="Percorso assoluto, ad esempio /home/nome/Documenti. Funziona solo da questo computer." error={addPath.isError ? errorMessage(addPath.error) : undefined}>
+          <Field label={t("documents.aggiungi_una_cartella_o_un")} htmlFor="kb-path" hint={t("documents.percorso_assoluto_ad_esempio_home")} error={addPath.isError ? errorMessage(addPath.error) : undefined}>
             <Input id="kb-path" mono value={path} placeholder="/home/nome/Documenti" onChange={(e) => setPath(e.target.value)} />
           </Field>
           <div className="kb-path-actions">
-            <Button type="submit" icon="file" disabled={!path.trim() || addPath.isPending}>Aggiungi cartella</Button>
-            <Button type="button" variant="ghost" icon="refresh" disabled={running || reindex.isPending} onClick={() => reindex.mutate(collectionId)}>Reindicizza</Button>
+            <Button type="submit" icon="file" disabled={!path.trim() || addPath.isPending}>{t("documents.aggiungi_cartella")}</Button>
+            <Button type="button" variant="ghost" icon="refresh" disabled={running || reindex.isPending} onClick={() => reindex.mutate(collectionId)}>{t("documents.reindicizza")}</Button>
           </div>
           {reindex.isError && <p className="kb-error text-sm" role="alert">{errorMessage(reindex.error)}</p>}
         </form>
       )}
 
       {mine.length > 0 && (
-        <ul className="kb-jobs" aria-label="Operazioni">
+        <ul className="kb-jobs" aria-label={t("documents.operazioni")}>
           {mine.map((j) => (
             <li key={j.id} className="kb-job">
               {isRunning(j) ? (
                 <>
                   <div className="kb-job-head">
-                    <b>In corso</b>
+                    <b>{t("documents.in_corso")}</b>
                     <span className="faint text-sm">{jobProgressText(j)}</span>
                     <span className="grow" />
-                    <Button size="sm" variant="ghost" onClick={() => cancel.mutate(j.id)}>Interrompi</Button>
+                    <Button size="sm" variant="ghost" onClick={() => cancel.mutate(j.id)}>{t("documents.interrompi")}</Button>
                   </div>
-                  <Meter value={jobPercent(j)} max={100} label="Avanzamento" />
+                  <Meter value={jobPercent(j)} max={100} label={t("documents.avanzamento")} />
                 </>
               ) : (
                 <>
@@ -90,7 +91,7 @@ export function AddDocuments({ collectionId, jobs, developer }: Props) {
                   {j.skipped.length > 0 && (
                     <ul className="kb-notes text-xs">
                       {j.skipped.map((s) => <li key={`${s.name}|${s.reason}`}><b>{s.name}</b>: {s.reason}</li>)}
-                      {j.skipped_total > j.skipped.length && <li>…e altri {j.skipped_total - j.skipped.length}.</li>}
+                      {j.skipped_total > j.skipped.length && <li>{t("documents.e_altri", { p: j.skipped_total - j.skipped.length })}</li>}
                     </ul>
                   )}
                 </>

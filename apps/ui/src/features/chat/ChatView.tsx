@@ -43,6 +43,7 @@ import { useVoice } from "./useVoice";
 import { COMPACT_SESSIONS_QUERY, useDraft, useInspectorMode, useInspectorOpen } from "./useLayout";
 import "./chat.css";
 
+import { t as tr, t } from "../../shared/i18n";
 const chatPath = (id: string) => `/chat/${encodeURIComponent(id)}`;
 
 /** Workspace: sessions on the left, the conversation in the middle, the run panel on the right. */
@@ -58,7 +59,7 @@ export function ChatView() {
   const system = useSystem();
   const browserButton = api.openBrowser && (system.data?.device.os === "ios" || system.data?.device.os === "android"
     || (system.data?.device.os === "macos" && system.data.sandboxed))
-    ? () => { void api.openBrowser?.().catch((e: unknown) => toast(e instanceof Error ? e.message : "Non riesco ad aprire il browser.", "crit")); }
+    ? () => { void api.openBrowser?.().catch((e: unknown) => toast(e instanceof Error ? e.message : tr("chat.non_riesco_ad_aprire_il"), "crit")); }
     : undefined;
 
   // The open session lives in the URL (#/chat/:sessionId): back/forward, links and view switches keep it.
@@ -101,7 +102,7 @@ export function ChatView() {
       // Out of the list at once, so the redirect below never picks it again.
       qc.setQueryData<Session[]>(qk.sessions.list(), (l) => l?.filter((x) => x.id !== id));
       void qc.invalidateQueries({ queryKey: qk.sessions.all() });
-      toast("Questa sessione non esiste più: è stata eliminata da un altro dispositivo o client.");
+      toast(tr("chat.questa_sessione_non_esiste_piu"));
       navigate("/chat", { replace: true });
     },
     [qc],
@@ -197,7 +198,7 @@ export function ChatView() {
   // Until there is a session to show: loading while the list loads (or the redirect to one runs), the list's own error if it failed.
   const listFailed = sessions.isError && !list;
   const logState = listFailed
-    ? { status: "error" as const, error: sessions.error, title: "Impossibile caricare le sessioni" }
+    ? { status: "error" as const, error: sessions.error, title: tr("chat.impossibile_caricare_le_sessioni") }
     : sessions.isPending || (!!list?.length && !openId) ? { status: "loading" as const } : conv.history;
   const voice = useVoice({
     sessionId: openId, ready: !!openId && logState.status === "ready", running: conv.running, items: conv.items, pending: conv.pending,
@@ -219,10 +220,10 @@ export function ChatView() {
 
   return (
     <div className="ws">
-      <h1 className="sr-only">Workspace</h1>
-      {!compactSessions && <aside className="ws-sessions" aria-label="Sessioni">{sessionList()}</aside>}
+      <h1 className="sr-only">{tr("chat.workspace")}</h1>
+      {!compactSessions && <aside className="ws-sessions" aria-label={tr("chat.sessioni")}>{sessionList()}</aside>}
 
-      <section className="ws-main" aria-label="Workspace">
+      <section className="ws-main" aria-label={tr("chat.workspace")}>
         <ChatHeader
           session={active} agent={agent} profile={profile} running={conv.running}
           sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
@@ -231,9 +232,9 @@ export function ChatView() {
         {noSessions ? (
           <div className="ws-nosession">
             <EmptyState
-              icon="chat" title="Nessuna sessione"
-              description="Crea la prima sessione per far lavorare un agente su questo dispositivo."
-              action={<Button variant="primary" icon="plus" disabled={!defaultAgent || createSession.isPending} onClick={() => create({ agent_id: defaultAgent, isolation: "none" })}>Nuova sessione</Button>}
+              icon="chat" title={tr("chat.nessuna_sessione")}
+              description={tr("chat.crea_la_prima_sessione_per")}
+              action={<Button variant="primary" icon="plus" disabled={!defaultAgent || createSession.isPending} onClick={() => create({ agent_id: defaultAgent, isolation: "none" })}>{tr("chat.nuova_sessione")}</Button>}
             />
           </div>
         ) : (
@@ -248,9 +249,9 @@ export function ChatView() {
           <div className="ws-note ws-lesson" role="status">
             <Icon name="sparkle" size={18} />
             <div className="ws-note-body">
-              <b>Ho proposto una lezione da rivedere</b>
-              <span className="ws-note-hint">«{lessonToReview.title}»: non viene scritta finché non la approvi.</span>
-              <Link to="/" className="ws-note-link">Rivedila nella Panoramica <Icon name="forward" size={12} /></Link>
+              <b>{tr("chat.ho_proposto_una_lezione_da")}</b>
+              <span className="ws-note-hint">{tr("chat.non_viene_scritta_finche_non", { title: lessonToReview.title })}</span>
+              <Link to="/" className="ws-note-link">{t("chat.rivedila_nella_panoramica")}{" "}<Icon name="forward" size={12} /></Link>
             </div>
           </div>
         )}
@@ -260,7 +261,7 @@ export function ChatView() {
           onMcpPrompt={developer && (mcpPrompts.data?.length ?? 0) > 0 ? () => setPromptPicker(true) : undefined}
           focusKey={`${openId}:${focusTick}`} voice={voice} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined}
           modelLabel={profile ? `${profile.runtime_id} · ${profile.model || "nessun modello"}` : undefined}
-          placeholder={!openId ? "Crea una sessione per iniziare" : logState.status === "loading" ? "Carico la conversazione…" : `Scrivi a ${agent?.name ?? "l'agente"}…`}
+          placeholder={!openId ? tr("chat.crea_una_sessione_per_iniziare") : logState.status === "loading" ? tr("chat.carico_la_conversazione") : tr("chat.scrivi_a", { p: agent?.name ?? "l'agente" })}
         />
         {promptPicker && mcpPrompts.data && (
           <McpPromptPicker
@@ -271,11 +272,11 @@ export function ChatView() {
         <p className="sr-only" role="status" aria-live="polite">{announce}</p>
       </section>
 
-      {mode === "inline" && panel.open && <aside className="ws-inspector" aria-label="Pannello del run">{inspector}</aside>}
-      {mode === "drawer" && panel.open && <Drawer title="Pannello del run" onClose={panel.close}>{inspector}</Drawer>}
-      {mode === "sheet" && panel.open && <Sheet title="Pannello del run" onClose={panel.close}>{inspector}</Sheet>}
+      {mode === "inline" && panel.open && <aside className="ws-inspector" aria-label={tr("chat.pannello_del_run")}>{inspector}</aside>}
+      {mode === "drawer" && panel.open && <Drawer title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Drawer>}
+      {mode === "sheet" && panel.open && <Sheet title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Sheet>}
       {compactSessions && showSessions && (
-        <ModalShell variant="drawer" title="Sessioni" className="ws-drawer-left" onClose={() => setShowSessions(false)}>
+        <ModalShell variant="drawer" title={tr("chat.sessioni")} className="ws-drawer-left" onClose={() => setShowSessions(false)}>
           {sessionList(() => setShowSessions(false))}
         </ModalShell>
       )}

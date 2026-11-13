@@ -11,6 +11,7 @@ import { useConfig } from "../../settings/api";
 import { defaultProfile, runtimeShortcut } from "../model/overview";
 import { SIMPLE_ACTIONS } from "../model/simple";
 
+import { t, t as tr, tNode as trNode } from "../../../shared/i18n";
 function Action({ icon, title, hint, onClick, primary, disabled }: { icon: string; title: string; hint: ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean }) {
   return (
     <button type="button" className={cx("hm-action", primary && "is-primary")} onClick={onClick} disabled={disabled}>
@@ -46,7 +47,7 @@ export function QuickActions({ simple = false }: { simple?: boolean }) {
   if (simple) {
     const [chat, download] = SIMPLE_ACTIONS;
     return (
-      <section className="hm-actions hm-actions-simple" aria-label="Azioni rapide">
+      <section className="hm-actions hm-actions-simple" aria-label={t("home.azioni_rapide")}>
         <Action
           primary icon="plus" title={chat.title} hint={chat.hint}
           disabled={!agentId || createSession.isPending}
@@ -58,21 +59,21 @@ export function QuickActions({ simple = false }: { simple?: boolean }) {
   }
 
   return (
-    <section className="hm-actions" aria-label="Azioni rapide">
+    <section className="hm-actions" aria-label={t("home.azioni_rapide")}>
       <Action
-        primary icon="plus" title="Nuova sessione" hint={agent ? `con ${agent.name}` : "scegli un agente"}
+        primary icon="plus" title={t("home.nuova_sessione")} hint={agent ? t("home.con", { name: agent.name }) : t("home.scegli_un_agente")}
         disabled={!agentId || createSession.isPending}
         onClick={() => createSession.mutate({ agent_id: agentId }, { onSuccess: (s) => navigate(`/chat/${encodeURIComponent(s.id)}`) })}
       />
-      <Action icon="download" title="Scarica un modello" hint="Hugging Face, Ollama, catalogo" onClick={() => navigate("/models/discover")} />
+      <Action icon="download" title={t("home.scarica_un_modello")} hint={t("home.hugging_face_ollama_catalogo")} onClick={() => navigate("/models/discover")} />
       <Action
         icon="power"
-        title={shortcut.kind === "start" ? `Avvia ${shortcut.runtime.name}` : shortcut.kind === "running" ? "Runtime in esecuzione" : "Avvia un runtime"}
-        hint={shortcut.kind === "start" ? "runtime del profilo predefinito" : shortcut.kind === "running" ? shortcut.runtime.name : "apri l'elenco dei runtime"}
+        title={shortcut.kind === "start" ? t("home.avvia", { name: shortcut.runtime.name }) : shortcut.kind === "running" ? t("home.runtime_in_esecuzione") : t("home.avvia_un_runtime")}
+        hint={shortcut.kind === "start" ? t("home.runtime_del_profilo_predefinito") : shortcut.kind === "running" ? shortcut.runtime.name : t("home.apri_l_elenco_dei_runtime")}
         disabled={runtimeAction.isPending}
         onClick={startRuntime}
       />
-      <Action icon="search" title="Apri la palette" hint={<><kbd>Ctrl</kbd> <kbd>K</kbd> · comandi e pagine</>} onClick={openPalette} />
+      <Action icon="search" title={t("home.apri_la_palette")} hint={<>{trNode("home.comandi_e_pagine", { kbd: <kbd>{tr("home.ctrl")}</kbd>, kbd2: <kbd>{tr("home.k")}</kbd> })}</>} onClick={openPalette} />
     </section>
   );
 }

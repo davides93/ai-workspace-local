@@ -305,6 +305,17 @@ immagini non sono nei messaggi salvati: `chat/model/imageCache` ricorda quelle v
 budget di memoria. `HttpTransport.subscribeRun` scarta gli eventi con `seq` già visto
 (il server rimanda lo storico alla riconnessione) come fa il carrier Tauri.
 
+## 7b. Lingue (it / en)
+
+`shared/i18n/` è il livello di traduzione (nessuna libreria):
+
+- `messages/it/<area>.ts` (fonte di verità) e `messages/en/<area>.ts`: una voce per riga, chiavi `area.testo`; `it.ts` ed `en.ts` le riuniscono (`MessageKey`). `en` è `Record<MessageKey, string>`: una chiave mancante o in più è un errore di tipo. Il glossario sta in cima a `en.ts`.
+- `t(chiave, parametri)`: `{nome}` per i parametri, `{n, plural, one {# file} other {# file}}` per i plurali (`Intl.PluralRules`). `tNode(chiave, {slot: <b>..</b>})` per testi con elementi dentro, `labelMap({...})` per le mappe di etichette a livello di modulo (leggono la lingua a ogni accesso), `useT()` per i componenti che vogliono rieseguire il render.
+- Lingua: impostazione `ui.language` (`auto` | `it` | `en`, strato globale come `ui.mode`), copia sul dispositivo in `localStorage` (`aiw.ui.language`), `useLanguage()` in `app/`. Un cambio di lingua rimonta l'app sotto i provider (`LocaleBoundary` in `main.tsx`), così testi e formati si aggiornano insieme. `shared/lib/format.ts` usa la lingua attiva; `currentLocaleTag()` per i `toLocale*`.
+- Aggiungere una stringa: scrivere `t("area.chiave")` nel codice, la voce italiana in `messages/it/<area>.ts` e quella inglese in `messages/en/<area>.ts` (lo stesso segnaposto in entrambe: lo verifica `shared/i18n/i18n.test.ts`). Non usare `t()` in costanti di modulo (restano nella lingua dell'avvio): usare `labelMap` o una funzione. I test girano con la lingua `it` (`src/test-setup.ts`).
+- Aiuti di migrazione: `node scripts/i18n-extract.mjs <cartelle>` sposta i letterali semplici nel catalogo italiano e riscrive il codice; `node scripts/i18n-apply-en.mjs righe.txt` scrive l'inglese (`n|testo`). `npm run i18n:scan [-- --list]` elenca i letterali JSX ancora fuori dai cataloghi.
+- Restano in italiano per scelta: dati demo, testi del backend Rust (errori, prompt, riepilogo), guscio desktop (menu, tray, notifiche).
+
 ## 8. Test
 
 - **Vitest** (`npm test`, ambiente `node`) per la logica pura: router e `navGate`, formattatori,

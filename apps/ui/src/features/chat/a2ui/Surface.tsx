@@ -5,6 +5,7 @@ import {
   type A2uiAction, type A2uiComponent, type Json, type Obj, type Scope, type SurfaceState,
 } from "./protocol";
 
+import { t as tr } from "../../../shared/i18n";
 // ------------------------------------------------------------------ rendering
 const FLEX: Record<string, string> = {
   start: "flex-start", end: "flex-end", center: "center", stretch: "stretch",
@@ -40,10 +41,10 @@ export function A2uiSurface({ surface, onAction, disabled = false }: { surface: 
     }),
     [surface, data, onAction, disabled, touched],
   );
-  if (surface.deleted) return <div className="a2ui-surface faint">Interfaccia chiusa.</div>;
-  if (!surface.components.root) return <div className="a2ui-surface faint">Interfaccia senza componente root.</div>;
+  if (surface.deleted) return <div className="a2ui-surface faint">{tr("chat.interfaccia_chiusa")}</div>;
+  if (!surface.components.root) return <div className="a2ui-surface faint">{tr("chat.interfaccia_senza_componente_root")}</div>;
   return (
-    <div className="a2ui-surface" data-surface={surface.surfaceId} aria-label={`Interfaccia ${surface.surfaceId}`}>
+    <div className="a2ui-surface" data-surface={surface.surfaceId} aria-label={tr("chat.interfaccia", { surfaceId: surface.surfaceId })}>
       <Node id="root" ctx={ctx} scope={{ data, base: "" }} />
     </div>
   );
@@ -228,7 +229,7 @@ function Node({ id, ctx, scope }: { id: string; ctx: Ctx; scope: Scope }): React
       );
     }
     default:
-      return <span className="a2ui-missing">Componente non supportato: {c.component}</span>;
+      return <span className="a2ui-missing">{tr("chat.componente_non_supportato", { component: c.component })}</span>;
   }
 }
 
@@ -258,10 +259,10 @@ function Modal({ c, ctx, scope }: { c: A2uiComponent; ctx: Ctx; scope: Scope }) 
         <Node id={String(c.trigger)} ctx={{ ...ctx, onAction: () => setOpen(true) }} scope={scope} />
       </span>
       {open && (
-        <ModalShell variant="dialog" title="Finestra dell'interfaccia" onClose={() => setOpen(false)}>
+        <ModalShell variant="dialog" title={tr("chat.finestra_dell_interfaccia")} onClose={() => setOpen(false)}>
           <div className="overlay-head">
             <span className="grow" />
-            <IconButton aria-label="Chiudi" icon="close" onClick={() => setOpen(false)} />
+            <IconButton aria-label={tr("chat.chiudi")} icon="close" onClick={() => setOpen(false)} />
           </div>
           <div className="overlay-body">
             <Node id={String(c.content)} ctx={ctx} scope={scope} />

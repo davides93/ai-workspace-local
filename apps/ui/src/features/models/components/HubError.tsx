@@ -3,6 +3,7 @@ import { errorMessage } from "../../../shared/lib/errors";
 import { Button, Icon } from "../../../shared/ui";
 import { errorHint, errorTitle, needsToken } from "../model/errors";
 
+import { t } from "../../../shared/i18n";
 /**
  * Failure of a provider call (search, files of a model, start of a download): the backend's Italian
  * message, the next step for its HTTP status, "Riprova" and, for 401/403 or a gated repository,
@@ -27,8 +28,8 @@ export function HubError({ error, title, onRetry, retrying, onSetToken, children
       {children}
       {(onRetry || token) && (
         <div className="row">
-          {token && <Button variant="primary" size="sm" icon="key" onClick={onSetToken}>Imposta token</Button>}
-          {onRetry && <Button size="sm" icon="refresh" onClick={onRetry} disabled={retrying}>Riprova</Button>}
+          {token && <Button variant="primary" size="sm" icon="key" onClick={onSetToken}>{t("models.imposta_token")}</Button>}
+          {onRetry && <Button size="sm" icon="refresh" onClick={onRetry} disabled={retrying}>{t("models.riprova")}</Button>}
         </div>
       )}
     </div>
@@ -47,7 +48,7 @@ export function InlineError({ error, message, onSetToken }: { error?: unknown; m
         <span>{text}</span>
         {hint && <span className="faint"> {hint}</span>}
       </div>
-      {token && <Button size="sm" icon="key" onClick={onSetToken}>Imposta token</Button>}
+      {token && <Button size="sm" icon="key" onClick={onSetToken}>{t("models.imposta_token")}</Button>}
     </div>
   );
 }

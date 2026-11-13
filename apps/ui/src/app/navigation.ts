@@ -1,3 +1,4 @@
+import { t, type MessageKey } from "../shared/i18n";
 import type { UiMode } from "../shared/lib/uiMode";
 import type { AppRoute, GroupId } from "./routes";
 
@@ -7,7 +8,7 @@ import type { AppRoute, GroupId } from "./routes";
  */
 
 type NavRoute = Pick<AppRoute, "id" | "label" | "group" | "simple" | "simpleLabel" | "tab" | "simpleTab">;
-type NavGroup = { id: GroupId; label?: string; simpleLabel?: string };
+type NavGroup = { id: GroupId; label?: MessageKey; simpleLabel?: MessageKey };
 
 /** Routes shown in `mode`, in table order. */
 export function visibleRoutes<R extends Pick<AppRoute, "simple">>(routes: R[], mode: UiMode): R[] {
@@ -15,9 +16,9 @@ export function visibleRoutes<R extends Pick<AppRoute, "simple">>(routes: R[], m
 }
 
 /** Name of a section in `mode` (simple mode may use a plainer word). */
-export const routeLabel = (r: Pick<AppRoute, "label" | "simpleLabel">, mode: UiMode): string => (mode === "simple" && r.simpleLabel) || r.label;
+export const routeLabel = (r: Pick<AppRoute, "label" | "simpleLabel">, mode: UiMode): string => t((mode === "simple" && r.simpleLabel) || r.label);
 
-export const groupLabel = (g: Pick<NavGroup, "label" | "simpleLabel">, mode: UiMode): string | undefined => (mode === "simple" && g.simpleLabel) || g.label;
+export const groupLabel = (g: Pick<NavGroup, "label" | "simpleLabel">, mode: UiMode): string | undefined => (() => { const k = (mode === "simple" && g.simpleLabel) || g.label; return k ? t(k) : undefined; })();
 
 /** Position of a route in the phone tab bar in `mode`: simple mode may have its own table (`simpleTab`). */
 export const tabPosition = (r: Pick<AppRoute, "tab" | "simpleTab">, mode: UiMode): number | undefined => (mode === "simple" ? r.simpleTab ?? r.tab : r.tab);

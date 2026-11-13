@@ -1,9 +1,13 @@
+import { t } from "../i18n";
+
 /** Human readable message of anything that was thrown. */
 export function errorMessage(e: unknown): string {
+  // Browser network failures have English, engine-specific wording: say it in the interface language.
+  if (e instanceof TypeError && /failed to fetch|networkerror|load failed|network request failed/i.test(e.message)) return t("common.error_network");
   if (e instanceof Error && e.message) return e.message;
   if (typeof e === "string" && e) return e;
   if (e && typeof e === "object" && "message" in e && typeof (e as { message: unknown }).message === "string") return (e as { message: string }).message;
-  return "Errore sconosciuto";
+  return t("common.error_unknown");
 }
 
 /** HTTP status carried by an `ApiError`, when there is one. */

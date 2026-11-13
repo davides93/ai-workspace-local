@@ -5,6 +5,7 @@ import { Button, Icon, Pill } from "../../../shared/ui";
 import type { Session } from "../../../shared/api/types";
 import { useWorktree, useWorktreeApply, useWorktreeDiscard } from "../api";
 
+import { t } from "../../../shared/i18n";
 const FILE_STATUS: Record<string, string> = { A: "aggiunto", M: "modificato", D: "eliminato", R: "rinominato", C: "copiato", T: "tipo cambiato" };
 
 /** Changes of an isolated session: review the diff, apply it to the workspace or throw it away. */
@@ -37,13 +38,13 @@ export function WorktreePanel({ session, running }: { session: Session; running:
   return (
     <section className="ws-insp-section ws-wt">
       <div className="ws-insp-head">
-        <h3>Worktree</h3>
+        <h3>{t("chat.worktree_2")}</h3>
         <Pill className="mono"><Icon name="branch" size={13} /> {wt.branch}</Pill>
       </div>
       <span className="faint mono ws-wt-path" title={wt.path}>{wt.path}</span>
-      {st && files.length === 0 && <span className="faint text-sm">Nessuna modifica da applicare.</span>}
+      {st && files.length === 0 && <span className="faint text-sm">{t("chat.nessuna_modifica_da_applicare")}</span>}
       {files.length > 0 && (
-        <ul className="ws-changed" aria-label="File modificati">
+        <ul className="ws-changed" aria-label={t("chat.file_modificati")}>
           {files.map((f) => (
             <li key={f.path}>
               <span className={`ws-fs ws-fs-${f.status}`} title={FILE_STATUS[f.status] ?? f.status}>{f.status}</span>
@@ -55,16 +56,15 @@ export function WorktreePanel({ session, running }: { session: Session; running:
       )}
       <div className="row">
         <Button size="sm" disabled={files.length === 0} onClick={() => setShowDiff((v) => !v)} aria-expanded={showDiff}>
-          {showDiff ? "Nascondi differenze" : "Differenze"}
+          {showDiff ? t("chat.nascondi_differenze") : t("chat.differenze")}
         </Button>
         <Button size="sm" variant="primary" icon="check" disabled={busy || running || files.length === 0} onClick={() => apply.mutate(session.id, { onSuccess: () => setShowDiff(false) })}>
-          Applica al workspace
-        </Button>
+          {t("chat.applica_al_workspace")}</Button>
         <Button size="sm" variant="danger" disabled={busy || running} onClick={onDiscard} onBlur={() => setConfirmDiscard(false)}>
-          {confirmDiscard ? "Conferma: elimina" : "Scarta"}
+          {confirmDiscard ? t("chat.conferma_elimina") : t("chat.scarta")}
         </Button>
       </div>
-      {running && <span className="faint text-xs">Applica e scarta tornano disponibili alla fine del run.</span>}
+      {running && <span className="faint text-xs">{t("chat.applica_e_scarta_tornano_disponibili")}</span>}
       {showDiff && st && <Diff text={st.diff} truncated={st.truncated} />}
     </section>
   );
@@ -77,10 +77,10 @@ function Diff({ text, truncated }: { text: string; truncated: boolean }) {
       ? "meta"
       : l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : l.startsWith("@@") ? "hunk" : undefined;
   return (
-    <pre className="ws-diff" aria-label="Differenze" tabIndex={0}>
+    <pre className="ws-diff" aria-label={t("chat.differenze")} tabIndex={0}>
       <code>
         {lines.map((l, i) => <span key={i} className={cls(l)}>{l || " "}</span>)}
-        {truncated && <span className="meta">… differenze troncate</span>}
+        {truncated && <span className="meta">{t("chat.differenze_troncate")}</span>}
       </code>
     </pre>
   );

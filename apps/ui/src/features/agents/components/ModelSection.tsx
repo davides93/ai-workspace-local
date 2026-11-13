@@ -7,6 +7,7 @@ import { autoChoices, autoSummary, isAutoProfile } from "../../models/model/advi
 import type { AgentProfile, InferenceProfile, RuntimeInfo } from "../../../shared/api/types";
 import type { AgentIssue } from "../model/agents";
 
+import { t } from "../../../shared/i18n";
 /** Which inference profile the agent runs on, and what that profile means in practice. */
 export function ModelSection({ agent, profiles, runtimes, issues, onChange }: {
   agent: AgentProfile;
@@ -24,15 +25,15 @@ export function ModelSection({ agent, profiles, runtimes, issues, onChange }: {
   const missing = !!agent.inference_profile && !auto && !profile && profiles.length > 0;
   return (
     <div className="form-grid">
-      <Field label="Profilo di inferenza" htmlFor="ag-profile" error={error} hint="Decide runtime, modello e parametri di generazione.">
+      <Field label={t("agents.profilo_di_inferenza")} htmlFor="ag-profile" error={error} hint={t("agents.decide_runtime_modello_e_parametri")}>
         <Select id="ag-profile" value={agent.inference_profile} onChange={(e) => onChange({ inference_profile: e.target.value })} aria-invalid={!!error}>
-          {missing && <option value={agent.inference_profile}>{agent.inference_profile} (non esiste più)</option>}
-          {!agent.inference_profile && <option value="">Scegli un profilo…</option>}
-          <optgroup label="Scelta automatica">
+          {missing && <option value={agent.inference_profile}>{t("agents.non_esiste_piu", { inference_profile: agent.inference_profile })}</option>}
+          {!agent.inference_profile && <option value="">{t("agents.scegli_un_profilo")}</option>}
+          <optgroup label={t("agents.scelta_automatica")}>
             {autoChoices(mode, agent.inference_profile).map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
           </optgroup>
-          <optgroup label="Profili">
-            {profiles.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.runtime_id} · {p.model || "nessun modello"}</option>)}
+          <optgroup label={t("agents.profili")}>
+            {profiles.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.runtime_id} · {p.model || t("agents.nessun_modello")}</option>)}
           </optgroup>
         </Select>
       </Field>
@@ -41,7 +42,7 @@ export function ModelSection({ agent, profiles, runtimes, issues, onChange }: {
         <div className="profile-card">
           <KeyValue items={[
             ["Runtime", <span key="r" className="row"><span className="mono">{runtime?.name ?? profile.runtime_id}</span>{runtime && <StatusPill status={runtime.status} />}</span>],
-            ["Modello", profile.model ? <span className="mono">{profile.model}</span> : <Pill tone="warn">da scegliere</Pill>],
+            ["Modello", profile.model ? <span className="mono">{profile.model}</span> : <Pill tone="warn">{t("agents.da_scegliere")}</Pill>],
             ["Contesto", formatContext(profile.params.context)],
             ["Temperatura", profile.params.temperature ?? "—"],
           ]} />
@@ -50,8 +51,8 @@ export function ModelSection({ agent, profiles, runtimes, issues, onChange }: {
       )}
       <p className="row text-sm">
         <Icon name="info" size={14} />
-        <span className="muted">Modifichi i profili in</span> <Link to="/models/profiles">Profili di inferenza</Link>
-        <span className="muted">· scarichi i modelli in</span> <Link to="/models">Modelli</Link>
+        <span className="muted">{t("agents.modifichi_i_profili_in")}</span> <Link to="/models/profiles">{t("agents.profili_di_inferenza")}</Link>
+        <span className="muted">{t("agents.scarichi_i_modelli_in")}</span> <Link to="/models">{t("agents.modelli")}</Link>
       </p>
     </div>
   );

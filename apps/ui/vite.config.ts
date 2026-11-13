@@ -18,6 +18,7 @@ export default defineConfig(({ mode }) => ({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    setupFiles: ["src/test-setup.ts"],
     // tokens.test.ts reads tokens.css as text to check the contrast of the palette.
     css: { include: [/tokens\.css/] },
   },

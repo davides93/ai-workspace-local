@@ -4,6 +4,7 @@ import { emptyRow, isKeptRow, renameRow, type KvRow } from "../lib/kvRows";
 import { Button, IconButton } from "./Button";
 import "./KeyValueEditor.css";
 
+import { t } from "../i18n";
 /**
  * Rows of name/value pairs (environment variables, HTTP headers). A row whose name `isSecret`
  * shows its value masked, with a button to reveal it.
@@ -63,30 +64,28 @@ export function KeyValueEditor({ idPrefix, label, rows, onChange, keyLabel = "No
             />
             <input
               id={`${idPrefix}-v${i}`} className={cx("input mono kve-value", kept && "kve-kept")} placeholder={valuePlaceholder}
-              aria-label={kept ? `${valueLabel} ${i + 1}: nascosto, resta invariato` : `${valueLabel} ${i + 1}`}
+              aria-label={kept ? t("ui.nascosto_resta_invariato", { valueLabel, p: i + 1 }) : `${valueLabel} ${i + 1}`}
               type={secret && !shown ? "password" : "text"} value={r.value} readOnly={kept} autoComplete="off" spellCheck={false}
               onChange={(e) => patch(r.id, { value: e.target.value })}
             />
             <div className="kve-actions">
               {kept && (
                 <Button size="sm" variant="ghost" aria-label={`Cambia il valore ${i + 1}`} onClick={() => { patch(r.id, { value: "" }); setFocusRow(r.id); }}>
-                  Cambia
-                </Button>
+                  {t("ui.cambia")}</Button>
               )}
               {restorable && mask !== undefined && (
                 <Button size="sm" variant="ghost" aria-label={`Mantieni il valore salvato ${i + 1}`} onClick={() => patch(r.id, { value: mask })}>
-                  Mantieni
-                </Button>
+                  {t("ui.mantieni")}</Button>
               )}
               {secret && !kept && (
                 <Button
-                  size="sm" variant="ghost" aria-label={shown ? `Nascondi il valore ${i + 1}` : `Mostra il valore ${i + 1}`}
+                  size="sm" variant="ghost" aria-label={shown ? t("ui.nascondi_il_valore", { p: i + 1 }) : t("ui.mostra_il_valore", { p: i + 1 })}
                   aria-pressed={shown} onClick={() => toggleReveal(r.id)}
                 >
-                  {shown ? "Nascondi" : "Mostra"}
+                  {shown ? t("ui.nascondi") : t("ui.mostra")}
                 </Button>
               )}
-              <IconButton aria-label={`Rimuovi la riga ${i + 1}`} icon="trash" size={16} onClick={() => onChange(rows.filter((x) => x.id !== r.id))} />
+              <IconButton aria-label={t("ui.rimuovi_la_riga", { p: i + 1 })} icon="trash" size={16} onClick={() => onChange(rows.filter((x) => x.id !== r.id))} />
             </div>
           </div>
         );

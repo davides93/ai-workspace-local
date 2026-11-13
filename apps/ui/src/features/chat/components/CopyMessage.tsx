@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { copyText } from "../../../shared/lib/clipboard";
 import { IconButton } from "../../../shared/ui";
 
+import { t } from "../../../shared/i18n";
 /** Copies the Markdown source of a reply; the icon turns into a check for a moment. */
 export function CopyMessage({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -13,8 +14,8 @@ export function CopyMessage({ text }: { text: string }) {
     <IconButton
       icon={done ? "check" : "copy"}
       size={15}
-      aria-label={done ? "Risposta copiata" : "Copia la risposta"}
-      title={done ? "Copiata" : "Copia la risposta"}
+      aria-label={done ? t("chat.risposta_copiata") : t("chat.copia_la_risposta")}
+      title={done ? t("chat.copiata") : t("chat.copia_la_risposta")}
       onClick={async () => {
         if (!(await copyText(text))) return;
         setDone(true);

@@ -7,6 +7,7 @@ import { RUN_STATUS_LABEL } from "../model/labels";
 import { MAX_TITLE, validateTitle } from "../model/sessions";
 import { useRenameSession } from "../api";
 
+import { t } from "../../../shared/i18n";
 const CHANNEL_NAME = { telegram: "Telegram", slack: "Slack", email: "Email" } as const;
 
 const ledTone = (s: Session): LedTone => (s.last_status === "failed" ? "crit" : s.last_status === "running" ? "run" : s.last_status === "cancelled" ? "warn" : s.last_status ? "ok" : "off");
@@ -42,7 +43,7 @@ function RenameForm({ session, onDone }: { session: Session; onDone: () => void 
         <input
           ref={input}
           className="input"
-          aria-label="Nuovo titolo della sessione"
+          aria-label={t("chat.nuovo_titolo_della_sessione")}
           aria-invalid={error ? true : undefined}
           value={value}
           maxLength={MAX_TITLE}
@@ -52,8 +53,8 @@ function RenameForm({ session, onDone }: { session: Session; onDone: () => void 
             setError(null);
           }}
         />
-        <IconButton type="submit" aria-label="Salva il titolo" icon="check" size={16} disabled={rename.isPending} />
-        <IconButton aria-label="Annulla la modifica" icon="close" size={16} onClick={onDone} />
+        <IconButton type="submit" aria-label={t("chat.salva_il_titolo")} icon="check" size={16} disabled={rename.isPending} />
+        <IconButton aria-label={t("chat.annulla_la_modifica")} icon="close" size={16} onClick={onDone} />
       </div>
       {error && <span className="field-error" role="alert">{error}</span>}
     </form>
@@ -90,18 +91,18 @@ export function SessionItem({ session, agentName, active, renaming, reflecting, 
               <span className="ws-session-agent">{agentName}</span>
               <span aria-hidden="true">·</span>
               <time dateTime={session.updated_at}>{relTime(session.updated_at)}</time>
-              {session.channel && <span className="pill neutral" title={`Conversazione che arriva da ${CHANNEL_NAME[session.channel]}`}>{CHANNEL_NAME[session.channel]}</span>}
-              {session.worktree && <span title={`Worktree ${session.worktree.branch}`} className="inline-flex"><Icon name="branch" size={12} /><span className="sr-only">Worktree isolato</span></span>}
+              {session.channel && <span className="pill neutral" title={t("chat.conversazione_che_arriva_da", { p: CHANNEL_NAME[session.channel] })}>{CHANNEL_NAME[session.channel]}</span>}
+              {session.worktree && <span title={t("chat.worktree", { branch: session.worktree.branch })} className="inline-flex"><Icon name="branch" size={12} /><span className="sr-only">{t("chat.worktree_isolato_2")}</span></span>}
             </span>
           </button>
           <div className="ws-session-actions">
             {/* The title names the session; the buttons are described by it (their own names stay short). */}
-            <IconButton aria-label="Rinomina la sessione" aria-describedby={titleId} icon="edit" size={15} onClick={onRename} />
+            <IconButton aria-label={t("chat.rinomina_la_sessione")} aria-describedby={titleId} icon="edit" size={15} onClick={onRename} />
             <IconButton
-              aria-label="Rifletti su questa conversazione" aria-describedby={titleId} icon="sparkle" size={15} disabled={reflecting || session.last_status === "running"}
-              title={reflecting ? "L'agente sta scrivendo una lezione…" : "Rifletti su questa conversazione: l'agente propone una lezione da approvare"} onClick={onReflect}
+              aria-label={t("chat.rifletti_su_questa_conversazione")} aria-describedby={titleId} icon="sparkle" size={15} disabled={reflecting || session.last_status === "running"}
+              title={reflecting ? t("chat.l_agente_sta_scrivendo_una") : t("chat.rifletti_su_questa_conversazione_l")} onClick={onReflect}
             />
-            <IconButton aria-label="Elimina la sessione" aria-describedby={titleId} icon="trash" size={15} onClick={onDelete} />
+            <IconButton aria-label={t("chat.elimina_la_sessione")} aria-describedby={titleId} icon="trash" size={15} onClick={onDelete} />
           </div>
         </>
       )}

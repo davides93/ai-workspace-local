@@ -444,7 +444,7 @@ export const configSchema: SettingsSchema = {
   properties: {
     "ui.mode": { type: "string", title: "Modalità dell'interfaccia", description: "Semplice mostra solo le sezioni di uso quotidiano; Sviluppatore le mostra tutte", enum: ["simple", "developer"], default: "simple" },
     "ui.theme": { type: "string", title: "Tema", enum: ["system", "light", "dark"], default: "system" },
-    "ui.language": { type: "string", title: "Lingua", enum: ["it", "en"], default: "it" },
+    "ui.language": { type: "string", title: "Lingua", enum: ["auto", "it", "en"], default: "auto" },
     "agent.default": { type: "string", title: "Agente predefinito", default: "operator" },
     "approvals.timeout_s": { type: "integer", title: "Tempo massimo per rispondere a una richiesta di approvazione (secondi)", description: "0 = nessun limite. Allo scadere la richiesta dell'agente viene rifiutata", default: 0, minimum: 0, maximum: 86400 },
     "policy.mode": { type: "string", title: "Modalità di approvazione", enum: ["plan", "ask", "auto-edit", "auto", "yolo"], default: "ask" },

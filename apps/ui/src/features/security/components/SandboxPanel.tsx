@@ -5,6 +5,7 @@ import { useSystem } from "../../../shared/query/system";
 import { useConfig, useSetConfig } from "../../settings/api";
 import { CONTAINMENT, containmentFor, KNOWN_LIMITS } from "../model/sandbox";
 
+import { t, tNode } from "../../../shared/i18n";
 const asText = (v: unknown, fallback: string) => (typeof v === "string" && v ? v : fallback);
 
 /** Effective configuration and what actually contains a command on this operating system. */
@@ -19,7 +20,7 @@ export function SandboxPanel() {
 
   return (
     <div className="stack stack-lg">
-      <Section title="Valori correnti" hint="Dalla configurazione a strati. Ogni agente ha la propria modalità e la propria sandbox: queste sono le predefinite.">
+      <Section title={t("security.valori_correnti")} hint={t("security.dalla_configurazione_a_strati_ogni")}>
         <QueryState query={cfg}>
           {(view) => {
             const mode = asText(view.effective["policy.mode"], "ask");
@@ -32,13 +33,11 @@ export function SandboxPanel() {
                 <KeyValue items={[
                   ["Modalità di approvazione", <><Pill tone={m?.tone ?? "neutral"}>{m?.label ?? mode}</Pill> <span className="muted">{m?.summary}</span></>],
                   ["Sandbox", <><Pill tone={s?.tone ?? "neutral"}>{s?.label ?? sandbox}</Pill> <span className="muted">{s?.summary}</span></>],
-                  ["Domini consentiti a web e browser", domains.length ? <span className="mono">{domains.join(", ")}</span> : <span className="muted">Tutti i domini pubblici</span>],
+                  ["Domini consentiti a web e browser", domains.length ? <span className="mono">{domains.join(", ")}</span> : <span className="muted">{t("security.tutti_i_domini_pubblici")}</span>],
                   system.data && ["Questo dispositivo", <>{system.data.device.name} · {here?.label ?? system.data.device.os}</>],
                 ]} />
                 <p className="faint text-sm mt-3">
-                  Le predefinite valgono per i passi «tool» dei workflow e per i client esterni (MCP e API). Per cambiarle apri le <Link to="/settings">Impostazioni</Link>;
-                  la modalità e la sandbox di un agente si cambiano dalla sua scheda in <Link to="/agents">Agenti</Link>.
-                </p>
+                  {tNode("security.le_predefinite_valgono_per_i", { link: <Link to="/settings">{t("security.impostazioni")}</Link>, link2: <Link to="/agents">{t("security.agenti")}</Link> })}</p>
               </Panel>
             );
           }}
@@ -53,51 +52,42 @@ export function SandboxPanel() {
             <>
               {view.effective["sandbox.shell_network_notice"] === true && (
                 <div className="notice warn" role="status">
-                  <b>Novità: la rete dei comandi ora si governa da qui.</b> Per non cambiare il tuo modo di lavorare, in questa installazione è rimasta <b>accesa</b> (com'era prima).
+                  <b>{t("security.novita_la_rete_dei_comandi")}</b> Per non cambiare il tuo modo di lavorare, in questa installazione è rimasta <b>{t("security.accesa")}</b> (com'era prima).
                   Le nuove installazioni partono con la rete spenta: ti consigliamo di spegnerla se non ti serve per installare pacchetti. Da ora la cartella dei dati dell'app e le cartelle delle credenziali sono nascoste ai comandi, e le variabili d'ambiente con chiavi e token non arrivano più ai comandi.
-                  <div className="mt-2"><Button size="sm" onClick={() => save("sandbox.shell_network_notice", false, "Avviso sulla rete dei comandi")}>Ho capito</Button></div>
+                  <div className="mt-2"><Button size="sm" onClick={() => save("sandbox.shell_network_notice", false, "Avviso sulla rete dei comandi")}>{t("security.ho_capito")}</Button></div>
                 </div>
               )}
-              <Section title="Rete e credenziali dei comandi" hint="Valgono per i comandi di shell e per i server MCP isolati. Sono impostazioni della macchina: un repository non può allentarle.">
+              <Section title={t("security.rete_e_credenziali_dei_comandi")} hint={t("security.valgono_per_i_comandi_di")}>
                 <Panel>
                   <div className="stack">
                     <div>
-                      <b>Rete dei comandi</b>
+                      <b>{t("security.rete_dei_comandi")}</b>
                       <Segmented
-                        label="Rete dei comandi" value={net}
-                        options={[{ id: "off", label: "Spenta" }, { id: "on", label: "Accesa" }]}
+                        label={t("security.rete_dei_comandi")} value={net}
+                        options={[{ id: "off", label: t("security.spenta") }, { id: "on", label: t("security.accesa_2") }]}
                         onChange={(v) => save("sandbox.shell_network", v, "Rete dei comandi")}
                       />
                       <p className="faint text-sm">
-                        {windows
-                          ? "Su Windows la rete dei comandi non si può chiudere: questo interruttore non ha effetto sui comandi di shell (resta valido per i tool che lo leggono). Vedi i limiti sotto."
-                          : !shellContained
-                            ? "Su questo dispositivo i comandi non sono contenuti (manca bubblewrap o non c'è una sandbox): l'interruttore non ha effetto finché non c'è."
-                            : net === "off"
-                              ? "Spenta: i comandi non raggiungono la rete. Se un comando fallisce per questo, il risultato lo dice. Per installare pacchetti o scaricare file accendila."
-                              : "Accesa: i comandi possono usare la rete. Un agente può comunque chiuderla per una singola chiamata, mai aprirla."}
+                        {windows ? t("security.su_windows_la_rete_dei") : !shellContained ? t("security.su_questo_dispositivo_i_comandi") : net === "off" ? t("security.spenta_i_comandi_non_raggiungono") : t("security.accesa_i_comandi_possono_usare")}
                       </p>
                     </div>
                     <div>
-                      <b>Cartelle nascoste ai comandi</b>
+                      <b>{t("security.cartelle_nascoste_ai_comandi")}</b>
                       <TagInput
-                        id="sandbox-deny-read" label="Cartelle nascoste" value={list("sandbox.deny_read")}
+                        id="sandbox-deny-read" label={t("security.cartelle_nascoste")} value={list("sandbox.deny_read")}
                         onChange={(v) => save("sandbox.deny_read", v, "Cartelle nascoste")} placeholder="~/.ssh"
                       />
                       <p className="faint text-sm">
-                        Oltre alla cartella dei dati dell'app (sempre nascosta) i comandi non vedono queste cartelle: chiavi SSH, credenziali cloud, token di registri. Il compromesso: anche <code>git</code> via SSH non trova la tua chiave.
-                        Per consentirlo togli <code>~/.ssh</code> dall'elenco (o usa HTTPS con un token). I tool di file degli agenti rispettano lo stesso elenco.
-                      </p>
+                        {tNode("security.oltre_alla_cartella_dei_dati", { code: <code>{t("security.git")}</code>, code2: <code>~/.ssh</code> })}</p>
                     </div>
                     <div>
-                      <b>Variabili d'ambiente consentite</b>
+                      <b>{t("security.variabili_d_ambiente_consentite")}</b>
                       <TagInput
-                        id="sandbox-env-allow" label="Variabili consentite" value={list("sandbox.env_allow")}
+                        id="sandbox-env-allow" label={t("security.variabili_consentite")} value={list("sandbox.env_allow")}
                         onChange={(v) => save("sandbox.env_allow", v, "Variabili consentite")} placeholder="NPM_TOKEN"
                       />
                       <p className="faint text-sm">
-                        Ai comandi non arrivano le variabili che sembrano segreti (<code>*_TOKEN</code>, <code>*_KEY</code>, <code>*_SECRET</code>, <code>*PASSWORD*</code>, <code>AIW_*</code>, credenziali cloud). Se un comando ne ha davvero bisogno, scrivi qui il nome esatto.
-                      </p>
+                        {tNode("security.ai_comandi_non_arrivano_le", { code: <code>*_TOKEN</code>, code2: <code>*_KEY</code>, code3: <code>*_SECRET</code>, code4: <code>{t("security.password")}</code>, code5: <code>AIW_*</code> })}</p>
                     </div>
                   </div>
                 </Panel>
@@ -107,7 +97,7 @@ export function SandboxPanel() {
         }}
       </QueryState>
 
-      <Section title="Modalità della sandbox" hint="Quanto lontano arrivano i comandi e i tool di file di un agente.">
+      <Section title={t("security.modalita_della_sandbox")} hint={t("security.quanto_lontano_arrivano_i_comandi")}>
         <div className="mode-cards">
           {SANDBOX_MODES.map((m) => (
             <div key={m.id} className="mode-card">
@@ -119,15 +109,15 @@ export function SandboxPanel() {
         </div>
       </Section>
 
-      <Section title="Cosa contiene un comando, per sistema" hint="Cosa fa davvero il backend su ciascun sistema operativo.">
+      <Section title={t("security.cosa_contiene_un_comando_per")} hint={t("security.cosa_fa_davvero_il_backend")}>
         <div className="table-wrap">
-          <table className="data" aria-label="Contenimento dei comandi per sistema operativo">
-            <thead><tr><th scope="col">Sistema</th><th scope="col">Meccanismo</th><th scope="col">Scritture</th><th scope="col">Rete</th><th scope="col">Cartelle nascoste</th><th scope="col">Server MCP</th><th scope="col">Nota</th></tr></thead>
+          <table className="data" aria-label={t("security.contenimento_dei_comandi_per_sistema")}>
+            <thead><tr><th scope="col">{t("security.sistema")}</th><th scope="col">{t("security.meccanismo")}</th><th scope="col">{t("security.scritture")}</th><th scope="col">{t("security.rete")}</th><th scope="col">{t("security.cartelle_nascoste")}</th><th scope="col">{t("security.server_mcp")}</th><th scope="col">{t("security.nota")}</th></tr></thead>
             <tbody>
               {CONTAINMENT.map((c) => (
                 <tr key={c.os} aria-current={c.os === here?.os ? "true" : undefined} className={c.os === here?.os ? "current-os" : undefined}>
-                  <th scope="row" className="cell-os">{c.label}{c.os === here?.os && <Pill tone="run">questo dispositivo</Pill>}</th>
-                  <td>{c.mechanism ?? <span className="faint">nessuno</span>}</td>
+                  <th scope="row" className="cell-os">{c.label}{c.os === here?.os && <Pill tone="run">{t("security.questo_dispositivo")}</Pill>}</th>
+                  <td>{c.mechanism ?? <span className="faint">{t("security.nessuno")}</span>}</td>
                   <td className="cell-detail">{c.writes}</td>
                   <td className="cell-detail">{c.network}</td>
                   <td className="cell-detail">{c.reads}</td>
@@ -140,7 +130,7 @@ export function SandboxPanel() {
         </div>
       </Section>
 
-      <Section title="Limiti noti" hint="Cosa la sandbox non fa oggi.">
+      <Section title={t("security.limiti_noti")} hint={t("security.cosa_la_sandbox_non_fa")}>
         <ul className="limits">
           {KNOWN_LIMITS.map((l) => (
             <li key={l.title} className="limit">

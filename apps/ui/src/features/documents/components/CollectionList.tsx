@@ -5,6 +5,7 @@ import type { KbCollection } from "../../../shared/api/types";
 import { useCreateCollection, useDeleteCollection } from "../api";
 import { collectionCounts } from "../model/kb";
 
+import { t } from "../../../shared/i18n";
 interface Props {
   collections: KbCollection[];
   selected: string | null;
@@ -27,11 +28,11 @@ export function CollectionList({ collections, selected, onSelect }: Props) {
 
   return (
     <div className="kb-cols">
-      <h2>Raccolte</h2>
+      <h2>{t("documents.raccolte")}</h2>
       {collections.length === 0 ? (
-        <EmptyState icon="file" title="Nessuna raccolta" description="Crea una raccolta e aggiungi i tuoi documenti: l'assistente potrà cercarci dentro." />
+        <EmptyState icon="file" title={t("documents.nessuna_raccolta")} description={t("documents.crea_una_raccolta_e_aggiungi")} />
       ) : (
-        <ul className="kb-col-list" aria-label="Raccolte">
+        <ul className="kb-col-list" aria-label={t("documents.raccolte")}>
           {collections.map((c) => (
             <li key={c.id}>
               <button type="button" className={`kb-col${c.id === selected ? " is-on" : ""}`} aria-pressed={c.id === selected} onClick={() => onSelect(c.id)}>
@@ -44,24 +45,24 @@ export function CollectionList({ collections, selected, onSelect }: Props) {
         </ul>
       )}
       <form className="kb-new" onSubmit={submit}>
-        <Field label="Nuova raccolta" htmlFor="kb-new-name" error={create.isError ? errorMessage(create.error) : undefined}>
-          <Input id="kb-new-name" value={name} maxLength={80} placeholder="Ad esempio: Casa" onChange={(e) => setName(e.target.value)} />
+        <Field label={t("documents.nuova_raccolta")} htmlFor="kb-new-name" error={create.isError ? errorMessage(create.error) : undefined}>
+          <Input id="kb-new-name" value={name} maxLength={80} placeholder={t("documents.ad_esempio_casa")} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Button type="submit" variant="primary" icon="plus" disabled={!name.trim() || create.isPending}>Crea</Button>
+        <Button type="submit" variant="primary" icon="plus" disabled={!name.trim() || create.isPending}>{t("documents.crea")}</Button>
       </form>
       {current && (
-        <Button variant="ghost" icon="trash" onClick={() => setConfirm(current)}>Elimina «{current.name}»</Button>
+        <Button variant="ghost" icon="trash" onClick={() => setConfirm(current)}>{t("documents.elimina", { name: current.name })}</Button>
       )}
       {confirm && (
         <DecisionDialog
-          title="Eliminare la raccolta?"
-          confirmLabel="Elimina"
+          title={t("documents.eliminare_la_raccolta")}
+          confirmLabel={t("documents.elimina_2")}
           pending={del.isPending}
           error={del.error}
           onCancel={() => setConfirm(null)}
           onConfirm={() => del.mutate(confirm.id, { onSuccess: () => setConfirm(null) })}
         >
-          <p>«{confirm.name}» e i suoi {collectionCounts(confirm)} escono dall'archivio dell'assistente. I file originali sul tuo computer non vengono toccati.</p>
+          <p>{t("documents.e_i_suoi_escono_dall", { name: confirm.name, p: collectionCounts(confirm) })}</p>
         </DecisionDialog>
       )}
     </div>

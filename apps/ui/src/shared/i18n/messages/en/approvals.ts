@@ -1,0 +1,25 @@
+// English messages of "approvals". One entry per line; must have exactly the keys of the Italian file.
+import type { approvalsIt } from "../it/approvals";
+
+export const approvalsEn: Record<keyof typeof approvalsIt, string> = {
+  "approvals.1_ad_alto_rischio": "1 high risk",
+  "approvals.ad_alto_rischio": "{high} high risk",
+  "approvals.rivedi": "Review",
+  "approvals.serve_la_tua_conferma": "Your approval is needed",
+  "approvals.rischio": "{p} risk",
+  "approvals.consentito": "Allowed",
+  "approvals.negato": "Denied",
+  "approvals.argomenti": "Arguments",
+  "approvals.consenti_per_la_sessione": "Allow for the chat",
+  "approvals.apri_la_sessione": "Open the chat",
+  "approvals.conferme_in_attesa": "Approvals waiting ({length})",
+  "approvals.gli_agenti_e_i_workflow": "Agents and workflows stay paused until you decide.",
+  "approvals.scorciatoie_da_tastiera": "Keyboard shortcuts",
+  "approvals.a": "A",
+  "approvals.consenti": "{kbd} allow",
+  "approvals.n": "N",
+  "approvals.nega": "{kbd} deny",
+  "approvals.cambia_richiesta": "{kbd}{kbd2} switch request",
+  "approvals.esc": "Esc",
+  "approvals.chiudi": "{kbd} close",
+};

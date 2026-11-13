@@ -10,6 +10,7 @@ import { SearchBox } from "./components/SearchBox";
 import { KEYWORDS_ONLY_BANNER, coverageText, pickCollection, runningJobs } from "./model/kb";
 import "./documents.css";
 
+import { t } from "../../shared/i18n";
 /**
  * `#/documents` — "Documenti": the local knowledge base. Collections of files the assistant can search, with
  * what is indexed, a box to try the search and (developer mode) a folder added by path.
@@ -29,20 +30,20 @@ export function DocumentsView() {
       <header className="kb-head">
         <Icon name="file" size={20} />
         <div>
-          <h1>Documenti</h1>
-          <p className="muted text-sm">I file che l'assistente può consultare. Restano su questo dispositivo.</p>
+          <h1>{t("documents.documenti")}</h1>
+          <p className="muted text-sm">{t("documents.i_file_che_l_assistente")}</p>
         </div>
       </header>
       {keywordsOnly && (
         <div className="banner" role="status">
           <span>{KEYWORDS_ONLY_BANNER}</span>
-          <Link to="/models" className="btn btn-sm banner-cta">Vai a Modelli</Link>
+          <Link to="/models" className="btn btn-sm banner-cta">{t("documents.vai_a_modelli")}</Link>
         </div>
       )}
       <QueryState query={collections}>
         {(list) => (
           <div className="kb-body">
-            <aside className="kb-side" aria-label="Raccolte">
+            <aside className="kb-side" aria-label={t("documents.raccolte")}>
               <CollectionList collections={list} selected={selectedId} onSelect={setWanted} />
             </aside>
             <main className="kb-main">
@@ -58,7 +59,7 @@ export function DocumentsView() {
                   <SearchBox collectionName={selected.name} />
                 </>
               ) : (
-                <p className="muted">Crea la prima raccolta qui accanto per cominciare.</p>
+                <p className="muted">{t("documents.crea_la_prima_raccolta_qui")}</p>
               )}
             </main>
           </div>
