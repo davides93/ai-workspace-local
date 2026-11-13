@@ -4,6 +4,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { WorkflowDef, WorkflowRun } from "../../shared/api/types";
 
+import { t } from "../../shared/i18n";
 /** Poll interval of the workflow runs, used only while one of them is still going. */
 export const WORKFLOW_RUNS_POLL_MS = 2_000;
 
@@ -56,7 +57,7 @@ export function useSaveWorkflow(opts: { silent?: boolean } = {}) {
   return useMutation({
     mutationFn: (w: WorkflowDef) => api.saveWorkflow(w),
     onSuccess: (w) => {
-      if (!opts.silent) toast("Workflow salvato");
+      if (!opts.silent) toast(t("workflows.workflow_salvato"));
       qc.setQueryData<WorkflowDef[]>(qk.workflows.list(), (list) => upsert(list, w));
       void qc.invalidateQueries({ queryKey: qk.workflows.list() });
     },
@@ -71,7 +72,7 @@ export function useDeleteWorkflow() {
     mutationFn: (id: string) => api.deleteWorkflow(id),
     meta: { handled: true },
     onSuccess: (_void, id) => {
-      toast("Workflow eliminato");
+      toast(t("workflows.workflow_eliminato"));
       qc.setQueryData<WorkflowDef[]>(qk.workflows.list(), (list) => list?.filter((w) => w.id !== id));
       void qc.invalidateQueries({ queryKey: qk.workflows.all() });
     },
@@ -85,7 +86,7 @@ export function useRunWorkflow() {
   return useMutation({
     mutationFn: (w: Pick<WorkflowDef, "id" | "inputs">) => api.runWorkflow(w.id, w.inputs),
     onSuccess: (run) => {
-      toast("Workflow avviato");
+      toast(t("workflows.workflow_avviato"));
       qc.setQueryData<WorkflowRun[]>(qk.workflows.runs(), (list) => [run, ...(list ?? []).filter((r) => r.id !== run.id)]);
       void qc.invalidateQueries({ queryKey: qk.workflows.runs() });
     },

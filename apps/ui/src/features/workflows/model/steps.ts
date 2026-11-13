@@ -13,6 +13,7 @@
 
 import type { StepOptions, WorkflowStep } from "../../../shared/api/types";
 
+import { t as tr } from "../../../shared/i18n";
 export type StepKind = WorkflowStep["kind"];
 
 export const STEP_KINDS: { kind: StepKind; label: string; icon: string; hint: string }[] = [
@@ -104,7 +105,7 @@ export function newStep(kind: StepKind, steps: readonly StepDraft[], d: StepDefa
     case "foreach": return { id, kind, items: "", body: inlineJson({ id: `${id}-step`, kind: "llm", profile: d.profile ?? "", prompt: "{{item}}" }) };
     case "parallel": return { id, kind, steps: JSON.stringify([{ id: `${id}-a`, kind: "llm", profile: d.profile ?? "", prompt: "" }], null, 2) };
     case "workflow": return { id, kind, workflow: d.workflow ?? "", inputs: "{}" };
-    case "approval": return { id, kind, message: "Procedo?" };
+    case "approval": return { id, kind, message: tr("workflows.procedo") };
     case "condition": return { id, kind, if: "", then: [], else: [] };
   }
 }
@@ -152,9 +153,9 @@ export function approvalTimeoutProblem(t: number | undefined): string | null {
 export function optionsProblem(o: StepOptions | undefined): { field: string; message: string } | null {
   if (!o) return null;
   const bad = (n: number | undefined, min: number, max: number) => n !== undefined && (!Number.isInteger(n) || n < min || n > max);
-  if (bad(o.retry, 0, OPTION_LIMITS.retry)) return { field: "retry", message: `I tentativi extra vanno da 0 a ${OPTION_LIMITS.retry}.` };
-  if (bad(o.retry_delay_s, 0, OPTION_LIMITS.retryDelay)) return { field: "retry_delay_s", message: `L'attesa tra i tentativi va da 0 a ${OPTION_LIMITS.retryDelay} secondi.` };
-  if (bad(o.timeout_s, 1, OPTION_LIMITS.timeout)) return { field: "timeout_s", message: `Il limite di tempo va da 1 a ${OPTION_LIMITS.timeout} secondi.` };
+  if (bad(o.retry, 0, OPTION_LIMITS.retry)) return { field: "retry", message: tr("workflows.i_tentativi_extra_vanno_da", { retry: OPTION_LIMITS.retry }) };
+  if (bad(o.retry_delay_s, 0, OPTION_LIMITS.retryDelay)) return { field: "retry_delay_s", message: tr("workflows.l_attesa_tra_i_tentativi", { retryDelay: OPTION_LIMITS.retryDelay }) };
+  if (bad(o.timeout_s, 1, OPTION_LIMITS.timeout)) return { field: "timeout_s", message: tr("workflows.il_limite_di_tempo_va", { timeout: OPTION_LIMITS.timeout }) };
   return null;
 }
 

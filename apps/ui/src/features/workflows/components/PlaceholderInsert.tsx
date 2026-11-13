@@ -2,6 +2,7 @@ import { useId } from "react";
 import { Select } from "../../../shared/ui";
 import type { StepDraft } from "../model/steps";
 
+import { t } from "../../../shared/i18n";
 /** Inserts a `{{…}}` placeholder where the cursor is in the field `targetId`. */
 export function PlaceholderInsert({ targetId, value, onChange, before, inputKeys, quoted }: {
   targetId: string;
@@ -27,22 +28,22 @@ export function PlaceholderInsert({ targetId, value, onChange, before, inputKeys
   return (
     <div className="placeholder-insert">
       <Select
-        id={id} className="placeholder-select" value="" aria-label="Inserisci un segnaposto"
+        id={id} className="placeholder-select" value="" aria-label={t("workflows.inserisci_un_segnaposto")}
         onChange={(e) => {
           if (e.target.value) insert(e.target.value);
         }}
       >
-        <option value="">Inserisci segnaposto…</option>
-        {inputKeys.length > 0 && <optgroup label="Input del workflow">{inputKeys.map((k) => <option key={k} value={`{{inputs.${k}}}`}>{`{{inputs.${k}}}`}</option>)}</optgroup>}
-        {before.length > 0 && <optgroup label="Risultato dei passi precedenti">{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.output}}`}>{`{{steps.${s.id}.output}}`}</option>)}</optgroup>}
-        {before.length > 0 && <optgroup label="Risultato come JSON (aggiungi .campo o .0 per scendere)">{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.json}}`}>{`{{steps.${s.id}.json}}`}</option>)}</optgroup>}
-        {before.length > 0 && <optgroup label="Errore di un passo che prosegue (on_error: continue)">{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.error}}`}>{`{{steps.${s.id}.error}}`}</option>)}</optgroup>}
-        <optgroup label="Altro">
+        <option value="">{t("workflows.inserisci_segnaposto")}</option>
+        {inputKeys.length > 0 && <optgroup label={t("workflows.input_del_workflow")}>{inputKeys.map((k) => <option key={k} value={`{{inputs.${k}}}`}>{`{{inputs.${k}}}`}</option>)}</optgroup>}
+        {before.length > 0 && <optgroup label={t("workflows.risultato_dei_passi_precedenti")}>{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.output}}`}>{`{{steps.${s.id}.output}}`}</option>)}</optgroup>}
+        {before.length > 0 && <optgroup label={t("workflows.risultato_come_json_aggiungi_campo")}>{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.json}}`}>{`{{steps.${s.id}.json}}`}</option>)}</optgroup>}
+        {before.length > 0 && <optgroup label={t("workflows.errore_di_un_passo_che")}>{before.map((s) => <option key={s.id} value={`{{steps.${s.id}.error}}`}>{`{{steps.${s.id}.error}}`}</option>)}</optgroup>}
+        <optgroup label={t("workflows.altro")}>
           <option value="{{now}}">{"{{now}}"} · data e ora</option>
           <option value="{{inputs.payload}}">{"{{inputs.payload}}"} · corpo del webhook</option>
         </optgroup>
       </Select>
-      {quoted && <span className="faint text-xs">Nel JSON mettilo tra virgolette.</span>}
+      {quoted && <span className="faint text-xs">{t("workflows.nel_json_mettilo_tra_virgolette")}</span>}
     </div>
   );
 }

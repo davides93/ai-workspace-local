@@ -8,6 +8,7 @@ import { parseCron } from "./cron";
 import { approvalTimeoutProblem, cleanOptions, FOREACH_MAX_PARALLEL, hasOptions, inlineJson, innerIds, optionsOf, optionsProblem, parseInline, isKnownTail, placeholders, STEP_ID, stepRef, stepTail, stepTexts, type StepDraft } from "./steps";
 import { joinInterval, MIN_INTERVAL_S, splitInterval, type IntervalUnit } from "./triggers";
 
+import { t as tr } from "../../../shared/i18n";
 export type TriggerDraft =
   | { kind: "manual" }
   | { kind: "interval"; amount: number; unit: IntervalUnit }
@@ -249,7 +250,7 @@ export interface ValidationContext {
 export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
   const out: Issue[] = [];
   const add = (i: Issue) => out.push(i);
-  if (!d.name.trim()) add({ scope: "meta", field: "name", level: "error", message: "Dai un nome al workflow." });
+  if (!d.name.trim()) add({ scope: "meta", field: "name", level: "error", message: tr("workflows.dai_un_nome_al_workflow") });
 
   // Trigger
   const t = d.trigger;
@@ -257,10 +258,10 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
     const r = parseCron(t.expr);
     if (!r.ok) add({ scope: "trigger", field: "expr", level: "error", message: r.error });
   } else if (t.kind === "interval") {
-    if (!Number.isFinite(t.amount) || t.amount <= 0) add({ scope: "trigger", field: "amount", level: "error", message: "Indica un intervallo maggiore di zero." });
-    else if (joinInterval(t.amount, t.unit) < MIN_INTERVAL_S) add({ scope: "trigger", field: "amount", level: "warn", message: `Il servizio non esegue più spesso di ogni ${MIN_INTERVAL_S} secondi: l'intervallo verrà portato a ${MIN_INTERVAL_S} s.` });
+    if (!Number.isFinite(t.amount) || t.amount <= 0) add({ scope: "trigger", field: "amount", level: "error", message: tr("workflows.indica_un_intervallo_maggiore_di") });
+    else if (joinInterval(t.amount, t.unit) < MIN_INTERVAL_S) add({ scope: "trigger", field: "amount", level: "warn", message: tr("workflows.il_servizio_non_esegue_piu", { MIN_INTERVAL_S, MIN_INTERVAL_S2: MIN_INTERVAL_S }) });
   } else if (t.kind === "file" && !t.path.trim()) {
-    add({ scope: "trigger", field: "path", level: "error", message: "Indica il file o la cartella da controllare." });
+    add({ scope: "trigger", field: "path", level: "error", message: tr("workflows.indica_il_file_o_la") });
   }
 
   // Inputs
@@ -268,29 +269,29 @@ export function validateDraft(d: PlainDraft, ctx: ValidationContext): Issue[] {
   d.inputs.forEach((r, i) => {
     const key = r.key.trim();
     if (!key) return;
-    if (!/^[A-Za-z0-9_-]+$/.test(key)) add({ scope: "inputs", step: i, level: "error", message: `«${key}»: usa solo lettere, cifre, «_» e «-».` });
-    if (keys.has(key)) add({ scope: "inputs", step: i, level: "error", message: `L'input «${key}» è ripetuto.` });
+    if (!/^[A-Za-z0-9_-]+$/.test(key)) add({ scope: "inputs", step: i, level: "error", message: tr("workflows.usa_solo_lettere_cifre_e", { key }) });
+    if (keys.has(key)) add({ scope: "inputs", step: i, level: "error", message: tr("workflows.l_input_e_ripetuto", { key }) });
     keys.set(key, i);
     if (r.json) {
       try {
         JSON.parse(r.value);
       } catch {
-        add({ scope: "inputs", step: i, level: "error", message: `Il valore di «${key}» non è un JSON valido.` });
+        add({ scope: "inputs", step: i, level: "error", message: tr("workflows.il_valore_di_non_e", { key }) });
       }
     }
   });
 
   // Steps
-  if (d.steps.length === 0) add({ scope: "steps", level: "warn", message: "Il workflow non ha passi: non farà nulla." });
+  if (d.steps.length === 0) add({ scope: "steps", level: "warn", message: tr("workflows.il_workflow_non_ha_passi") });
   const index = new Map<string, number>();
   d.steps.forEach((s, i) => {
     for (const inner of innerIds(s)) {
-      if (index.has(inner)) add({ scope: "step", step: i, field: s.kind === "foreach" ? "body" : "steps", level: "error", message: `Identificativo duplicato: «${inner}» è già usato dal passo ${index.get(inner)! + 1}.` });
+      if (index.has(inner)) add({ scope: "step", step: i, field: s.kind === "foreach" ? "body" : "steps", level: "error", message: tr("workflows.identificativo_duplicato_e_gia_usato", { inner, p: index.get(inner)! + 1 }) });
       else index.set(inner, i);
     }
-    if (!s.id.trim()) add({ scope: "step", step: i, field: "id", level: "error", message: "Il passo ha bisogno di un identificativo." });
-    else if (!STEP_ID.test(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: "L'identificativo può contenere solo lettere, cifre, «_» e «-»." });
-    else if (index.has(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: `Identificativo duplicato: «${s.id}» è già usato dal passo ${index.get(s.id)! + 1}.` });
+    if (!s.id.trim()) add({ scope: "step", step: i, field: "id", level: "error", message: tr("workflows.il_passo_ha_bisogno_di") });
+    else if (!STEP_ID.test(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: tr("workflows.l_identificativo_puo_contenere_solo") });
+    else if (index.has(s.id)) add({ scope: "step", step: i, field: "id", level: "error", message: tr("workflows.identificativo_duplicato_e_gia_usato_2", { id: s.id, p: index.get(s.id)! + 1 }) });
     if (!index.has(s.id)) index.set(s.id, i);
   });
   d.steps.forEach((s, i) => {

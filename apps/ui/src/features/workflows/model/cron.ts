@@ -1,3 +1,4 @@
+import { t as tr } from "../../../shared/i18n";
 // 5-field cron as the backend reads it (crates/aiw-workflow/src/schedule.rs): `min hour day month weekday`,
 // weekday 0 or 7 = Sunday, 1 = Monday. The backend's `cron` crate requires day-of-month AND weekday to match
 // when both are restricted (unlike Vixie cron, which accepts either). The scheduler evaluates the expression in the
@@ -40,21 +41,21 @@ function value(token: string, spec: Spec): number {
   const t = token.toLowerCase();
   const named = spec.names?.indexOf(t.slice(0, 3));
   if (spec.names && t.length >= 3 && /^[a-z]+$/.test(t) && named !== undefined && named >= 0) return named + spec.nameBase;
-  if (!/^\d+$/.test(t)) throw new Error(`«${token}» non è un valore valido per ${spec.label}`);
+  if (!/^\d+$/.test(t)) throw new Error(tr("workflows.non_e_un_valore_valido", { token, label: spec.label }));
   const n = Number(t);
-  if (n < spec.min || n > spec.max) throw new Error(`${spec.label}: ${n} è fuori dall'intervallo ${spec.min}–${spec.max}`);
+  if (n < spec.min || n > spec.max) throw new Error(tr("workflows.e_fuori_dall_intervallo", { label: spec.label, n, min: spec.min, max: spec.max }));
   return n;
 }
 
 function parseField(text: string, spec: Spec): Set<number> {
   const out = new Set<number>();
   for (const part of text.split(",")) {
-    if (part === "") throw new Error(`${spec.label}: elemento vuoto`);
+    if (part === "") throw new Error(tr("workflows.elemento_vuoto", { label: spec.label }));
     const [range, stepText, extra] = part.split("/");
-    if (extra !== undefined) throw new Error(`${spec.label}: troppi «/» in «${part}»`);
+    if (extra !== undefined) throw new Error(tr("workflows.troppi_in", { label: spec.label, part }));
     let step = 1;
     if (stepText !== undefined) {
-      if (!/^\d+$/.test(stepText) || Number(stepText) < 1) throw new Error(`${spec.label}: il passo «${stepText}» non è valido`);
+      if (!/^\d+$/.test(stepText) || Number(stepText) < 1) throw new Error(tr("workflows.il_passo_non_e_valido", { label: spec.label, stepText }));
       step = Number(stepText);
     }
     let lo: number;
@@ -64,10 +65,10 @@ function parseField(text: string, spec: Spec): Set<number> {
       hi = spec.max;
     } else if (range.includes("-")) {
       const [a, b, more] = range.split("-");
-      if (more !== undefined) throw new Error(`${spec.label}: intervallo non valido «${range}»`);
+      if (more !== undefined) throw new Error(tr("workflows.intervallo_non_valido", { label: spec.label, range }));
       lo = value(a, spec);
       hi = value(b, spec);
-      if (hi < lo) throw new Error(`${spec.label}: l'intervallo ${range} è al contrario`);
+      if (hi < lo) throw new Error(tr("workflows.l_intervallo_e_al_contrario", { label: spec.label, range }));
     } else {
       lo = value(range, spec);
       hi = stepText === undefined ? lo : spec.max;

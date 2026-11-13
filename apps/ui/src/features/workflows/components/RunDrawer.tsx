@@ -6,13 +6,14 @@ import { isActiveRun } from "../api";
 import { runSeconds } from "../model/triggers";
 import { runProgress } from "./RunsPanel";
 
+import { t } from "../../../shared/i18n";
 /** Detail of one run: every step with its status, result or error. Updates by itself while the run goes on. */
 export function RunDrawer({ run, workflow, onClose }: { run: WorkflowRun; workflow?: WorkflowDef; onClose: () => void }) {
   const active = isActiveRun(run);
   const secs = runSeconds(run.started_at, run.finished_at);
   const p = runProgress(run);
   return (
-    <Drawer title="Esecuzione" subtitle={`${workflow?.name ?? run.workflow_id} · ${run.id}`} onClose={onClose}>
+    <Drawer title={t("workflows.esecuzione")} subtitle={`${workflow?.name ?? run.workflow_id} · ${run.id}`} onClose={onClose}>
       <div className="run-summary">
         <KeyValue items={[
           ["Stato", <StatusPill key="s" status={run.status} />],
@@ -25,11 +26,11 @@ export function RunDrawer({ run, workflow, onClose }: { run: WorkflowRun; workfl
         {active && (
           <p className="row text-sm" role="status">
             <Led tone="run" small />
-            {run.status === "waiting_approval" ? "In attesa della tua conferma: rispondi dal riquadro delle conferme in alto." : "In corso: la pagina si aggiorna da sola."}
+            {run.status === "waiting_approval" ? t("workflows.in_attesa_della_tua_conferma") : t("workflows.in_corso_la_pagina_si")}
           </p>
         )}
       </div>
-      <ol className="run-steps-list" aria-label="Passi dell'esecuzione">
+      <ol className="run-steps-list" aria-label={t("workflows.passi_dell_esecuzione")}>
         {run.steps.map((s, i) => {
           const def = workflow?.steps.find((x) => x.id === s.id);
           return (
@@ -44,11 +45,11 @@ export function RunDrawer({ run, workflow, onClose }: { run: WorkflowRun; workfl
               {s.error && <p className="run-error" role="alert"><Icon name="alert" size={14} /> {s.error}</p>}
               {s.output && (
                 <div className="run-output">
-                  <div className="row row-between"><span className="eyebrow">Risultato</span><CopyButton text={s.output} /></div>
+                  <div className="row row-between"><span className="eyebrow">{t("workflows.risultato")}</span><CopyButton text={s.output} /></div>
                   <pre tabIndex={0}>{s.output}</pre>
                 </div>
               )}
-              {!s.output && !s.error && s.status === "skipped" && <p className="faint text-xs">Saltato: nessuna condizione lo ha scelto.</p>}
+              {!s.output && !s.error && s.status === "skipped" && <p className="faint text-xs">{t("workflows.saltato_nessuna_condizione_lo_ha")}</p>}
             </li>
           );
         })}

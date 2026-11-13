@@ -7,6 +7,7 @@ import { changeKind, dropReferences, newStep, renameReferences, STEP_KINDS, step
 import { StepCard } from "./StepCard";
 import type { StepCatalog } from "./StepForms";
 
+import { t } from "../../../shared/i18n";
 /** The steps of a workflow as a list of cards: add, remove, reorder and edit each by kind. */
 export function StepEditor({ rows, setRows, issues, catalog, inputKeys, lastRun }: {
   rows: Keyed<StepDraft>[];
@@ -46,9 +47,9 @@ export function StepEditor({ rows, setRows, issues, catalog, inputKeys, lastRun 
   return (
     <div className="stack stack-lg">
       {rows.length === 0 ? (
-        <EmptyState icon="flow" title="Nessun passo" description="Un workflow è una sequenza di passi: chiamare un tool, affidare un compito a un agente, chiedere una conferma o scegliere un ramo." />
+        <EmptyState icon="flow" title={t("workflows.nessun_passo")} description={t("workflows.un_workflow_e_una_sequenza")} />
       ) : (
-        <ol className="step-list" aria-label="Passi del workflow">
+        <ol className="step-list" aria-label={t("workflows.passi_del_workflow")}>
           {rows.map((r, i) => (
             <StepCard
               key={r.uid} uid={r.uid} index={i} steps={steps} catalog={catalog} inputKeys={inputKeys}
@@ -61,8 +62,8 @@ export function StepEditor({ rows, setRows, issues, catalog, inputKeys, lastRun 
           ))}
         </ol>
       )}
-      <div className="step-add" role="group" aria-label="Aggiungi un passo">
-        <span className="muted text-sm">Aggiungi un passo:</span>
+      <div className="step-add" role="group" aria-label={t("workflows.aggiungi_un_passo")}>
+        <span className="muted text-sm">{t("workflows.aggiungi_un_passo_2")}</span>
         {STEP_KINDS.map((k) => <Button key={k.kind} size="sm" icon={stepMeta(k.kind).icon} title={k.hint} onClick={() => add(k.kind)}>{k.label}</Button>)}
       </div>
     </div>

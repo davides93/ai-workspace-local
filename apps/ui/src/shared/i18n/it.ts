@@ -25,6 +25,7 @@ import { teachIt } from "./messages/it/teach";
 import { teamsIt } from "./messages/it/teams";
 import { trainingIt } from "./messages/it/training";
 import { uiIt } from "./messages/it/ui";
+import { workflowsIt } from "./messages/it/workflows";
 
 export const it = {
   ...activityIt,
@@ -53,6 +54,7 @@ export const it = {
   ...teamsIt,
   ...trainingIt,
   ...uiIt,
+  ...workflowsIt,
 } as const;
 
 export type MessageKey = keyof typeof it;

@@ -3,6 +3,7 @@ import { formatDateTime, formatDuration, relTime } from "../../../shared/lib/for
 import type { WorkflowRun } from "../../../shared/api/types";
 import { runSeconds } from "../model/triggers";
 
+import { t } from "../../../shared/i18n";
 /** Number of steps finished out of the total, and the first one that failed. */
 export function runProgress(run: WorkflowRun): { done: number; total: number; failed?: string } {
   return {
@@ -23,14 +24,14 @@ export function RunsPanel({ runs, selectedId, onOpen, onRun, runDisabled }: {
   if (runs.length === 0) {
     return (
       <EmptyState
-        icon="play" title="Nessuna esecuzione"
-        description="Quando il workflow parte, manualmente o da un trigger, trovi qui lo stato di ogni passo, il risultato e gli errori."
-        action={<Button variant="primary" icon="play" onClick={onRun} disabled={runDisabled}>Esegui ora</Button>}
+        icon="play" title={t("workflows.nessuna_esecuzione")}
+        description={t("workflows.quando_il_workflow_parte_manualmente")}
+        action={<Button variant="primary" icon="play" onClick={onRun} disabled={runDisabled}>{t("workflows.esegui_ora")}</Button>}
       />
     );
   }
   return (
-    <ul className="run-list" aria-label="Esecuzioni del workflow">
+    <ul className="run-list" aria-label={t("workflows.esecuzioni_del_workflow")}>
       {runs.map((r) => {
         const p = runProgress(r);
         const secs = runSeconds(r.started_at, r.finished_at);
@@ -43,7 +44,7 @@ export function RunsPanel({ runs, selectedId, onOpen, onRun, runDisabled }: {
                 {r.parent_run_id && <span className="faint text-xs">sotto-workflow di <span className="mono">{r.parent_run_id}</span></span>}
                 <span className="faint text-xs" title={formatDateTime(r.started_at)}>{relTime(r.started_at)}{secs !== null ? ` · ${formatDuration(secs)}` : ""}</span>
               </span>
-              <span className="run-steps text-xs num">{p.done}/{p.total} passi{p.failed ? <span className="run-failed"> · «{p.failed}» non riuscito</span> : null}</span>
+              <span className="run-steps text-xs num">{t("workflows.steps_done", { done: p.done, total: p.total })}{p.failed ? <span className="run-failed">{" "}{t("workflows.non_riuscito", { failed: p.failed })}</span> : null}</span>
               <Icon name="forward" size={14} />
             </button>
           </li>

@@ -34,6 +34,7 @@ import { teachEn } from "./messages/en/teach";
 import { teamsEn } from "./messages/en/teams";
 import { trainingEn } from "./messages/en/training";
 import { uiEn } from "./messages/en/ui";
+import { workflowsEn } from "./messages/en/workflows";
 
 export const en: Record<MessageKey, string> = {
   ...activityEn,
@@ -62,4 +63,5 @@ export const en: Record<MessageKey, string> = {
   ...teamsEn,
   ...trainingEn,
   ...uiEn,
+  ...workflowsEn,
 };

@@ -17,6 +17,7 @@ import { RunDialog } from "./RunDialog";
 import { RunDrawer } from "./RunDrawer";
 import { RunsPanel } from "./RunsPanel";
 
+import { t as tr } from "../../../shared/i18n";
 type DetailTab = "editor" | "runs" | "advanced";
 export const NEW_WORKFLOW = "new";
 
@@ -107,7 +108,7 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
   if (!draft || !plain || !saved) {
     return (
       <Panel>
-        <EmptyState icon="flow" title="Workflow non trovato" description="Questo workflow non esiste (più). Sceglilo dall'elenco o creane uno nuovo." action={<Link to="/workflows" className="btn">Torna ai workflow</Link>} />
+        <EmptyState icon="flow" title={tr("workflows.workflow_non_trovato")} description={tr("workflows.questo_workflow_non_esiste_piu")} action={<Link to="/workflows" className="btn">{tr("workflows.torna_ai_workflow")}</Link>} />
       </Panel>
     );
   }
@@ -118,23 +119,23 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
     <div className="stack stack-lg">
       <Panel
         title={<>
-          <Link to="/workflows" className="md-back only-phone" aria-label="Torna ai workflow"><Icon name="back" size={16} /> Workflow</Link>
-          <span className="wf-title">{plain.name.trim() || (isNew ? "Nuovo workflow" : "Senza nome")}</span>
+          <Link to="/workflows" className="md-back only-phone" aria-label="Torna ai workflow"><Icon name="back" size={16} /> {tr("workflows.workflow")}</Link>
+          <span className="wf-title">{plain.name.trim() || (isNew ? tr("workflows.nuovo_workflow") : tr("workflows.senza_nome"))}</span>
         </>}
         actions={!isNew && <div className="detail-actions">
           <label className="wf-enable check-inline text-sm">
-            <Toggle label={saved.enabled ? "Disattiva il workflow" : "Attiva il workflow"} checked={saved.enabled} disabled={toggle.isPending} onChange={(enabled) => toggle.mutate({ ...saved, enabled })} />
-            {saved.enabled ? "Attivo" : "Disattivato"}
+            <Toggle label={saved.enabled ? tr("workflows.disattiva_il_workflow") : tr("workflows.attiva_il_workflow")} checked={saved.enabled} disabled={toggle.isPending} onChange={(enabled) => toggle.mutate({ ...saved, enabled })} />
+            {saved.enabled ? tr("workflows.attivo") : tr("workflows.disattivato_2")}
           </label>
-          <Link to={`/workflows/new?from=${encodeURIComponent(saved.id)}`} className="btn"><Icon name="copy" size={15} /> Duplica</Link>
-          <Button variant="danger" icon="trash" onClick={() => setConfirmDelete(true)}>Elimina</Button>
-          <Button variant="primary" icon="play" onClick={runNow} disabled={dirty || run.isPending} title={dirty ? "Salva le modifiche prima di eseguire" : undefined}>Esegui ora</Button>
+          <Link to={`/workflows/new?from=${encodeURIComponent(saved.id)}`} className="btn"><Icon name="copy" size={15} /> {tr("workflows.duplica")}</Link>
+          <Button variant="danger" icon="trash" onClick={() => setConfirmDelete(true)}>{tr("workflows.elimina")}</Button>
+          <Button variant="primary" icon="play" onClick={runNow} disabled={dirty || run.isPending} title={dirty ? "Salva le modifiche prima di eseguire" : undefined}>{tr("workflows.esegui_ora")}</Button>
         </div>}
       >
-        {dirty && !isNew && <p className="faint text-sm mb-3">«Esegui ora» usa la versione salvata: salva le modifiche per provarle.</p>}
+        {dirty && !isNew && <p className="faint text-sm mb-3">{tr("workflows.esegui_ora_usa_la_versione")}</p>}
         <Tabs
-          idPrefix="wfd" label="Sezioni del workflow" value={tab} onChange={changeTab}
-          tabs={[{ id: "editor", label: "Editor" }, ...(isNew ? [] : [{ id: "runs" as const, label: "Esecuzioni", count: wfRuns.length }]), { id: "advanced", label: "Avanzato" }]}
+          idPrefix="wfd" label={tr("workflows.sezioni_del_workflow")} value={tab} onChange={changeTab}
+          tabs={[{ id: "editor", label: tr("workflows.editor") }, ...(isNew ? [] : [{ id: "runs" as const, label: tr("workflows.esecuzioni"), count: wfRuns.length }]), { id: "advanced", label: tr("workflows.avanzato") }]}
         />
         <TabPanel idPrefix="wfd" id={tab}>
           {tab === "editor" && (
@@ -149,17 +150,17 @@ export function WorkflowEditor({ workflowId, from }: { workflowId: string; from?
 
       {tab !== "runs" && (
         <SaveBar
-          dirty={dirty} isNew={isNew} saving={save.isPending} canSave={!hasErrors(issues)} blocker="Correggi gli errori indicati nei controlli"
-          saveLabel={isNew ? "Crea workflow" : "Salva"} onSave={() => void submit()} onDiscard={reset}
+          dirty={dirty} isNew={isNew} saving={save.isPending} canSave={!hasErrors(issues)} blocker={tr("workflows.correggi_gli_errori_indicati_nei")}
+          saveLabel={isNew ? tr("workflows.crea_workflow") : tr("workflows.salva")} onSave={() => void submit()} onDiscard={reset}
         />
       )}
 
-      <UnsavedChangesDialog guard={guard} subject={`il workflow «${plain.name.trim() || "senza nome"}»`} onSave={submit} saving={save.isPending} canSave={!hasErrors(issues)} />
+      <UnsavedChangesDialog guard={guard} subject={tr("workflows.il_workflow", { name: plain.name.trim() || tr("workflows.unnamed_inline") })} onSave={submit} saving={save.isPending} canSave={!hasErrors(issues)} />
       {runDialog && <RunDialog workflow={saved} pending={run.isPending} onRun={startRun} onClose={() => setRunDialog(false)} />}
       {openRun && <RunDrawer run={openRun} workflow={saved} onClose={() => setQuery({ run: undefined })} />}
       {confirmDelete && (
         <DecisionDialog
-          title="Elimina il workflow" confirmLabel="Elimina" icon="trash" pending={del.isPending} error={del.error}
+          title={tr("workflows.elimina_il_workflow")} confirmLabel={tr("workflows.elimina")} icon="trash" pending={del.isPending} error={del.error}
           onCancel={() => { setConfirmDelete(false); del.reset(); }}
           onConfirm={() => del.mutate(saved.id, { onSuccess: () => { setConfirmDelete(false); guard.go("/workflows", { replace: true }); } })}
         >

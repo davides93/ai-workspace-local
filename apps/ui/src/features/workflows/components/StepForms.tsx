@@ -6,6 +6,7 @@ import { cleanOptions, DEFAULT_RETRY_DELAY_S, FOREACH_MAX_PARALLEL, OPTION_LIMIT
 import type { StepOptions } from "../../../shared/api/types";
 import { PlaceholderInsert } from "./PlaceholderInsert";
 
+import { t as tr, tNode as trNode } from "../../../shared/i18n";
 export interface StepCatalog {
   /** Workflows a sub-workflow step can start (not the one being edited). */
   workflows: { id: string; name: string }[];
@@ -58,14 +59,14 @@ export function ToolFields({ step, uid, issues, catalog, before, inputKeys, onCh
   const a = note(issues, "args");
   return (
     <>
-      <Field label="Tool" htmlFor={`st-${uid}-tool`} error={t.error} hint={t.hint ?? tool?.description}>
+      <Field label={tr("workflows.tool")} htmlFor={`st-${uid}-tool`} error={t.error} hint={t.hint ?? tool?.description}>
         <Select id={`st-${uid}-tool`} value={step.tool} onChange={(e) => onChange({ ...step, tool: e.target.value })} aria-invalid={!!t.error}>
-          {!step.tool && <option value="">Scegli un tool…</option>}
-          {step.tool && !tool && <option value={step.tool}>{step.tool} (non nel catalogo)</option>}
-          {names.map((x) => <option key={x.name} value={x.name}>{x.name}{x.enabled ? "" : " (disattivato)"}</option>)}
+          {!step.tool && <option value="">{tr("workflows.scegli_un_tool")}</option>}
+          {step.tool && !tool && <option value={step.tool}>{tr("workflows.non_nel_catalogo", { tool: step.tool })}</option>}
+          {names.map((x) => <option key={x.name} value={x.name}>{x.name}{x.enabled ? "" : tr("workflows.disattivato")}</option>)}
         </Select>
       </Field>
-      <Field label="Argomenti (JSON)" htmlFor={`st-${uid}-args`} error={a.error} hint={a.hint ?? (params.length ? <>Parametri: {params.map((p) => <Chip key={p.name} title={p.required ? "Obbligatorio" : "Facoltativo"}>{p.name}{p.required ? "*" : ""}</Chip>)}</> : "Un oggetto JSON; puoi usare i segnaposto nei valori.")}>
+      <Field label={tr("workflows.argomenti_json")} htmlFor={`st-${uid}-args`} error={a.error} hint={a.hint ?? (params.length ? <>Parametri: {params.map((p) => <Chip key={p.name} title={p.required ? "Obbligatorio" : "Facoltativo"}>{p.name}{p.required ? "*" : ""}</Chip>)}</> : tr("workflows.un_oggetto_json_puoi_usare"))}>
         <Textarea id={`st-${uid}-args`} rows={4} className="mono" spellCheck={false} value={step.args} onChange={(e) => onChange({ ...step, args: e.target.value })} aria-invalid={!!a.error} />
         <PlaceholderInsert targetId={`st-${uid}-args`} value={step.args} onChange={(v) => onChange({ ...step, args: v })} before={before} inputKeys={inputKeys} quoted />
       </Field>
@@ -78,14 +79,14 @@ export function AgentFields({ step, uid, issues, catalog, before, inputKeys, onC
   const n = note(issues, "agent");
   return (
     <>
-      <Field label="Agente" htmlFor={`st-${uid}-agent`} error={n.error} hint={n.hint ?? catalog.agents.find((a) => a.id === step.agent)?.description}>
+      <Field label={tr("workflows.agente")} htmlFor={`st-${uid}-agent`} error={n.error} hint={n.hint ?? catalog.agents.find((a) => a.id === step.agent)?.description}>
         <Select id={`st-${uid}-agent`} value={step.agent} onChange={(e) => onChange({ ...step, agent: e.target.value })} aria-invalid={!!n.error}>
-          {!step.agent && <option value="">Scegli un agente…</option>}
-          {step.agent && !known && <option value={step.agent}>{step.agent} (non esiste)</option>}
+          {!step.agent && <option value="">{tr("workflows.scegli_un_agente")}</option>}
+          {step.agent && !known && <option value={step.agent}>{tr("workflows.non_esiste", { agent: step.agent })}</option>}
           {catalog.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       </Field>
-      <PromptField id={`st-${uid}-prompt`} label="Compito" value={step.prompt} placeholder="Descrivi cosa deve fare l'agente. Puoi citare i risultati dei passi precedenti." issues={issues} field="prompt" before={before} inputKeys={inputKeys} onChange={(prompt) => onChange({ ...step, prompt })} />
+      <PromptField id={`st-${uid}-prompt`} label={tr("workflows.compito")} value={step.prompt} placeholder={tr("workflows.descrivi_cosa_deve_fare_l")} issues={issues} field="prompt" before={before} inputKeys={inputKeys} onChange={(prompt) => onChange({ ...step, prompt })} />
     </>
   );
 }
@@ -95,14 +96,14 @@ export function TeamFields({ step, uid, issues, catalog, before, inputKeys, onCh
   const n = note(issues, "team");
   return (
     <>
-      <Field label="Team" htmlFor={`st-${uid}-team`} error={n.error} hint={n.hint ?? catalog.teams.find((t) => t.id === step.team)?.description}>
+      <Field label={tr("workflows.team")} htmlFor={`st-${uid}-team`} error={n.error} hint={n.hint ?? catalog.teams.find((t) => t.id === step.team)?.description}>
         <Select id={`st-${uid}-team`} value={step.team} onChange={(e) => onChange({ ...step, team: e.target.value })} aria-invalid={!!n.error}>
-          {!step.team && <option value="">Scegli un team…</option>}
-          {step.team && !known && <option value={step.team}>{step.team} (non esiste)</option>}
+          {!step.team && <option value="">{tr("workflows.scegli_un_team")}</option>}
+          {step.team && !known && <option value={step.team}>{tr("workflows.non_esiste_2", { team: step.team })}</option>}
           {catalog.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </Select>
       </Field>
-      <PromptField id={`st-${uid}-prompt`} label="Compito" value={step.prompt} placeholder="Descrivi il lavoro del team. Puoi citare i risultati dei passi precedenti." issues={issues} field="prompt" before={before} inputKeys={inputKeys} onChange={(prompt) => onChange({ ...step, prompt })} />
+      <PromptField id={`st-${uid}-prompt`} label={tr("workflows.compito")} value={step.prompt} placeholder={tr("workflows.descrivi_il_lavoro_del_team")} issues={issues} field="prompt" before={before} inputKeys={inputKeys} onChange={(prompt) => onChange({ ...step, prompt })} />
     </>
   );
 }
@@ -112,14 +113,14 @@ export function LlmFields({ step, uid, issues, catalog, before, inputKeys, onCha
   const n = note(issues, "profile");
   return (
     <>
-      <Field label="Profilo di inferenza" htmlFor={`st-${uid}-profile`} error={n.error} hint={n.hint}>
+      <Field label={tr("workflows.profilo_di_inferenza")} htmlFor={`st-${uid}-profile`} error={n.error} hint={n.hint}>
         <Select id={`st-${uid}-profile`} value={step.profile} onChange={(e) => onChange({ ...step, profile: e.target.value })} aria-invalid={!!n.error}>
-          {!step.profile && <option value="">Scegli un profilo…</option>}
-          {step.profile && !known && <option value={step.profile}>{step.profile} (non esiste)</option>}
-          {catalog.profiles.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.model || "nessun modello"}</option>)}
+          {!step.profile && <option value="">{tr("workflows.scegli_un_profilo")}</option>}
+          {step.profile && !known && <option value={step.profile}>{tr("workflows.non_esiste_3", { profile: step.profile })}</option>}
+          {catalog.profiles.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.model || tr("workflows.nessun_modello")}</option>)}
         </Select>
       </Field>
-      <PromptField id={`st-${uid}-prompt`} label="Prompt" value={step.prompt} placeholder="Una sola richiesta al modello, senza tool." issues={issues} field="prompt" before={before} inputKeys={inputKeys} onChange={(prompt) => onChange({ ...step, prompt })} />
+      <PromptField id={`st-${uid}-prompt`} label={tr("workflows.prompt")} value={step.prompt} placeholder={tr("workflows.una_sola_richiesta_al_modello")} issues={issues} field="prompt" before={before} inputKeys={inputKeys} onChange={(prompt) => onChange({ ...step, prompt })} />
     </>
   );
 }
@@ -138,13 +139,13 @@ export function ForeachFields({ step, uid, issues, before, inputKeys, onChange }
   const p = note(issues, "parallel");
   return (
     <>
-      <PromptField id={`st-${uid}-items`} label="Elenco da scorrere" value={step.items} rows={2} placeholder="{{steps.scan.output}}" issues={issues} field="items" before={before} inputKeys={inputKeys} onChange={(items) => onChange({ ...step, items })} />
-      <p className="faint text-xs">Un array JSON (anche in un blocco ```json) oppure un testo con una voce per riga; al massimo 200 voci.</p>
-      <Field label="Voci alla volta" htmlFor={`st-${uid}-parallel`} error={p.error} hint={`1–${FOREACH_MAX_PARALLEL}`}>
+      <PromptField id={`st-${uid}-items`} label={tr("workflows.elenco_da_scorrere")} value={step.items} rows={2} placeholder="{{steps.scan.output}}" issues={issues} field="items" before={before} inputKeys={inputKeys} onChange={(items) => onChange({ ...step, items })} />
+      <p className="faint text-xs">{tr("workflows.un_array_json_anche_in")}</p>
+      <Field label={tr("workflows.voci_alla_volta")} htmlFor={`st-${uid}-parallel`} error={p.error} hint={`1–${FOREACH_MAX_PARALLEL}`}>
         <Input id={`st-${uid}-parallel`} type="number" min={1} max={FOREACH_MAX_PARALLEL} value={step.parallel ?? ""} placeholder="1" onChange={(e) => onChange({ ...step, parallel: e.target.value.trim() === "" ? undefined : Number(e.target.value) })} aria-invalid={!!p.error} />
       </Field>
       <InlineJson
-        id={`st-${uid}-body`} label="Passo da ripetere (JSON)" value={step.body} rows={7} issues={issues} field="body" onChange={(body) => onChange({ ...step, body })}
+        id={`st-${uid}-body`} label={tr("workflows.passo_da_ripetere_json")} value={step.body} rows={7} issues={issues} field="body" onChange={(body) => onChange({ ...step, body })}
         hint={<>Un passo <code>tool</code>, <code>agent</code> o <code>llm</code>. Usa <code>{"{{item}}"}</code>, <code>{"{{item.campo}}"}</code> e <code>{"{{index}}"}</code>.</>}
       />
     </>
@@ -154,7 +155,7 @@ export function ForeachFields({ step, uid, issues, before, inputKeys, onChange }
 export function ParallelFields({ step, uid, issues, onChange }: Props<"parallel">) {
   return (
     <InlineJson
-      id={`st-${uid}-steps`} label="Passi da eseguire insieme (JSON)" value={step.steps} rows={10} issues={issues} field="steps" onChange={(steps) => onChange({ ...step, steps })}
+      id={`st-${uid}-steps`} label={tr("workflows.passi_da_eseguire_insieme_json")} value={step.steps} rows={10} issues={issues} field="steps" onChange={(steps) => onChange({ ...step, steps })}
       hint={<>Un elenco di passi <code>tool</code>, <code>agent</code> o <code>llm</code>. L'output di ognuno è anche <code>{"{{steps.<id>.output}}"}</code>.</>}
     />
   );
@@ -166,14 +167,14 @@ export function WorkflowFields({ step, uid, issues, catalog, before, inputKeys, 
   const i = note(issues, "inputs");
   return (
     <>
-      <Field label="Workflow da avviare" htmlFor={`st-${uid}-workflow`} error={n.error} hint={n.hint ?? "Anche un workflow disattivato: l'attivazione riguarda solo i suoi trigger."}>
+      <Field label={tr("workflows.workflow_da_avviare")} htmlFor={`st-${uid}-workflow`} error={n.error} hint={n.hint ?? tr("workflows.anche_un_workflow_disattivato_l")}>
         <Select id={`st-${uid}-workflow`} value={step.workflow} onChange={(e) => onChange({ ...step, workflow: e.target.value })} aria-invalid={!!n.error}>
-          {!step.workflow && <option value="">Scegli un workflow…</option>}
-          {step.workflow && !known && <option value={step.workflow}>{step.workflow} (non esiste)</option>}
+          {!step.workflow && <option value="">{tr("workflows.scegli_un_workflow")}</option>}
+          {step.workflow && !known && <option value={step.workflow}>{tr("workflows.non_esiste_4", { workflow: step.workflow })}</option>}
           {catalog.workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
         </Select>
       </Field>
-      <Field label="Input (JSON)" htmlFor={`st-${uid}-inputs`} error={i.error} hint={i.hint ?? "Un oggetto JSON; i valori possono usare i segnaposto. Il risultato è l'output dell'ultimo passo del workflow avviato."}>
+      <Field label={tr("workflows.input_json")} htmlFor={`st-${uid}-inputs`} error={i.error} hint={i.hint ?? tr("workflows.un_oggetto_json_i_valori")}>
         <Textarea id={`st-${uid}-inputs`} rows={4} className="mono" spellCheck={false} value={step.inputs} onChange={(e) => onChange({ ...step, inputs: e.target.value })} aria-invalid={!!i.error} />
         <PlaceholderInsert targetId={`st-${uid}-inputs`} value={step.inputs} onChange={(v) => onChange({ ...step, inputs: v })} before={before} inputKeys={inputKeys} quoted />
       </Field>
@@ -185,19 +186,19 @@ export function ApprovalFields({ step, uid, issues, before, inputKeys, onChange 
   const t = note(issues, "timeout_s");
   return (
     <>
-      <PromptField id={`st-${uid}-message`} label="Domanda per te" value={step.message} rows={2} placeholder="Sposto i file come proposto?" issues={issues} field="message" before={before} inputKeys={inputKeys} onChange={(message) => onChange({ ...step, message })} />
+      <PromptField id={`st-${uid}-message`} label={tr("workflows.domanda_per_te")} value={step.message} rows={2} placeholder={tr("workflows.sposto_i_file_come_proposto")} issues={issues} field="message" before={before} inputKeys={inputKeys} onChange={(message) => onChange({ ...step, message })} />
       <div className="step-options-grid">
-        <Field label="Attendi al massimo (s)" htmlFor={`st-${uid}-wait`} error={t.error} hint="Vuoto = aspetta senza limite">
+        <Field label={tr("workflows.attendi_al_massimo_s")} htmlFor={`st-${uid}-wait`} error={t.error} hint={tr("workflows.vuoto_aspetta_senza_limite")}>
           <Input
             id={`st-${uid}-wait`} type="number" min={1} max={OPTION_LIMITS.timeout} value={step.timeout_s ?? ""}
             onChange={(e) => onChange({ ...step, timeout_s: e.target.value.trim() === "" ? undefined : Number(e.target.value) })} aria-invalid={!!t.error}
           />
         </Field>
         {step.timeout_s !== undefined && (
-          <Field label="Se nessuno risponde" htmlFor={`st-${uid}-default`}>
+          <Field label={tr("workflows.se_nessuno_risponde")} htmlFor={`st-${uid}-default`}>
             <Select id={`st-${uid}-default`} value={step.default ?? "deny"} onChange={(e) => onChange({ ...step, default: e.target.value === "allow" ? "allow" : undefined })}>
-              <option value="deny">Rifiuta (il workflow finisce)</option>
-              <option value="allow">Approva e prosegui</option>
+              <option value="deny">{tr("workflows.rifiuta_il_workflow_finisce")}</option>
+              <option value="allow">{tr("workflows.approva_e_prosegui")}</option>
             </Select>
           </Field>
         )}
@@ -210,7 +211,7 @@ function Targets({ legend, value, others, onToggle }: { legend: string; value: s
   return (
     <fieldset className="targets">
       <legend className="field-label">{legend}</legend>
-      {others.length === 0 ? <span className="faint text-sm">Aggiungi altri passi per sceglierli qui.</span> : (
+      {others.length === 0 ? <span className="faint text-sm">{tr("workflows.aggiungi_altri_passi_per_sceglierli")}</span> : (
         <div className="chips">
           {others.map((o) => (
             <button key={o.id} type="button" className={`chip chip-btn ${value.includes(o.id) ? "hot" : ""}`} aria-pressed={value.includes(o.id)} onClick={() => onToggle(o.id, !value.includes(o.id))}>
@@ -233,17 +234,17 @@ export function ConditionFields({ step, uid, issues, before, inputKeys, others, 
   return (
     <>
       <Field
-        label="Espressione" htmlFor={`st-${uid}-if`} error={n.error}
-        hint={n.hint ?? <>Forme ammesse: <code>A contains B</code>, <code>A == B</code>, <code>A != B</code>, <code>not A</code>, oppure un valore (vuoto, «0», «no» e «false» sono falsi). I segnaposto si sostituiscono prima.</>}
+        label={tr("workflows.espressione")} htmlFor={`st-${uid}-if`} error={n.error}
+        hint={n.hint ?? <>{trNode("workflows.forme_ammesse_oppure_un_valore", { code: <code>A contains B</code>, code2: <code>A == B</code>, code3: <code>A != B</code>, code4: <code>not A</code> })}</>}
       >
         <Input id={`st-${uid}-if`} mono value={step.if} onChange={(e) => onChange({ ...step, if: e.target.value })} placeholder="{{steps.scan.output}} contains pdf" aria-invalid={!!n.error} spellCheck={false} />
         <PlaceholderInsert targetId={`st-${uid}-if`} value={step.if} onChange={(v) => onChange({ ...step, if: v })} before={before} inputKeys={inputKeys} />
       </Field>
       <div className="targets-grid">
-        <Targets legend="Se vero, esegui" value={step.then} others={others} onToggle={(id, on) => toggle("then", id, on)} />
-        <Targets legend="Altrimenti, esegui" value={step.else} others={others} onToggle={(id, on) => toggle("else", id, on)} />
+        <Targets legend={tr("workflows.se_vero_esegui")} value={step.then} others={others} onToggle={(id, on) => toggle("then", id, on)} />
+        <Targets legend={tr("workflows.altrimenti_esegui")} value={step.else} others={others} onToggle={(id, on) => toggle("else", id, on)} />
       </div>
-      <p className="faint text-xs">I passi non scelti vengono saltati. Un passo scelto deve venire dopo la condizione, altrimenti non parte mai.</p>
+      <p className="faint text-xs">{tr("workflows.i_passi_non_scelti_vengono")}</p>
       {t.map((i) => <p key={i.message} className={i.level === "error" ? "field-error" : "row-warn"}>{i.message}</p>)}
     </>
   );
@@ -257,21 +258,21 @@ export function OptionsFields({ opts, uid, issues, onChange }: { opts?: StepOpti
   const err = (field: string) => note(issues, field).error;
   return (
     <details className="step-options" open={!!cleanOptions(opts) || undefined}>
-      <summary className="muted text-sm">Tentativi, limite di tempo ed errori</summary>
+      <summary className="muted text-sm">{tr("workflows.tentativi_limite_di_tempo_ed")}</summary>
       <div className="step-options-grid">
-        <Field label="Nuovi tentativi" htmlFor={`st-${uid}-retry`} error={err("retry")} hint={`0–${OPTION_LIMITS.retry}`}>
+        <Field label={tr("workflows.nuovi_tentativi")} htmlFor={`st-${uid}-retry`} error={err("retry")} hint={`0–${OPTION_LIMITS.retry}`}>
           <Input id={`st-${uid}-retry`} type="number" min={0} max={OPTION_LIMITS.retry} value={o.retry ?? ""} placeholder="0" onChange={(e) => set({ retry: num(e.target.value) })} aria-invalid={!!err("retry")} />
         </Field>
-        <Field label="Attesa tra i tentativi (s)" htmlFor={`st-${uid}-delay`} error={err("retry_delay_s")} hint={`0–${OPTION_LIMITS.retryDelay}`}>
+        <Field label={tr("workflows.attesa_tra_i_tentativi_s")} htmlFor={`st-${uid}-delay`} error={err("retry_delay_s")} hint={`0–${OPTION_LIMITS.retryDelay}`}>
           <Input id={`st-${uid}-delay`} type="number" min={0} max={OPTION_LIMITS.retryDelay} value={o.retry_delay_s ?? ""} placeholder={String(DEFAULT_RETRY_DELAY_S)} onChange={(e) => set({ retry_delay_s: num(e.target.value) })} aria-invalid={!!err("retry_delay_s")} />
         </Field>
-        <Field label="Limite di tempo (s)" htmlFor={`st-${uid}-timeout`} error={err("timeout_s")} hint="Per ogni tentativo; vuoto = nessun limite">
+        <Field label={tr("workflows.limite_di_tempo_s")} htmlFor={`st-${uid}-timeout`} error={err("timeout_s")} hint={tr("workflows.per_ogni_tentativo_vuoto_nessun")}>
           <Input id={`st-${uid}-timeout`} type="number" min={1} max={OPTION_LIMITS.timeout} value={o.timeout_s ?? ""} onChange={(e) => set({ timeout_s: num(e.target.value) })} aria-invalid={!!err("timeout_s")} />
         </Field>
-        <Field label="Se il passo fallisce" htmlFor={`st-${uid}-onerror`} hint="Con «prosegui» l'errore è in {{steps.<id>.error}}">
+        <Field label={tr("workflows.se_il_passo_fallisce")} htmlFor={`st-${uid}-onerror`} hint="Con «prosegui» l'errore è in {{steps.<id>.error}}">
           <Select id={`st-${uid}-onerror`} value={o.on_error ?? "fail"} onChange={(e) => set({ on_error: e.target.value === "continue" ? "continue" : "fail" })}>
-            <option value="fail">Ferma il workflow</option>
-            <option value="continue">Prosegui con i passi successivi</option>
+            <option value="fail">{tr("workflows.ferma_il_workflow")}</option>
+            <option value="continue">{tr("workflows.prosegui_con_i_passi_successivi")}</option>
           </Select>
         </Field>
       </div>
