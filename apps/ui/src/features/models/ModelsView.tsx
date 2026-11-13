@@ -35,7 +35,7 @@ export function ModelsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Inferenza" title={tr("models.modelli")}
+        eyebrow={tr("nav.group_inference")} title={tr("models.modelli")}
         subtitle={tr("models.disponibili_su_disco_memoria_disponibile", { p: models.data?.length ?? 0, p2: formatBytes(totalInstalled), p3: formatMb(system.data?.device.memory_mb), p4: vram ? `, VRAM ${formatMb(vram)}` : "" })}
       />
       <Tabs

@@ -17,7 +17,7 @@ export function SecurityView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Controllo" title={tr("security.sicurezza")}
+        eyebrow={tr("nav.group_control")} title={tr("security.sicurezza")}
         subtitle={tr("security.cosa_puo_fare_un_agente")}
       />
       <Tabs

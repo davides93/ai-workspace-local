@@ -55,7 +55,7 @@ export function SettingsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Controllo" title={tr("settings.impostazioni")}
+        eyebrow={tr("nav.group_control")} title={tr("settings.impostazioni")}
         subtitle={tr("settings.configurazione_a_strati_default_globale")}
         actions={<Segmented label={tr("settings.tema")} value={theme} onChange={chooseTheme} options={THEMES.map((t) => ({ id: t, label: THEME_LABEL[t] }))} />}
       />

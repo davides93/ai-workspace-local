@@ -34,7 +34,7 @@ export function ActivityView() {
   return (
     <Page className="act">
       <PageHeader
-        eyebrow="Controllo" title={t("activity.attivita")}
+        eyebrow={t("nav.group_control")} title={t("activity.attivita")}
         subtitle={t("activity.audit_trail_di_ogni_decisione")}
         actions={<Button icon="download" disabled={filtered.length === 0} onClick={exportJson} title="Scarica le righe filtrate in un file JSON">{t("activity.esporta_json", { p: filtered.length > 0 ? ` (${filtered.length})` : "" })}</Button>}
       />

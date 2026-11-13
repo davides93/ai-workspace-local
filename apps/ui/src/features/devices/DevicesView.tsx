@@ -12,7 +12,7 @@ export function DevicesView() {
   const system = useSystem();
   return (
     <Page>
-      <PageHeader eyebrow="Inferenza" title={t("devices.dispositivi")} subtitle={t("devices.il_profilo_hardware_guida_la")} />
+      <PageHeader eyebrow={t("nav.group_inference")} title={t("devices.dispositivi")} subtitle={t("devices.il_profilo_hardware_guida_la")} />
       <QueryState query={system} skeleton={<PageSkeleton />}>
         {(info) => (
           <>

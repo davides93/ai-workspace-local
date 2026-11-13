@@ -20,7 +20,7 @@ export function CapabilitiesView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Capacità" title={tr("capabilities.tool_mcp_e_browser")}
+        eyebrow={tr("nav.group_capabilities")} title={tr("capabilities.tool_mcp_e_browser")}
         subtitle={tr("capabilities.cosa_possono_fare_gli_agenti")}
       />
       <Tabs

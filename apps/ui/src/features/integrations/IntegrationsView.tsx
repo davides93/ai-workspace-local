@@ -22,7 +22,7 @@ export function IntegrationsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Capacità" title={t("integrations.integrazioni")}
+        eyebrow={t("nav.group_capabilities")} title={t("integrations.integrazioni")}
         subtitle={t("integrations.gli_endpoint_con_cui_altri")}
       />
       <AccessPanel audience={audience} onAudience={setAudience} lanAddress={lan.data} />

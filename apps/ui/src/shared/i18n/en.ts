@@ -29,6 +29,7 @@ import { securityEn } from "./messages/en/security";
 import { settingsEn } from "./messages/en/settings";
 import { shellEn } from "./messages/en/shell";
 import { teachEn } from "./messages/en/teach";
+import { teamsEn } from "./messages/en/teams";
 import { uiEn } from "./messages/en/ui";
 
 export const en: Record<MessageKey, string> = {
@@ -53,5 +54,6 @@ export const en: Record<MessageKey, string> = {
   ...settingsEn,
   ...shellEn,
   ...teachEn,
+  ...teamsEn,
   ...uiEn,
 };

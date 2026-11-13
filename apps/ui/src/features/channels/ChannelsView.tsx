@@ -19,7 +19,7 @@ export function ChannelsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Lavoro" title={t("channels.canali")}
+        eyebrow={t("nav.group_work")} title={t("channels.canali")}
         subtitle={t("channels.parla_con_l_assistente_da")}
         actions={!adding && <Button variant="primary" icon="plus" onClick={() => setAdding(true)}>{t("channels.aggiungi_un_canale")}</Button>}
       />

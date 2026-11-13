@@ -22,7 +22,7 @@ export function AgentsView() {
   return (
     <Page className="agents-page">
       <PageHeader
-        eyebrow="Lavoro" title={tr("agents.agenti")}
+        eyebrow={tr("nav.group_work")} title={tr("agents.agenti")}
         subtitle={tr("agents.un_agente_unisce_un_profilo")}
         actions={tab === "agents" && <Link to="/agents/new" className="btn primary"><Icon name="plus" size={15} /> {" "}{tr("agents.nuovo_agente")}</Link>}
       />

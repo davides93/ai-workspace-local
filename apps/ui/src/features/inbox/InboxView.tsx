@@ -17,7 +17,7 @@ export function InboxView() {
   return (
     <Page className="ib">
       <PageHeader
-        eyebrow="Lavoro" title={t("inbox.proposte")}
+        eyebrow={t("nav.group_work")} title={t("inbox.proposte")}
         subtitle={t("inbox.cose_che_l_assistente_ha")}
         actions={!off && <Button size="sm" icon="refresh" disabled={tick.isPending} onClick={() => tick.mutate()}>{t("inbox.controlla_adesso")}</Button>}
       />
