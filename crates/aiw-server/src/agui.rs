@@ -731,4 +731,144 @@ mod tests {
         assert_eq!(title_of("  "), None);
         assert_eq!(title_of(&"x".repeat(100)).unwrap().chars().count(), 60);
     }
+
+    // ------------------------------------------------------------------ the Assistant: questions and secrets
+
+    fn models() -> Value {
+        json!({
+            "kind": "choice", "title": "Quale modello?", "message": "Ho trovato due varianti.",
+            "options": [{"id": "q4", "label": "Q4_K_M", "description": "Consigliata"}, {"id": "q8", "label": "Q8_0"}]
+        })
+    }
+
+    /// The request of an AG-UI client that says (or not) what it can show.
+    fn input_with(thread: &str, props: Option<Value>) -> Value {
+        let mut body = input(thread, "r1", json!("Scarica un modello"));
+        if let Some(p) = props {
+            body["forwardedProps"] = p;
+        }
+        body
+    }
+
+    fn both() -> Option<Value> {
+        Some(json!({"aiw": {"interactive": ["questions", "secrets"]}}))
+    }
+
+    /// The events of `frames` with this custom name, in order.
+    fn customs(evs: &[Value], name: &str) -> Vec<Value> {
+        evs.iter().filter(|v| v["type"] == "CUSTOM" && v["name"] == name).map(|v| v["value"].clone()).collect()
+    }
+
+    /// What the rest of a stream says once the client stopped reading in the middle.
+    async fn rest_of(body: axum::body::Body) -> String {
+        let bytes = tokio::time::timeout(Duration::from_secs(10), axum::body::to_bytes(body, 1 << 22))
+            .await
+            .expect("the stream ends with the run")
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    fn tool_result_of(evs: &[Value], tool_call_id: &str) -> Value {
+        let v = evs
+            .iter()
+            .find(|v| v["type"] == "TOOL_CALL_RESULT" && v["toolCallId"] == tool_call_id)
+            .unwrap_or_else(|| panic!("no result for {tool_call_id}"));
+        serde_json::from_str(v["content"].as_str().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn without_a_declaration_ask_user_answers_unsupported_at_once_and_the_agent_asks_in_text() {
+        let turns = vec![ScriptedBackend::tool_turn("a1", "ask_user", models()), ScriptedBackend::text_turn("Quale preferisci: Q4 o Q8?")];
+        let (app, e, _d, _w) = fixture(turns).await;
+        let (st, _, rid, evs) = run(&app, "assistant", input_with("thr-q0", None)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(evs.last().unwrap()["type"], "RUN_FINISHED", "the run is not stopped by a question nobody can answer");
+        // The call is seen (a generic client shows the question in the arguments), the answer is `unsupported` with the way out.
+        let start = evs.iter().find(|v| v["type"] == "TOOL_CALL_START").unwrap();
+        assert_eq!(start["toolCallName"], "ask_user");
+        assert_eq!(
+            tool_result_of(&evs, start["toolCallId"].as_str().unwrap()),
+            json!({"outcome": "unsupported", "hint": "Fai la domanda in testo e aspetta il prossimo messaggio."})
+        );
+        assert!(customs(&evs, "aiw.question").is_empty() && customs(&evs, "aiw.question_resolved").is_empty());
+        assert!(e.questions().is_empty());
+        let text: String = evs.iter().filter(|v| v["type"] == "TEXT_MESSAGE_CONTENT").map(|v| v["delta"].as_str().unwrap()).collect();
+        assert_eq!(text, "Quale preferisci: Q4 o Q8?");
+        assert!(e.run_done(&rid));
+    }
+
+    #[tokio::test]
+    async fn declaring_questions_and_secrets_the_owner_gets_aiw_question_and_the_run_waits_for_the_rest_endpoint() {
+        let turns = vec![ScriptedBackend::tool_turn("a1", "ask_user", models()), ScriptedBackend::text_turn("Scarico la Q4.")];
+        let (app, e, _d, _w) = fixture(turns).await;
+        let res = post_raw(&app, "assistant", input_with("thr-q1", both()), &[]).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let rid = header(&res, "x-aiw-run-id");
+        let mut body = res.into_body();
+        let seen = read_until(&mut body, "aiw.question").await;
+        let q = customs(&frames(&seen), "aiw.question").pop().expect("the question event");
+        assert_eq!(
+            (q["kind"].as_str(), q["title"].as_str(), q["run_id"].as_str()),
+            (Some("choice"), Some("Quale modello?"), Some(rid.as_str()))
+        );
+        // The null of what is not there are written out, and the options come as the model gave them.
+        assert_eq!((&q["options"][1]["description"], &q["confirm_label"], &q["deny_label"]), (&Value::Null, &Value::Null, &Value::Null));
+        assert_eq!(q["fields"], json!([]));
+        assert!(!e.run_done(&rid), "the run waits for the person");
+        assert_eq!(e.questions().len(), 1);
+        // The answer comes on the REST endpoint, in a request of its own: the stream goes on with the result and ends.
+        let id = q["id"].as_str().unwrap();
+        let reply = json!({"action": "answer", "selected": ["q4"], "other": null, "confirmed": null, "values": null});
+        let (st, v) = crate::dispatch(app.clone(), "POST", &format!("/api/questions/{id}"), Some(reply)).await;
+        assert_eq!((st, v), (200, json!({})));
+        let evs = frames(&format!("{seen}{}", rest_of(body).await));
+        assert_eq!(evs.last().unwrap()["type"], "RUN_FINISHED");
+        assert_eq!(
+            customs(&evs, "aiw.question_resolved"),
+            [json!({"id": id, "outcome": "answered", "answer": {"selected": ["q4"], "other": null, "confirmed": null, "values": null}})]
+        );
+        let start = evs.iter().find(|v| v["type"] == "TOOL_CALL_START").unwrap();
+        assert_eq!(tool_result_of(&evs, start["toolCallId"].as_str().unwrap())["selected"], json!(["q4"]));
+        assert!(e.questions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn declaring_only_questions_or_being_a_device_a_secret_request_is_unsupported_at_once() {
+        let args = json!({"target": "provider_token:hf", "label": "Token di Hugging Face"});
+        let turns = vec![
+            ScriptedBackend::tool_turn("s1", "aiw_secret_request", args.clone()),
+            ScriptedBackend::text_turn("Il token va inserito dall'app."),
+            ScriptedBackend::tool_turn("s2", "aiw_secret_request", args),
+            ScriptedBackend::text_turn("Il token va inserito dall'app."),
+        ];
+        let (app, e, _d, _w) = fixture(turns).await;
+        let hint = "dall'app su questo computer";
+        // The owner's client shows questions but declared no secrets.
+        let only_questions = Some(json!({"aiw": {"interactive": ["questions"]}}));
+        let (_, _, _, evs) = run(&app, "assistant", input_with("thr-s1", only_questions)).await;
+        let start = evs.iter().find(|v| v["type"] == "TOOL_CALL_START").unwrap();
+        assert_eq!(start["toolCallName"], "aiw_secret_request");
+        let result = tool_result_of(&evs, start["toolCallId"].as_str().unwrap());
+        assert_eq!(result["outcome"], "unsupported");
+        assert!(result["hint"].as_str().unwrap().contains(hint), "{result}");
+        assert!(customs(&evs, "aiw.secret_request").is_empty());
+        // A paired device that declares both: a secret is typed at an endpoint it cannot use, so it is not asked for one.
+        let dev = format!("Bearer {}", e.create_api_token("Telefono", "device", None, None, None).unwrap().token);
+        let mut r = req(
+            "POST",
+            "/agui/assistant",
+            Some(LAN),
+            &[("host", "192.168.1.5:7777"), ("authorization", dev.as_str())],
+            Some(input_with("thr-s2", both())),
+        );
+        r.extensions_mut().insert(crate::security::TlsConn);
+        let res = tower::ServiceExt::oneshot(app.clone(), r).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let evs = frames(&read_all(res).await);
+        assert_eq!(evs.last().unwrap()["type"], "RUN_FINISHED");
+        let start = evs.iter().find(|v| v["type"] == "TOOL_CALL_START").unwrap();
+        let result = tool_result_of(&evs, start["toolCallId"].as_str().unwrap());
+        assert_eq!(result["outcome"], "unsupported");
+        assert!(customs(&evs, "aiw.secret_request").is_empty() && e.secret_requests().is_empty());
+    }
 }
