@@ -18,9 +18,11 @@
 //!   `delegate_tools`; the agents the app ships (the Assistant included) are not touched;
 //! * what a result tells the model is short and never a secret: the previous value of a setting is
 //!   cut and redacted, a connector is described by its names and status, and the whole answer is
-//!   cleaned of the exact values of every secret the app stores.
+//!   cleaned of the exact values of every secret the app stores. The command line or address of a
+//!   connector that is already stored (card, answer, audit, engine messages) is always shown in the safe
+//!   form of [`connector_target`], because what is stored can hold a secret the model must not see.
 
-use super::require_owner;
+use super::{args_safe, clip, redact, require_owner, text, url_safe};
 use crate::{Engine, Inner};
 use aiw_core::api::{AgentProfile, McpServerConfig, SECRET_MASK};
 use aiw_core::config::{is_management_forbidden_key, is_management_protected_key, management_protected_keys};
@@ -219,12 +221,12 @@ impl Tool for Admin {
             Kind::SettingSet | Kind::SettingSetProtected => opt_str(args, "key").ok().flatten().map(|k| clip(&k, 120)),
             Kind::ConnectorSave => {
                 let cfg = connector_config(&e, &parse_connector(args).ok()?, true).ok()?;
-                Some(connector_target(&cfg, false))
+                Some(connector_target(&cfg))
             }
             Kind::ConnectorRemove => {
                 let id = opt_str(args, "id").ok().flatten()?;
                 let cfg = find_connector(&e, &id)?;
-                Some(format!("«{}»: {}", text(&cfg.name, 60), connector_target(&cfg, false)))
+                Some(format!("«{}»: {}", text(&cfg.name, 60), connector_target(&cfg)))
             }
             Kind::AgentSave => opt_str(args, "id").ok().flatten().or_else(|| opt_str(args, "name").ok().flatten()).map(|s| text(&s, 80)),
             Kind::AgentDelete => {
@@ -302,42 +304,28 @@ fn scrub(v: &mut Value, secrets: &[String]) {
     }
 }
 
-fn clip(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(max).collect::<String>())
-    }
+/// The formats of key that are recognised by their shape, wherever they are written (the redactor of the
+/// traces knows the same, without the word boundary, which an ordinary word like `task-` would trip over).
+fn known_key_formats() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?x)
+              \bsk-[A-Za-z0-9_\-]{16,}
+            | \bgh[pousr]_[A-Za-z0-9]{20,}
+            | \bgithub_pat_[A-Za-z0-9_]{20,}
+            | \bAKIA[0-9A-Z]{16}\b
+            | \bxox[bp]-[A-Za-z0-9\-]{10,}
+            | -----BEGIN\ [A-Z\ ]*PRIVATE\ KEY-----",
+        )
+        .expect("static pattern")
+    })
 }
 
-/// Free text from elsewhere (a memory, an error, an argument): `token=…`, `password: …`, `Bearer …` and
-/// credentials in URLs are hidden by the redactor of the diagnostics.
-fn redact(s: &str) -> String {
-    static PATTERNS: OnceLock<Vec<(regex::Regex, &'static str)>> = OnceLock::new();
-    crate::diagnostics::scrub_line(PATTERNS.get_or_init(crate::diagnostics::line_patterns), s)
-}
-
-fn text(s: &str, max: usize) -> String {
-    redact(&clip(s, max))
-}
-
-/// Does this text carry something the redactor would hide (a credential in a URL, `token=…`, `Bearer …`)?
+/// Does this text carry something the redactor would hide (a credential in a URL, `token=…`, `Bearer …`) or a
+/// key of a known format (`ghp_…`, `sk-…`, `AKIA…`, `xox…`)?
 fn looks_secret(s: &str) -> bool {
-    redact(s) != s
-}
-
-/// An address without what could be a secret: no user or password, no query, no fragment, and a path
-/// segment that looks like a token (long) cut.
-fn url_safe(raw: &str) -> String {
-    let Ok(mut u) = reqwest::Url::parse(raw.trim()) else { return "(indirizzo non leggibile)".into() };
-    let _ = u.set_username("");
-    let _ = u.set_password(None);
-    u.set_query(None);
-    u.set_fragment(None);
-    let path: Vec<String> =
-        u.path().split('/').map(|s| if s.chars().count() > 20 { "omesso".to_string() } else { s.to_string() }).collect();
-    u.set_path(&path.join("/"));
-    u.to_string()
+    redact(s) != s || known_key_formats().is_match(s)
 }
 
 /// A text value of a setting as the model reads it back: an address without credentials, query or long
@@ -657,20 +645,53 @@ fn normalized_name(raw: &str) -> String {
     raw.trim().replace(' ', "_")
 }
 
-/// What the confirmation card shows of a connector: the command line of a `stdio` server (what will run)
-/// or the address of an `http` one (`safe`: an address without credentials, query and long segments, for
-/// the answer; the card shows it as it was written, redacted).
-fn connector_target(cfg: &McpServerConfig, safe: bool) -> String {
+/// What the confirmation card, the answer and the audit show of a connector: the command line of a `stdio`
+/// server (what will run) or the address of an `http` one. It is always the safe form, because what a
+/// connector had stored (from the interface, the API or an earlier edit) can hold a secret that the model
+/// and the events must not see: the value that follows a flag that names a secret (`--token abc`) is
+/// hidden, and so are credentials, query, fragment and long (token-like) segments of an address. What the
+/// model itself wrote in the call is still shown by the card through the arguments of the call.
+fn connector_target(cfg: &McpServerConfig) -> String {
     if cfg.transport == "stdio" {
-        text(&command_line(cfg), 400)
+        let shown = McpServerConfig { args: cfg.args.as_deref().map(args_safe), ..cfg.clone() };
+        text(&command_line(&shown), 400)
     } else {
-        let url = cfg.url.as_deref().unwrap_or_default();
-        if safe {
-            url_safe(url)
-        } else {
-            text(url, 400)
+        url_safe(cfg.url.as_deref().unwrap_or_default())
+    }
+}
+
+/// What the engine says about the state of a connector (`error`) for the model. The engine quotes the command
+/// line or the address as stored ("Questo server esegue il comando `…`", "error sending request for url (…)"),
+/// and what is stored can hold a secret: the quoted line or address becomes the safe form, and so does any
+/// piece of it that the message cuts out (a token-like path segment, the query, the value of a secret flag).
+fn status_text(error: &str, cfg: &McpServerConfig) -> String {
+    let mut out = error.to_string();
+    if cfg.transport == "stdio" {
+        out = out.replace(&command_line(cfg), &connector_target(cfg));
+        let args = cfg.args.as_deref().unwrap_or_default();
+        let secret_values = (1..args.len())
+            .filter(|&i| args[i - 1].starts_with('-') && !args[i - 1].contains('=') && crate::secrets::is_secret_name(&args[i - 1]))
+            .map(|i| args[i].as_str());
+        // A short piece would also match ordinary words of the message: only the line as a whole is hunted for then.
+        for value in secret_values.filter(|v| v.chars().count() >= MIN_SECRET_LEN) {
+            out = out.replace(value, SECRET_MASK);
+        }
+    } else if let Some(raw) = cfg.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+        let safe = url_safe(raw);
+        let parsed = reqwest::Url::parse(raw).ok();
+        for quoted in std::iter::once(raw.to_string()).chain(parsed.iter().map(|u| u.to_string())) {
+            out = out.replace(&quoted, &safe);
+        }
+        if let Some(u) = &parsed {
+            for segment in u.path().split('/').filter(|s| s.chars().count() > 20) {
+                out = out.replace(segment, "omesso");
+            }
+            for (_, value) in u.query_pairs().filter(|(_, v)| v.chars().count() >= MIN_SECRET_LEN) {
+                out = out.replace(value.as_ref(), SECRET_MASK);
+            }
         }
     }
+    text(&out, 200)
 }
 
 fn valid_env_name(name: &str) -> bool {
@@ -913,7 +934,7 @@ fn check_url(url: &str) -> Result<()> {
     let parsed = reqwest::Url::parse(url.trim())
         .ok()
         .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
-        .ok_or_else(|| Error::Invalid(format!("indirizzo non valido: {} (serve un URL http o https)", clip(url, 80))))?;
+        .ok_or_else(|| Error::Invalid(format!("indirizzo non valido: {} (serve un URL http o https)", text(url, 80))))?;
     if !parsed.username().is_empty() || parsed.password().is_some() || looks_secret(url) {
         return Err(Error::Invalid(
             "L'indirizzo contiene delle credenziali (utente e password o un token nei parametri): non scriverle qui. Se servono, dichiara il nome dell'intestazione in `secret_headers` (per esempio Authorization) e fai inserire il valore all'utente con aiw_secret_request.".into(),
@@ -962,7 +983,7 @@ async fn connector_save(e: &Engine, args: &Value) -> Result<Value> {
             note.push_str("Il comando di questo connettore non è stato confermato qui (la conferma non lo mostrava per intero): l'utente lo conferma dall'app. ");
         }
     }
-    e.audit_user("connector.save", &format!("{} ({id}): {}", stored.name, connector_target(&stored, true)));
+    e.audit_user("connector.save", &format!("{} ({id}): {}", stored.name, connector_target(&stored)));
 
     let info = e.mcp_servers().into_iter().find(|s| s.config.id == id);
     let slots = secret_slots(&stored);
@@ -974,14 +995,14 @@ async fn connector_save(e: &Engine, args: &Value) -> Result<Value> {
         ));
     }
     if let Some(error) = info.as_ref().and_then(|i| i.error.as_deref()).filter(|_| stored.enabled) {
-        note.push_str(&format!("Stato: {}. ", text(error, 200)));
+        note.push_str(&format!("Stato: {}. ", status_text(error, &stored)));
     }
     Ok(json!({
         "id": id,
         "name": stored.name,
         "created": creating,
         "transport": stored.transport,
-        "target": connector_target(&stored, true),
+        "target": connector_target(&stored),
         "enabled": stored.enabled,
         "command_confirmed": stored.transport != "stdio" || e.mcp_approved(&stored),
         "status": info.as_ref().map(|i| i.status.clone()),
@@ -997,13 +1018,13 @@ async fn connector_remove(e: &Engine, args: &Value) -> Result<Value> {
         Error::NotFound(format!("Connettore `{}` non trovato: guarda l'elenco con aiw_inspect (topic connectors).", clip(&id, 60)))
     })?;
     e.remove_mcp_server(&cfg.id).await?;
-    e.audit_user("connector.remove", &format!("{} ({}): {}", cfg.name, cfg.id, connector_target(&cfg, true)));
+    e.audit_user("connector.remove", &format!("{} ({}): {}", cfg.name, cfg.id, connector_target(&cfg)));
     let names = |map: &Option<Map<String, Value>>| map.iter().flat_map(|m| m.keys().cloned()).collect::<Vec<_>>();
     Ok(json!({
         "removed": cfg.id,
         "name": cfg.name,
         "transport": cfg.transport,
-        "target": connector_target(&cfg, true),
+        "target": connector_target(&cfg),
         "variables": names(&cfg.env),
         "headers": names(&cfg.headers),
         "note": "Rimosso con i valori che aveva salvato (variabili, intestazioni, accesso): per rimetterlo serve crearlo di nuovo e reinserire i segreti.",
@@ -1841,6 +1862,16 @@ mod tests {
             (json!({"name": "a", "transport": "http", "url": "https://utente:fake-pass-0042@example.com/mcp"}), "credenziali"),
             (json!({"name": "a", "transport": "http", "url": "https://example.com/mcp?token=fake-token-9"}), "credenziali"),
             (json!({"name": "a", "transport": "http", "url": "ftp://example.com/mcp"}), "indirizzo non valido"),
+            (json!({"name": "a", "transport": "http", "url": "ftp://utente:fake-pass-0042@example.com/mcp"}), "indirizzo non valido"),
+            (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "env": {"GH": github}}), "credenziali"),
+            (
+                json!({"name": "a", "transport": "stdio", "command": PROGRAM, "args": ["--config", "sk-fakefakefakefakefake0123"]}),
+                "argomento n. 2",
+            ),
+            (
+                json!({"name": "a", "transport": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"X-Note": "AKIAFAKEFAKEFAKE0123"}}),
+                "credenziali",
+            ),
             (json!({"name": "a", "transport": "http", "url": "http://127.0.0.1:9/mcp", "command": PROGRAM}), "valgono solo per stdio"),
             (json!({"name": "a", "transport": "stdio"}), "manca `command`"),
             (json!({"name": "a", "transport": "http"}), "manca `url`"),
@@ -1865,6 +1896,36 @@ mod tests {
         .await;
         let saved = stored(&e, answer["id"].as_str().unwrap());
         assert_eq!(Value::Object(saved.env.unwrap()), json!({"LANG": "it_IT.UTF-8", "RETRIES": "3", "VERBOSE": "true"}));
+    }
+
+    #[tokio::test]
+    async fn keys_are_recognised_by_their_shape_but_ordinary_names_that_contain_a_prefix_are_not_taken_for_one() {
+        let (e, _d, _w) = engine(vec![]).await;
+        for fake in [
+            "ghp_fakefakefakefakefake0123456789",
+            "sk-fakefakefakefakefake0123",
+            "AKIAFAKEFAKEFAKE0123",
+            "xoxb-fake-0123456789-fake",
+            "-----BEGIN PRIVATE KEY-----",
+        ] {
+            assert!(looks_secret(fake) && looks_secret(&format!("--opt={fake}")), "{fake}");
+        }
+        // The packages and flags of ordinary servers: `task-`, `disk-` and `risk-` end in `sk-`.
+        let ordinary = [
+            "@scope/task-runner-mcp-server",
+            "--disk-usage-monitor-tool-name",
+            "risk-assessment-and-planning-server",
+            "github_pat",
+            "ghost_writer_assistant_server",
+        ];
+        assert!(ordinary.iter().all(|a| !looks_secret(a)));
+        let answer = ok(
+            &e,
+            "aiw_connector_save",
+            json!({"name": "ok", "transport": "stdio", "command": "npx", "args": ["-y", "@scope/task-runner-mcp-server", "--disk-usage-monitor-tool-name"], "enabled": false}),
+        )
+        .await;
+        assert_eq!(stored(&e, answer["id"].as_str().unwrap()).args.unwrap().len(), 3);
     }
 
     #[tokio::test]
@@ -1996,6 +2057,182 @@ mod tests {
         let err = run(&e, "aiw_connector_remove", json!({"id": id})).await.unwrap_err();
         assert!(matches!(err, Error::NotFound(_)) && err.to_string().contains("aiw_inspect"), "{err}");
         assert!(tool.subject(&json!({"id": "inesistente"})).is_none());
+    }
+
+    /// A connector the way the interface or the API stores it (the tool never takes these values from the model).
+    fn made_through_the_api(id: &str, name: &str, transport: &str) -> McpServerConfig {
+        McpServerConfig {
+            id: id.into(),
+            name: name.into(),
+            transport: transport.into(),
+            command: (transport == "stdio").then(|| PROGRAM.into()),
+            args: None,
+            url: None,
+            env: None,
+            headers: None,
+            enabled: false,
+            sampling: false,
+            oauth_client_id: None,
+            sandbox: "off".into(),
+            sandbox_network: true,
+        }
+    }
+
+    /// A chat of the owner with an agent that has the two connector tools: the scripted model makes the one call it
+    /// was scripted to make and the owner confirms it. Returns the confirmation request, what the tool answered (the
+    /// saved tool message) and everything the run left behind (that request, the saved messages, the events and the
+    /// whole audit) as one text.
+    async fn confirmed_call(e: &Engine) -> (ApprovalRequest, Value, String) {
+        if e.agent("gestore").is_err() {
+            e.save_agent(AgentProfile {
+                id: "gestore".into(),
+                name: "Gestore".into(),
+                mode: "ask".into(),
+                tools: vec!["aiw_connector_save".into(), "aiw_connector_remove".into()],
+                ..e.agent("planner").unwrap()
+            })
+            .unwrap();
+        }
+        let s = e.create_session("gestore", None).unwrap();
+        let run_id = e.start_run_from(&s.id, "sistema il connettore".into(), None, None, vec![], Some(OWNER)).await.unwrap();
+        let req = next_approval(e).await;
+        e.respond_approval_as(&req.id, true, false, true).unwrap();
+        wait_finished(e, &run_id).await;
+        let messages = e.messages(&s.id).unwrap();
+        let tool_message = messages.iter().find(|m| m.role == "tool").expect("the tool answered");
+        let answer: Value = serde_json::from_str(&tool_message.content).unwrap_or_else(|err| panic!("{err}: {}", tool_message.content));
+        let left = [
+            serde_json::to_string(&req).unwrap(),
+            serde_json::to_string(&messages).unwrap(),
+            serde_json::to_string(&e.run_events(&run_id)).unwrap(),
+            serde_json::to_string(&e.audit()).unwrap(),
+        ]
+        .join("\n");
+        (req, answer, left)
+    }
+
+    #[tokio::test]
+    async fn a_secret_stored_in_a_command_line_never_reaches_the_card_the_answer_the_events_or_the_audit() {
+        let (e, _d, _w) = engine(vec![
+            ScriptedBackend::tool_turn("c1", "aiw_connector_save", json!({"id": "srv-cli", "enabled": true})),
+            ScriptedBackend::text_turn("Attivato."),
+            ScriptedBackend::tool_turn("c2", "aiw_connector_remove", json!({"id": "srv-cli"})),
+            ScriptedBackend::text_turn("Rimosso."),
+        ])
+        .await;
+        // The token is the value of a flag that names it: `--token VALUE`, the way a connector made in the interface may have it.
+        let mut cli = made_through_the_api("srv-cli", "cli", "stdio");
+        cli.args = Some(vec!["--verbose".into(), "--token".into(), FAKE_SECRET.into()]);
+        e.save_mcp_server(cli).await.unwrap();
+        let shown = format!("{PROGRAM} --verbose --token {SECRET_MASK}");
+
+        // An edit that inherits the command line: the card, the answer, the events and the audit show it with the value hidden.
+        let (card, answer, left) = confirmed_call(&e).await;
+        assert_eq!(card.tool, "aiw_connector_save");
+        assert!(card.reason.ends_with(&shown), "the card shows what will run, with the value hidden: {}", card.reason);
+        assert!(!left.contains(FAKE_SECRET), "the secret is in what the edit left behind: {left}");
+        assert_eq!(answer["target"], json!(shown), "{answer}");
+        assert_eq!(answer["command_confirmed"], false, "an inherited command is not confirmed by this call: {answer}");
+        assert!(e.audit().iter().any(|a| a.action == "connector.save" && a.detail.contains(&shown)), "the audit says what was saved");
+        // Controls: the edit really happened and kept the stored command line, secret included.
+        let saved = stored(&e, "srv-cli");
+        assert!(saved.enabled);
+        assert_eq!(saved.args, Some(vec!["--verbose".to_string(), "--token".to_string(), FAKE_SECRET.to_string()]));
+
+        // The removal says the same about the connector it takes away.
+        let (card, answer, left) = confirmed_call(&e).await;
+        assert_eq!(card.tool, "aiw_connector_remove");
+        assert!(card.reason.ends_with(&format!("«cli»: {shown}")), "{}", card.reason);
+        assert!(!left.contains(FAKE_SECRET), "the secret is in what the removal left behind: {left}");
+        assert_eq!(answer["target"], json!(shown));
+        assert!(e.audit().iter().any(|a| a.action == "connector.remove" && a.detail.contains(&shown)));
+        assert!(e.0.store.get_doc::<McpServerConfig>("mcp", "srv-cli").unwrap().is_none(), "the connector was removed");
+    }
+
+    #[tokio::test]
+    async fn the_command_line_of_a_connector_hides_what_follows_a_flag_that_names_a_secret() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let cfg = |args: &[&str]| McpServerConfig {
+            args: Some(args.iter().map(|a| a.to_string()).collect()),
+            ..made_through_the_api("x", "x", "stdio")
+        };
+        assert_eq!(connector_target(&cfg(&[])), PROGRAM);
+        assert_eq!(connector_target(&cfg(&["--flag", "due parole"])), format!("{PROGRAM} --flag \"due parole\""));
+        assert_eq!(
+            connector_target(&cfg(&["--api-key", FAKE_SECRET, "--verbose"])),
+            format!("{PROGRAM} --api-key {SECRET_MASK} --verbose")
+        );
+        assert_eq!(connector_target(&cfg(&["--password", "due parole"])), format!("{PROGRAM} --password {SECRET_MASK}"));
+        // `--key=value` is hidden by the redactor; a flag that does not name a secret keeps its value. A name that only
+        // contains a secret word (`--keyboard`) is taken for one: hiding too much is the safe side.
+        let line = connector_target(&cfg(&["--token=fake-token-1234567", "--port", "8080", "--keyboard", "it"]));
+        assert_eq!(line, format!("{PROGRAM} --token={SECRET_MASK} --port 8080 --keyboard {SECRET_MASK}"));
+        // The subject of a call that writes the line itself is the same form.
+        let tool = e.tool_registry().get("aiw_connector_save").unwrap();
+        assert_eq!(
+            tool.subject(&json!({"name": "a", "transport": "stdio", "command": PROGRAM, "args": ["--flag", "a b"]})).as_deref(),
+            Some(format!("{PROGRAM} --flag \"a b\"").as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_address_stored_with_a_token_in_its_path_never_reaches_the_card_the_answer_the_events_or_the_audit() {
+        let (e, _d, _w) = engine(vec![
+            ScriptedBackend::tool_turn("c1", "aiw_connector_save", json!({"id": "srv-http", "enabled": false})),
+            ScriptedBackend::text_turn("Fatto."),
+            ScriptedBackend::tool_turn("c2", "aiw_connector_remove", json!({"id": "srv-http"})),
+            ScriptedBackend::text_turn("Rimosso."),
+        ])
+        .await;
+        // The token is a long segment of the path (an MCP endpoint with the key in it) and the query holds another value
+        // whose name the redactor does not know.
+        const OTHER: &str = "other-fake-query-9876543210";
+        let mut remote = made_through_the_api("srv-http", "remoto", "http");
+        remote.url = Some(format!("http://127.0.0.1:9/v1/{FAKE_SECRET}/mcp?k={OTHER}"));
+        e.save_mcp_server(remote).await.unwrap();
+        let shown = "http://127.0.0.1:9/v1/omesso/mcp";
+
+        // An edit that inherits the address.
+        let (card, answer, left) = confirmed_call(&e).await;
+        assert_eq!(card.tool, "aiw_connector_save");
+        assert!(card.reason.ends_with(shown), "{}", card.reason);
+        for secret in [FAKE_SECRET, OTHER] {
+            assert!(!left.contains(secret), "{secret} is in what the edit left behind: {left}");
+        }
+        assert_eq!(answer["target"], shown);
+        assert!(e.audit().iter().any(|a| a.action == "connector.save" && a.detail.ends_with(shown)), "the audit says what was saved");
+        // Control: the stored address still has everything.
+        assert_eq!(stored(&e, "srv-http").url, Some(format!("http://127.0.0.1:9/v1/{FAKE_SECRET}/mcp?k={OTHER}")));
+
+        // The removal.
+        let (card, answer, left) = confirmed_call(&e).await;
+        assert_eq!(card.tool, "aiw_connector_remove");
+        assert!(card.reason.ends_with(&format!("«remoto»: {shown}")), "{}", card.reason);
+        for secret in [FAKE_SECRET, OTHER] {
+            assert!(!left.contains(secret), "{secret} is in what the removal left behind: {left}");
+        }
+        assert_eq!(answer["target"], shown);
+        assert!(e.audit().iter().any(|a| a.action == "connector.remove" && a.detail.ends_with(shown)));
+        assert!(e.0.store.get_doc::<McpServerConfig>("mcp", "srv-http").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_connection_error_does_not_bring_the_stored_address_or_command_line_back() {
+        let (e, _d, _w) = engine(vec![]).await;
+        // An address that refuses the connection: the error of the connection may name the address it tried.
+        let mut remote = made_through_the_api("srv-http", "remoto", "http");
+        remote.url = Some(format!("http://127.0.0.1:9/v1/{FAKE_SECRET}/mcp"));
+        e.save_mcp_server(remote).await.unwrap();
+        let answer = ok(&e, "aiw_connector_save", json!({"id": "srv-http", "enabled": true})).await;
+        assert!(!answer.to_string().contains(FAKE_SECRET), "{answer}");
+        // A command line that waits for the person's confirmation: the engine's own message quotes it.
+        let mut cli = made_through_the_api("srv-cli", "cli", "stdio");
+        cli.args = Some(vec!["--token".into(), FAKE_SECRET.into()]);
+        e.save_mcp_server(cli).await.unwrap();
+        let answer = ok(&e, "aiw_connector_save", json!({"id": "srv-cli", "enabled": true})).await;
+        assert!(!answer.to_string().contains(FAKE_SECRET), "{answer}");
+        assert!(answer["note"].as_str().unwrap().contains("Stato"), "the status is still told: {answer}");
+        assert!(answer["note"].as_str().unwrap().contains(SECRET_MASK), "{answer}");
     }
 
     // ------------------------------------------------------------------ agents
