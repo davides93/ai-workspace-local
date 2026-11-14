@@ -41,7 +41,7 @@ const isInternal = (t: Pick<ToolInfo, "name"> & Partial<Pick<ToolInfo, "source">
 
 export type CategoryId = "file" | "shell" | "web" | "browser" | "computer" | "internal" | "other" | `mcp:${string}`;
 
-const FILE_TOOLS = new Set(["read_file", "write_file", "edit_file", "move_file", "list_dir", "glob", "grep"]);
+const FILE_TOOLS = new Set(["read_file", "write_file", "edit_file", "move_file", "copy_file", "delete_file", "list_dir", "glob", "grep"]);
 
 /** One entry of the picker: a catalogue tool or an internal one, already classified. */
 export interface PickerTool {
@@ -134,8 +134,10 @@ export function groupTools(catalog: readonly PickerTool[], query = ""): ToolGrou
 export const TRAINING_TOOL = "training_harness";
 /** Runs code in the web page the agent has open. */
 export const EVAL_TOOL = "browser_eval";
+/** Deletes a file of the workspace (the run's rewind brings it back). */
+export const DELETE_TOOL = "delete_file";
 /** Tools a `*` does not include: an agent has to list them by name (the backend's `explicit_grant`). */
-export const EXPLICIT_TOOLS: readonly string[] = [TRAINING_TOOL, EVAL_TOOL];
+export const EXPLICIT_TOOLS: readonly string[] = [TRAINING_TOOL, EVAL_TOOL, DELETE_TOOL];
 export const isExplicitTool = (name: string): boolean => EXPLICIT_TOOLS.includes(name);
 
 /** A wildcard subsumes ordinary tools; training and page scripts always need an explicit grant. */
@@ -205,7 +207,7 @@ export function blockedTools(tools: readonly string[], catalog: readonly PickerT
     if (!isSelected(tools, t.name)) continue;
     if (mode === "plan" && (t.risk === "write" || t.risk === "exec" || t.risk === "computer")) {
       out.push({ name: t.name, why: tr("agents.la_modalita_piano_nega_scritture") });
-    } else if (sandbox === "read-only" && (t.name === "write_file" || t.name === "edit_file" || t.name === "move_file")) {
+    } else if (sandbox === "read-only" && (t.name === "write_file" || t.name === "edit_file" || t.name === "move_file" || t.name === "copy_file" || t.name === "delete_file")) {
       out.push({ name: t.name, why: tr("agents.la_sandbox_in_sola_lettura") });
     }
   }

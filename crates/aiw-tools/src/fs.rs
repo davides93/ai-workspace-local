@@ -6,7 +6,17 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub fn tools() -> Vec<Arc<dyn Tool>> {
-    vec![Arc::new(ReadFile), Arc::new(WriteFile), Arc::new(EditFile), Arc::new(ListDir), Arc::new(Glob), Arc::new(Grep), Arc::new(MoveFile)]
+    vec![
+        Arc::new(ReadFile),
+        Arc::new(WriteFile),
+        Arc::new(EditFile),
+        Arc::new(ListDir),
+        Arc::new(Glob),
+        Arc::new(Grep),
+        Arc::new(MoveFile),
+        Arc::new(CopyFile),
+        Arc::new(DeleteFile),
+    ]
 }
 
 const MAX_READ: usize = 120_000;
@@ -459,6 +469,94 @@ impl Tool for MoveFile {
     }
 }
 
+/// Checks that `p` is a regular file (not a folder, not a link) and says why otherwise.
+fn regular_file(ctx: &ToolContext, p: &Path) -> std::result::Result<(), String> {
+    match std::fs::symlink_metadata(p) {
+        Err(_) => Err(format!("{} non esiste", rel(ctx, p))),
+        Ok(m) if m.file_type().is_symlink() => Err(format!("{} è un collegamento simbolico: lavoro solo su file normali", rel(ctx, p))),
+        Ok(m) if m.is_dir() => Err(format!("{} è una cartella: lavoro solo su file singoli", rel(ctx, p))),
+        Ok(m) if !m.is_file() => Err(format!("{} non è un file normale", rel(ctx, p))),
+        Ok(_) => Ok(()),
+    }
+}
+
+struct CopyFile;
+#[async_trait]
+impl Tool for CopyFile {
+    fn name(&self) -> &str {
+        "copy_file"
+    }
+    fn description(&self) -> &str {
+        "Copia un file dentro il workspace (crea la cartella di destinazione). Non sovrascrive: se la destinazione esiste dà errore. Solo file singoli, non cartelle."
+    }
+    fn parameters(&self) -> Value {
+        json!({"type":"object","properties":{"from":{"type":"string"},"to":{"type":"string"}},"required":["from","to"]})
+    }
+    fn risk(&self) -> Risk {
+        Risk::Write
+    }
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let from = ctx.resolve(arg_str(&args, "from")?, true)?;
+        let mut to = ctx.resolve(arg_str(&args, "to")?, true)?;
+        if let Err(msg) = regular_file(ctx, &from) {
+            return Ok(ToolOutput::error(msg));
+        }
+        if to.is_dir() {
+            to = to.join(from.file_name().ok_or_else(|| Error::Invalid("origine non valida".into()))?);
+            // The joined name was never checked: it may be a link inside the folder.
+            to = ctx.resolve(&to.to_string_lossy(), true)?;
+        }
+        // `symlink_metadata`, not `exists`: a dangling link in the way must not be written through.
+        if std::fs::symlink_metadata(&to).is_ok() {
+            return Ok(ToolOutput::error(format!("{} esiste già: scegli un altro nome", rel(ctx, &to))));
+        }
+        if let Some(parent) = to.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::copy(&from, &to).await.map_err(|e| Error::Invalid(format!("copia non riuscita: {e}")))?;
+        // The destination did not exist: a rewind deletes the copy.
+        ctx.record_created(&to);
+        Ok(ToolOutput::text(format!("{} -> {}", rel(ctx, &from), rel(ctx, &to))))
+    }
+}
+
+struct DeleteFile;
+#[async_trait]
+impl Tool for DeleteFile {
+    fn name(&self) -> &str {
+        "delete_file"
+    }
+    fn description(&self) -> &str {
+        "Elimina un file del workspace (non le cartelle). L'originale viene salvato nel checkpoint, quindi il ripristino del run lo rimette a posto."
+    }
+    fn parameters(&self) -> Value {
+        json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})
+    }
+    fn risk(&self) -> Risk {
+        Risk::Write
+    }
+    /// Like `channel_send` and `browser_eval`: a `*` in the tools of an agent does not include it.
+    fn explicit_grant(&self) -> bool {
+        true
+    }
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let path = ctx.resolve(arg_str(&args, "path")?, true)?;
+        if let Err(msg) = regular_file(ctx, &path) {
+            return Ok(ToolOutput::error(msg));
+        }
+        ctx.checkpoint(&path);
+        // A deletion must always be undoable: without a saved original (and a file the run did not create) it does not happen.
+        if !ctx.can_rewind(&path) {
+            return Ok(ToolOutput::error(format!(
+                "{} non eliminato: non riesco a salvarne l'originale per il ripristino",
+                rel(ctx, &path)
+            )));
+        }
+        tokio::fs::remove_file(&path).await.map_err(|e| Error::Invalid(format!("eliminazione non riuscita: {e}")))?;
+        Ok(ToolOutput::text(format!("Eliminato {}", rel(ctx, &path))))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,5 +738,197 @@ mod tests {
             let out = t("write_file").call(json!({"path":"nuovo.md","content":content}), &ctx).await.unwrap();
             assert!(!out.is_error, "{}", out.content);
         }
+    }
+
+    fn ctx_with_checkpoint(ws: &Path, ckpt: &Path, run: &str) -> ToolContext {
+        let mut ctx = ToolContext::new(run, ws.to_path_buf());
+        ctx.checkpoint_dir = Some(ckpt.to_path_buf());
+        ctx
+    }
+
+    #[tokio::test]
+    async fn copy_file_copies_and_refuses_to_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new("run_t", dir.path().to_path_buf());
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        std::fs::write(dir.path().join("a.md"), "contenuto").unwrap();
+        std::fs::create_dir(dir.path().join("cartella")).unwrap();
+
+        let out = t("copy_file").call(json!({"from":"a.md","to":"copie/2026/a.md"}), &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(out.content, "a.md -> copie/2026/a.md");
+        assert_eq!(std::fs::read_to_string(dir.path().join("copie/2026/a.md")).unwrap(), "contenuto");
+        assert!(dir.path().join("a.md").exists(), "the source stays");
+
+        // Into an existing folder, with the same name.
+        let out = t("copy_file").call(json!({"from":"a.md","to":"cartella"}), &ctx).await.unwrap();
+        assert!(!out.is_error && out.content == "a.md -> cartella/a.md", "{}", out.content);
+
+        // An existing destination is never overwritten.
+        std::fs::write(dir.path().join("b.md"), "altro").unwrap();
+        let out = t("copy_file").call(json!({"from":"a.md","to":"b.md"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("esiste già"), "{}", out.content);
+        assert_eq!(std::fs::read_to_string(dir.path().join("b.md")).unwrap(), "altro");
+        let out = t("copy_file").call(json!({"from":"a.md","to":"cartella"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("esiste già"), "{}", out.content);
+
+        // Folders and missing files are not copied; the workspace boundary holds.
+        let out = t("copy_file").call(json!({"from":"cartella","to":"altra"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("cartella"), "{}", out.content);
+        assert!(!dir.path().join("altra").exists());
+        let out = t("copy_file").call(json!({"from":"manca.md","to":"x.md"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("non esiste"), "{}", out.content);
+        assert!(matches!(t("copy_file").call(json!({"from":"a.md","to":"../fuori.md"}), &ctx).await, Err(Error::Denied(_))));
+        assert!(matches!(t("copy_file").call(json!({"from":"../fuori.md","to":"x.md"}), &ctx).await, Err(Error::Denied(_))));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_and_delete_refuse_links() {
+        use std::os::unix::fs::symlink;
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "segreto fuori").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let w = ws.path();
+        symlink(outside.path(), w.join("link_dir")).unwrap();
+        symlink(&secret, w.join("link_file")).unwrap();
+        std::fs::write(w.join("dentro.txt"), "ok dentro").unwrap();
+        symlink(w.join("dentro.txt"), w.join("alias_interno")).unwrap();
+        std::fs::create_dir(w.join("cartella")).unwrap();
+        // A dangling link with the name the copy would get.
+        symlink(outside.path().join("nuovo.txt"), w.join("cartella/dentro.txt")).unwrap();
+
+        let ctx = ToolContext::new("run_t", w.to_path_buf());
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        let denied = |r: Result<ToolOutput>, what: &str| match r {
+            Err(Error::Denied(m)) => assert!(m.contains("collegamento simbolico"), "{what}: {m}"),
+            other => panic!("{what}: expected a denial, got {other:?}"),
+        };
+        denied(t("copy_file").call(json!({"from": "link_file", "to": "copia.txt"}), &ctx).await, "copy from a link out");
+        denied(t("copy_file").call(json!({"from": "dentro.txt", "to": "link_dir/dentro.txt"}), &ctx).await, "copy into a linked folder");
+        denied(t("copy_file").call(json!({"from": "dentro.txt", "to": "cartella"}), &ctx).await, "copy onto a dangling link");
+        denied(t("delete_file").call(json!({"path": "link_file"}), &ctx).await, "delete a link out");
+        denied(t("delete_file").call(json!({"path": "link_dir/secret.txt"}), &ctx).await, "delete through a linked folder");
+        assert_eq!(std::fs::read_to_string(&secret).unwrap(), "segreto fuori");
+        assert!(!outside.path().join("nuovo.txt").exists() && !outside.path().join("dentro.txt").exists());
+
+        // A link that stays inside the workspace is still a link: neither tool touches it.
+        let out = t("copy_file").call(json!({"from": "alias_interno", "to": "copia.txt"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("collegamento simbolico"), "{}", out.content);
+        let out = t("delete_file").call(json!({"path": "alias_interno"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("collegamento simbolico"), "{}", out.content);
+        assert!(std::fs::symlink_metadata(w.join("alias_interno")).is_ok() && w.join("dentro.txt").exists());
+        assert!(!w.join("copia.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn delete_file_deletes_files_only_and_a_rewind_restores_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_checkpoint(dir.path(), ckpt.path(), "run_d");
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        std::fs::write(dir.path().join("vecchio.md"), "da conservare").unwrap();
+        std::fs::create_dir(dir.path().join("cartella")).unwrap();
+        std::fs::write(dir.path().join("cartella/dentro.md"), "x").unwrap();
+
+        let out = t("delete_file").call(json!({"path":"cartella"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("cartella"), "{}", out.content);
+        assert!(dir.path().join("cartella/dentro.md").exists());
+        let out = t("delete_file").call(json!({"path":"manca.md"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("non esiste"), "{}", out.content);
+        assert!(matches!(t("delete_file").call(json!({"path":"../fuori.md"}), &ctx).await, Err(Error::Denied(_))));
+
+        let out = t("delete_file").call(json!({"path":"vecchio.md"}), &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(out.content, "Eliminato vecchio.md");
+        assert!(!dir.path().join("vecchio.md").exists());
+        let info = checkpoint::plan(ckpt.path(), "run_d").unwrap();
+        assert_eq!(info.restore, vec!["vecchio.md"]);
+        let r = checkpoint::rewind(ckpt.path(), "run_d").unwrap();
+        assert!(r.failed.is_empty(), "{:?}", r.failed);
+        assert_eq!(std::fs::read_to_string(dir.path().join("vecchio.md")).unwrap(), "da conservare");
+    }
+
+    #[tokio::test]
+    async fn delete_file_never_deletes_without_a_way_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+        // A file where the checkpoint folder should be: the original cannot be saved.
+        let blocked = ckpt.path().join("bloccato");
+        std::fs::write(&blocked, "non e' una cartella").unwrap();
+        let ctx = ctx_with_checkpoint(dir.path(), &blocked, "run_b");
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        std::fs::write(dir.path().join("prezioso.md"), "contenuto").unwrap();
+
+        let out = t("delete_file").call(json!({"path":"prezioso.md"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("originale"), "{}", out.content);
+        assert_eq!(std::fs::read_to_string(dir.path().join("prezioso.md")).unwrap(), "contenuto");
+    }
+
+    #[tokio::test]
+    async fn delete_file_of_a_file_created_by_the_run_needs_no_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_checkpoint(dir.path(), ckpt.path(), "run_n");
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        t("write_file").call(json!({"path":"bozza.md","content":"uno"}), &ctx).await.unwrap();
+        let out = t("delete_file").call(json!({"path":"bozza.md"}), &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert!(!dir.path().join("bozza.md").exists());
+        assert!(!ckpt.path().join("run_n/bozza.md").exists(), "no original for a file the run created");
+        // Nothing to put back and nothing left to delete.
+        assert!(checkpoint::plan(ckpt.path(), "run_n").is_none_or(|i| i.restore.is_empty() && i.delete.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn rewind_undoes_copy_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_checkpoint(dir.path(), ckpt.path(), "run_r");
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        std::fs::write(dir.path().join("a.md"), "originale a").unwrap();
+        std::fs::write(dir.path().join("b.md"), "originale b").unwrap();
+
+        t("copy_file").call(json!({"from":"a.md","to":"copie/a.md"}), &ctx).await.unwrap();
+        t("delete_file").call(json!({"path":"b.md"}), &ctx).await.unwrap();
+        // The copy was made by the run and is then deleted too: it never counts as an original.
+        t("delete_file").call(json!({"path":"copie/a.md"}), &ctx).await.unwrap();
+        t("copy_file").call(json!({"from":"a.md","to":"copie/a2.md"}), &ctx).await.unwrap();
+
+        let info = checkpoint::plan(ckpt.path(), "run_r").unwrap();
+        assert_eq!(info.restore, vec!["b.md"]);
+        assert_eq!(info.delete, vec!["copie/a2.md"]);
+        let r = checkpoint::rewind(ckpt.path(), "run_r").unwrap();
+        assert!(r.failed.is_empty(), "{:?}", r.failed);
+        assert_eq!(std::fs::read_to_string(dir.path().join("b.md")).unwrap(), "originale b");
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.md")).unwrap(), "originale a");
+        assert!(!dir.path().join("copie/a2.md").exists() && !dir.path().join("copie/a.md").exists());
+    }
+
+    #[tokio::test]
+    async fn rewind_keeps_the_original_of_a_file_deleted_and_written_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_checkpoint(dir.path(), ckpt.path(), "run_w");
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        std::fs::write(dir.path().join("nota.md"), "originale").unwrap();
+        t("delete_file").call(json!({"path":"nota.md"}), &ctx).await.unwrap();
+        t("write_file").call(json!({"path":"nota.md","content":"nuova"}), &ctx).await.unwrap();
+        let r = checkpoint::rewind(ckpt.path(), "run_w").unwrap();
+        assert!(r.failed.is_empty(), "{:?}", r.failed);
+        assert_eq!(std::fs::read_to_string(dir.path().join("nota.md")).unwrap(), "originale");
+    }
+
+    #[test]
+    fn only_delete_file_needs_an_explicit_grant_and_both_write() {
+        let all = tools();
+        let find = |n: &str| all.iter().find(|t| t.name() == n).unwrap();
+        assert!(find("delete_file").explicit_grant());
+        assert!(!find("copy_file").explicit_grant());
+        for n in ["copy_file", "delete_file"] {
+            assert_eq!(find(n).risk(), Risk::Write, "{n}");
+        }
+        assert!(all.iter().filter(|t| t.explicit_grant()).all(|t| t.name() == "delete_file"));
     }
 }

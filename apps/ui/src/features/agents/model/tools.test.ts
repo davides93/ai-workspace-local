@@ -108,6 +108,15 @@ describe("selection", () => {
     expect(normalizeTools(["browser_eval", "browser_eval"])).toEqual(["browser_eval"]);
   });
 
+  it("keeps file deletion out of a wildcard too: delete_file needs an explicit grant, copy_file does not", () => {
+    expect(isExplicitTool("delete_file")).toBe(true);
+    expect(isExplicitTool("copy_file")).toBe(false);
+    expect(isSelected(["*"], "delete_file")).toBe(false);
+    expect(isSelected(["*", "delete_file"], "delete_file")).toBe(true);
+    expect(isSelected(["*"], "copy_file")).toBe(true);
+    expect(normalizeTools(["*", "delete_file", "copy_file"])).toEqual(["*", "delete_file"]);
+  });
+
   it("knows every browser tool of the demo catalogue and groups them under Browser", () => {
     const browser = mockTools.filter((t) => t.name.startsWith("browser_"));
     expect(browser.map((t) => t.name)).toEqual(expect.arrayContaining([
@@ -165,6 +174,12 @@ describe("tools an agent can never use", () => {
 
   it("lists file writers in a read-only sandbox", () => {
     expect(blockedTools(["read_file", "write_file"], cat, "ask", "read-only").map((b) => b.name)).toEqual(["write_file"]);
+  });
+
+  it("lists copy and delete among the file writers in a read-only sandbox", () => {
+    const fs = ["move_file", "copy_file", "delete_file"];
+    const cat = buildCatalog(fs.map((name) => tool(name, { risk: "write" })));
+    expect(blockedTools(fs, cat, "ask", "read-only").map((b) => b.name)).toEqual(fs);
   });
 
   it("is quiet when nothing conflicts", () => {

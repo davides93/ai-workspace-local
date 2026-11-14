@@ -59,7 +59,7 @@ function Group({ group, value, locked, forceOpen, onChange }: { group: ToolGroup
       </div>
       {shown && (
         <ul id={bodyId} className="tool-list">
-          {group.tools.map((t) => <ToolRow key={t.name} tool={t} checked={isSelected(value, t.name)} locked={locked} onToggle={(on) => onChange(toggleTool(value, t.name, on))} />)}
+          {group.tools.map((t) => <ToolRow key={t.name} tool={t} checked={isSelected(value, t.name)} locked={locked && !isExplicitTool(t.name)} onToggle={(on) => onChange(toggleTool(value, t.name, on))} />)}
         </ul>
       )}
     </div>
@@ -83,7 +83,8 @@ export function ToolPicker({ value, onChange, catalog, mode, sandbox }: {
   const ordinaryTools = catalog.filter((tool) => !isExplicitTool(tool.name));
   const training = catalog.find((tool) => tool.name === TRAINING_TOOL);
   const pageScripts = catalog.find((tool) => tool.name === EVAL_TOOL);
-  const groups = groupTools(ordinaryTools, query);
+  // `delete_file` is explicit too, but it has no toggle of its own: it stays in the list, where it can be ticked even with `*`.
+  const groups = groupTools(catalog.filter((tool) => tool.name !== TRAINING_TOOL && tool.name !== EVAL_TOOL), query);
   const summary = summarizeTools(value, catalog);
   const orphans = all ? [] : orphanTools(value, catalog);
   const blocked = blockedTools(value, catalog, mode, sandbox);

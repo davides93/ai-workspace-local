@@ -183,6 +183,10 @@ pub fn rewind(checkpoint_dir: &Path, run_id: &str) -> Result<RewindResult> {
         }
     }
     for rel in &info.delete {
+        // Deleted by the run and written again later: the original just put back wins over the new file.
+        if out.restored.contains(rel) {
+            continue;
+        }
         match std::fs::remove_file(root.join(rel)) {
             Ok(()) => out.deleted.push(rel.clone()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

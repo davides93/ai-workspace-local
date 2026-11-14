@@ -17,6 +17,8 @@ describe("toolCategory", () => {
   it("sorts built-in tools by what they do", () => {
     expect(toolCategory(tool("read_file"))).toBe("files");
     expect(toolCategory(tool("move_file"))).toBe("files");
+    expect(toolCategory(tool("copy_file", { risk: "write" }))).toBe("files");
+    expect(toolCategory(tool("delete_file", { risk: "write" }))).toBe("files");
     expect(toolCategory(tool("shell"))).toBe("shell");
     expect(toolCategory(tool("web_fetch"))).toBe("web");
     expect(toolCategory(tool("web_search"))).toBe("web");
