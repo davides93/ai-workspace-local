@@ -1,3 +1,4 @@
+import { matchPath, parseHash } from "../../app/router";
 import type { McpElicitation, Question, QuestionAnswer, QuestionField, QuestionKind, QuestionOutcome, QuestionReply, SecretOutcome, SecretRequest } from "../../shared/api/types";
 import { errorStatus } from "../../shared/lib/errors";
 import { initialValues, toContent, type FormValues } from "../mcp/model";
@@ -148,6 +149,11 @@ export function pickChoice(q: Question, st: ChoiceState, index: number): ChoiceS
   return { ...st, selected: st.selected.includes(id) ? st.selected.filter((x) => x !== id) : [...st.selected, id] };
 }
 
+/** Writing in the field of «Altro»: it is picked (with a single answer it replaces the options), whatever the text. */
+export function typeOther(q: Question, st: ChoiceState, text: string): ChoiceState {
+  return { selected: q.multiple ? st.selected : [], otherOn: true, otherText: text };
+}
+
 /** Which choice the digit key `1`..`9` stands for (0-based), or `null` when there is no such choice. */
 export function digitChoice(key: string, q: Question): number | null {
   if (!/^[1-9]$/.test(key)) return null;
@@ -257,6 +263,11 @@ export function secretFailure(e: unknown): "rejected" | "forbidden" | "closed" |
 }
 
 // ---------------------------------------------------------------- the banner for what waits in another conversation
+
+/** The conversation open in the chat, from the address (`#/chat/<id>`); `null` anywhere else. */
+export function openChatSession(hash: string): string | null {
+  return matchPath("/chat/:sessionId?", parseHash(hash).path)?.sessionId ?? null;
+}
 
 /** Of the things waiting, those whose run is not in the open conversation (`sessionOf`: where the run belongs, when this tab knows). */
 export function waitingElsewhere<T extends { run_id: string }>(list: readonly T[] | undefined, open: string | null, sessionOf: (runId: string) => string | undefined): T[] {

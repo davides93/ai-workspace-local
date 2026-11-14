@@ -46,4 +46,6 @@ export const askIt = {
   "ask.banner_sessione_sconosciuta": "Apri la chat per rispondere.",
   "ask.apri_la_sessione": "Apri la sessione",
   "ask.apri_la_chat": "Apri la chat",
+  "ask.dopo_contenuti_esterni": "Richiesta arrivata dopo la lettura di contenuti esterni.",
+  "ask.dopo_contenuti_esterni_hint": "Quello che l'assistente ha letto potrebbe averla suggerita: consenti solo se è davvero ciò che volevi.",
 } as const;

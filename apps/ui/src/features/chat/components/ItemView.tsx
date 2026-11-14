@@ -2,6 +2,8 @@ import { memo } from "react";
 import { Icon, Led, Markdown } from "../../../shared/ui";
 import { useStoredUiMode } from "../../../shared/lib/uiMode";
 import { ApprovalCard } from "../../approvals/components/ApprovalCard";
+import { QuestionCard } from "../../ask/QuestionCard";
+import { SecretPrompt } from "../../ask/SecretPrompt";
 import { A2uiSurface, type A2uiAction } from "../a2ui";
 import type { ApprovalRequest, Feedback } from "../../../shared/api/types";
 import { reasoningLabel, type Item } from "../model/items";
@@ -91,11 +93,16 @@ export const ItemView = memo(function ItemView({ it, sessionId, onRespond, onAct
             request={it.req}
             resolved={it.resolved}
             allowRemember
+            afterExternal={it.afterExternal}
             pending={respondingId === it.req.id}
             onRespond={(decision, remember) => onRespond(it.req, decision, remember)}
           />
         </div>
       );
+    case "question":
+      return <div className="ws-msg ws-assistant"><QuestionCard it={it} /></div>;
+    case "secret":
+      return <div className="ws-msg ws-assistant"><SecretPrompt it={it} /></div>;
     case "subagent":
       return (
         <div className="ws-msg ws-assistant">

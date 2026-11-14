@@ -48,4 +48,6 @@ export const askEn: Record<keyof typeof askIt, string> = {
   "ask.banner_sessione_sconosciuta": "Open the chat to answer.",
   "ask.apri_la_sessione": "Open the session",
   "ask.apri_la_chat": "Open the chat",
+  "ask.dopo_contenuti_esterni": "Request that came after reading outside content.",
+  "ask.dopo_contenuti_esterni_hint": "What the assistant read may have suggested it: allow it only if it is really what you wanted.",
 };

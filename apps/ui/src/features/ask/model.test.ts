@@ -3,7 +3,7 @@ import { ApiError } from "../../shared/api/http";
 import type { Question } from "../../shared/api/types";
 import {
   answerSummary, bannerSession, choiceCount, choiceReply, closedText, confirmReply, digitChoice, emptyChoice, formReply, initialFormValues, isManagementTool,
-  isTypingTarget, parseQuestion, parseQuestionArgs, parseQuestionResult, parseSecret, parseSecretResult, pickChoice, questionTitle, secretClosedText, secretFailure, waitingElsewhere,
+  isTypingTarget, openChatSession, parseQuestion, parseQuestionArgs, parseQuestionResult, parseSecret, parseSecretResult, pickChoice, questionTitle, secretClosedText, secretFailure, typeOther, waitingElsewhere,
 } from "./model";
 
 const base: Question = {
@@ -84,6 +84,12 @@ describe("choosing", () => {
     st = pickChoice(q, st, 0);
     st = pickChoice(q, st, 3);
     expect(st).toMatchObject({ selected: ["f16"], otherOn: false });
+  });
+  it("writing in «Altro» picks it: with a single answer it replaces the options, with several it keeps them", () => {
+    const single = { ...base, allow_other: true };
+    expect(typeOther(single, pickChoice(single, emptyChoice, 1), "Phi")).toEqual({ selected: [], otherOn: true, otherText: "Phi" });
+    const multi = { ...single, multiple: true };
+    expect(typeOther(multi, pickChoice(multi, emptyChoice, 1), "Phi")).toEqual({ selected: ["q8"], otherOn: true, otherText: "Phi" });
   });
   it("a choice that does not exist changes nothing", () => {
     expect(pickChoice(base, emptyChoice, 3)).toBe(emptyChoice);
@@ -223,6 +229,13 @@ describe("what waits in another conversation", () => {
     expect(waitingElsewhere(list, "s2", sessionOf).map((x) => x.run_id)).toEqual(["r1", "r9"]);
     expect(waitingElsewhere(list, null, sessionOf)).toHaveLength(3);
     expect(waitingElsewhere(undefined, "s1", sessionOf)).toEqual([]);
+  });
+  it("knows the open conversation from the address, and none outside the chat", () => {
+    expect(openChatSession("#/chat/ses_pdf")).toBe("ses_pdf");
+    expect(openChatSession("#/chat/ses%20x?foo=1")).toBe("ses x");
+    expect(openChatSession("#/chat")).toBeNull();
+    expect(openChatSession("#/models")).toBeNull();
+    expect(openChatSession("")).toBeNull();
   });
   it("leads to the first conversation it knows, or to none", () => {
     expect(bannerSession([{ run_id: "r9" }, { run_id: "r2" }], sessionOf)).toBe("s2");
