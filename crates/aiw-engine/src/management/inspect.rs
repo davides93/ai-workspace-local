@@ -563,11 +563,15 @@ mod tests {
     const URL_PATH: &str = "FAKE_URL_PATH_SEGMENT_9a0b1c2d3e4f";
     const ARG_SECRET: &str = "FAKE_ARG_KEY_5a6b7c";
     const ARG_NEXT: &str = "FAKE_ARG_FOLLOWING_VALUE_8d9e0f";
+    // Values given in the same argument to names that the redactor of free text does not know.
+    const ARG_ACCESS_KEY: &str = "FAKE_ARG_ACCESS_KEY_2f3a4b";
+    const ARG_AUTH: &str = "FAKE_ARG_AUTH_VALUE_5c6d7e";
+    const ARG_VARIABLE: &str = "FAKE_ARG_VARIABLE_VALUE_8f9a0b";
     const BRAVE_KEY: &str = "FAKE_BRAVE_KEY_1b2c3d";
     const RUNTIME_SECRET: &str = "FAKE_RUNTIME_SECRET_4e5f6a";
     const MEMORY_SECRET: &str = "FAKE_MEMORY_SECRET_7b8c9d";
     const AUDIT_SECRET: &str = "FAKE_AUDIT_SECRET_0a1b2c";
-    const FAKES: [&str; 14] = [
+    const FAKES: [&str; 17] = [
         PROVIDER_TOKEN,
         HEADER_SECRET,
         CUSTOM_HEADER,
@@ -578,6 +582,9 @@ mod tests {
         URL_PATH,
         ARG_SECRET,
         ARG_NEXT,
+        ARG_ACCESS_KEY,
+        ARG_AUTH,
+        ARG_VARIABLE,
         BRAVE_KEY,
         RUNTIME_SECRET,
         MEMORY_SECRET,
@@ -607,7 +614,16 @@ mod tests {
             name: "Locale di prova".into(),
             transport: "stdio".into(),
             command: Some("npx".into()),
-            args: Some(vec![format!("--api-key={ARG_SECRET}"), "--token".into(), ARG_NEXT.into(), "server.js".into()]),
+            args: Some(vec![
+                format!("--api-key={ARG_SECRET}"),
+                "--token".into(),
+                ARG_NEXT.into(),
+                format!("--access-key={ARG_ACCESS_KEY}"),
+                format!("--auth={ARG_AUTH}"),
+                "-e".into(),
+                format!("MY_PRIVATE_KEY={ARG_VARIABLE}"),
+                "server.js".into(),
+            ]),
             url: None,
             env: serde_json::from_value(json!({"GITHUB_TOKEN": ENV_SECRET, "MODE": ENV_PLAIN})).ok(),
             headers: None,
@@ -693,6 +709,10 @@ mod tests {
         // The address lost its credentials, query and token-like path segment; the flag that hides a value hid it.
         assert!(!connectors_text.contains("utente:") && !connectors_text.contains("?token"), "{connectors_text}");
         assert!(connectors_text.contains("--api-key=") && connectors_text.contains(SECRET_MASK), "{connectors_text}");
+        // The name of a flag or variable stays, whatever the redactor knows of it, so the model can tell what is set.
+        for shown in ["--access-key=••••••", "--auth=••••••", "MY_PRIVATE_KEY=••••••"] {
+            assert!(connectors_text.contains(shown), "{shown} missing from {connectors_text}");
+        }
         let secrets_text = of(json!({"topic": "secrets"}));
         let secrets: Value = serde_json::from_str(&secrets_text).unwrap();
         let set_of = |target: &str| -> Option<bool> {
@@ -884,6 +904,31 @@ mod tests {
         assert_eq!(url_safe("non è un indirizzo"), "(indirizzo non leggibile)");
         let hidden = args_safe(&["--api-key=abc12345".into(), "--password".into(), "hunter22".into(), "--verbose".into(), "plain".into()]);
         assert_eq!(hidden, ["--api-key=••••••", "--password", SECRET_MASK, "--verbose", "plain"]);
+        // `--key=value` and its kin: the names that the redactor of free text does not know are hidden by name.
+        let inline = args_safe(
+            &[
+                "--key=k1k1k1",
+                "--access-key=k2k2k2",
+                "--private-key=k3k3k3",
+                "--auth=k4k4k4",
+                "--credentials=k5k5k5",
+                "-e",
+                "SOME_KEY=k6k6k6",
+            ]
+            .map(String::from),
+        );
+        assert_eq!(
+            inline,
+            [
+                "--key=••••••",
+                "--access-key=••••••",
+                "--private-key=••••••",
+                "--auth=••••••",
+                "--credentials=••••••",
+                "-e",
+                "SOME_KEY=••••••"
+            ]
+        );
         assert!(hit(&None, &["x"]) && hit(&Some("BET".into()), &["alfa beta"]) && !hit(&Some("zeta".into()), &["alfa beta"]));
         let cut = listing((0..31).map(|i| json!(i)).collect());
         assert!(cut["total"] == 31 && cut["shown"] == 30 && cut["items"].as_array().unwrap().len() == 30);

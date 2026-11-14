@@ -22,7 +22,7 @@
 //!   connector that is already stored (card, answer, audit, engine messages) is always shown in the safe
 //!   form of [`connector_target`], because what is stored can hold a secret the model must not see.
 
-use super::{args_safe_up_to, clip, redact, require_owner, text, url_safe};
+use super::{args_safe_up_to, clip, hidden_values, redact, require_owner, text, url_safe};
 use crate::{Engine, Inner};
 use aiw_core::api::{AgentProfile, McpServerConfig, SECRET_MASK};
 use aiw_core::config::{is_management_forbidden_key, is_management_protected_key, management_protected_keys};
@@ -650,9 +650,10 @@ fn normalized_name(raw: &str) -> String {
 /// What the confirmation card, the answer and the audit show of a connector: the command line of a `stdio`
 /// server (what will run) or the address of an `http` one. It is always the safe form, because what a
 /// connector had stored (from the interface, the API or an earlier edit) can hold a secret that the model
-/// and the events must not see: the value that follows a flag that names a secret (`--token abc`) is
-/// hidden, and so are credentials, query, fragment and long (token-like) segments of an address. What the
-/// model itself wrote in the call is still shown by the card through the arguments of the call.
+/// and the events must not see: the value that follows a flag that names a secret (`--token abc`) or is
+/// given to one (`--token=abc`, `--access-key=abc`) is hidden, and so are credentials, query, fragment and
+/// long (token-like) segments of an address. What the model itself wrote in the call is still shown by the
+/// card through the arguments of the call.
 fn connector_target(cfg: &McpServerConfig) -> String {
     if cfg.transport == "stdio" {
         // Each argument is cut only by the limit of the whole line: what the owner confirms must not be cut shorter than that.
@@ -671,12 +672,9 @@ fn status_text(error: &str, cfg: &McpServerConfig) -> String {
     let mut out = error.to_string();
     if cfg.transport == "stdio" {
         out = out.replace(&command_line(cfg), &connector_target(cfg));
-        let args = cfg.args.as_deref().unwrap_or_default();
-        let secret_values = (1..args.len())
-            .filter(|&i| args[i - 1].starts_with('-') && !args[i - 1].contains('=') && crate::secrets::is_secret_name(&args[i - 1]))
-            .map(|i| args[i].as_str());
+        // The value after a flag that names a secret (`--token abc`) and the one given to a name (`--key=abc`).
         // A short piece would also match ordinary words of the message: only the line as a whole is hunted for then.
-        for value in secret_values.filter(|v| v.chars().count() >= MIN_SECRET_LEN) {
+        for value in hidden_values(cfg.args.as_deref().unwrap_or_default()).into_iter().filter(|v| v.chars().count() >= MIN_SECRET_LEN) {
             out = out.replace(value, SECRET_MASK);
         }
     } else if let Some(raw) = cfg.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
@@ -1357,6 +1355,16 @@ mod tests {
 
     /// A made-up secret that no real service would accept, long enough to be hunted for in an answer.
     const FAKE_SECRET: &str = "fake-secret-value-0123456789";
+
+    /// Flags whose name the redactor of free text does not know (it knows `--api-key=` and `--token=`), each with a
+    /// made-up value written the way a program takes it: in the same argument, after an `=`.
+    const INLINE_SECRET_FLAGS: [(&str, &str); 5] = [
+        ("--key", "fake-key-flag-0001"),
+        ("--access-key", "fake-access-key-0002"),
+        ("--private-key", "fake-private-key-0003"),
+        ("--auth", "fake-auth-flag-0004"),
+        ("--credentials", "fake-credentials-0005"),
+    ];
 
     /// The tool by name, called in a run of the owner.
     async fn run(e: &Engine, name: &str, args: Value) -> Result<ToolOutput> {
@@ -2124,29 +2132,37 @@ mod tests {
         ])
         .await;
         // The token is the value of a flag that names it: `--token VALUE`, the way a connector made in the interface may have it.
+        // The same line holds the other way a flag takes its value, `--key=VALUE`, for flags the redactor does not know.
+        let mut args: Vec<String> = vec!["--verbose".into(), "--token".into(), FAKE_SECRET.into()];
+        args.extend(INLINE_SECRET_FLAGS.iter().map(|(flag, value)| format!("{flag}={value}")));
         let mut cli = made_through_the_api("srv-cli", "cli", "stdio");
-        cli.args = Some(vec!["--verbose".into(), "--token".into(), FAKE_SECRET.into()]);
+        cli.args = Some(args.clone());
         e.save_mcp_server(cli).await.unwrap();
-        let shown = format!("{PROGRAM} --verbose --token {SECRET_MASK}");
+        let flags: String = INLINE_SECRET_FLAGS.iter().map(|(flag, _)| format!(" {flag}={SECRET_MASK}")).collect();
+        let shown = format!("{PROGRAM} --verbose --token {SECRET_MASK}{flags}");
 
         // An edit that inherits the command line: the card, the answer, the events and the audit show it with the value hidden.
         let (card, answer, left) = confirmed_call(&e).await;
         assert_eq!(card.tool, "aiw_connector_save");
         assert!(card.reason.ends_with(&shown), "the card shows what will run, with the value hidden: {}", card.reason);
-        assert!(!left.contains(FAKE_SECRET), "the secret is in what the edit left behind: {left}");
+        for secret in std::iter::once(FAKE_SECRET).chain(INLINE_SECRET_FLAGS.iter().map(|(_, value)| *value)) {
+            assert!(!left.contains(secret), "{secret} is in what the edit left behind: {left}");
+        }
         assert_eq!(answer["target"], json!(shown), "{answer}");
         assert_eq!(answer["command_confirmed"], false, "an inherited command is not confirmed by this call: {answer}");
         assert!(e.audit().iter().any(|a| a.action == "connector.save" && a.detail.contains(&shown)), "the audit says what was saved");
         // Controls: the edit really happened and kept the stored command line, secret included.
         let saved = stored(&e, "srv-cli");
         assert!(saved.enabled);
-        assert_eq!(saved.args, Some(vec!["--verbose".to_string(), "--token".to_string(), FAKE_SECRET.to_string()]));
+        assert_eq!(saved.args, Some(args));
 
         // The removal says the same about the connector it takes away.
         let (card, answer, left) = confirmed_call(&e).await;
         assert_eq!(card.tool, "aiw_connector_remove");
         assert!(card.reason.ends_with(&format!("«cli»: {shown}")), "{}", card.reason);
-        assert!(!left.contains(FAKE_SECRET), "the secret is in what the removal left behind: {left}");
+        for secret in std::iter::once(FAKE_SECRET).chain(INLINE_SECRET_FLAGS.iter().map(|(_, value)| *value)) {
+            assert!(!left.contains(secret), "{secret} is in what the removal left behind: {left}");
+        }
         assert_eq!(answer["target"], json!(shown));
         assert!(e.audit().iter().any(|a| a.action == "connector.remove" && a.detail.contains(&shown)));
         assert!(e.0.store.get_doc::<McpServerConfig>("mcp", "srv-cli").unwrap().is_none(), "the connector was removed");
@@ -2166,10 +2182,48 @@ mod tests {
             format!("{PROGRAM} --api-key {SECRET_MASK} --verbose")
         );
         assert_eq!(connector_target(&cfg(&["--password", "due parole"])), format!("{PROGRAM} --password {SECRET_MASK}"));
-        // `--key=value` is hidden by the redactor; a flag that does not name a secret keeps its value. A name that only
-        // contains a secret word (`--keyboard`) is taken for one: hiding too much is the safe side.
+        // `--key=value` is hidden too; a flag that does not name a secret keeps its value. A name that only contains a
+        // secret word (`--keyboard`, `--auth-type=basic`) is taken for one: hiding too much is the safe side.
         let line = connector_target(&cfg(&["--token=fake-token-1234567", "--port", "8080", "--keyboard", "it"]));
         assert_eq!(line, format!("{PROGRAM} --token={SECRET_MASK} --port 8080 --keyboard {SECRET_MASK}"));
+        assert_eq!(
+            connector_target(&cfg(&["--auth-type=basic", "--port=8080"])),
+            format!("{PROGRAM} --auth-type={SECRET_MASK} --port=8080")
+        );
+        // The redactor of free text knows few of the names, and a program may take the value in any of these ways: the
+        // name is what decides, not the redactor.
+        for (flag, value) in INLINE_SECRET_FLAGS {
+            let line = connector_target(&cfg(&[&format!("{flag}={value}"), "--verbose"]));
+            assert_eq!(line, format!("{PROGRAM} {flag}={SECRET_MASK} --verbose"), "{flag}");
+        }
+        let line = connector_target(&cfg(&[
+            "-e",
+            "MY_PRIVATE_KEY=fake-variable-0006",
+            "--env=DB_AUTH=fake-nested-0007",
+            "--url=https://host.example/mcp?a=1&access-key=fake-query-0008",
+            "--region=eu",
+        ]));
+        assert_eq!(
+            line,
+            format!(
+                "{PROGRAM} -e MY_PRIVATE_KEY={SECRET_MASK} --env=DB_AUTH={SECRET_MASK} --url=https://host.example/mcp?a=1&access-key={SECRET_MASK} --region=eu"
+            )
+        );
+        // A host or a path that happens to hold a secret word is not a name: only what stands before an `=` is.
+        let line = connector_target(&cfg(&["https://auth.example.org/keys/mcp", "--url=https://auth.example.org/x?a=1"]));
+        assert_eq!(line, format!("{PROGRAM} https://auth.example.org/keys/mcp --url=https://auth.example.org/x?a=1"));
+        // Accents, symbols and the mask itself in an argument are text like any other (no cut in the middle of a character).
+        let line = connector_target(&cfg(&["--descrizione=città", "è=1", "--chiave•=x", "--nome=«ciao»"]));
+        assert_eq!(line, format!("{PROGRAM} --descrizione=città è=1 --chiave•=x --nome=«ciao»"));
+        let line = connector_target(&cfg(&["--città-key=fake-accent-0012", "perché--auth=fake-accent-0013", "è_token=fake-accent-0014"]));
+        assert_eq!(line, format!("{PROGRAM} --città-key={SECRET_MASK} perché--auth={SECRET_MASK} è_token={SECRET_MASK}"));
+        // A flag that names a secret hides the argument after it even when that one is a flag that names a secret too.
+        let line = connector_target(&cfg(&["--token", "--password", "fake-chain-0009", "--verbose"]));
+        assert_eq!(line, format!("{PROGRAM} --token {SECRET_MASK} {SECRET_MASK} --verbose"));
+        // What the engine says about a connector may quote a piece of the line: the values of both forms are cleaned out of it.
+        let line = cfg(&["--access-key=fake-status-0010", "--password", "fake-status-0011", "--port=8080"]);
+        let said = status_text("il programma ha risposto: fake-status-0010 e fake-status-0011 non valgono, porta 8080", &line);
+        assert_eq!(said, format!("il programma ha risposto: {SECRET_MASK} e {SECRET_MASK} non valgono, porta 8080"));
         // An argument longer than 200 characters is cut only by the limit of the whole line, like the line itself.
         let long = "x".repeat(300);
         assert_eq!(connector_target(&cfg(&["--name", long.as_str()])), format!("{PROGRAM} --name {long}"));

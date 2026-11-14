@@ -160,8 +160,49 @@ pub(super) fn url_safe(raw: &str) -> String {
     u.to_string()
 }
 
-/// The arguments of a command line, without what follows a flag that names a secret (`--token abc`)
-/// and with `--key=abc` hidden by the redactor. Each argument is cut at 200 characters.
+/// A value given to a name in one argument (`--key=abc`, `KEY=abc`, `--env=KEY=abc`, `…?access-key=abc`).
+pub(super) struct Assignment<'a> {
+    /// The name, as written (`--access-key`).
+    pub name: &'a str,
+    /// The argument up to and including the `=` that gives the value (`--env=KEY=`).
+    pub prefix: &'a str,
+    /// What follows that `=`, to the end of the argument.
+    pub value: &'a str,
+}
+
+/// The first value of `arg` that is given to a name `is_secret` says is a secret. The name is the run of
+/// letters, digits, `_`, `.` and `-` just before each `=`, so a flag (`--key`), a variable (`API_KEY`), a
+/// name nested in a flag (`--env=API_KEY=abc`) and a query parameter (`?access-key=abc`) are all found,
+/// while the host or the path of an address that has no `=` of its own is not taken for a name.
+pub(super) fn secret_assignment<'a>(arg: &'a str, is_secret: impl Fn(&str) -> bool) -> Option<Assignment<'a>> {
+    let mut from = 0;
+    while let Some(offset) = arg[from..].find('=') {
+        let eq = from + offset;
+        let before = &arg[..eq];
+        let start = before
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !(c.is_ascii_alphanumeric() || "_.-".contains(*c)))
+            .map_or(0, |(i, c)| i + c.len_utf8());
+        let name = &before[start..];
+        if !name.is_empty() && is_secret(name) {
+            return Some(Assignment { name, prefix: &arg[..=eq], value: &arg[eq + 1..] });
+        }
+        from = eq + 1;
+    }
+    None
+}
+
+/// Does the name of a flag or variable look like a secret? The word list of the connectors' secret headers
+/// and variables, so that what the interface hides and what is hidden here never drift apart.
+pub(super) fn names_a_secret(name: &str) -> bool {
+    crate::secrets::is_secret_name(name)
+}
+
+/// The arguments of a command line, without the value that follows a flag that names a secret
+/// (`--token abc`) nor the value given to a name that names one (`--key=abc`, `KEY=abc`): the name stays,
+/// the value is [`SECRET_MASK`](aiw_core::api::SECRET_MASK). A name that only contains a secret word
+/// (`--keyboard=it`, `--auth-type=basic`) is taken for one, too. Each argument is cut at 200 characters.
 pub(super) fn args_safe(args: &[String]) -> Vec<String> {
     args_safe_up_to(args, 200)
 }
@@ -172,15 +213,35 @@ pub(super) fn args_safe_up_to(args: &[String], max: usize) -> Vec<String> {
     args.iter()
         .map(|a| {
             let masked = std::mem::replace(&mut hide_next, false);
+            // A flag that names a secret hides the argument after it, even when that one is hidden itself.
+            hide_next = is_secret_flag(a);
             if masked {
                 return aiw_core::api::SECRET_MASK.to_string();
             }
-            if a.starts_with('-') && !a.contains('=') && crate::secrets::is_secret_name(a) {
-                hide_next = true;
+            match secret_assignment(a, names_a_secret) {
+                Some(assignment) => format!("{}{}", text(assignment.prefix, max), aiw_core::api::SECRET_MASK),
+                None => text(a, max),
             }
-            text(a, max)
         })
         .collect()
+}
+
+/// A flag with no `=` whose name says that the argument after it is a secret (`--token`, `--api-key`).
+pub(super) fn is_secret_flag(arg: &str) -> bool {
+    arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg)
+}
+
+/// The values [`args_safe`] hides, so that a text that quotes one of them alone can be cleaned too.
+pub(super) fn hidden_values(args: &[String]) -> Vec<&str> {
+    let mut out = Vec::new();
+    for (i, a) in args.iter().enumerate() {
+        if let Some(assignment) = secret_assignment(a, names_a_secret) {
+            out.push(assignment.value);
+        } else if is_secret_flag(a) {
+            out.extend(args.get(i + 1).map(String::as_str));
+        }
+    }
+    out
 }
 
 /// Registers the management tools of every area. Called once, when the engine starts.
