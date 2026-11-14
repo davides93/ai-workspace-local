@@ -1,4 +1,5 @@
 import { expect, openApp, test } from "../support/app";
+import { chatWith, FAKE_TOKEN, whereIs } from "../support/ask";
 import { appLinks, conversation, FAKE_KEY, goSimpleWithPalette, linksOutsideChat, messageBox, startDownloadThenGoSimple } from "../support/simple";
 
 // The simple interface is one chat: every other address leads to it, nothing in it leads to a hidden section, and what used to
@@ -170,6 +171,47 @@ test.describe("the assistant from the chat", () => {
     await expect(conversation(page).getByRole("form", { name: "Quale modello?" })).toBeVisible();
   });
 
+  test("a new session is the Assistente's and the scripted requests work from it: the question, and the protected field for a token", async ({ page }) => {
+    // «Nuova» in the sessions list: no agent is chosen, the session is the Assistente's.
+    await chatWith(page, "Scarica un modello");
+    const list = page.getByRole("navigation", { name: "Elenco delle sessioni" });
+    // (Its title is the first message once the list is refreshed; the agent's name is in the row either way.)
+    await expect(list.getByRole("button", { name: /^(Nuova sessione|Scarica un modello).*Assistente/ })).toBeVisible();
+    const card = conversation(page).getByRole("form", { name: "Quale modello?" });
+    await expect(card).toBeVisible();
+    // The cards of the assistant (and the run panel) lead to the chat only, like everything else here.
+    expect(linksOutsideChat(await appLinks(page)), "question").toEqual([]);
+    await card.getByRole("button", { name: "Non ora" }).click();
+    await expect(conversation(page).getByText("Va bene, non scarico nulla.")).toBeVisible();
+
+    await messageBox(page).fill("Aggiungi il token di Hugging Face");
+    await messageBox(page).press("Enter");
+    const secret = conversation(page).getByRole("form", { name: "Token di Hugging Face" });
+    await expect(secret).toBeVisible();
+    expect(linksOutsideChat(await appLinks(page)), "secret request").toEqual([]);
+    const field = secret.getByLabel("Valore di «Token di Hugging Face»");
+    await expect(field).toHaveAttribute("type", "password");
+    await field.fill(FAKE_TOKEN);
+    await field.press("Enter");
+    await expect(conversation(page).getByText("Salvato: Token di Hugging Face")).toBeVisible();
+    await expect(secret).toBeHidden();
+    // The value is nowhere: not in the page, the storage, the caches, the messages of the demo (the detector is proved in ask.spec).
+    expect(await whereIs(page, [FAKE_TOKEN])).toEqual([]);
+  });
+
+  for (const size of [{ name: "1440", width: 1440, height: 900 }, { name: "390", width: 390, height: 844 }]) {
+    test(`${size.name}: the run panel, open, leads to the chat only`, async ({ page }) => {
+      await page.setViewportSize({ width: size.width, height: size.height });
+      await openApp(page, "/chat/ses_pdf");
+      const toggle = page.getByRole("button", { name: "Pannello del run" });
+      // Open on a wide screen to begin with, a sheet on a phone that has to be asked for.
+      if ((await toggle.getAttribute("aria-pressed")) !== "true") await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByRole("complementary", { name: "Pannello del run" }).or(page.getByRole("dialog", { name: "Pannello del run" }))).toBeVisible();
+      expect(linksOutsideChat(await appLinks(page))).toEqual([]);
+    });
+  }
+
   test("a suggestion for looking after the app types its sentence in the message box", async ({ page }) => {
     await openApp(page, "/chat");
     await page.getByRole("button", { name: "Nuova", exact: true }).click();
@@ -231,6 +273,9 @@ test.describe("downloads", () => {
     // Nothing in the strip is a live region: a percentage read out at every step would drown the chat.
     await expect(strip.locator("[aria-live], [role=status], [role=alert]")).toHaveCount(0);
     await expect(strip).toBeHidden({ timeout: 30_000 });
+    // The toast that says it is done is plain text: nothing to follow to the Modelli page.
+    await expect(page.getByText(/Download completato/)).toBeVisible();
+    expect(linksOutsideChat(await appLinks(page))).toEqual([]);
   });
 
   test("with no download there is no strip", async ({ page }) => {
