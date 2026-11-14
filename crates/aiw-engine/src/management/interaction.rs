@@ -7,15 +7,18 @@
 //! answer comes back on a REST endpoint (`POST /api/questions/{id}`, `POST /api/secret-requests/{id}`).
 //! The wait ends with the answer, with `approvals.timeout_s` (300 s when it is not set), when the run
 //! is cancelled, or at the kill switch, and the tool then writes the closing event itself, so it
-//! always lands before the end of the run.
+//! always lands before the end of the run. (A secret that is being written when the time runs out is
+//! waited for: the model hears what happened to it, not a `timeout` for a value that is saved.)
 //!
 //! **A secret never goes through the model.** The model names only a `target` (the destination);
 //! the engine checks it, writes in words where the value will go (`destination`: computed here,
-//! never taken from the model) and asks. The value travels in the body of one HTTP request, is
-//! written by the existing function of the destination, and is in no tool argument, tool result,
-//! event, saved message, audit row, confirmation or error message: the one audit row (`secret.set`)
-//! holds the `target` only, and an error of the destination is cleaned of the value before it is
-//! returned.
+//! never taken from the model) and asks. The request keeps the raw identity of the destination
+//! (the whole endpoint or URL): when the value arrives the target is resolved again, and the value
+//! is written only if it is the destination the person was shown. The value travels in the body of
+//! one HTTP request, is written by the existing function of the destination, and is in no tool
+//! argument, tool result, event, saved message, audit row, confirmation or error message: the one
+//! audit row (`secret.set`) holds the `target` only, and an error of the destination is cleaned of
+//! the value before it is returned.
 
 use super::inspect::{args_safe, clip, url_safe};
 use super::{require_origin, require_owner};
@@ -890,6 +893,8 @@ impl Engine {
     /// The person gives the secret (`provide`) or declines (`decline`). `owner` says whether the caller has
     /// full access to this computer; anyone else is refused. A value the destination refuses is an error
     /// without the value in it, and the request stays open for another try; a request closed already is `NotFound`.
+    /// A destination that is not the one the request showed any more is a `Conflict` (409): nothing is written
+    /// and the request is closed (the model hears `declined` with a hint, see [`DESTINATION_CHANGED`]).
     pub async fn respond_secret(&self, id: &str, answer: SecretAnswer, owner: bool) -> Result<()> {
         if !owner {
             return Err(Error::Denied(
