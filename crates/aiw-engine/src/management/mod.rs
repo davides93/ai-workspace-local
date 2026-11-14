@@ -161,8 +161,13 @@ pub(super) fn url_safe(raw: &str) -> String {
 }
 
 /// The arguments of a command line, without what follows a flag that names a secret (`--token abc`)
-/// and with `--key=abc` hidden by the redactor.
+/// and with `--key=abc` hidden by the redactor. Each argument is cut at 200 characters.
 pub(super) fn args_safe(args: &[String]) -> Vec<String> {
+    args_safe_up_to(args, 200)
+}
+
+/// [`args_safe`] with the length at which each argument is cut.
+pub(super) fn args_safe_up_to(args: &[String], max: usize) -> Vec<String> {
     let mut hide_next = false;
     args.iter()
         .map(|a| {
@@ -173,7 +178,7 @@ pub(super) fn args_safe(args: &[String]) -> Vec<String> {
             if a.starts_with('-') && !a.contains('=') && crate::secrets::is_secret_name(a) {
                 hide_next = true;
             }
-            text(a, 200)
+            text(a, max)
         })
         .collect()
 }

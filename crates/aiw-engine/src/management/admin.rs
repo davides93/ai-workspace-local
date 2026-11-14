@@ -22,7 +22,7 @@
 //!   connector that is already stored (card, answer, audit, engine messages) is always shown in the safe
 //!   form of [`connector_target`], because what is stored can hold a secret the model must not see.
 
-use super::{args_safe, clip, redact, require_owner, text, url_safe};
+use super::{args_safe_up_to, clip, redact, require_owner, text, url_safe};
 use crate::{Engine, Inner};
 use aiw_core::api::{AgentProfile, McpServerConfig, SECRET_MASK};
 use aiw_core::config::{is_management_forbidden_key, is_management_protected_key, management_protected_keys};
@@ -39,6 +39,8 @@ const MAX_CHARS: usize = 24_000;
 const MIN_SECRET_LEN: usize = 6;
 /// Longest value of a variable or header the model may write (a longer one is not a setting).
 const MAX_VALUE_CHARS: usize = 2_000;
+/// Longest command line the card, the answer and the audit show for a connector.
+const MAX_TARGET_CHARS: usize = 400;
 /// Longest name, description and system prompt of an agent made from the chat.
 const MAX_NAME_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 500;
@@ -653,8 +655,9 @@ fn normalized_name(raw: &str) -> String {
 /// model itself wrote in the call is still shown by the card through the arguments of the call.
 fn connector_target(cfg: &McpServerConfig) -> String {
     if cfg.transport == "stdio" {
-        let shown = McpServerConfig { args: cfg.args.as_deref().map(args_safe), ..cfg.clone() };
-        text(&command_line(&shown), 400)
+        // Each argument is cut only by the limit of the whole line: what the owner confirms must not be cut shorter than that.
+        let shown = McpServerConfig { args: cfg.args.as_deref().map(|a| args_safe_up_to(a, MAX_TARGET_CHARS)), ..cfg.clone() };
+        text(&command_line(&shown), MAX_TARGET_CHARS)
     } else {
         url_safe(cfg.url.as_deref().unwrap_or_default())
     }
@@ -2167,6 +2170,10 @@ mod tests {
         // contains a secret word (`--keyboard`) is taken for one: hiding too much is the safe side.
         let line = connector_target(&cfg(&["--token=fake-token-1234567", "--port", "8080", "--keyboard", "it"]));
         assert_eq!(line, format!("{PROGRAM} --token={SECRET_MASK} --port 8080 --keyboard {SECRET_MASK}"));
+        // An argument longer than 200 characters is cut only by the limit of the whole line, like the line itself.
+        let long = "x".repeat(300);
+        assert_eq!(connector_target(&cfg(&["--name", long.as_str()])), format!("{PROGRAM} --name {long}"));
+        assert_eq!(connector_target(&cfg(&[long.as_str(), long.as_str()])).chars().count(), 401, "the whole line is cut at 400");
         // The subject of a call that writes the line itself is the same form.
         let tool = e.tool_registry().get("aiw_connector_save").unwrap();
         assert_eq!(
