@@ -183,6 +183,10 @@ test.describe("the assistant from the chat", () => {
     expect(linksOutsideChat(await appLinks(page)), "question").toEqual([]);
     await card.getByRole("button", { name: "Non ora" }).click();
     await expect(conversation(page).getByText("Va bene, non scarico nulla.")).toBeVisible();
+    // The closing text arrives before the end of the run, and a message sent while the run is still going is dropped without
+    // a word (`ChatView.send`): wait until the run is over (no «Ferma», «Invia» is back) before writing the next one.
+    await expect(page.getByRole("button", { name: "Ferma" })).toBeHidden();
+    await expect(page.getByRole("button", { name: "Invia" })).toBeVisible();
 
     await messageBox(page).fill("Aggiungi il token di Hugging Face");
     await messageBox(page).press("Enter");
