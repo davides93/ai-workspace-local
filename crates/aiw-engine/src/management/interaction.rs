@@ -914,4 +914,1069 @@ impl Tool for SecretClear {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::management::test_ctx;
+    use crate::tests::{engine, wait_finished};
+    use crate::RunOrigin;
+    use aiw_core::events::AgEvent;
+    use aiw_runtimes::{ChatDelta, ScriptedBackend};
+    use std::time::Duration;
+
+    const OWNER: RunOrigin = RunOrigin { owner: true, questions: true, secrets: true };
+    /// A client that shows questions but cannot take a secret (a paired phone).
+    const PHONE: RunOrigin = RunOrigin { owner: false, questions: true, secrets: false };
+    /// A client that declared nothing.
+    const BARE: RunOrigin = RunOrigin { owner: true, questions: false, secrets: false };
+
+    /// The token the fake Hugging Face accepts, and one it refuses.
+    const GOOD_TOKEN: &str = "FAKE_HF_TOKEN_hf_Q7w3Zk9x2LmN8vB4";
+    const WRONG_TOKEN: &str = "FAKE_WRONG_TOKEN_p0o9i8u7y6t5";
+    const HEADER_VALUE: &str = "FAKE_HEADER_VALUE_Bearer_5c4d3e2f1a";
+    const ENV_VALUE: &str = "FAKE_ENV_VALUE_8a7b6c5d4e";
+    const SETTING_VALUE: &str = "FAKE_BRAVE_KEY_2f3e4d5c6b";
+    const RUNTIME_VALUE: &str = "FAKE_RUNTIME_KEY_9e8d7c6b5a";
+
+    fn answer(action: &str, a: QuestionAnswer) -> QuestionReply {
+        QuestionReply { action: action.into(), answer: a }
+    }
+
+    fn pick(ids: &[&str]) -> QuestionAnswer {
+        QuestionAnswer { selected: Some(ids.iter().map(|s| s.to_string()).collect()), ..Default::default() }
+    }
+
+    fn provide(value: &str) -> SecretAnswer {
+        SecretAnswer { action: "provide".into(), value: Some(value.into()) }
+    }
+
+    fn decline() -> SecretAnswer {
+        SecretAnswer { action: "decline".into(), value: None }
+    }
+
+    fn models() -> Value {
+        json!({
+            "kind": "choice", "title": "Quale modello?", "message": "Ho trovato tre varianti adatte a questo computer.",
+            "options": [
+                {"id": "q4", "label": "Q4_K_M · 4,7 GB", "description": "Consigliata"},
+                {"id": "q8", "label": "Q8_0 · 8,5 GB"},
+                {"id": "q5", "label": "Q5_K_M · 5,6 GB"}
+            ]
+        })
+    }
+
+    fn form() -> Value {
+        json!({
+            "kind": "form", "message": "Come lo vuoi?",
+            "fields": [
+                {"name": "nome", "label": "Nome", "type": "string", "required": true, "placeholder": "Posta"},
+                {"name": "lingua", "label": "Lingua", "type": "enum", "options": ["italiano", "inglese"], "required": true},
+                {"name": "bozze", "label": "Quante bozze", "type": "integer"},
+                {"name": "peso", "label": "Peso", "type": "number"},
+                {"name": "da_solo", "label": "Risponde da solo", "type": "boolean"}
+            ]
+        })
+    }
+
+    /// The custom events of a run with this name, in order.
+    fn customs(e: &Engine, run_id: &str, name: &str) -> Vec<Value> {
+        e.run_events(run_id)
+            .into_iter()
+            .filter_map(|s| match s.event.event {
+                AgEvent::Custom { name: n, value } if n == name => Some(value),
+                _ => None,
+            })
+            .collect()
+    }
+
+    async fn wait_until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+        for _ in 0..300 {
+            if let Some(v) = f() {
+                return v;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("timeout: {what}");
+    }
+
+    async fn next_question(e: &Engine) -> Question {
+        wait_until("a question", || e.questions().into_iter().next()).await
+    }
+
+    async fn next_secret(e: &Engine) -> SecretRequest {
+        wait_until("a request for a secret", || e.secret_requests().into_iter().next()).await
+    }
+
+    /// The tool call, started in the background: the run id of its context, the task and the question it asked.
+    async fn ask_in_background(
+        e: &Engine,
+        origin: RunOrigin,
+        args: Value,
+    ) -> (ToolContext, tokio::task::JoinHandle<Result<ToolOutput>>, Question) {
+        let tool = e.tool_registry().get("ask_user").expect("ask_user is registered");
+        let ctx = test_ctx(e, Some(origin));
+        let c = ctx.clone();
+        let task = tokio::spawn(async move { tool.call(args, &c).await });
+        let q = next_question(e).await;
+        (ctx, task, q)
+    }
+
+    async fn finished(task: tokio::task::JoinHandle<Result<ToolOutput>>) -> Value {
+        let out = tokio::time::timeout(Duration::from_secs(10), task).await.expect("the tool ends").unwrap().unwrap();
+        serde_json::from_str(&out.content).unwrap_or_else(|_| panic!("the result is JSON: {}", out.content))
+    }
+
+    /// An assistant run with this script; the first message of the person is `text`.
+    async fn assistant_run(e: &Engine, turns: Vec<Vec<ChatDelta>>, text: &str, origin: RunOrigin) -> (String, String, ScriptedBackend) {
+        let backend = ScriptedBackend::new(turns);
+        e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+        let s = e.create_session("assistant", None).unwrap();
+        let run = e.start_run_from(&s.id, text.into(), None, None, vec![], Some(origin)).await.unwrap();
+        (s.id, run, backend)
+    }
+
+    /// The content of the result of the (only) tool call of a session.
+    fn tool_result(e: &Engine, session: &str) -> Value {
+        let m = e.messages(session).unwrap().into_iter().find(|m| m.role == "tool").expect("a tool result was stored");
+        serde_json::from_str(&m.content).unwrap_or_else(|_| panic!("the result is JSON: {}", m.content))
+    }
+
+    // ------------------------------------------------------------------ the arguments of ask_user
+
+    #[test]
+    fn the_arguments_of_a_question_are_checked_as_the_schema_says() {
+        let q = parse_question(&models()).unwrap();
+        assert_eq!((q.kind.as_str(), q.title.as_deref(), q.options.len()), ("choice", Some("Quale modello?"), 3));
+        assert_eq!(q.options[0].description.as_deref(), Some("Consigliata"));
+        assert_eq!(q.options[1].description, None);
+        assert!(q.fields.is_empty() && !q.multiple && !q.allow_other && q.confirm_label.is_none());
+        let f = parse_question(&form()).unwrap();
+        assert_eq!((f.fields.len(), f.fields[1].options.len(), f.fields[0].required, f.fields[2].required), (5, 2, true, false));
+        assert!(f.options.is_empty());
+        let c = parse_question(&json!({"kind": "confirm", "message": "Li cancello?", "confirm_label": "Cancella", "deny_label": "Tienili", "options": [{"id": "x", "label": "x"}]})).unwrap();
+        assert_eq!((c.confirm_label.as_deref(), c.deny_label.as_deref(), c.options.len()), (Some("Cancella"), Some("Tienili"), 0));
+
+        let long = |n: usize| "x".repeat(n);
+        let with = |key: &str, v: Value| {
+            let mut a = models();
+            a[key] = v;
+            a
+        };
+        let opts = |n: usize| Value::Array((0..n).map(|i| json!({"id": format!("o{i}"), "label": format!("Opzione {i}")})).collect());
+        let bad: Vec<(&str, Value)> = vec![
+            ("kind sconosciuto", json!({"kind": "radio", "message": "?"})),
+            ("manca il kind", json!({"message": "?"})),
+            ("messaggio mancante", json!({"kind": "confirm"})),
+            ("messaggio vuoto", json!({"kind": "confirm", "message": "   "})),
+            ("messaggio troppo lungo", json!({"kind": "confirm", "message": long(1001)})),
+            ("titolo troppo lungo", with("title", json!(long(81)))),
+            ("una sola opzione", with("options", opts(1))),
+            ("nove opzioni", with("options", opts(9))),
+            ("id doppi", with("options", json!([{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]))),
+            ("id troppo lungo", with("options", json!([{"id": long(41), "label": "A"}, {"id": "b", "label": "B"}]))),
+            ("etichetta vuota", with("options", json!([{"id": "a", "label": ""}, {"id": "b", "label": "B"}]))),
+            (
+                "descrizione troppo lunga",
+                with("options", json!([{"id": "a", "label": "A", "description": long(201)}, {"id": "b", "label": "B"}])),
+            ),
+            ("etichetta del pulsante troppo lunga", json!({"kind": "confirm", "message": "?", "confirm_label": long(41)})),
+            ("form senza campi", json!({"kind": "form", "message": "?"})),
+            (
+                "nove campi",
+                json!({"kind": "form", "message": "?", "fields": (0..9).map(|i| json!({"name": format!("c{i}"), "label": "C", "type": "string"})).collect::<Vec<_>>()}),
+            ),
+            (
+                "campi con lo stesso nome",
+                json!({"kind": "form", "message": "?", "fields": [{"name": "a", "label": "A", "type": "string"}, {"name": "a", "label": "B", "type": "string"}]}),
+            ),
+            (
+                "tipo del campo sconosciuto",
+                json!({"kind": "form", "message": "?", "fields": [{"name": "a", "label": "A", "type": "date"}]}),
+            ),
+            ("enum senza valori", json!({"kind": "form", "message": "?", "fields": [{"name": "a", "label": "A", "type": "enum"}]})),
+            (
+                "enum con valori doppi",
+                json!({"kind": "form", "message": "?", "fields": [{"name": "a", "label": "A", "type": "enum", "options": ["x", "x"]}]}),
+            ),
+        ];
+        for (what, args) in bad {
+            assert!(matches!(parse_question(&args), Err(Error::Invalid(_))), "{what} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_form_that_asks_for_a_secret_is_refused_with_a_pointer_to_the_right_tool() {
+        for (name, label, placeholder) in [
+            ("password", "Valore", None),
+            ("valore", "La tua password", None),
+            ("campo", "Campo", Some("incolla il token")),
+            ("api_key", "Chiave", None),
+            ("x", "Chiave privata", None),
+        ] {
+            let mut field = json!({"name": name, "label": label, "type": "string"});
+            if let Some(p) = placeholder {
+                field["placeholder"] = json!(p);
+            }
+            let err = parse_question(&json!({"kind": "form", "message": "Mi serve un dato", "fields": [field]})).unwrap_err();
+            assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("aiw_secret_request"), "{name}/{label}: {err}");
+        }
+        // The same words in the message or in the title of a question are not a field: the model may talk about them.
+        assert!(parse_question(&json!({"kind": "confirm", "title": "Token", "message": "Uso il token già salvato?"})).is_ok());
+    }
+
+    // ------------------------------------------------------------------ the answers
+
+    #[test]
+    fn an_answer_is_checked_against_the_question_it_was_shown_for() {
+        let q = |args: Value| parse_question(&args).unwrap();
+        let single = q(models());
+        let mut multiple = q(models());
+        multiple.multiple = true;
+        let mut other_single = q(models());
+        other_single.allow_other = true;
+        let mut other_multiple = multiple.clone();
+        other_multiple.allow_other = true;
+        let free = |t: &str| QuestionAnswer { other: Some(t.into()), ..Default::default() };
+        let both = |ids: &[&str], t: &str| QuestionAnswer { other: Some(t.into()), ..pick(ids) };
+
+        // A single choice: one id that exists; «Altro» only when it is allowed, and then it is an answer of its own.
+        assert_eq!(check_answer(&single, pick(&["q4"])).unwrap(), pick(&["q4"]));
+        assert!(check_answer(&single, pick(&["zz"])).is_err(), "an option that does not exist");
+        assert!(check_answer(&single, pick(&["q4", "q8"])).is_err(), "two answers to a single choice");
+        assert!(check_answer(&single, pick(&[])).is_err(), "no answer at all");
+        assert!(check_answer(&single, QuestionAnswer::default()).is_err());
+        assert!(check_answer(&single, free("boh")).is_err(), "no free answer unless allowed");
+        assert_eq!(check_answer(&other_single, free("  una mia idea ")).unwrap(), free("una mia idea"));
+        assert_eq!(
+            check_answer(&other_single, QuestionAnswer { other: Some("   ".into()), ..pick(&["q8"]) }).unwrap(),
+            pick(&["q8"]),
+            "a blank «Altro» is not there"
+        );
+        assert!(check_answer(&other_single, both(&["q4"], "e anche questo")).is_err(), "single: an option and «Altro» exclude each other");
+        // A multiple choice: several ids, the same one once; «Altro» next to them only when allowed.
+        assert_eq!(check_answer(&multiple, pick(&["q4", "q8", "q4"])).unwrap(), pick(&["q4", "q8"]));
+        assert!(check_answer(&multiple, both(&["q4"], "altro")).is_err(), "multiple, but «Altro» is not allowed");
+        assert_eq!(check_answer(&other_multiple, both(&["q4", "q5"], "altro")).unwrap(), both(&["q4", "q5"], "altro"));
+        assert_eq!(check_answer(&other_multiple, free("solo questo")).unwrap(), free("solo questo"));
+        assert!(check_answer(&other_multiple, free(&"x".repeat(MAX_ANSWER_CHARS + 1))).is_err());
+
+        // A confirmation needs a yes or a no, and carries nothing else.
+        let confirm = q(json!({"kind": "confirm", "message": "Procedo?"}));
+        let yes = QuestionAnswer { confirmed: Some(true), ..Default::default() };
+        assert_eq!(check_answer(&confirm, QuestionAnswer { selected: Some(vec!["x".into()]), ..yes.clone() }).unwrap(), yes);
+        assert!(check_answer(&confirm, QuestionAnswer::default()).is_err());
+
+        // A form: the types, the enum, the required fields, nothing unknown; what is empty is not filled in.
+        let form = q(form());
+        let values = |v: Value| QuestionAnswer { values: Some(v.as_object().unwrap().clone()), ..Default::default() };
+        let ok = values(json!({"nome": "Posta", "lingua": "italiano", "bozze": 3, "peso": 0.5, "da_solo": false}));
+        assert_eq!(check_answer(&form, ok.clone()).unwrap(), ok);
+        let sparse = check_answer(&form, values(json!({"nome": "Posta", "lingua": "inglese", "bozze": null, "peso": ""}))).unwrap();
+        assert_eq!(sparse, values(json!({"nome": "Posta", "lingua": "inglese"})));
+        for (what, v) in [
+            ("a required field is missing", json!({"lingua": "italiano"})),
+            ("a required field is empty", json!({"nome": "", "lingua": "italiano"})),
+            ("an unknown field", json!({"nome": "P", "lingua": "italiano", "altro": 1})),
+            ("a text where a number goes", json!({"nome": "P", "lingua": "italiano", "bozze": "tre"})),
+            ("a fraction for an integer", json!({"nome": "P", "lingua": "italiano", "bozze": 1.5})),
+            ("a value the enum does not have", json!({"nome": "P", "lingua": "klingon"})),
+            ("a number for a text", json!({"nome": 7, "lingua": "italiano"})),
+            ("a text for a boolean", json!({"nome": "P", "lingua": "italiano", "da_solo": "sì"})),
+            ("a text that is too long", json!({"nome": "x".repeat(MAX_ANSWER_CHARS + 1), "lingua": "italiano"})),
+        ] {
+            assert!(matches!(check_answer(&form, values(v)), Err(Error::Invalid(_))), "{what}");
+        }
+        assert!(check_answer(&form, QuestionAnswer::default()).is_err(), "required fields and nothing sent");
+    }
+
+    // ------------------------------------------------------------------ ask_user in a run
+
+    #[tokio::test]
+    async fn a_run_that_asks_emits_the_question_waits_and_gets_the_answer() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let turns = vec![ScriptedBackend::tool_turn("a1", "ask_user", models()), ScriptedBackend::text_turn("Scarico la Q4.")];
+        let (session, run, backend) = assistant_run(&e, turns, "Scarica un modello", OWNER).await;
+        let q = next_question(&e).await;
+
+        // The event has the exact shape of the contract, with an explicit null for what is not there.
+        let mut event = customs(&e, &run, "aiw.question").remove(0);
+        assert_eq!(event["id"], q.id);
+        assert_eq!(event["run_id"], run);
+        assert!(q.id.starts_with("ask_") && run.starts_with("run_"));
+        let expires = event["expires_at"].as_str().unwrap().to_string();
+        let at = chrono::DateTime::parse_from_rfc3339(&expires).expect("RFC 3339");
+        let left = (at.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds();
+        assert!((290..=300).contains(&left), "five minutes by default: {left}");
+        assert!(expires.ends_with('Z'));
+        event["id"] = json!("ID");
+        event["run_id"] = json!("RUN");
+        event["expires_at"] = json!("T");
+        assert_eq!(
+            event,
+            json!({
+                "id": "ID", "run_id": "RUN", "kind": "choice", "title": "Quale modello?",
+                "message": "Ho trovato tre varianti adatte a questo computer.",
+                "options": [
+                    {"id": "q4", "label": "Q4_K_M · 4,7 GB", "description": "Consigliata"},
+                    {"id": "q8", "label": "Q8_0 · 8,5 GB", "description": null},
+                    {"id": "q5", "label": "Q5_K_M · 5,6 GB", "description": null}
+                ],
+                "multiple": false, "allow_other": false, "fields": [], "confirm_label": null, "deny_label": null, "expires_at": "T"
+            })
+        );
+        assert_eq!(serde_json::to_value(&q).unwrap()["title"], "Quale modello?");
+
+        // The run is stopped: nothing was said after the question, and it is still going.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!e.run_done(&run));
+        assert_eq!(backend.requests.lock().unwrap().len(), 1, "the model was not asked again");
+
+        // A wrong answer is an error and the question stays open; an unknown one is not found.
+        let err = e.respond_question(&q.id, answer("answer", pick(&["zz"]))).unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)) && err.status() == 400, "{err}");
+        assert_eq!(e.questions().len(), 1);
+        assert!(matches!(e.respond_question(&q.id, answer("boh", QuestionAnswer::default())), Err(Error::Invalid(_))));
+        assert!(matches!(e.respond_question("ask_non_esiste", answer("decline", QuestionAnswer::default())), Err(Error::NotFound(_))));
+
+        e.respond_question(&q.id, answer("answer", pick(&["q4"]))).unwrap();
+        wait_finished(&e, &run).await;
+        assert!(e.questions().is_empty());
+        // Closing event and result, as the contract says.
+        assert_eq!(
+            customs(&e, &run, "aiw.question_resolved"),
+            [json!({"id": q.id, "outcome": "answered", "answer": {"selected": ["q4"], "other": null, "confirmed": null, "values": null}})]
+        );
+        assert_eq!(
+            tool_result(&e, &session),
+            json!({"outcome": "answered", "selected": ["q4"], "other": null, "confirmed": null, "values": null})
+        );
+        // The model got the answer in its next request, and went on.
+        let told = backend.requests.lock().unwrap()[1].messages.last().map(|m| m.text()).unwrap_or_default();
+        assert!(told.contains("\"selected\":[\"q4\"]"), "{told}");
+        assert_eq!(e.messages(&session).unwrap().last().unwrap().content, "Scarico la Q4.");
+        // A closed question is not found any more, whoever asks.
+        assert!(matches!(e.respond_question(&q.id, answer("decline", QuestionAnswer::default())), Err(Error::NotFound(_))));
+        // The activity log has what happened, with no content of the answer.
+        let row = e.audit().into_iter().find(|a| a.action == "question").expect("an audit row");
+        assert_eq!(
+            (row.tool.as_deref(), row.decision.as_deref(), row.run_id.as_deref()),
+            (Some("ask_user"), Some("answered"), Some(run.as_str()))
+        );
+    }
+
+    #[tokio::test]
+    async fn every_kind_of_question_comes_back_in_its_own_shape() {
+        let (e, _d, _w) = engine(vec![]).await;
+        // A confirmation.
+        let (_, task, q) = ask_in_background(&e, OWNER, json!({"kind": "confirm", "message": "Procedo?"})).await;
+        e.respond_question(&q.id, answer("answer", QuestionAnswer { confirmed: Some(false), ..Default::default() })).unwrap();
+        assert_eq!(
+            finished(task).await,
+            json!({"outcome": "answered", "selected": null, "other": null, "confirmed": false, "values": null})
+        );
+        // A form.
+        let (_, task, q) = ask_in_background(&e, OWNER, form()).await;
+        let values = json!({"nome": "Posta", "lingua": "italiano", "da_solo": true}).as_object().unwrap().clone();
+        e.respond_question(&q.id, answer("answer", QuestionAnswer { values: Some(values), ..Default::default() })).unwrap();
+        let r = finished(task).await;
+        assert_eq!(r["values"], json!({"nome": "Posta", "lingua": "italiano", "da_solo": true}));
+        assert_eq!((&r["selected"], &r["confirmed"]), (&Value::Null, &Value::Null));
+        // A multiple choice with «Altro».
+        let mut args = models();
+        args["multiple"] = json!(true);
+        args["allow_other"] = json!(true);
+        let (_, task, q) = ask_in_background(&e, OWNER, args).await;
+        assert!(q.multiple && q.allow_other);
+        e.respond_question(&q.id, answer("answer", QuestionAnswer { other: Some("Phi".into()), ..pick(&["q4", "q8"]) })).unwrap();
+        assert_eq!(
+            finished(task).await,
+            json!({"outcome": "answered", "selected": ["q4", "q8"], "other": "Phi", "confirmed": null, "values": null})
+        );
+        // «Non ora»: no answer, nothing but the outcome.
+        let (ctx, task, q) = ask_in_background(&e, OWNER, models()).await;
+        e.respond_question(&q.id, answer("decline", QuestionAnswer::default())).unwrap();
+        assert_eq!(finished(task).await, json!({"outcome": "declined"}));
+        assert_eq!(customs(&e, &ctx.run_id, "aiw.question_resolved"), [json!({"id": q.id, "outcome": "declined", "answer": null})]);
+        assert!(e.questions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_listing_has_every_open_question_in_order() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let (_, first, q1) = ask_in_background(&e, OWNER, models()).await;
+        let (_, second, _) = {
+            let tool = e.tool_registry().get("ask_user").unwrap();
+            let ctx = test_ctx(&e, Some(OWNER));
+            let task = tokio::spawn({
+                let ctx = ctx.clone();
+                async move { tool.call(json!({"kind": "confirm", "message": "E questa?"}), &ctx).await }
+            });
+            wait_until("two questions", || (e.questions().len() == 2).then_some(())).await;
+            (ctx, task, ())
+        };
+        let ids: Vec<String> = e.questions().into_iter().map(|q| q.id).collect();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0], q1.id, "the oldest first");
+        e.respond_question(&ids[0], answer("decline", QuestionAnswer::default())).unwrap();
+        e.respond_question(&ids[1], answer("decline", QuestionAnswer::default())).unwrap();
+        finished(first).await;
+        finished(second).await;
+    }
+
+    #[tokio::test]
+    async fn a_run_without_what_it_takes_gets_unsupported_at_once() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let tool = e.tool_registry().get("ask_user").unwrap();
+        // The client declared nothing: `unsupported` with the hint, no event, no question left behind.
+        let ctx = test_ctx(&e, Some(BARE));
+        let out = tokio::time::timeout(Duration::from_secs(2), tool.call(models(), &ctx)).await.expect("it does not wait").unwrap();
+        assert!(!out.is_error);
+        assert_eq!(
+            serde_json::from_str::<Value>(&out.content).unwrap(),
+            json!({"outcome": "unsupported", "hint": "Fai la domanda in testo e aspetta il prossimo messaggio."})
+        );
+        assert!(customs(&e, &ctx.run_id, "aiw.question").is_empty() && e.questions().is_empty());
+        // Even arguments that would not pass: the model is told to ask in text, and that is what it does.
+        let out = tool.call(json!({"kind": "?"}), &test_ctx(&e, Some(BARE))).await.unwrap();
+        assert!(out.content.contains("unsupported"));
+        // No origin at all: the usual refusal of the management tools.
+        let err = tool.call(models(), &test_ctx(&e, None)).await.unwrap_err();
+        assert!(matches!(err, Error::Denied(_)) && err.to_string().contains("disponibile solo all'Assistente in una chat"), "{err}");
+        // A client that can show questions gets asked, even when its person is not the owner (a phone answers them).
+        let (_, task, q) = ask_in_background(&e, PHONE, models()).await;
+        e.respond_question(&q.id, answer("decline", QuestionAnswer::default())).unwrap();
+        finished(task).await;
+        // And through a whole run, with the arguments checked: a wrong one is told to the model as an error.
+        let turns =
+            vec![ScriptedBackend::tool_turn("a1", "ask_user", json!({"kind": "choice", "message": "?"})), ScriptedBackend::text_turn("ok")];
+        let (session, run, _) = assistant_run(&e, turns, "chiedi", OWNER).await;
+        wait_finished(&e, &run).await;
+        let m = e.messages(&session).unwrap().into_iter().find(|m| m.role == "tool").unwrap();
+        assert!(m.content.contains("da 2 a 8 opzioni"), "{}", m.content);
+        assert!(e.questions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_wait_ends_on_time_with_the_outcome_timeout() {
+        let (e, _d, _w) = engine(vec![]).await;
+        e.set_config("global", "approvals.timeout_s", json!(1)).unwrap();
+        let started = std::time::Instant::now();
+        let (ctx, task, q) = ask_in_background(&e, OWNER, models()).await;
+        let at = chrono::DateTime::parse_from_rfc3339(q.expires_at.as_deref().unwrap()).unwrap();
+        assert!((at.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds() <= 1, "the limit of the setting, not five minutes");
+        assert_eq!(finished(task).await, json!({"outcome": "timeout"}));
+        assert!(started.elapsed() >= Duration::from_millis(900), "it waited for the limit");
+        assert!(e.questions().is_empty(), "an expired question is withdrawn");
+        assert_eq!(customs(&e, &ctx.run_id, "aiw.question_resolved"), [json!({"id": q.id, "outcome": "timeout", "answer": null})]);
+        assert!(matches!(e.respond_question(&q.id, answer("decline", QuestionAnswer::default())), Err(Error::NotFound(_))), "too late");
+        assert!(e.audit().iter().any(|a| a.action == "question" && a.decision.as_deref() == Some("timeout") && a.actor == "system"));
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_run_closes_the_question_as_cancelled() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let turns = vec![ScriptedBackend::tool_turn("a1", "ask_user", models()), ScriptedBackend::text_turn("non arrivo qui")];
+        let (session, run, _) = assistant_run(&e, turns, "chiedi", OWNER).await;
+        let q = next_question(&e).await;
+        e.cancel_run(&run).unwrap();
+        wait_finished(&e, &run).await;
+        assert!(e.questions().is_empty());
+        assert_eq!(customs(&e, &run, "aiw.question_resolved"), [json!({"id": q.id, "outcome": "cancelled", "answer": null})]);
+        assert_eq!(e.sessions().unwrap().into_iter().find(|s| s.id == session).unwrap().last_status.as_deref(), Some("cancelled"));
+        // The closing event comes before the end of the run.
+        let events = e.run_events(&run);
+        let resolved =
+            events.iter().position(|s| matches!(&s.event.event, AgEvent::Custom { name, .. } if name == "aiw.question_resolved")).unwrap();
+        let end = events.iter().position(|s| s.event.event.is_terminal()).unwrap();
+        assert!(resolved < end);
+    }
+
+    #[tokio::test]
+    async fn the_kill_switch_closes_questions_and_secret_requests_before_stopping_the_runs() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let turns = vec![ScriptedBackend::tool_turn("a1", "ask_user", models()), ScriptedBackend::text_turn("non arrivo qui")];
+        let (_, ask_run, _) = assistant_run(&e, turns, "chiedi", OWNER).await;
+        let q = next_question(&e).await;
+        let turns = vec![
+            ScriptedBackend::tool_turn(
+                "s1",
+                "aiw_secret_request",
+                json!({"target": "setting:search.brave_api_key", "label": "Chiave di Brave"}),
+            ),
+            ScriptedBackend::text_turn("non arrivo qui"),
+        ];
+        let (_, secret_run, _) = assistant_run(&e, turns, "chiedi il segreto", OWNER).await;
+        let req = next_secret(&e).await;
+
+        let killed = e.kill().await;
+        assert_eq!((killed["questions"].as_u64(), killed["secret_requests"].as_u64()), (Some(1), Some(1)), "{killed}");
+        wait_finished(&e, &ask_run).await;
+        wait_finished(&e, &secret_run).await;
+        assert!(e.questions().is_empty() && e.secret_requests().is_empty());
+        assert_eq!(customs(&e, &ask_run, "aiw.question_resolved"), [json!({"id": q.id, "outcome": "cancelled", "answer": null})]);
+        assert_eq!(customs(&e, &secret_run, "aiw.secret_resolved"), [json!({"id": req.id, "outcome": "cancelled"})]);
+        assert!(e
+            .audit()
+            .iter()
+            .any(|a| a.action == "kill" && a.detail.contains("1 domande") && a.detail.contains("1 richieste di segreti")));
+        // What was closed cannot be answered any more.
+        assert!(matches!(e.respond_question(&q.id, answer("decline", QuestionAnswer::default())), Err(Error::NotFound(_))));
+        assert!(matches!(e.respond_secret(&req.id, provide(SETTING_VALUE), true).await, Err(Error::NotFound(_))));
+        assert!(e.0.config.get_str("search.brave_api_key").unwrap_or_default().is_empty(), "nothing was stored");
+    }
+
+    // ------------------------------------------------------------------ a fake Hugging Face
+
+    /// A local Hugging Face that accepts one token and answers 401 to any other. Returns its address.
+    async fn fake_hf(good: &'static str) -> String {
+        fake_hf_after(good, 0).await
+    }
+
+    /// The same, answering after `delay_ms` milliseconds (a destination that takes its time).
+    async fn fake_hf_after(good: &'static str, delay_ms: u64) -> String {
+        use axum::http::{HeaderMap, StatusCode};
+        let app = axum::Router::new().route(
+            "/api/whoami-v2",
+            axum::routing::get(move |h: HeaderMap| async move {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                let given = h.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+                if given == format!("Bearer {good}") {
+                    (StatusCode::OK, axum::Json(json!({"name": "tester"})))
+                } else {
+                    (StatusCode::UNAUTHORIZED, axum::Json(json!({"error": "Invalid credentials"})))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// Every place a value could leak to, as text: the events of the run (live and as stored), the messages
+    /// of the session with their tool calls, the whole activity log, the confirmations and the requests
+    /// still open, what the model was sent, and the result of the tool.
+    fn everything(e: &Engine, session: &str, run: &str, backend: &ScriptedBackend) -> String {
+        let live = serde_json::to_string(&e.run_events(run)).unwrap();
+        let stored = serde_json::to_string(&e.0.store.events(run).unwrap()).unwrap();
+        let messages = serde_json::to_string(&e.messages(session).unwrap()).unwrap();
+        let audit = serde_json::to_string(&e.audit()).unwrap();
+        let open = serde_json::to_string(&(e.approvals(), e.secret_requests(), e.questions())).unwrap();
+        let sent = serde_json::to_string(&*backend.requests.lock().unwrap()).unwrap();
+        [live, stored, messages, audit, open, sent].join("\n")
+    }
+
+    #[tokio::test]
+    async fn a_secret_goes_to_the_provider_and_is_in_none_of_the_places_the_model_or_the_history_see() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let hf = fake_hf(GOOD_TOKEN).await;
+        e.set_provider_auth("hf", None, Some(hf)).await.unwrap();
+        let args =
+            json!({"target": "provider_token:hf", "label": "Token di Hugging Face", "reason": "CANARY_ARGS serve per i modelli riservati"});
+        let turns = vec![ScriptedBackend::tool_turn("s1", "aiw_secret_request", args), ScriptedBackend::text_turn("Il token è salvato.")];
+        e.audit_user("canary", "CANARY_AUDIT");
+        let (session, run, backend) = assistant_run(&e, turns, "Aggiungi il token di Hugging Face CANARY_USER", OWNER).await;
+        let req = next_secret(&e).await;
+
+        // The event has the shape of the contract and says where the value goes, in the engine's words.
+        let mut event = customs(&e, &run, "aiw.secret_request").remove(0);
+        assert_eq!(event["id"], req.id);
+        assert!(req.id.starts_with("sec_"));
+        assert!(event["expires_at"].as_str().is_some_and(|t| t.ends_with('Z')));
+        event["id"] = json!("ID");
+        event["run_id"] = json!("RUN");
+        event["expires_at"] = json!("T");
+        assert_eq!(
+            event,
+            json!({
+                "id": "ID", "run_id": "RUN", "target": "provider_token:hf", "label": "Token di Hugging Face",
+                "reason": "CANARY_ARGS serve per i modelli riservati", "destination": "Hugging Face (127.0.0.1)", "expires_at": "T"
+            })
+        );
+        assert_eq!(req.run_id, run);
+        assert!(!e.run_done(&run), "the run waits");
+
+        // A value the service refuses: 401, nothing of the value in the words, the request still open, nothing stored.
+        let err = e.respond_secret(&req.id, provide(WRONG_TOKEN), true).await.unwrap_err();
+        assert!(matches!(err, Error::Unauthorized(_)) && err.status() == 401, "{err:?}");
+        assert!(!err.to_string().contains(WRONG_TOKEN) && !format!("{err:?}").contains(WRONG_TOKEN));
+        assert_eq!(e.secret_requests().len(), 1, "it can be tried again");
+        assert!(!e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured);
+        assert!(e.0.store.get_doc::<crate::models::ProviderDoc>("model_provider", "hf").unwrap().is_none_or(|d| d.token.is_none()));
+        // Someone who is not the owner cannot give it, and the request stays.
+        assert!(matches!(e.respond_secret(&req.id, provide(GOOD_TOKEN), false).await, Err(Error::Denied(_))));
+        assert_eq!(e.secret_requests().len(), 1);
+
+        // The right one.
+        e.respond_secret(&req.id, provide(GOOD_TOKEN), true).await.unwrap();
+        wait_finished(&e, &run).await;
+        assert!(e.secret_requests().is_empty());
+        assert!(e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured, "the token is stored");
+        let doc = e.0.store.get_doc::<crate::models::ProviderDoc>("model_provider", "hf").unwrap().expect("stored");
+        assert_eq!(doc.token.as_deref(), Some(GOOD_TOKEN));
+        assert_eq!(customs(&e, &run, "aiw.secret_resolved"), [json!({"id": req.id, "outcome": "stored"})]);
+        assert_eq!(tool_result(&e, &session), json!({"outcome": "stored", "target": "provider_token:hf"}));
+        assert_eq!(e.messages(&session).unwrap().last().unwrap().content, "Il token è salvato.");
+        // The audit trail has one row for it, with the destination and nothing else.
+        let sets: Vec<_> = e.audit().into_iter().filter(|a| a.action == "secret.set").collect();
+        assert_eq!(sets.len(), 1);
+        assert_eq!(
+            (sets[0].detail.as_str(), sets[0].run_id.as_deref(), sets[0].actor.as_str()),
+            ("provider_token:hf", Some(run.as_str()), "user")
+        );
+        // The model asked for it; the engine knows it as a secret from now on.
+        assert!(e.known_secrets().iter().any(|s| s == GOOD_TOKEN));
+        // Typing the secret is the consent: no confirmation card was asked for (a card would carry the arguments).
+        assert!(e.audit().iter().all(|a| a.action != "approval"));
+
+        // The value, and the one that was refused, are nowhere. The canaries show every place is looked at.
+        let all = everything(&e, &session, &run, &backend);
+        for canary in ["CANARY_USER", "CANARY_ARGS", "CANARY_AUDIT", "aiw.secret_request", "aiw.secret_resolved", "provider_token:hf"] {
+            assert!(all.contains(canary), "{canary} is not in the text searched: the search would prove nothing");
+        }
+        for value in [GOOD_TOKEN, WRONG_TOKEN] {
+            assert!(!all.contains(value), "a secret value is in the events, the messages, the audit, the requests or the prompt");
+        }
+        let seen = format!("{:?} {:?} {:?}", e.secret_requests(), e.approvals(), provide(GOOD_TOKEN));
+        assert!(!seen.contains(GOOD_TOKEN), "Debug of the answer hides the value");
+    }
+
+    #[tokio::test]
+    async fn a_secret_refused_by_the_destination_leaves_the_request_open_for_another_try() {
+        let (e, _d, _w) = engine(vec![]).await;
+        e.set_provider_auth("hf", None, Some(fake_hf(GOOD_TOKEN).await)).await.unwrap();
+        let turns = vec![
+            ScriptedBackend::tool_turn("s1", "aiw_secret_request", json!({"target": "provider_token:hf", "label": "Token"})),
+            ScriptedBackend::text_turn("Fatto."),
+        ];
+        let (session, run, _) = assistant_run(&e, turns, "token", OWNER).await;
+        let req = next_secret(&e).await;
+        // A value that is not valid in itself, before any destination is asked.
+        for (what, value) in [
+            ("empty", Some("   ".to_string())),
+            ("missing", None),
+            ("the mask", Some(SECRET_MASK.to_string())),
+            ("a newline in the middle", Some(format!("{WRONG_TOKEN}\nx"))),
+            ("too long", Some("x".repeat(MAX_SECRET_CHARS + 1))),
+        ] {
+            let err = e.respond_secret(&req.id, SecretAnswer { action: "provide".into(), value: value.clone() }, true).await.unwrap_err();
+            assert!(matches!(err, Error::Invalid(_)), "{what}: {err:?}");
+            let typed = value.as_deref().map(str::trim).unwrap_or_default();
+            assert!(typed.is_empty() || !err.to_string().contains(typed), "{what}: the message repeats the value");
+        }
+        assert!(matches!(
+            e.respond_secret(&req.id, SecretAnswer { action: "boh".into(), value: None }, true).await,
+            Err(Error::Invalid(_))
+        ));
+        // Refused twice, then the right one: the same request takes it, the paste blanks are trimmed.
+        for _ in 0..2 {
+            let err = e.respond_secret(&req.id, provide(WRONG_TOKEN), true).await.unwrap_err();
+            assert_eq!(err.status(), 401);
+            assert_eq!(e.secret_requests().len(), 1);
+        }
+        e.respond_secret(&req.id, provide(&format!("  {GOOD_TOKEN}\n")), true).await.unwrap();
+        wait_finished(&e, &run).await;
+        assert_eq!(tool_result(&e, &session)["outcome"], "stored");
+        assert_eq!(
+            e.0.store.get_doc::<crate::models::ProviderDoc>("model_provider", "hf").unwrap().unwrap().token.as_deref(),
+            Some(GOOD_TOKEN)
+        );
+        // Closed: a second answer finds nothing.
+        assert!(matches!(e.respond_secret(&req.id, provide(GOOD_TOKEN), true).await, Err(Error::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn while_a_value_is_being_written_no_second_answer_is_taken() {
+        let (e, _d, _w) = engine(vec![]).await;
+        e.set_provider_auth("hf", None, Some(fake_hf_after(GOOD_TOKEN, 600).await)).await.unwrap();
+        let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+        let ctx = test_ctx(&e, Some(OWNER));
+        let task = tokio::spawn({
+            let (ctx, args) = (ctx.clone(), secret_args("provider_token:hf"));
+            async move { tool.call(args, &ctx).await }
+        });
+        let req = next_secret(&e).await;
+        let first = tokio::spawn({
+            let (e, id) = (e.clone(), req.id.clone());
+            async move { e.respond_secret(&id, provide(GOOD_TOKEN), true).await }
+        });
+        wait_until("the value to be in flight", || e.0.secret_requests.lock().unwrap().get(&req.id).filter(|p| p.busy).map(|_| ())).await;
+        // The request is still listed, but neither a second value nor a refusal gets in the way of the first.
+        assert_eq!(e.secret_requests().len(), 1);
+        assert!(matches!(e.respond_secret(&req.id, provide(GOOD_TOKEN), true).await, Err(Error::Conflict(_))));
+        assert!(matches!(e.respond_secret(&req.id, decline(), true).await, Err(Error::Conflict(_))));
+        first.await.unwrap().unwrap();
+        assert_eq!(finished(task).await, json!({"outcome": "stored", "target": "provider_token:hf"}));
+        assert_eq!(e.audit().iter().filter(|a| a.action == "secret.set").count(), 1, "stored once");
+    }
+
+    #[tokio::test]
+    async fn a_run_cancelled_while_its_value_is_being_written_still_ends_with_the_value_stored_once() {
+        let (e, _d, _w) = engine(vec![]).await;
+        e.set_provider_auth("hf", None, Some(fake_hf_after(GOOD_TOKEN, 500).await)).await.unwrap();
+        let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+        let ctx = test_ctx(&e, Some(OWNER));
+        let task = tokio::spawn({
+            let (ctx, args) = (ctx.clone(), secret_args("provider_token:hf"));
+            async move { tool.call(args, &ctx).await }
+        });
+        let req = next_secret(&e).await;
+        let write = tokio::spawn({
+            let (e, id) = (e.clone(), req.id.clone());
+            async move { e.respond_secret(&id, provide(GOOD_TOKEN), true).await }
+        });
+        wait_until("the value to be in flight", || e.0.secret_requests.lock().unwrap().get(&req.id).filter(|p| p.busy).map(|_| ())).await;
+        ctx.cancel.cancel();
+        assert_eq!(finished(task).await, json!({"outcome": "cancelled"}));
+        // The write goes on and is honest about it: the value is stored and the request leaves nothing behind.
+        write.await.unwrap().unwrap();
+        assert!(e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured);
+        assert!(e.secret_requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_request_for_a_secret_can_be_declined_and_a_missing_one_is_not_found() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let turns = vec![
+            ScriptedBackend::tool_turn("s1", "aiw_secret_request", json!({"target": "setting:search.brave_api_key", "label": "Chiave"})),
+            ScriptedBackend::text_turn("Va bene."),
+        ];
+        let (session, run, _) = assistant_run(&e, turns, "chiave", OWNER).await;
+        let req = next_secret(&e).await;
+        assert!(matches!(e.respond_secret(&req.id, decline(), false).await, Err(Error::Denied(_))), "not from a device");
+        e.respond_secret(&req.id, decline(), true).await.unwrap();
+        wait_finished(&e, &run).await;
+        assert_eq!(tool_result(&e, &session), json!({"outcome": "declined"}));
+        assert_eq!(customs(&e, &run, "aiw.secret_resolved"), [json!({"id": req.id, "outcome": "declined"})]);
+        assert!(e.0.config.get_str("search.brave_api_key").unwrap_or_default().is_empty());
+        assert!(e.audit().iter().any(|a| a.action == "secret.request"
+            && a.decision.as_deref() == Some("declined")
+            && a.detail == "setting:search.brave_api_key"));
+        assert!(e.audit().iter().all(|a| a.action != "secret.set"));
+        assert!(matches!(e.respond_secret(&req.id, decline(), true).await, Err(Error::NotFound(_))));
+        assert!(matches!(e.respond_secret("sec_non_esiste", provide(GOOD_TOKEN), true).await, Err(Error::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn a_request_for_a_secret_expires_and_is_cancelled_like_a_question() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+        let args = json!({"target": "setting:search.brave_api_key", "label": "Chiave"});
+        // Time.
+        e.set_config("global", "approvals.timeout_s", json!(1)).unwrap();
+        let ctx = test_ctx(&e, Some(OWNER));
+        let out = tokio::time::timeout(Duration::from_secs(10), tool.call(args.clone(), &ctx)).await.expect("it ends").unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&out.content).unwrap(), json!({"outcome": "timeout"}));
+        assert!(e.secret_requests().is_empty());
+        let resolved = customs(&e, &ctx.run_id, "aiw.secret_resolved");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0]["outcome"], "timeout");
+        // The run is cancelled.
+        e.set_config("global", "approvals.timeout_s", json!(0)).unwrap();
+        let ctx = test_ctx(&e, Some(OWNER));
+        let task = tokio::spawn({
+            let (tool, ctx, args) = (tool.clone(), ctx.clone(), args.clone());
+            async move { tool.call(args, &ctx).await }
+        });
+        next_secret(&e).await;
+        ctx.cancel.cancel();
+        assert_eq!(finished(task).await, json!({"outcome": "cancelled"}));
+        assert!(e.secret_requests().is_empty());
+        assert_eq!(customs(&e, &ctx.run_id, "aiw.secret_resolved")[0]["outcome"], "cancelled");
+    }
+
+    #[tokio::test]
+    async fn a_secret_is_asked_only_of_the_owner_whose_client_can_take_it() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+        let args = json!({"target": "provider_token:hf", "label": "Token"});
+        let hint = |v: &Value| v["hint"].as_str().unwrap_or_default().to_string();
+        for (who, origin) in [
+            ("a client that declared nothing", BARE),
+            ("a phone", PHONE),
+            ("owner, but secrets not shown", RunOrigin { owner: true, questions: true, secrets: false }),
+            ("secrets declared, not the owner", RunOrigin { owner: false, questions: true, secrets: true }),
+        ] {
+            let ctx = test_ctx(&e, Some(origin));
+            let out = tokio::time::timeout(Duration::from_secs(2), tool.call(args.clone(), &ctx)).await.expect("it does not wait").unwrap();
+            let v: Value = serde_json::from_str(&out.content).unwrap();
+            assert_eq!(v["outcome"], "unsupported", "{who}");
+            assert!(hint(&v).contains("dall'app su questo computer"), "{who}: {v}");
+            assert!(customs(&e, &ctx.run_id, "aiw.secret_request").is_empty(), "{who}");
+        }
+        assert!(e.secret_requests().is_empty());
+        // No origin: the usual refusal.
+        let err = tool.call(args, &test_ctx(&e, None)).await.unwrap_err();
+        assert!(matches!(err, Error::Denied(_)), "{err:?}");
+    }
+
+    // ------------------------------------------------------------------ the destinations
+
+    fn http_connector() -> McpServerConfig {
+        serde_json::from_value(json!({
+            "name": "Remoto di prova", "transport": "http", "enabled": false,
+            "url": "https://utente:FAKE_URL_PASSWORD_1a2b@api.example.com/mcp/FAKE_PATH_SEGMENT_9a0b1c2d3e4f5g?token=FAKE_QUERY_TOKEN_3c4d",
+            "headers": {"Authorization": "", "X-Region": "eu"}
+        }))
+        .unwrap()
+    }
+
+    fn stdio_connector() -> McpServerConfig {
+        serde_json::from_value(json!({
+            "name": "Locale di prova", "transport": "stdio", "enabled": false, "command": "npx",
+            "args": ["-y", "server-github", "--token", "FAKE_ARG_VALUE_7e8f9a"],
+            "env": {"GITHUB_TOKEN": "", "MODE": "test"}
+        }))
+        .unwrap()
+    }
+
+    fn secret_args(target: &str) -> Value {
+        json!({"target": target, "label": "Segreto"})
+    }
+
+    /// Asks for `target` in a run, gives `value`, and returns what the tool said.
+    async fn give(e: &Engine, target: &str, value: &str) -> Value {
+        let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+        let ctx = test_ctx(e, Some(OWNER));
+        let task = tokio::spawn({
+            let (tool, ctx, args) = (tool.clone(), ctx.clone(), secret_args(target));
+            async move { tool.call(args, &ctx).await }
+        });
+        let req = next_secret(e).await;
+        e.respond_secret(&req.id, provide(value), true).await.unwrap();
+        finished(task).await
+    }
+
+    async fn refused(e: &Engine, target: &str) -> String {
+        let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+        let err = tool.call(secret_args(target), &test_ctx(e, Some(OWNER))).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{target}: {err:?}");
+        assert!(e.secret_requests().is_empty(), "nothing was asked for {target}");
+        err.to_string()
+    }
+
+    #[tokio::test]
+    async fn the_header_of_a_connector_takes_the_secret_and_the_request_says_where_it_goes() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let id = e.save_mcp_server(http_connector()).await.unwrap().config.id;
+        let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+        let ctx = test_ctx(&e, Some(OWNER));
+        let task = tokio::spawn({
+            let (ctx, args) = (ctx.clone(), secret_args("mcp_header:Remoto_di_prova:authorization"));
+            async move { tool.call(args, &ctx).await }
+        });
+        let req = next_secret(&e).await;
+        // The connector is found by its name too, the header whatever its case, and the target is made canonical.
+        assert_eq!(req.target, format!("mcp_header:{id}:Authorization"));
+        assert_eq!(req.destination, "Connettore MCP «Remoto_di_prova», header Authorization, inviato a https://api.example.com/mcp/omesso");
+        for leaked in ["FAKE_URL_PASSWORD", "FAKE_PATH_SEGMENT", "FAKE_QUERY_TOKEN", "utente"] {
+            assert!(!req.destination.contains(leaked), "{leaked} in {}", req.destination);
+        }
+        e.respond_secret(&req.id, provide(HEADER_VALUE), true).await.unwrap();
+        assert_eq!(finished(task).await, json!({"outcome": "stored", "target": format!("mcp_header:{id}:Authorization")}));
+        // The value is where the connector reads it, the other header is untouched, and the API shows the mask.
+        let stored = e.0.store.get_doc::<McpServerConfig>("mcp", &id).unwrap().unwrap();
+        assert_eq!(stored.headers.as_ref().unwrap()["Authorization"], HEADER_VALUE);
+        assert_eq!(stored.headers.as_ref().unwrap()["X-Region"], "eu");
+        let shown = serde_json::to_string(&e.mcp_servers()).unwrap();
+        assert!(!shown.contains(HEADER_VALUE) && shown.contains(SECRET_MASK));
+        assert!(e.known_secrets().iter().any(|s| s == HEADER_VALUE));
+        // What cannot be a destination: another transport's slot, an undeclared name, a name that is no secret.
+        assert!(refused(&e, &format!("mcp_env:{id}:GITHUB_TOKEN")).await.contains("usa http"));
+        assert!(refused(&e, &format!("mcp_header:{id}:X-Nuovo-Token")).await.contains("non dichiarata"));
+        assert!(refused(&e, &format!("mcp_header:{id}:X-Region")).await.contains("non sembra il nome di un segreto"));
+        assert!(refused(&e, "mcp_header:inesistente:Authorization").await.contains("non trovato"));
+        assert!(refused(&e, &format!("mcp_header:{id}")).await.contains("la forma è"));
+    }
+
+    #[tokio::test]
+    async fn the_environment_of_a_confirmed_stdio_connector_takes_the_secret_and_stays_confirmed() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let info = e.save_mcp_server(stdio_connector()).await.unwrap();
+        let id = info.config.id.clone();
+        e.approve_mcp_server(&id, &aiw_tools::mcp::launch::approval_hash(&info.config)).await.unwrap();
+        assert!(e.mcp_approved(&e.0.store.get_doc::<McpServerConfig>("mcp", &id).unwrap().unwrap()));
+
+        let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+        let ctx = test_ctx(&e, Some(OWNER));
+        let task = tokio::spawn({
+            let (ctx, args) = (ctx.clone(), secret_args(&format!("mcp_env:{id}:GITHUB_TOKEN")));
+            async move { tool.call(args, &ctx).await }
+        });
+        let req = next_secret(&e).await;
+        // The command shown to the person has no value of an argument that follows a flag that names a secret.
+        assert_eq!(
+            req.destination,
+            "Connettore MCP «Locale_di_prova», variabile GITHUB_TOKEN, passata al comando `npx -y server-github --token ••••••`"
+        );
+        assert!(!req.destination.contains("FAKE_ARG_VALUE"));
+        e.respond_secret(&req.id, provide(ENV_VALUE), true).await.unwrap();
+        finished(task).await;
+        let stored = e.0.store.get_doc::<McpServerConfig>("mcp", &id).unwrap().unwrap();
+        assert_eq!(stored.env.as_ref().unwrap()["GITHUB_TOKEN"], ENV_VALUE);
+        assert_eq!(stored.env.as_ref().unwrap()["MODE"], "test");
+        assert!(e.mcp_approved(&stored), "the confirmation covers the names of the variables, not their values: it still stands");
+        assert!(!serde_json::to_string(&e.mcp_servers()).unwrap().contains(ENV_VALUE));
+        // A stdio connector has no headers, and the plain variable is not a secret slot.
+        assert!(refused(&e, &format!("mcp_header:{id}:Authorization")).await.contains("usa stdio"));
+        assert!(refused(&e, &format!("mcp_env:{id}:MODE")).await.contains("non sembra il nome di un segreto"));
+        assert!(refused(&e, &format!("mcp_env:{id}:github_token")).await.contains("non dichiarata"), "variable names are exact");
+    }
+
+    #[tokio::test]
+    async fn an_app_setting_and_an_engine_setting_take_the_secret_only_when_the_schema_calls_it_secret() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let said = give(&e, "setting:search.brave_api_key", SETTING_VALUE).await;
+        assert_eq!(said, json!({"outcome": "stored", "target": "setting:search.brave_api_key"}));
+        assert_eq!(e.0.config.get_str("search.brave_api_key").as_deref(), Some(SETTING_VALUE));
+        assert!(!serde_json::to_string(&e.config()).unwrap().contains(SETTING_VALUE), "the API shows the mask");
+        // The settings that are not secret, and the ones that do not exist, are not destinations.
+        assert!(refused(&e, "setting:ui.theme").await.contains("non è un'impostazione segreta"));
+        assert!(refused(&e, "setting:non.esiste").await.contains("non è un'impostazione segreta"));
+        // An engine with a secret setting in its manifest.
+        let (runtime, key) = e
+            .runtimes()
+            .into_iter()
+            .find_map(|r| r.settings_schema.properties.iter().find(|(_, f)| f.secret).map(|(k, _)| (r.id.clone(), k.clone())))
+            .expect("an engine with a secret setting");
+        let target = format!("runtime_setting:{runtime}:{key}");
+        assert_eq!(give(&e, &target, RUNTIME_VALUE).await, json!({"outcome": "stored", "target": target}));
+        assert_eq!(e.0.runtimes.settings(&runtime).unwrap()[&key], RUNTIME_VALUE);
+        assert!(!serde_json::to_string(&e.runtimes()).unwrap().contains(RUNTIME_VALUE));
+        assert!(e.0.store.get_doc::<Value>("runtime_settings", &runtime).unwrap().is_some(), "it is persisted like the editor does");
+        assert!(refused(&e, &format!("runtime_setting:{runtime}:nessuna_chiave"))
+            .await
+            .contains("non è un'impostazione segreta del motore"));
+        assert!(refused(&e, "runtime_setting:motore-che-non-c-e:x").await.contains("motore"));
+        // A provider that has no token, an unknown one, a destination of a kind that does not exist.
+        assert!(refused(&e, "provider_token:ollama").await.contains("non usa un token"));
+        assert!(refused(&e, "provider_token:nessuno").await.contains("sconosciuto"));
+        assert!(refused(&e, "password_di_sistema:x").await.contains("destinazione"));
+        assert!(refused(&e, "").await.contains("manca"));
+    }
+
+    #[tokio::test]
+    async fn a_secret_that_is_stored_is_hidden_by_the_diagnostics_the_traces_and_aiw_inspect() {
+        let (e, _d, _w) = engine(vec![]).await;
+        give(&e, "setting:search.brave_api_key", SETTING_VALUE).await;
+        let inspect = super::super::inspect::render(&e, &json!({"topic": "secrets"})).await.unwrap();
+        assert!(!inspect.contains(SETTING_VALUE) && inspect.contains("\"set\":true"), "{inspect}");
+        let diagnostics = e.diagnostics().await.unwrap().to_string();
+        assert!(!diagnostics.contains(SETTING_VALUE));
+    }
+
+    // ------------------------------------------------------------------ aiw_secret_clear
+
+    #[tokio::test]
+    async fn clearing_a_secret_removes_it_from_where_it_was_stored_and_asks_for_confirmation_with_the_target_only() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let hf = fake_hf(GOOD_TOKEN).await;
+        e.set_provider_auth("hf", Some(Some(GOOD_TOKEN.into())), Some(hf)).await.unwrap();
+        let id = e.save_mcp_server(http_connector()).await.unwrap().config.id;
+        give(&e, &format!("mcp_header:{id}:Authorization"), HEADER_VALUE).await;
+        give(&e, "setting:search.brave_api_key", SETTING_VALUE).await;
+        // The same key also lives in the layer of this device: clearing takes it away from every layer.
+        e.set_config("device", "search.brave_api_key", json!(SETTING_VALUE)).unwrap();
+
+        // Through a whole run: it asks the owner first (in every mode), the card has the target and no value.
+        let turns = vec![
+            ScriptedBackend::tool_turn("c1", "aiw_secret_clear", json!({"target": "provider_token:hf"})),
+            ScriptedBackend::text_turn("Tolto."),
+        ];
+        let (session, run, backend) = assistant_run(&e, turns, "togli il token", OWNER).await;
+        let approval = wait_until("a confirmation", || e.approvals().into_iter().next()).await;
+        assert_eq!((approval.tool.as_str(), approval.risk.as_str()), ("aiw_secret_clear", "medium"));
+        assert_eq!(approval.args, json!({"target": "provider_token:hf"}));
+        assert!(e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured, "nothing happens before the answer");
+        assert!(e.respond_approval(&approval.id, true, false).is_err(), "a channel cannot confirm it");
+        e.respond_approval_as(&approval.id, true, false, true).unwrap();
+        wait_finished(&e, &run).await;
+        assert_eq!(tool_result(&e, &session), json!({"outcome": "cleared", "target": "provider_token:hf"}));
+        assert!(!e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured);
+        assert!(e.0.store.get_doc::<crate::models::ProviderDoc>("model_provider", "hf").unwrap().is_none_or(|d| d.token.is_none()));
+        let all = everything(&e, &session, &run, &backend);
+        assert!(!all.contains(GOOD_TOKEN), "the value of a secret that is cleared is not in what the run left behind");
+
+        // The tool itself, for the rest of the destinations.
+        let tool = e.tool_registry().get("aiw_secret_clear").unwrap();
+        assert_eq!((tool.risk(), tool.explicit_grant()), (Risk::Write, true));
+        let owner = test_ctx(&e, Some(OWNER));
+        for (target, expect) in [
+            (format!("mcp_header:{id}:Authorization"), format!("mcp_header:{id}:Authorization")),
+            ("setting:search.brave_api_key".into(), "setting:search.brave_api_key".into()),
+        ] {
+            let out = tool.call(json!({"target": target}), &owner).await.unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&out.content).unwrap(), json!({"outcome": "cleared", "target": expect}));
+        }
+        let stored = e.0.store.get_doc::<McpServerConfig>("mcp", &id).unwrap().unwrap();
+        assert_eq!(stored.headers.as_ref().unwrap()["Authorization"], "", "the name stays declared, the value is gone");
+        assert!(
+            e.0.config.get_str("search.brave_api_key").unwrap_or_default().is_empty(),
+            "gone from the global layer and from the device's"
+        );
+        assert!(e.audit().iter().any(|a| a.action == "secret.clear" && a.detail == "setting:search.brave_api_key"));
+        assert!(e.audit().iter().all(|a| !a.detail.contains(SETTING_VALUE) && !a.detail.contains(HEADER_VALUE)));
+        // Not for anyone but the owner, not without an origin, and not for what is not a destination.
+        let err = tool.call(json!({"target": "setting:search.brave_api_key"}), &test_ctx(&e, Some(PHONE))).await.unwrap_err();
+        assert!(matches!(err, Error::Denied(_)) && err.to_string().contains("accesso completo"), "{err}");
+        assert!(matches!(tool.call(json!({"target": "setting:search.brave_api_key"}), &test_ctx(&e, None)).await, Err(Error::Denied(_))));
+        assert!(matches!(tool.call(json!({"target": "setting:ui.theme"}), &owner).await, Err(Error::Invalid(_))));
+        assert!(matches!(tool.call(json!({}), &owner).await, Err(Error::Invalid(_))));
+    }
+
+    // ------------------------------------------------------------------ what the tools say about themselves
+
+    #[tokio::test]
+    async fn the_three_tools_are_registered_with_the_risk_and_the_grant_the_contract_gives_them() {
+        let (e, _d, _w) = engine(vec![]).await;
+        for (name, risk) in [("ask_user", Risk::Read), ("aiw_secret_request", Risk::Read), ("aiw_secret_clear", Risk::Write)] {
+            let tool = e.tool_registry().get(name).unwrap_or_else(|| panic!("{name} is not registered"));
+            assert_eq!((tool.risk(), tool.explicit_grant()), (risk, true), "{name}");
+            assert!(tool.available().is_ok());
+            assert_eq!(tool.parameters()["type"], "object");
+            assert!(tool.description().len() < 800, "{name}: the description is part of every request to the model");
+            assert!(crate::management::is_known(name) && crate::management::is_management(name));
+        }
+        // The questions schema is the one of the plan: kind and message required, the same limits.
+        let schema = e.tool_registry().get("ask_user").unwrap().parameters();
+        assert_eq!(schema["required"], json!(["kind", "message"]));
+        assert_eq!(schema["properties"]["kind"]["enum"], json!(["choice", "confirm", "form"]));
+        assert_eq!(
+            (schema["properties"]["options"]["minItems"].as_u64(), schema["properties"]["options"]["maxItems"].as_u64()),
+            (Some(2), Some(8))
+        );
+        assert_eq!(schema["properties"]["fields"]["maxItems"], 8);
+        assert_eq!(schema["properties"]["message"]["maxLength"], 1000);
+        // A secret request has no field that could take a value.
+        let schema = e.tool_registry().get("aiw_secret_request").unwrap().parameters();
+        let fields: Vec<&String> = schema["properties"].as_object().unwrap().keys().collect();
+        assert_eq!(fields, ["label", "reason", "target"]);
+        // The policy and the activity log see the destination.
+        assert_eq!(
+            e.tool_registry().get("aiw_secret_request").unwrap().subject(&json!({"target": "provider_token:hf"})).as_deref(),
+            Some("provider_token:hf")
+        );
+        // The builtin rules ask for the clearing and let the other two through, in every mode.
+        let rules = crate::management::builtin_rules();
+        assert!(
+            rules.iter().any(|r| r.tool == "aiw_secret_clear")
+                && !rules.iter().any(|r| r.tool == "ask_user" || r.tool == "aiw_secret_request")
+        );
+    }
+
+    #[test]
+    fn a_value_the_destination_refuses_is_cleaned_out_of_its_error_and_the_status_stays() {
+        for (e, status) in [
+            (Error::Invalid("rifiutato: SEGRETO-X non va".into()), 400),
+            (Error::Unauthorized("SEGRETO-X".into()), 401),
+            (Error::Runtime("sì SEGRETO-X no SEGRETO-X".into()), Error::Runtime(String::new()).status()),
+            (Error::Upstream("risposta: SEGRETO-X".into()), 502),
+            (Error::Io(std::io::Error::other("disco SEGRETO-X")), Error::Other(String::new()).status()),
+        ] {
+            let clean = without_value(e, "SEGRETO-X");
+            assert!(!clean.to_string().contains("SEGRETO-X") && clean.to_string().contains(SECRET_MASK), "{clean}");
+            assert_eq!(clean.status(), status, "{clean:?}");
+        }
+    }
+}
