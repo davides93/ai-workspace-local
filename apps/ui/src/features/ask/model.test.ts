@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../../shared/api/http";
-import type { Question } from "../../shared/api/types";
+import { normalizeAgent } from "../agents/model/agents";
+import type { AgentProfile, Question } from "../../shared/api/types";
 import {
   answerSummary, bannerSession, choiceCount, choiceReply, closedText, confirmReply, digitChoice, emptyChoice, formReply, initialFormValues, isManagementTool,
   isTypingTarget, openChatSession, parseQuestion, parseQuestionArgs, parseQuestionResult, parseSecret, parseSecretResult, pickChoice, questionTitle, secretClosedText, secretFailure, typeOther, waitingElsewhere,
@@ -241,5 +242,15 @@ describe("what waits in another conversation", () => {
     expect(bannerSession([{ run_id: "r9" }, { run_id: "r2" }], sessionOf)).toBe("s2");
     expect(bannerSession([{ run_id: "r9" }], sessionOf)).toBeNull();
     expect(bannerSession([], sessionOf)).toBeNull();
+  });
+});
+
+describe("agent profile", () => {
+  it("keeps delegate_tools when the agents page saves it (normalizeAgent only rebuilds the fields it knows)", () => {
+    const assistant: AgentProfile = {
+      id: "assistant", name: "Assistente", description: "", inference_profile: "auto:agent", system_prompt: "", tools: ["aiw_inspect", "ask_user"], mode: "ask", sandbox: "workspace-write", max_turns: 30,
+      delegate_tools: ["read_file", "browser_navigate"],
+    };
+    expect(normalizeAgent(assistant).delegate_tools).toEqual(["read_file", "browser_navigate"]);
   });
 });

@@ -122,7 +122,7 @@ function OpenSecret({ req }: { req: SecretRequest }) {
   return (
     <form ref={root} className="ask ask-open ask-secret" aria-labelledby={titleId} aria-busy={state.status === "sending" || undefined} onSubmit={onSubmit} noValidate>
       <p className="sr-only" role="status">{said}</p>
-      <span className="ask-eyebrow" aria-hidden="true">{t("ask.l_assistente_ha_una_domanda")}</span>
+      <span className="ask-eyebrow" aria-hidden="true">{t("ask.segreto_richiesto")}</span>
       <header className="ask-head">
         <Icon name="lock" size={16} />
         <strong id={titleId} className="ask-title">{req.label}</strong>

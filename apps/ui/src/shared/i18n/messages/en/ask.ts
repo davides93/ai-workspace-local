@@ -13,8 +13,6 @@ export const askEn: Record<keyof typeof askIt, string> = {
   "ask.conferma": "Confirm",
   "ask.altro": "Other",
   "ask.altro_testo": "Write your answer",
-  "ask.scegli_una_risposta": "Choose one answer",
-  "ask.scegline_una_o_piu": "Choose one or more",
   "ask.scorciatoia_cifre": "Press {keys} to choose, Enter to send.",
   "ask.scegli_un_opzione": "Choose an option.",
   "ask.scrivi_la_risposta_in_altro": "Write your answer in “Other”.",

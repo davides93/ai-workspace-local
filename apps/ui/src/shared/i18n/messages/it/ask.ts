@@ -11,8 +11,6 @@ export const askIt = {
   "ask.conferma": "Conferma",
   "ask.altro": "Altro",
   "ask.altro_testo": "Scrivi la tua risposta",
-  "ask.scegli_una_risposta": "Scegli una risposta",
-  "ask.scegline_una_o_piu": "Scegline una o più",
   "ask.scorciatoia_cifre": "Premi {keys} per scegliere, Invio per inviare.",
   "ask.scegli_un_opzione": "Scegli un'opzione.",
   "ask.scrivi_la_risposta_in_altro": "Scrivi la tua risposta in «Altro».",
