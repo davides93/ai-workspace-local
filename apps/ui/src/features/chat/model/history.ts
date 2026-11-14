@@ -1,5 +1,6 @@
 import { RUN_ERROR_MESSAGE, type ChatMessage } from "../../../shared/api/types";
 import { A2UI_ACTION_NAME, applyA2ui, describeAction, renderUiToMessages } from "../a2ui";
+import { ASK_TOOL, parseQuestionArgs, parseQuestionResult, parseSecretArgs, parseSecretResult, SECRET_TOOL } from "../../ask/model";
 import { CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, handoffText, SELF_CHECK, selfCheckText, type Item, type ToolImage, type ToolItem } from "./items";
 import { runErrorCode } from "./runNotice";
 import { resultStatus } from "./tools";
@@ -54,10 +55,39 @@ export function historyToItems(msgs: ChatMessage[], opts: HistoryOptions = {}): 
         card.status = resultStatus(m.content);
         // A successful render_ui call is shown as the interface it produced.
         if (card.name === "render_ui" && card.status === "done") replaceWithSurface(items, idx, card);
+        // A question or a request for a secret is shown as the line it became: what was asked and how it ended.
+        else if (card.name === ASK_TOOL) replaceWithQuestion(items, idx, card);
+        else if (card.name === SECRET_TOOL) replaceWithSecret(items, idx, card);
       }
     }
   }
+  // A question that never got its answer (the run was stopped while it waited) is a closed line, not a running tool.
+  items.forEach((it, idx) => {
+    if (it.kind === "tool" && it.result === undefined && it.name === ASK_TOOL) replaceWithQuestion(items, idx, it);
+    else if (it.kind === "tool" && it.result === undefined && it.name === SECRET_TOOL) replaceWithSecret(items, idx, it);
+  });
   return items;
+}
+
+/**
+ * `ask_user` call → closed question row. The row is built from the arguments of the call and its result; a call that
+ * failed, was never shown (`unsupported`), or whose arguments do not parse keeps its tool card.
+ */
+function replaceWithQuestion(items: Item[], idx: number, card: ToolItem): void {
+  const q = parseQuestionArgs(card.id, card.args);
+  if (!q) return;
+  const r = card.result === undefined ? { outcome: "cancelled" as const, answer: null } : parseQuestionResult(card.result);
+  if (!r || r.outcome === "unsupported") return;
+  items[idx] = { kind: "question", id: card.id, callId: card.id, q, outcome: r.outcome, answer: r.answer };
+}
+
+/** `aiw_secret_request` call → closed request row (only the label, the reason and how it ended: the stored call has no destination and no value). */
+function replaceWithSecret(items: Item[], idx: number, card: ToolItem): void {
+  const req = parseSecretArgs(card.id, card.args);
+  if (!req) return;
+  const outcome = card.result === undefined ? ("cancelled" as const) : parseSecretResult(card.result);
+  if (!outcome || outcome === "unsupported") return;
+  items[idx] = { kind: "secret", id: card.id, callId: card.id, req, outcome };
 }
 
 function replaceWithSurface(items: Item[], idx: number, card: ToolItem): void {

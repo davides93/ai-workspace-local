@@ -6,6 +6,7 @@ import { RISK_LABEL, RISK_TONE } from "../../../shared/lib/risk";
 import { chatPathForRun } from "../../../shared/lib/runIndex";
 import { Button, CodeBlock, Icon, Pill } from "../../../shared/ui";
 import type { ApprovalRequest } from "../../../shared/api/types";
+import { isManagementTool } from "../../ask/model";
 import "../approvals.css";
 
 import { t, t as tr } from "../../../shared/i18n";
@@ -18,8 +19,13 @@ export interface ApprovalCardProps {
   /** A response to this request is on its way. */
   pending?: boolean;
   onRespond?: (decision: "allow" | "deny", remember?: boolean) => void;
-  /** Offers "Consenti per la sessione" (only meaningful inside a chat session). */
+  /**
+   * Offers "Consenti per la sessione" (only meaningful inside a chat session). Never for the management tools of the
+   * Assistente (`aiw_*`): each of their requests is decided on its own, whatever the caller asks.
+   */
   allowRemember?: boolean;
+  /** The turn had read content from outside (web, browser, mail, MCP, a sub-agent) before this request: say so. */
+  afterExternal?: boolean;
   /** The request the drawer shortcuts act on. */
   selected?: boolean;
   /** Shows the A / N key hints on the buttons. */
@@ -32,7 +38,7 @@ export interface ApprovalCardProps {
  * confirmation drawer. Tool, risk, reason, the arguments (one line, full JSON on demand) and the
  * decision buttons, or the decision once it is taken.
  */
-export function ApprovalCard({ request, resolved, variant = "full", pending, onRespond, allowRemember, selected, showShortcuts, onSelect }: ApprovalCardProps) {
+export function ApprovalCard({ request, resolved, variant = "full", pending, onRespond, allowRemember, afterExternal, selected, showShortcuts, onSelect }: ApprovalCardProps) {
   const id = useId();
   const decided = resolved !== undefined;
   const compact = variant === "compact";
@@ -55,6 +61,9 @@ export function ApprovalCard({ request, resolved, variant = "full", pending, onR
         {decided && <Pill tone={resolved ? "ok" : "crit"}><Icon name={resolved ? "check" : "close"} size={12} />{resolved ? t("approvals.consentito") : t("approvals.negato")}</Pill>}
       </header>
       <p className="apv-reason">{request.reason}</p>
+      {afterExternal && !decided && (
+        <p className="apv-external"><Icon name="alert" size={14} /><span><b>{t("ask.dopo_contenuti_esterni")}</b> {t("ask.dopo_contenuti_esterni_hint")}</span></p>
+      )}
       {summary && (
         <details className="apv-args">
           <summary>
@@ -69,7 +78,7 @@ export function ApprovalCard({ request, resolved, variant = "full", pending, onR
           <Button variant="primary" size={size} icon="check" disabled={pending} aria-keyshortcuts={showShortcuts ? "A" : undefined} onClick={() => onRespond("allow")}>
             {t("approvals.allow")}{showShortcuts && <kbd aria-hidden="true">A</kbd>}
           </Button>
-          {allowRemember && (
+          {allowRemember && !isManagementTool(request.tool) && (
             <Button size={size} disabled={pending} onClick={() => onRespond("allow", true)} title={tr("approvals.non_chiedere_piu_conferma_per")}>
               {t("approvals.consenti_per_la_sessione")}</Button>
           )}

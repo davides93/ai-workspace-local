@@ -6,9 +6,18 @@ test.describe("chat", () => {
     const box = page.getByRole("textbox", { name: "Messaggio" });
     const log = page.getByRole("log", { name: "Conversazione" });
 
-    // A fresh session, so the log starts empty.
+    // A fresh session, so the log starts empty. The simple interface has nothing to choose: no agent, no worktree; the session is the Assistente's.
+    await expect(page.getByLabel("Agente della nuova sessione")).toHaveCount(0);
+    await expect(page.getByText("Isola in un worktree git")).toHaveCount(0);
     await page.getByRole("button", { name: "Nuova", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Cosa facciamo, in locale?" })).toBeVisible();
+    const list = page.getByRole("navigation", { name: "Elenco delle sessioni" });
+    await expect(list.getByRole("button", { name: /^Nuova sessione.*Assistente/ })).toBeVisible();
+    // The header says who and how without the technical details: the model as text (not a link), the approval mode; no sandbox.
+    const meta = page.getByRole("list", { name: "Come lavora questa sessione" });
+    await expect(meta.getByRole("link")).toHaveCount(0);
+    await expect(meta.getByText("Approvazione")).toBeVisible();
+    await expect(meta.getByText("Sandbox")).toHaveCount(0);
 
     // Attach a small text file with the message.
     const chooser = page.waitForEvent("filechooser");
@@ -34,7 +43,6 @@ test.describe("chat", () => {
     await expect(page.getByRole("button", { name: "Invia" })).toBeVisible();
 
     // The session was named after the first message; a new one starts empty.
-    const list = page.getByRole("navigation", { name: "Elenco delle sessioni" });
     await expect(list.getByRole("button", { name: /^Che cosa c'è in questo file\?/ })).toBeVisible();
     await page.getByRole("button", { name: "Nuova", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Cosa facciamo, in locale?" })).toBeVisible();

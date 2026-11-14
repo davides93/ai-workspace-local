@@ -1,13 +1,14 @@
 import { Icon } from "../../shared/ui";
 import { Link } from "../router";
-import { routeLabel, visibleTabRoutes } from "../navigation";
+import { hasNavigation, routeLabel, visibleTabRoutes } from "../navigation";
 import { routeHref, ROUTES, type RouteId } from "../routes";
 import { useUiMode } from "../useUiMode";
 
 import { t } from "../../shared/i18n";
-/** Bottom bar on phones: Panoramica, Workspace, Modelli, Runtime and "Altro" (every other section, the device and the kill switch). Simple mode leaves Runtime out. */
+/** Bottom bar on phones: Panoramica, Workspace, Modelli, Runtime and "Altro" (every other section, the device and the kill switch). The simple interface has one destination, so it has no bar (the chat header has a «Menu» button). */
 export function TabBar({ current, onMore, moreOpen }: { current?: RouteId; onMore: () => void; moreOpen: boolean }) {
   const [mode] = useUiMode();
+  if (!hasNavigation(ROUTES, mode)) return null;
   const tabs = visibleTabRoutes(ROUTES, mode);
   const inTabs = tabs.some((r) => r.id === current);
   return (

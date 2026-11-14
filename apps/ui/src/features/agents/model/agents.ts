@@ -9,7 +9,7 @@ import { ALL, normalizeTools } from "./tools";
 
 import { t as tr, t } from "../../../shared/i18n";
 /** Seeded on first run by crates/aiw-engine/src/defaults.rs `agents()`; the backend refuses to delete them (409). */
-export const BUILTIN_AGENT_IDS: readonly string[] = ["operator", "coder", "browser", "desktop", "planner", "teacher"];
+export const BUILTIN_AGENT_IDS: readonly string[] = ["operator", "coder", "browser", "desktop", "planner", "teacher", "assistant"];
 
 export const isBuiltinAgent = (id: string): boolean => BUILTIN_AGENT_IDS.includes(id);
 
