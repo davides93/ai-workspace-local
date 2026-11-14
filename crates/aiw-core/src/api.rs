@@ -932,6 +932,18 @@ pub struct Session {
     pub channel: Option<String>,
 }
 
+/// A screenshot a tool produced during a session (an `aiw.image` event of one of its runs), so the
+/// chat can show it again after a reload. `data` is base64 without the `data:` prefix.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionImage {
+    pub run_id: String,
+    /// Same name as in the event value.
+    #[serde(rename = "toolCallId")]
+    pub tool_call_id: String,
+    pub mime: String,
+    pub data: String,
+}
+
 /// A session isolated in a git worktree on branch `aiw/<id>`: parallel tasks never touch the
 /// user's checkout until the changes are reviewed and applied.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

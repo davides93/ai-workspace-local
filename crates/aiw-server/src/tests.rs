@@ -684,3 +684,67 @@ async fn voice_speaks_through_the_api_and_the_gateway() {
     let res = app.clone().oneshot(post(json!({"input": "Ciao."}))).await.unwrap();
     assert_eq!(res.status().as_u16(), 422);
 }
+
+/// A tool that returns a screenshot, like `browser_screenshot`.
+struct FakeShot;
+
+#[async_trait::async_trait]
+impl aiw_tools::Tool for FakeShot {
+    fn name(&self) -> &str {
+        "fake_screenshot"
+    }
+    fn description(&self) -> &str {
+        "screenshot finto"
+    }
+    fn parameters(&self) -> Value {
+        json!({"type": "object", "properties": {}})
+    }
+    fn risk(&self) -> aiw_tools::Risk {
+        aiw_tools::Risk::Read
+    }
+    async fn call(&self, _args: Value, _ctx: &aiw_tools::ToolContext) -> aiw_core::Result<aiw_tools::ToolOutput> {
+        Ok(aiw_tools::ToolOutput {
+            content: "Screenshot allegato.".into(),
+            images: vec!["data:image/png;base64,iVBORw0KGgo=".into()],
+            is_error: false,
+        })
+    }
+}
+
+#[tokio::test]
+async fn session_images_endpoint_lists_the_screenshots_of_the_runs() {
+    let (app, e, _d, _w) = app().await;
+    e.register_native_runtime(
+        "llama-embedded",
+        Arc::new(ScriptedBackend::new(vec![
+            ScriptedBackend::tool_turn("c1", "fake_screenshot", json!({})),
+            ScriptedBackend::text_turn("Vedo"),
+        ])),
+    );
+    e.tool_registry().register(Arc::new(FakeShot));
+    let (_, ses) = dispatch(app.clone(), "POST", "/api/sessions", Some(json!({"agent_id": "coder"}))).await;
+    let sid = ses["id"].as_str().unwrap().to_string();
+    let path = format!("/api/sessions/{sid}/images");
+
+    // No runs yet: an empty list, not an error.
+    let (st, none) = dispatch(app.clone(), "GET", &path, None).await;
+    assert_eq!((st, &none), (200, &json!([])));
+
+    let (st, run) = dispatch(app.clone(), "POST", &format!("/api/sessions/{sid}/runs"), Some(json!({"input": "Fai uno screenshot"}))).await;
+    assert_eq!(st, 200, "{run}");
+    let rid = run["run_id"].as_str().unwrap().to_string();
+    for _ in 0..200 {
+        if e.run_done(&rid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let (st, imgs) = dispatch(app.clone(), "GET", &path, None).await;
+    assert_eq!(st, 200, "{imgs}");
+    assert_eq!(imgs, json!([{"run_id": rid, "toolCallId": "c1", "mime": "image/png", "data": "iVBORw0KGgo="}]));
+
+    // An unknown session is a JSON 404.
+    let (st, err) = dispatch(app, "GET", "/api/sessions/ses_non_esiste/images", None).await;
+    assert_eq!(st, 404, "{err}");
+    assert!(err.is_object(), "{err}");
+}

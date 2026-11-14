@@ -305,6 +305,73 @@ async fn tool_images_are_stored_with_the_run_events_for_history_replay() {
     assert_eq!(stored, live);
 }
 
+/// Three runs of one session, each with a screenshot taken by a tool call `c1`, `c2`, `c3`.
+async fn session_with_three_screenshots() -> (Engine, tempfile::TempDir, tempfile::TempDir, String, Vec<String>) {
+    let turns = (1..=3)
+        .flat_map(|n| [ScriptedBackend::tool_turn(&format!("c{n}"), "fake_screenshot", json!({})), ScriptedBackend::text_turn("Vedo")])
+        .collect();
+    let (e, d, w) = scripted(turns).await;
+    e.tool_registry().register(Arc::new(FakeShot));
+    let s = e.create_session("coder", None).unwrap();
+    let mut runs = vec![];
+    for n in 1..=3 {
+        let run = e.start_run(&s.id, format!("Screenshot {n}")).await.unwrap();
+        wait_finished(&e, &run).await;
+        runs.push(run);
+    }
+    (e, d, w, s.id, runs)
+}
+
+#[tokio::test]
+async fn session_images_lists_the_screenshots_oldest_first_and_survive_a_restart() {
+    let (e, data, ws, sid, runs) = session_with_three_screenshots().await;
+    let expect = |runs: &[String]| {
+        runs.iter()
+            .enumerate()
+            .map(|(i, run)| SessionImage {
+                run_id: run.clone(),
+                tool_call_id: format!("c{}", i + 1),
+                mime: "image/png".into(),
+                data: "iVBORw0KGgo=".into(),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(e.session_images(&sid).unwrap(), expect(&runs));
+    assert!(matches!(e.session_images("ses_non_esiste"), Err(Error::NotFound(_))));
+
+    // A new engine on the same data folder (a restart) reads them from the database.
+    let reopened = Engine::new(EngineOptions {
+        data_dir: Some(data.path().to_path_buf()),
+        workspace_root: Some(ws.path().to_path_buf()),
+        mode: "embedded".into(),
+        offline: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert!(reopened.0.runs.lock().unwrap().is_empty(), "nothing in memory: the events come from the database");
+    assert_eq!(reopened.session_images(&sid).unwrap(), expect(&runs));
+    // The serialized form keeps the event's own field name.
+    let v = serde_json::to_value(&reopened.session_images(&sid).unwrap()[0]).unwrap();
+    assert_eq!(v["toolCallId"], "c1");
+    assert_eq!(v["run_id"], json!(runs[0]));
+}
+
+#[tokio::test]
+async fn session_images_over_the_cap_drop_the_oldest() {
+    let (e, _d, _w, sid, runs) = session_with_three_screenshots().await;
+    let size = "iVBORw0KGgo=".len();
+    let ids = |max: usize| e.session_images_capped(&sid, max).unwrap().into_iter().map(|i| i.tool_call_id).collect::<Vec<_>>();
+    assert_eq!(ids(3 * size), ["c1", "c2", "c3"], "exactly at the cap everything fits");
+    assert_eq!(ids(3 * size - 1), ["c2", "c3"], "one character over: the oldest goes");
+    assert_eq!(ids(size), ["c3"]);
+    assert!(ids(size - 1).is_empty());
+    let kept = e.session_images_capped(&sid, 2 * size).unwrap();
+    assert_eq!(kept.iter().map(|i| i.run_id.as_str()).collect::<Vec<_>>(), [runs[1].as_str(), runs[2].as_str()]);
+    // The public method uses the real budget.
+    assert_eq!(e.session_images(&sid).unwrap().len(), 3);
+}
+
 // ------------------------------------------------------------------ delete and rename
 
 #[tokio::test]

@@ -2,7 +2,7 @@ import { t } from "../i18n";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo, ToolInfo,
+  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -212,6 +212,8 @@ export interface Transport {
   cancelRun(runId: string): Promise<void>;
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void): () => void;
   activeRun(sessionId: string): Promise<string | null>;
+  /** The screenshots tools took in a session's runs (oldest first), to show them again after a reload. 404 when the session is gone. */
+  sessionImages(sessionId: string): Promise<SessionImage[]>;
   /** The events of a run so far (a sub-agent's run included), in order: the trace of a card. */
   runEvents(runId: string): Promise<AgEvent[]>;
   approvals(): Promise<ApprovalRequest[]>;

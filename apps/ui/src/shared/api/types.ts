@@ -1455,6 +1455,11 @@ export interface HookConfig {
   timeout_s: number;
 }
 
+/** One entry of `GET /sessions/{id}/images`: an `aiw.image` event of one of the session's runs. */
+export interface SessionImage extends AiwImage {
+  run_id: string;
+}
+
 /** Payload of the `CUSTOM` event named `aiw.image` (screenshots of browser and computer-use tools). */
 export interface AiwImage {
   toolCallId: string;

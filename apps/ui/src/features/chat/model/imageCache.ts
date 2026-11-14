@@ -1,7 +1,9 @@
-// Screenshots of tool calls (`aiw.image` events). The stored messages of a session carry only text and
-// the backend has no list of a session's runs, so an image would vanish when the user opens another
-// session and comes back. The chat keeps what it has seen, within a memory budget.
+// Screenshots of tool calls (`aiw.image` events). The stored messages of a session carry only text, so
+// the chat keeps the images it has seen (live events, or the list the backend replays from the stored
+// run events when a session is opened: `GET /sessions/{id}/images`) within a memory budget. A session
+// that falls out of the budget is loaded from the backend again when it is reopened.
 import type { ToolImage } from "./items";
+import { parseImageEvent } from "./reduce";
 
 const MAX_CHARS = 24_000_000;
 
@@ -23,6 +25,18 @@ export function rememberImage(sessionId: string, toolCallId: string, image: Tool
     const oldest = sessions.keys().next().value as string;
     if (oldest === sessionId) break;
     forgetSessionImages(oldest);
+  }
+}
+
+/**
+ * Remembers the list the backend sent for a session (entries shaped like the `aiw.image` event value, plus `run_id`).
+ * Anything that is not a well-formed image is skipped; images already remembered are not added twice.
+ */
+export function rememberSessionImages(sessionId: string, list: unknown): void {
+  if (!Array.isArray(list)) return;
+  for (const entry of list) {
+    const ev = parseImageEvent(entry);
+    if (ev) rememberImage(sessionId, ev.toolCallId, ev.image);
   }
 }
 
