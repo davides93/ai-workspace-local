@@ -113,6 +113,20 @@ async fn ask(backend: &Arc<dyn aiw_runtimes::types::ChatBackend>, model: &str) -
     Ok(text)
 }
 
+/// Unwraps the result of a sidecar start; on failure the panic carries the sidecar's own log
+/// lines (its stderr), so a CI failure shows why the server died instead of only its exit status.
+async fn started<T>(fx: &Fixture, what: &str, result: aiw_core::Result<T>) -> T {
+    match result {
+        Ok(v) => v,
+        Err(e) => {
+            // The log readers run in background tasks: give them a moment to drain the pipes.
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let logs = fx.reg.logs("fakesrv").await;
+            panic!("{what} failed: {e}\n--- sidecar log ---\n{}\n--- end of log ---", logs.join("\n"));
+        }
+    }
+}
+
 fn alive(pid: u32) -> bool {
     // Portable (Linux and macOS have no common /proc): `ps` prints the state of the process and
     // fails when it does not exist. A reaped or zombie process counts as dead.
@@ -130,11 +144,11 @@ async fn chat_uses_the_name_the_server_serves_for_a_local_path() {
     let fx = fixture(Some(("qwen3-4b", &path)));
     // The server is started with the path and serves the model under it; the profile id is
     // `qwen3-4b`, and the chat must still work.
-    let backend = fx.reg.backend("fakesrv", Some("qwen3-4b")).await.unwrap();
+    let backend = started(&fx, "first backend", fx.reg.backend("fakesrv", Some("qwen3-4b")).await).await;
     let reply = ask(&backend, "qwen3-4b").await.unwrap();
     assert_eq!(reply, format!("served:{}", path.display()));
     // A backend handed out while the sidecar is already running behaves the same.
-    let again = fx.reg.backend("fakesrv", Some("qwen3-4b")).await.unwrap();
+    let again = started(&fx, "second backend", fx.reg.backend("fakesrv", Some("qwen3-4b")).await).await;
     assert_eq!(ask(&again, "qwen3-4b").await.unwrap(), format!("served:{}", path.display()));
     fx.reg.stop_all().await;
 }
@@ -147,7 +161,8 @@ async fn concurrent_starts_spawn_one_process_and_both_backends_work() {
         tokio::spawn(async move { a.backend_with("fakesrv", Some("m"), Some(4096)).await }),
         tokio::spawn(async move { b.backend_with("fakesrv", Some("m"), Some(4096)).await }),
     );
-    let (ba, bb) = (ra.unwrap().unwrap(), rb.unwrap().unwrap());
+    let ba = started(&fx, "first concurrent start", ra.unwrap()).await;
+    let bb = started(&fx, "second concurrent start", rb.unwrap()).await;
     assert_eq!(fx.starts(), 1, "one process for two concurrent starts");
     assert_eq!(ask(&ba, "m").await.unwrap(), "served:m");
     assert_eq!(ask(&bb, "m").await.unwrap(), "served:m");
@@ -157,8 +172,8 @@ async fn concurrent_starts_spawn_one_process_and_both_backends_work() {
         tokio::spawn(async move { c.start_with("fakesrv", Some("m".into()), Some(4096)).await }),
         tokio::spawn(async move { d.start_with("fakesrv", Some("m".into()), Some(2048)).await }),
     );
-    rc.unwrap().unwrap();
-    rd.unwrap().unwrap();
+    started(&fx, "first explicit start", rc.unwrap()).await;
+    started(&fx, "second explicit start", rd.unwrap()).await;
     assert_eq!(fx.starts(), 1);
     fx.reg.stop_all().await;
 }
@@ -166,7 +181,7 @@ async fn concurrent_starts_spawn_one_process_and_both_backends_work() {
 #[tokio::test]
 async fn stop_kills_the_workers_of_the_sidecar() {
     let fx = fixture(None);
-    fx.reg.backend_with("fakesrv", Some("m"), Some(4096)).await.unwrap();
+    started(&fx, "start", fx.reg.backend_with("fakesrv", Some("m"), Some(4096)).await).await;
     let workers = fx.workers();
     assert_eq!(workers.len(), 1);
     assert!(alive(workers[0]), "worker is running");
@@ -183,15 +198,15 @@ async fn stop_kills_the_workers_of_the_sidecar() {
 #[tokio::test]
 async fn larger_context_does_not_restart_while_requests_are_in_flight() {
     let fx = fixture(None);
-    let backend = fx.reg.backend_with("fakesrv", Some("m"), Some(4096)).await.unwrap();
+    let backend = started(&fx, "start", fx.reg.backend_with("fakesrv", Some("m"), Some(4096)).await).await;
     // An unfinished stream counts as a request in flight.
     let stream = backend.chat(ChatRequest { model: "m".into(), ..Default::default() }, CancellationToken::new()).await.unwrap();
-    let busy = fx.reg.backend_with("fakesrv", Some("m"), Some(16384)).await.unwrap();
+    let busy = started(&fx, "second backend", fx.reg.backend_with("fakesrv", Some("m"), Some(16384)).await).await;
     assert_eq!(fx.starts(), 1, "no restart with a request in flight");
     assert_eq!(ask(&busy, "m").await.unwrap(), "served:m");
     drop(stream);
     // Idle again: the larger context restarts the sidecar.
-    fx.reg.backend_with("fakesrv", Some("m"), Some(16384)).await.unwrap();
+    started(&fx, "restart", fx.reg.backend_with("fakesrv", Some("m"), Some(16384)).await).await;
     assert_eq!(fx.starts(), 2);
     fx.reg.stop_all().await;
 }
@@ -205,15 +220,15 @@ async fn a_change_of_adapters_restarts_the_sidecar_and_a_bad_one_never_starts_it
     std::fs::write(&b, b"x").unwrap();
     let adapter = |p: &Path| vec![AdapterRef { path: p.display().to_string(), scale: None }];
     let fx = fixture(None);
-    fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&a)).await.unwrap();
+    started(&fx, "backend_for", fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&a)).await).await;
     assert_eq!(fx.starts(), 1);
     // The same adapters: the process is reused.
-    fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&a)).await.unwrap();
+    started(&fx, "backend_for", fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&a)).await).await;
     assert_eq!(fx.starts(), 1);
     // Another adapter, then none: each is a restart.
-    fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&b)).await.unwrap();
+    started(&fx, "backend_for", fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&b)).await).await;
     assert_eq!(fx.starts(), 2);
-    fx.reg.backend_for("fakesrv", Some("m"), None, &[]).await.unwrap();
+    started(&fx, "backend_for", fx.reg.backend_for("fakesrv", Some("m"), None, &[]).await).await;
     assert_eq!(fx.starts(), 3);
     // A path that is not an adapter is refused before anything is stopped or started.
     let err = fx.reg.backend_for("fakesrv", Some("m"), None, &adapter(&models.path().join("nope.gguf"))).await.err().unwrap();

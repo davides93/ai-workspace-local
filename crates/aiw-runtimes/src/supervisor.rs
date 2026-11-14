@@ -7,7 +7,7 @@ use aiw_core::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const LOG_LINES: usize = 400;
@@ -147,9 +147,41 @@ pub fn plan_launch(spec: &LaunchSpec<'_>, launch: &Launch, port: u16) -> LaunchP
     LaunchPlan { args, env: expand_env(launch, &vars), ctx }
 }
 
+/// How long a port handed out by `free_port` is not handed out again in the same process.
+/// The sidecar binds the port some time after `free_port` released it, so two concurrent
+/// starts could otherwise receive the same number from the OS.
+const PORT_REUSE_WINDOW: Duration = Duration::from_secs(60);
+/// Attempts to get a port that is not in the recent-ports registry before giving up.
+const PORT_MAX_ATTEMPTS: usize = 50;
+
 fn free_port() -> Result<u16> {
-    let l = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-    Ok(l.local_addr()?.port())
+    static RECENT: OnceLock<Mutex<HashMap<u16, Instant>>> = OnceLock::new();
+    let mut recent = RECENT.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    claim_port(&mut recent, PORT_REUSE_WINDOW, || {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        Ok((listener.local_addr()?.port(), listener))
+    })
+}
+
+/// Picks a port from `bind` that was not handed out within `window`, and records it.
+/// `bind` returns the candidate port plus a guard (the open listener) that stays alive until
+/// the call ends, so a rejected port is not returned again by the OS on the next attempt.
+/// Expired entries are dropped on every call.
+fn claim_port<G>(recent: &mut HashMap<u16, Instant>, window: Duration, mut bind: impl FnMut() -> Result<(u16, G)>) -> Result<u16> {
+    let now = Instant::now();
+    recent.retain(|_, handed_out| now.duration_since(*handed_out) < window);
+    let mut held = Vec::new();
+    for _ in 0..PORT_MAX_ATTEMPTS {
+        let (port, guard) = bind()?;
+        match recent.entry(port) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(now);
+                return Ok(port);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => held.push(guard),
+        }
+    }
+    Err(Error::Runtime(format!("Non trovo una porta locale libera dopo {PORT_MAX_ATTEMPTS} tentativi: chiudi qualche runtime e riprova.")))
 }
 
 fn push_log(logs: &Arc<Mutex<VecDeque<String>>>, line: String) {
@@ -630,5 +662,39 @@ mod tests {
         assert_eq!(get("C"), Some("pre-1-h"));
         assert_eq!(get("D"), Some("literal"));
         assert_eq!(get("E"), None);
+    }
+
+    #[test]
+    fn free_port_never_hands_out_the_same_port_twice() {
+        let ports: std::collections::HashSet<u16> = (0..300).map(|_| free_port().unwrap()).collect();
+        assert_eq!(ports.len(), 300);
+    }
+
+    #[test]
+    fn a_recent_port_is_skipped_and_exhausting_the_attempts_fails() {
+        let mut recent = HashMap::new();
+        let window = Duration::from_secs(60);
+        assert_eq!(claim_port(&mut recent, window, || Ok((5000, ()))).unwrap(), 5000);
+        // 5000 is still in the window: the next distinct candidate wins.
+        let mut candidates = [5000, 5000, 6000].into_iter();
+        assert_eq!(claim_port(&mut recent, window, || Ok((candidates.next().unwrap(), ()))).unwrap(), 6000);
+        // Only recent candidates: it gives up with a message for the user.
+        let mut calls = 0;
+        let err = claim_port(&mut recent, window, || {
+            calls += 1;
+            Ok((5000, ()))
+        })
+        .unwrap_err();
+        assert_eq!(calls, PORT_MAX_ATTEMPTS);
+        assert!(err.to_string().contains("porta locale libera"), "{err}");
+    }
+
+    #[test]
+    fn a_port_can_be_handed_out_again_once_its_entry_expires() {
+        let mut recent = HashMap::new();
+        // A zero window means every entry is already expired on the next call (no sleep needed).
+        assert_eq!(claim_port(&mut recent, Duration::ZERO, || Ok((5000, ()))).unwrap(), 5000);
+        assert_eq!(claim_port(&mut recent, Duration::ZERO, || Ok((5000, ()))).unwrap(), 5000);
+        assert_eq!(recent.len(), 1);
     }
 }
