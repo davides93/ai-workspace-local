@@ -1026,6 +1026,12 @@ fn runtime_args(args: &Value) -> Result<(String, &'static str)> {
     Ok((runtime, action))
 }
 
+/// `aiw_runtime_control`: starts or stops an engine that is installed.
+///
+/// A start without `model` does not load by itself the model a person chose with `aiw_model_use`:
+/// `Engine::runtime_action` takes the model of a profile whose `runtime_id` is this very engine, and
+/// the profiles that `aiw_model_use` pins have `runtime_id: "auto"` (the router picks the engine), so
+/// none of them matches. The description says so to the model: it must always pass `model`.
 struct RuntimeControl(Weak<Inner>);
 
 #[async_trait::async_trait]
@@ -1035,7 +1041,7 @@ impl Tool for RuntimeControl {
     }
 
     fn description(&self) -> &str {
-        "Avvia o ferma un motore di esecuzione già installato (per esempio llama-server o Ollama). `runtime`: l'id del motore (da aiw_inspect, topic runtimes); `action`: start o stop; `model`: facoltativo, il modello da caricare all'avvio. Per installarne uno nuovo c'è aiw_runtime_install. Chiede sempre la conferma dell'utente."
+        "Avvia o ferma un motore di esecuzione già installato (per esempio llama-server o Ollama). `runtime`: l'id del motore (da aiw_inspect, topic runtimes); `action`: start o stop; `model`: il modello da caricare all'avvio, da indicare sempre: i profili fissati da aiw_model_use hanno `runtime_id` = `auto`, quindi avviare un motore senza `model` non carica da solo il modello scelto. Per installarne uno nuovo c'è aiw_runtime_install. Chiede sempre la conferma dell'utente."
     }
 
     fn parameters(&self) -> Value {
@@ -1045,7 +1051,7 @@ impl Tool for RuntimeControl {
             "properties": {
                 "runtime": {"type": "string", "description": "Id del motore (da aiw_inspect, topic runtimes)."},
                 "action": {"type": "string", "enum": ["start", "stop"], "description": "start: avvia; stop: ferma."},
-                "model": {"type": "string", "description": "Solo per start: il modello installato da caricare."}
+                "model": {"type": "string", "description": "Solo per start: il modello installato da caricare. Indicalo sempre: senza, l'avvio non carica da solo il modello scelto con aiw_model_use."}
             }
         })
     }
@@ -1083,6 +1089,8 @@ impl Tool for RuntimeControl {
     }
 }
 
+/// Starts or stops an engine and says the state it is really in. A start without `model` loads no model
+/// of its own accord, unless a profile of this very engine names one (see [`RuntimeControl`]).
 async fn runtime_control(e: &Engine, args: &Value) -> Result<String> {
     let (runtime, action) = runtime_args(args)?;
     let what = if action == "start" { "avviare" } else { "fermare" };
@@ -2245,6 +2253,21 @@ mod tests {
         assert_eq!(control.subject(&start("QWEN3 test")).as_deref(), Some("start llama-embedded (mini-q8_0)"));
         call(&e, "aiw_model_delete", json!({"model": "qwen3 test"})).await.unwrap();
         assert!(e.models().is_empty(), "the one the card named is the one that went");
+    }
+
+    #[test]
+    fn the_description_of_an_engine_start_says_that_the_model_is_always_to_be_given() {
+        let tool = RuntimeControl(Weak::new());
+        let (description, parameters) = (tool.description(), tool.parameters().to_string());
+        assert!(
+            description.contains("da indicare sempre")
+                && description.contains("aiw_model_use")
+                && description.contains("`runtime_id` = `auto`"),
+            "{description}"
+        );
+        assert!(description.contains("senza `model` non carica da solo il modello scelto"), "{description}");
+        assert!(parameters.contains("Indicalo sempre") && parameters.contains("aiw_model_use"), "{parameters}");
+        assert!(description.ends_with("Chiede sempre la conferma dell'utente."), "{description}");
     }
 
     // ------------------------------------------------------------------ the six tools together
