@@ -1,5 +1,5 @@
 import { expect, openApp, test } from "../support/app";
-import { appLinks, conversation, FAKE_KEY, linksOutsideChat, messageBox, startDownloadThenGoSimple } from "../support/simple";
+import { appLinks, conversation, FAKE_KEY, goSimpleWithPalette, linksOutsideChat, messageBox, startDownloadThenGoSimple } from "../support/simple";
 
 // The simple interface is one chat: every other address leads to it, nothing in it leads to a hidden section, and what used to
 // be done in those sections is done from the chat (the assistant) or from its menu. Developer mode stays as it was.
@@ -236,5 +236,28 @@ test.describe("downloads", () => {
   test("with no download there is no strip", async ({ page }) => {
     await openApp(page, "/chat");
     await expect(page.getByRole("region", { name: "Download in corso" })).toHaveCount(0);
+  });
+});
+
+test.describe("update notice", () => {
+  test("in the rail it opens the updater in a dialog (the settings page is not there); in developer mode it is a link to the settings", async ({ page }) => {
+    // The demo finds a new version when asked to check; the notice is in the rail as soon as there is one.
+    await openApp(page, "/settings", { mode: "developer" });
+    await page.getByRole("button", { name: "Controlla ora" }).click();
+    const rail = page.getByRole("navigation", { name: "Sezioni" });
+    await expect(rail.getByRole("link", { name: /^Aggiornamento disponibile/ })).toHaveAttribute("href", "#/settings");
+
+    await goSimpleWithPalette(page);
+    const notice = rail.getByRole("button", { name: /^Aggiornamento disponibile/ });
+    await expect(rail.getByRole("link", { name: /^Aggiornamento disponibile/ })).toHaveCount(0);
+    await notice.click();
+    const dialog = page.getByRole("dialog", { name: "Aggiornamento disponibile" });
+    await expect(dialog.getByText("Versione 0.5.0-beta.3")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Controlla ora" })).toBeVisible();
+    // Still the chat behind it, and Esc gives the focus back to the notice.
+    await expect(page).toHaveURL(CHAT_URL);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(notice).toBeFocused();
   });
 });

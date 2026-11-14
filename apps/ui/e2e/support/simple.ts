@@ -20,6 +20,11 @@ export const conversation = (page: Page) => page.getByRole("log", { name: "Conve
  */
 export async function startDownloadThenGoSimple(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Scarica 256 MB" }).click();
+  await goSimpleWithPalette(page);
+}
+
+/** The palette's way back to the simple interface (works from any section of the developer one). */
+export async function goSimpleWithPalette(page: Page): Promise<void> {
   await page.keyboard.press("Control+k");
   const palette = page.getByRole("dialog", { name: "Cerca e comandi" });
   await palette.getByRole("combobox", { name: "Cerca una sezione o un comando" }).fill("semplice");
