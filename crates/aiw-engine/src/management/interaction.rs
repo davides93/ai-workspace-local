@@ -540,13 +540,13 @@ fn resolve_target(e: &Engine, raw: &str) -> Result<Resolved> {
                 let mut safe = cfg.clone();
                 safe.args = cfg.args.as_deref().map(args_safe);
                 format!(
-                    "Connettore MCP «{}», variabile {stored}, passata al comando `{}`",
+                    "Server MCP «{}», variabile {stored}, passata al comando `{}`",
                     shown(&cfg.name),
                     clip(&aiw_tools::mcp::launch::command_line(&safe), 200)
                 )
             } else {
                 format!(
-                    "Connettore MCP «{}», header {stored}, inviato a {}",
+                    "Server MCP «{}», header {stored}, inviato a {}",
                     shown(&cfg.name),
                     cfg.url.as_deref().map(url_safe).unwrap_or_else(|| "(indirizzo non impostato)".into())
                 )
@@ -1769,7 +1769,7 @@ mod tests {
         let req = next_secret(&e).await;
         // The connector is found by its name too, the header whatever its case, and the target is made canonical.
         assert_eq!(req.target, format!("mcp_header:{id}:Authorization"));
-        assert_eq!(req.destination, "Connettore MCP «Remoto_di_prova», header Authorization, inviato a https://api.example.com/mcp/omesso");
+        assert_eq!(req.destination, "Server MCP «Remoto_di_prova», header Authorization, inviato a https://api.example.com/mcp/omesso");
         for leaked in ["FAKE_URL_PASSWORD", "FAKE_PATH_SEGMENT", "FAKE_QUERY_TOKEN", "utente"] {
             assert!(!req.destination.contains(leaked), "{leaked} in {}", req.destination);
         }
@@ -1808,7 +1808,7 @@ mod tests {
         // The command shown to the person has no value of an argument that follows a flag that names a secret.
         assert_eq!(
             req.destination,
-            "Connettore MCP «Locale_di_prova», variabile GITHUB_TOKEN, passata al comando `npx -y server-github --token ••••••`"
+            "Server MCP «Locale_di_prova», variabile GITHUB_TOKEN, passata al comando `npx -y server-github --token ••••••`"
         );
         assert!(!req.destination.contains("FAKE_ARG_VALUE"));
         e.respond_secret(&req.id, provide(ENV_VALUE), true).await.unwrap();
@@ -1854,6 +1854,34 @@ mod tests {
         assert!(refused(&e, "provider_token:nessuno").await.contains("sconosciuto"));
         assert!(refused(&e, "password_di_sistema:x").await.contains("destinazione"));
         assert!(refused(&e, "").await.contains("manca"));
+    }
+
+    #[tokio::test]
+    async fn the_destination_is_written_by_the_engine_in_the_words_of_the_plan() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let said = |target: &str| resolve_target(&e, target).unwrap_or_else(|err| panic!("{target}: {err}"));
+        // The default Hugging Face: the name and the host the token will be sent to.
+        let hf = said("provider_token:hf");
+        assert_eq!((hf.canonical.as_str(), hf.destination.as_str()), ("provider_token:hf", "Hugging Face (huggingface.co)"));
+        assert_eq!(hf.target, SecretTarget::ProviderToken { id: "hf".into() });
+        // Surrounding blanks do not matter.
+        assert_eq!(said("  provider_token:hf ").canonical, "provider_token:hf");
+        let brave = said("setting:search.brave_api_key");
+        assert_eq!(brave.destination, "Impostazione «Chiave di Brave Search» (search.brave_api_key), salvata su questo computer");
+        let (runtime, key) = e
+            .runtimes()
+            .into_iter()
+            .find_map(|r| r.settings_schema.properties.iter().find(|(_, f)| f.secret).map(|(k, _)| (r.id.clone(), k.clone())))
+            .unwrap();
+        let rt = said(&format!("runtime_setting:{runtime}:{key}"));
+        assert!(
+            rt.destination.starts_with("Motore «") && rt.destination.contains(&format!("({key}), salvata su questo computer")),
+            "{}",
+            rt.destination
+        );
+        // A destination that sends the value to another host says so: the model cannot hide where it goes.
+        e.set_provider_auth("hf", None, Some("http://127.0.0.1:9".into())).await.unwrap();
+        assert_eq!(said("provider_token:hf").destination, "Hugging Face (127.0.0.1)");
     }
 
     #[tokio::test]
