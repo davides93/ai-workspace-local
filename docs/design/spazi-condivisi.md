@@ -2,7 +2,7 @@
 
 Data: 2026-11-14 · Stato: **Decisione approvata dal proprietario il 14 novembre 2026** · Riferimento: issue #74 (priorità P3, discovery)
 
-Questo documento è una discovery, non un'implementazione. Propone e motiva; la decisione finale spetta al proprietario del progetto. Non cambia codice né altri documenti.
+Questo documento conclude la discovery approvata dal proprietario (sezione 10). Non implementa la funzione: prima si misura l'utilità, poi si valuta l'MVP in base alle soglie definite.
 
 ## 1. Contesto e stato attuale
 
@@ -126,7 +126,7 @@ Si propone di **non implementare subito** e di fare prima la misura del paragraf
 
 Motivi: riusa il modello «proposta, approva, scrivi» già presente in `crates/aiw-engine/src/store/proposals.rs` e `crates/aiw-engine/src/learning.rs`; una fonte unica funziona anche sul telefono accoppiato; il blocco ottimistico è semplice da provare con test; il costo è una migrazione e un gruppo di rotte, non una nuova infrastruttura. L'opzione A non copre le modifiche dell'utente né il telefono; la C risolve un problema che non c'è.
 
-La decisione finale spetta al proprietario del progetto. Fino ad allora la issue #74 resta una discovery: il documento qui descritto è la risposta richiesta dall'accettazione (casi d'uso, modello dati, criteri per l'MVP).
+La decisione del proprietario è registrata nella sezione 10 e conclude la discovery #74: il documento contiene casi d'uso, modello dati e criteri per l'eventuale MVP.
 
 
 ## 10. Decisione del proprietario — 14 novembre 2026
