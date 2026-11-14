@@ -337,7 +337,7 @@ fn downloads(e: &Engine, a: &Args) -> Value {
         .map(|d| {
             json!({
                 "id": d.id, "model": d.model_id, "status": d.status,
-                "percent": if d.total > 0 { Some(d.received.saturating_mul(100) / d.total) } else { None },
+                "percent": d.received.saturating_mul(100).checked_div(d.total),
                 "received_mb": mb(d.received), "total_mb": mb(d.total), "speed_mb_s": d.speed_bps / (1024 * 1024),
                 "files": format!("{}/{}", d.files_done, d.files_total), "error": d.error.as_deref().map(|x| text(x, 200)),
             })

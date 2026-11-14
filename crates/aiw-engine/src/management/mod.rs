@@ -107,7 +107,9 @@ pub(crate) fn require_origin(engine: &Engine, ctx: &ToolContext) -> Result<RunOr
 }
 
 /// [`require_origin`], and the person who asked must be the owner: every tool that changes
-/// something starts with this.
+/// something starts with this. (The tools that change something live in the files of the other
+/// areas of this folder, so in a build that has none yet only the tests call it.)
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn require_owner(engine: &Engine, ctx: &ToolContext) -> Result<RunOrigin> {
     let origin = require_origin(engine, ctx)?;
     if !origin.owner {
