@@ -11,27 +11,28 @@ export const SIMPLE_ROUTE = "chat";
 export type RouteGate = "show" | "wait" | "redirect";
 
 /**
- * The mode the configuration confirms, for `routeGate` (`status` is the one of the configuration's query).
+ * What the configuration says about the mode, for `routeGate`: a mode, `undefined` (not answered yet) or `"unreadable"`.
  *
  * - The configuration answered with a mode: that one.
  * - It answered without a valid `ui.mode`, or the request failed for good (react-query reports `error` only once the retry
- *   is over): nothing is coming that could settle the question, so the mode kept on this device stands in for it. Without
- *   this the route would be held back (`wait`) for ever and the person would see a skeleton, on `#/` as well. A device
- *   that never kept a mode shows `simple`, so the address leads to the chat, which always opens and has the menu to go
- *   on from.
- * - A 401 is not "unreadable": the pairing screen is up and the configuration will be read once the device is paired.
+ *   is over): `"unreadable"`. Nothing is coming that could settle the question, so the gate stops waiting and opens the
+ *   route that was asked for, as the app did before the simple interface lost its sections: the person is never thrown out
+ *   on a guess, and the skeleton does not stay for ever. A later answer that says `simple` redirects as usual.
+ * - A 401 is not "unreadable": the pairing screen is up and the configuration will be read once the device is paired, so the
+ *   gate keeps waiting (`undefined`).
  * - Not answered yet: `undefined`, the gate waits.
  */
-export function confirmedUiMode(opts: {
+export type ConfigMode = UiMode | "unreadable" | undefined;
+
+export function configModeOf(opts: {
   fromConfig: UiMode | undefined;
   status: "pending" | "error" | "success";
   error?: unknown;
-  stored: UiMode;
-}): UiMode | undefined {
-  const { fromConfig, status, error, stored } = opts;
+}): ConfigMode {
+  const { fromConfig, status, error } = opts;
   if (fromConfig) return fromConfig;
-  if (status === "success") return stored;
-  if (status === "error" && !isUnauthorized(error)) return stored;
+  if (status === "success") return "unreadable";
+  if (status === "error" && !isUnauthorized(error)) return "unreadable";
   return undefined;
 }
 
@@ -47,14 +48,16 @@ export function confirmedUiMode(opts: {
  * render later), otherwise the redirect would fire on the stale value.
  *
  * - `show`: the route is allowed. The chat always is; every route is in Developer mode while nothing
- *   says otherwise.
+ *   says otherwise; and every route is while the configuration cannot be read (`"unreadable"`), because
+ *   nothing says that the person is in the simple interface.
  * - `wait`: the answer is not settled yet (the configuration has not answered, or the shown mode and the
  *   configuration disagree for a moment); show the skeleton, mount nothing, redirect nothing.
  * - `redirect`: simple mode, confirmed by the configuration, on a route that is not the chat.
  */
-export function routeGate(opts: { routeId: string | undefined; mode: UiMode; configMode: UiMode | undefined }): RouteGate {
+export function routeGate(opts: { routeId: string | undefined; mode: UiMode; configMode: ConfigMode }): RouteGate {
   const { routeId, mode, configMode } = opts;
   if (routeId === SIMPLE_ROUTE) return "show";
+  if (configMode === "unreadable") return "show";
   if (configMode === "simple" && mode === "simple") return "redirect";
   if (mode === "developer" && configMode !== "simple") return "show";
   return "wait";
