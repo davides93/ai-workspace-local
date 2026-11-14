@@ -149,6 +149,24 @@ test.describe("notes of the conversation", () => {
     await expect(open).toBeFocused();
   });
 
+  test("«Rifletti» from the list: the toast sends to the conversation, not to the Panoramica that is not there", async ({ page }) => {
+    await openApp(page, "/chat/ses_pdf");
+    const sessions = page.getByRole("navigation", { name: "Elenco delle sessioni" });
+    await sessions.getByRole("listitem").filter({ hasText: "Riordino PDF in Downloads" }).getByRole("button", { name: "Rifletti su questa conversazione" }).click();
+    const toast = page.getByRole("status").filter({ hasText: "Ho proposto una lezione" });
+    await expect(toast).toHaveText("Ho proposto una lezione: la trovi nella conversazione, con «Vuoi che lo ricordi?»");
+    await expect(toast).not.toContainText("Panoramica");
+    // …and the conversation does have it: the card of the memory.
+    await expect(page.getByRole("group", { name: "Vuoi che lo ricordi?" })).toBeVisible();
+  });
+
+  test("«Rifletti» in Sviluppatore: the toast still points to the Panoramica", async ({ page }) => {
+    await openApp(page, "/chat/ses_pdf", { mode: "developer" });
+    const sessions = page.getByRole("navigation", { name: "Elenco delle sessioni" });
+    await sessions.getByRole("listitem").filter({ hasText: "Riordino PDF in Downloads" }).getByRole("button", { name: "Rifletti su questa conversazione" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Ho proposto una lezione" })).toHaveText("Ho proposto una lezione: la trovi nella Panoramica");
+  });
+
   test("the session is the Assistente's: no agent in the header, the model as text", async ({ page }) => {
     await openApp(page, "/chat");
     await page.getByRole("button", { name: "Nuova", exact: true }).click();

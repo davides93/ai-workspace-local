@@ -26,4 +26,5 @@ export const learningIt = {
   "learning.il_titolo_supera_i_caratteri": "Il titolo supera i {max} caratteri.",
   "learning.il_contenuto_supera_i_caratteri": "Il contenuto supera i {max} caratteri.",
   "learning.anteprima_della_lezione": "Anteprima della lezione",
+  "learning.ho_proposto_una_lezione_nella": "Ho proposto una lezione: la trovi nella conversazione, con «{action}»",
 } as const;

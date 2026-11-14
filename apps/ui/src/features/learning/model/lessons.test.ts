@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MAX_LESSON_CONTENT_CHARS, MAX_LESSON_TITLE_CHARS, type Lesson } from "../../../shared/api/types";
-import { approvedMessage, checkLessonEdit, editOf, memoryPendingFor, pendingFor, rememberText, withDecided } from "./lessons";
+import { approvedMessage, checkLessonEdit, editOf, memoryPendingFor, pendingFor, reflectedMessage, rememberText, withDecided } from "./lessons";
 
 const lesson = (id: string, session_id: string, status: Lesson["status"] = "pending"): Lesson => ({
   id, session_id, agent_id: "operator", kind: "memory", title: "Titolo", content: "Contenuto", reason: "perché", status, created_at: "t",
@@ -47,6 +47,21 @@ describe("lists", () => {
   it("says where the lesson went", () => {
     expect(approvedMessage({ kind: "skill", title: "X" })).toContain("skill");
     expect(approvedMessage({ kind: "memory", title: "X" })).toContain("AGENTS.md");
+  });
+});
+
+describe("reflectedMessage", () => {
+  it("points to the Panoramica in Sviluppatore, whatever the lesson is", () => {
+    expect(reflectedMessage({ kind: "skill" }, false)).toBe("Ho proposto una lezione: la trovi nella Panoramica");
+    expect(reflectedMessage({ kind: "memory" }, false)).toBe("Ho proposto una lezione: la trovi nella Panoramica");
+  });
+  it("points to the conversation in the simple interface, where the Panoramica does not exist: the note of a skill, the card of a memory", () => {
+    const skill = reflectedMessage({ kind: "skill" }, true);
+    expect(skill).toBe("Ho proposto una lezione: la trovi nella conversazione, con «Rivedi la lezione»");
+    expect(skill).not.toContain("Panoramica");
+    const memory = reflectedMessage({ kind: "memory" }, true);
+    expect(memory).toBe("Ho proposto una lezione: la trovi nella conversazione, con «Vuoi che lo ricordi?»");
+    expect(memory).not.toContain("Panoramica");
   });
 });
 

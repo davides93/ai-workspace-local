@@ -28,4 +28,5 @@ export const learningEn: Record<keyof typeof learningIt, string> = {
   "learning.il_titolo_supera_i_caratteri": "The title is over {max} characters.",
   "learning.il_contenuto_supera_i_caratteri": "The content is over {max} characters.",
   "learning.anteprima_della_lezione": "Lesson preview",
+  "learning.ho_proposto_una_lezione_nella": "I proposed a lesson: you'll find it in the conversation, under “{action}”",
 };

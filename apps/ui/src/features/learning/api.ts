@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
 import { toast } from "../../shared/lib/toast";
+import { useStoredUiMode } from "../../shared/lib/uiMode";
 import { qk } from "../../shared/query/keys";
 import type { Lesson, LessonStatus } from "../../shared/api/types";
-import { approvedMessage, withDecided } from "./model/lessons";
+import { approvedMessage, reflectedMessage, withDecided } from "./model/lessons";
 
-import { t, t as tr } from "../../shared/i18n";
+import { t as tr } from "../../shared/i18n";
 /** Lessons proposed by the agents; a new thumbs down can add one, so the list is refreshed now and then. */
 export function useLessons(status?: LessonStatus) {
   const api = useApi();
@@ -43,10 +44,12 @@ export function useRejectLesson() {
 export function useReflect() {
   const api = useApi();
   const qc = useQueryClient();
+  // Where to find the lesson depends on the interface (see `reflectedMessage`).
+  const simple = useStoredUiMode() === "simple";
   return useMutation({
     mutationFn: (sessionId: string) => api.reflectSession(sessionId),
-    onSuccess: () => {
-      toast(t("learning.ho_proposto_una_lezione_la"));
+    onSuccess: (lesson) => {
+      toast(reflectedMessage(lesson, simple));
       void qc.invalidateQueries({ queryKey: qk.lessons.all() });
     },
   });
