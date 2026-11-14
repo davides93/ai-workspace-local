@@ -360,6 +360,23 @@ impl Drop for WithdrawQuestion<'_> {
     }
 }
 
+/// A value that is being written to its destination. If the answer of the person is dropped meanwhile (the client
+/// went away, the call was aborted) the request must not stay claimed: it opens again, or ends with `timeout` when
+/// its time ran out in the meantime, since nobody is left to say how the write ended.
+struct ClaimedSecret<'a> {
+    engine: &'a Engine,
+    id: &'a str,
+    written: bool,
+}
+
+impl Drop for ClaimedSecret<'_> {
+    fn drop(&mut self) {
+        if !self.written {
+            self.engine.release_secret(self.id, false);
+        }
+    }
+}
+
 /// The same for a request for a secret.
 struct WithdrawSecret<'a>(&'a Engine, String);
 
@@ -939,7 +956,10 @@ impl Engine {
                         return Err(Error::Conflict(DESTINATION_CHANGED.into()));
                     }
                 };
-                match self.write_secret(&resolved.target, Some(&value)).await {
+                let mut claim = ClaimedSecret { engine: self, id, written: false };
+                let written = self.write_secret(&resolved.target, Some(&value)).await;
+                claim.written = true;
+                match written {
                     Err(e) => {
                         self.release_secret(id, false);
                         Err(without_value(e, &value))
@@ -1884,6 +1904,32 @@ mod tests {
         assert_eq!(customs(&e, &run, "aiw.secret_resolved"), [json!({"id": req.id, "outcome": "timeout"})]);
         assert!(e.audit().iter().any(|a| a.action == "secret.request" && a.decision.as_deref() == Some("timeout") && a.actor == "system"));
         assert!(e.audit().iter().all(|a| a.action != "secret.set"));
+    }
+
+    #[tokio::test]
+    async fn an_answer_dropped_while_its_value_is_being_written_does_not_keep_the_request_claimed() {
+        // Dropped before the time runs out: the request opens again, and the time then closes it as usual.
+        let (e, _d, _w) = engine(vec![]).await;
+        let Late { task, request: req, write, given, .. } = written_past_the_time_limit(&e, GOOD_TOKEN, 1800).await;
+        write.abort();
+        assert!(write.await.unwrap_err().is_cancelled());
+        wait_until("the request to be free again", || {
+            e.0.secret_requests.lock().unwrap().get(&req.id).filter(|p| !p.busy && !p.expired).map(|_| ())
+        })
+        .await;
+        assert_eq!(finished(task).await, json!({"outcome": "timeout"}));
+        assert!(given.elapsed() >= Duration::from_millis(900), "the time closed it, not the drop");
+        assert!(e.secret_requests().is_empty());
+
+        // Dropped after the time ran out, while the write was being waited for: the tool must not wait for ever.
+        let (e, _d, _w) = engine(vec![]).await;
+        let Late { task, request: req, write, .. } = written_past_the_time_limit(&e, GOOD_TOKEN, 1800).await;
+        tokio::time::sleep(Duration::from_millis(1300)).await;
+        assert!(!task.is_finished(), "the wait goes on while the value is being written");
+        write.abort();
+        assert_eq!(finished(task).await, json!({"outcome": "timeout"}), "nobody is left to say how the write ended");
+        assert!(e.secret_requests().is_empty());
+        assert!(matches!(e.respond_secret(&req.id, provide(GOOD_TOKEN), true).await, Err(Error::NotFound(_))), "too late");
     }
 
     #[tokio::test]
