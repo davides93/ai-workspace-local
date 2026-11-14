@@ -186,9 +186,48 @@ async fn only_the_owner_can_answer_the_confirmation_of_a_management_tool_over_th
     wait_done(&e, &rid).await;
     assert_eq!(*seen.lock().unwrap(), [Some(ALL)], "the tool ran once, in the run of the owner");
 
-    // An ordinary tool stays answerable from a paired phone, as ever: that is what "device" is for.
+    // A request that does not exist (any more) is a 404, whoever asks.
     let (st, body) = dispatch(app.clone(), "POST", "/api/approvals/apr_non_esiste", Some(json!({"decision": "allow"}))).await;
     assert_eq!(st, 404, "{body}");
+}
+
+#[tokio::test]
+async fn a_paired_device_still_answers_the_confirmations_of_ordinary_tools() {
+    let (app, e, _d, w) = fixture(vec![]).await;
+    e.register_native_runtime(
+        "llama-embedded",
+        Arc::new(ScriptedBackend::new(vec![
+            ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "nota.md", "content": "ciao"})),
+            ScriptedBackend::text_turn("Fatto"),
+        ])),
+    );
+    let (_, ses) = dispatch(app.clone(), "POST", "/api/sessions", Some(json!({"agent_id": "operator"}))).await;
+    let sid = ses["id"].as_str().unwrap().to_string();
+    let (_, run) = dispatch(app.clone(), "POST", &format!("/api/sessions/{sid}/runs"), Some(json!({"input": "scrivi una nota"}))).await;
+    let rid = run["run_id"].as_str().unwrap().to_string();
+    let mut approval = None;
+    for _ in 0..250 {
+        approval = e.approvals().into_iter().next();
+        if approval.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let approval = approval.expect("the write asks for a confirmation");
+    assert_eq!(approval.tool, "write_file");
+    // This is what "device" is for: a paired phone answers the confirmations of the agents' ordinary tools.
+    let phone = device_token(&e);
+    let r = req(
+        "POST",
+        &format!("/api/approvals/{}", approval.id),
+        Some(LAN),
+        &[("host", "192.168.1.5:7777"), ("authorization", &phone)],
+        Some(json!({"decision": "allow", "remember": false})),
+    );
+    let (st, _, body) = send(&app, r).await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+    wait_done(&e, &rid).await;
+    assert_eq!(std::fs::read_to_string(w.path().join("nota.md")).unwrap(), "ciao");
 }
 
 fn rpc(method: &str, params: Value) -> Value {
