@@ -36,7 +36,7 @@ pub(crate) fn is_guarded(path: &str) -> bool {
     if path == "/api/mcp/oauth/callback" {
         return false;
     }
-    path.starts_with("/api/") || path.starts_with("/v1/") || path == "/mcp" || path == "/a2a"
+    path.starts_with("/api/") || path.starts_with("/v1/") || path.starts_with("/agui/") || path == "/mcp" || path == "/a2a"
 }
 
 fn is_webhook(path: &str) -> bool {
