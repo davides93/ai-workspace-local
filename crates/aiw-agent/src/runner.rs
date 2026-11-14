@@ -1539,7 +1539,7 @@ impl AgentRunner {
                     run_id: input.run_id.clone(),
                     tool: tc.name.clone(),
                     args: args.clone(),
-                    reason: format!("{} · {}", reason_text(&reason, tool.risk()), subject.clone().unwrap_or_default())
+                    reason: format!("{} · {}", reason_text(&tc.name, &reason, tool.risk()), subject.clone().unwrap_or_default())
                         .trim_end_matches(" · ")
                         .to_string(),
                     risk: risk_level(tool.risk()).into(),
@@ -1598,8 +1598,15 @@ impl AgentRunner {
     }
 }
 
-fn reason_text(reason: &str, risk: Risk) -> String {
+/// The sentence on the confirmation card. The management tools of the Assistant (`aiw_*`: the engine
+/// owns them, this crate cannot see them) change the app, not files or a shell, so their card says so.
+fn reason_text(tool: &str, reason: &str, risk: Risk) -> String {
+    let management = tool.starts_with("aiw_");
     let base = match risk {
+        Risk::Write if management => "L'Assistente vuole cambiare la configurazione dell'app (modelli, impostazioni, assistenti o ricordi)",
+        Risk::Exec if management => {
+            "L'Assistente vuole eseguire un'azione delicata sull'app (installare, eliminare, collegare un servizio o cambiare impostazioni di macchina)"
+        }
         Risk::Write => "L'agente vuole modificare dei file",
         Risk::Exec => "L'agente vuole eseguire un comando",
         Risk::Computer => "L'agente vuole usare mouse e tastiera",
@@ -1700,6 +1707,38 @@ async fn compact(messages: &mut Vec<Msg>, backend: &dyn ChatBackend, model: &str
     messages.push(Msg::assistant("Ok, riprendo dal riassunto."));
     messages.extend(tail);
     Some(removed)
+}
+
+#[cfg(test)]
+mod reason_text_tests {
+    use super::*;
+
+    #[test]
+    fn management_tools_say_what_they_change_in_the_app() {
+        let write = reason_text("aiw_model_use", "", Risk::Write);
+        assert_eq!(write, "L'Assistente vuole cambiare la configurazione dell'app (modelli, impostazioni, assistenti o ricordi)");
+        let exec = reason_text("aiw_runtime_install", "", Risk::Exec);
+        assert_eq!(
+            exec,
+            "L'Assistente vuole eseguire un'azione delicata sull'app (installare, eliminare, collegare un servizio o cambiare impostazioni di macchina)"
+        );
+        // The rule that made the tool ask still shows after the sentence.
+        assert_eq!(reason_text("aiw_setting_set", "regola incorporata", Risk::Write), format!("{write} (regola incorporata)"));
+    }
+
+    #[test]
+    fn every_other_tool_keeps_its_sentence() {
+        assert_eq!(reason_text("write_file", "", Risk::Write), "L'agente vuole modificare dei file");
+        assert_eq!(reason_text("bash", "", Risk::Exec), "L'agente vuole eseguire un comando");
+        assert_eq!(reason_text("computer", "", Risk::Computer), "L'agente vuole usare mouse e tastiera");
+        assert_eq!(reason_text("web_fetch", "", Risk::Network), "L'agente vuole accedere alla rete");
+        assert_eq!(reason_text("read_file", "", Risk::Read), "L'agente vuole leggere dei dati");
+        assert_eq!(reason_text("bash", "ask", Risk::Exec), "L'agente vuole eseguire un comando (ask)");
+        // The prefix is `aiw_`, not any name that merely contains it, and only the two risks that change the app.
+        assert_eq!(reason_text("my_aiw_tool", "", Risk::Write), "L'agente vuole modificare dei file");
+        assert_eq!(reason_text("aiw_inspect", "", Risk::Read), "L'agente vuole leggere dei dati");
+        assert_eq!(reason_text("aiw_other", "", Risk::Network), "L'agente vuole accedere alla rete");
+    }
 }
 
 #[cfg(test)]
