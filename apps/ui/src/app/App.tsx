@@ -12,8 +12,9 @@ import { CommandPalette } from "./palette/CommandPalette";
 import { onOpenPalette } from "./palette/openPalette";
 import { useCommands } from "./palette/useCommands";
 import { routeLabel } from "./navigation";
+import { routeGate, SIMPLE_HOME } from "./routeGate";
 import { useUiMode } from "./useUiMode";
-import { RouteProvider, Link, useRoute } from "./router";
+import { RouteProvider, Link, navigate, useRoute } from "./router";
 import { ROUTES } from "./routes";
 import { ConnectionBanner, DemoBanner } from "./shell/Banners";
 import { ErrorBoundary } from "./shell/ErrorBoundary";
@@ -26,7 +27,7 @@ import { useLanguage } from "./useLanguage";
 export function App() {
   const resolved = useRoute(ROUTES);
   const { needsPairing } = useConnection();
-  const [mode] = useUiMode();
+  const [mode, , configMode] = useUiMode();
   const locale = useLocale();
   useLanguage();
   const commands = useCommands();
@@ -34,6 +35,11 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
   const current = resolved?.route.id;
+  // Simple mode has one route: any other address goes to the chat, but only once the configuration confirms the mode.
+  const gate = routeGate({ routeId: current, mode, configMode });
+  useEffect(() => {
+    if (gate === "redirect") navigate(SIMPLE_HOME, { replace: true });
+  }, [gate]);
   // Remember the open chat before the rail renders, so its Workspace link always points at it.
   if (resolved?.route.id === "chat" && resolved.params.sessionId) rememberChatSession(resolved.params.sessionId);
   useDownloadsWatcher();
@@ -77,6 +83,8 @@ export function App() {
           <Suspense fallback={<PageSkeleton />}>
             {needsPairing ? (
               <PairingScreen />
+            ) : gate !== "show" ? (
+              <PageSkeleton />
             ) : View && resolved ? (
               <RouteProvider value={{ params: resolved.params, query: resolved.query }}>
                 <View />

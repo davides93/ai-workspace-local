@@ -5,10 +5,12 @@ import { setStoredUiMode, useStoredUiMode, type UiMode } from "../shared/lib/uiM
 
 import { t } from "../shared/i18n";
 /**
- * The interface mode and a setter. The configuration (`ui.mode`) decides; the last known value is
- * kept on the device so the shell does not flash the wrong sections while the configuration loads.
+ * The interface mode, a setter and what the configuration says. The configuration (`ui.mode`) decides;
+ * the last known value is kept on the device so the shell does not flash the wrong sections while the
+ * configuration loads. The third element is the mode the configuration reported, `undefined` until it
+ * has answered: the shell redirects only on that (`routeGate`), never on the value kept on the device.
  */
-export function useUiMode(): [UiMode, (mode: UiMode) => void] {
+export function useUiMode(): [UiMode, (mode: UiMode) => void, UiMode | undefined] {
   const mode = useStoredUiMode();
   const cfg = useConfig();
   const setConfig = useSetConfig();
@@ -32,5 +34,5 @@ export function useUiMode(): [UiMode, (mode: UiMode) => void] {
     },
     [view, mode, setConfig],
   );
-  return [mode, set];
+  return [mode, set, fromConfig];
 }
