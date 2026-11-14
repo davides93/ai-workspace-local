@@ -38,6 +38,11 @@ const QUESTION_HINT: &str = "Fai la domanda in testo e aspetta il prossimo messa
 /// What the model is told when the client of the run cannot take a secret.
 const SECRET_HINT: &str =
     "Non chiedere il segreto in chat. Spiega all'utente che va inserito dall'app su questo computer (nelle impostazioni o nella scheda del servizio).";
+/// What the person is told when the destination is not the one the request showed (the value is not written).
+const DESTINATION_CHANGED: &str = "La destinazione è cambiata dopo la richiesta: chiedi di nuovo il segreto";
+/// What the model is told in the same case, next to the outcome `declined`: the person did not refuse.
+const CHANGED_HINT: &str =
+    "La destinazione del segreto è cambiata dopo la richiesta e il valore non è stato salvato. Se serve ancora, chiedilo di nuovo con aiw_secret_request.";
 
 /// Longest text answer of a form or free answer «Altro», in characters.
 const MAX_ANSWER_CHARS: usize = 2000;
@@ -440,7 +445,7 @@ impl Engine {
             let _ = q.tx.send((QuestionOutcome::Cancelled, None));
         }
         for s in secrets {
-            let _ = s.tx.send(SecretOutcome::Cancelled);
+            let _ = s.tx.send((SecretOutcome::Cancelled, None));
         }
         counts
     }
@@ -475,6 +480,10 @@ struct Resolved {
     target: SecretTarget,
     canonical: String,
     destination: String,
+    /// What the destination is right now, from the raw fields that decide where the value goes (the whole
+    /// endpoint or URL, not the clipped text of `destination`). The request keeps it, and the value is
+    /// written only if resolving the target again gives the same. Never shown, never sent anywhere.
+    identity: String,
 }
 
 fn shown(s: &str) -> String {
@@ -498,7 +507,12 @@ fn resolve_target(e: &Engine, raw: &str) -> Result<Resolved> {
                 Some(h) => format!("{} ({h})", info.name),
                 None => info.name.clone(),
             };
-            Ok(Resolved { target: SecretTarget::ProviderToken { id: info.id.clone() }, canonical: format!("provider_token:{}", info.id), destination })
+            Ok(Resolved {
+                target: SecretTarget::ProviderToken { id: info.id.clone() },
+                canonical: format!("provider_token:{}", info.id),
+                destination,
+                identity: json!(["provider_token", info.id, info.endpoint]).to_string(),
+            })
         }
         "mcp_env" | "mcp_header" => {
             let env = kind == "mcp_env";
@@ -556,7 +570,13 @@ fn resolve_target(e: &Engine, raw: &str) -> Result<Resolved> {
             } else {
                 SecretTarget::McpHeader { server: cfg.id.clone(), name: stored.clone() }
             };
-            Ok(Resolved { target, canonical: format!("{kind}:{}:{stored}", cfg.id), destination })
+            // Where the value goes: the URL the header is sent to, or the command that gets the variable.
+            let identity = if env {
+                json!([kind, cfg.id, stored, cfg.transport, cfg.command.as_deref().map(str::trim), cfg.args])
+            } else {
+                json!([kind, cfg.id, stored, cfg.transport, cfg.url])
+            };
+            Ok(Resolved { target, canonical: format!("{kind}:{}:{stored}", cfg.id), destination, identity: identity.to_string() })
         }
         "setting" => {
             let field = e.0.config.schema().properties.get(rest).filter(|f| f.secret).ok_or_else(|| {
@@ -567,6 +587,7 @@ fn resolve_target(e: &Engine, raw: &str) -> Result<Resolved> {
                 target: SecretTarget::Setting { key: rest.into() },
                 canonical: format!("setting:{rest}"),
                 destination: format!("Impostazione «{}» ({rest}), salvata su questo computer", shown(&title)),
+                identity: json!(["setting", rest]).to_string(),
             })
         }
         "runtime_setting" => {
@@ -586,6 +607,7 @@ fn resolve_target(e: &Engine, raw: &str) -> Result<Resolved> {
                 target: SecretTarget::RuntimeSetting { runtime: runtime.into(), key: key.into() },
                 canonical: format!("runtime_setting:{runtime}:{key}"),
                 destination: format!("Motore «{}»: impostazione «{}» ({key}), salvata su questo computer", shown(&info.name), shown(&title)),
+                identity: json!(["runtime_setting", runtime, key]).to_string(),
             })
         }
         _ => Err(bad(format!(
@@ -646,12 +668,6 @@ impl Engine {
             }
         }
         Ok(())
-    }
-
-    /// Writes the value the person typed to the destination. Used only by [`Engine::respond_secret`].
-    async fn store_secret(&self, target: &str, value: &str) -> Result<()> {
-        let resolved = resolve_target(self, target)?;
-        self.write_secret(&resolved.target, Some(value)).await
     }
 }
 
@@ -762,17 +778,21 @@ impl Engine {
             expires_at: Some(expires_at(wait)),
         };
         let (tx, rx) = oneshot::channel();
-        self.0.secret_requests.lock().unwrap().insert(request.id.clone(), PendingSecret { request: request.clone(), tx, busy: false });
+        self.0
+            .secret_requests
+            .lock()
+            .unwrap()
+            .insert(request.id.clone(), PendingSecret { request: request.clone(), tx, identity: resolved.identity, busy: false });
         let _withdraw = WithdrawSecret(self, request.id.clone());
         self.emit(
             &ctx.run_id,
             AgEvent::Custom { name: "aiw.secret_request".into(), value: serde_json::to_value(&request).unwrap_or(Value::Null) },
         );
-        let outcome = tokio::select! {
+        let (outcome, hint) = tokio::select! {
             biased;
-            a = rx => a.unwrap_or(SecretOutcome::Cancelled),
-            _ = ctx.cancel.cancelled() => SecretOutcome::Cancelled,
-            _ = tokio::time::sleep(wait) => SecretOutcome::Timeout,
+            a = rx => a.unwrap_or((SecretOutcome::Cancelled, None)),
+            _ = ctx.cancel.cancelled() => (SecretOutcome::Cancelled, None),
+            _ = tokio::time::sleep(wait) => (SecretOutcome::Timeout, None),
         };
         self.0.secret_requests.lock().unwrap().remove(&request.id);
         self.emit(
@@ -780,20 +800,24 @@ impl Engine {
             AgEvent::Custom { name: "aiw.secret_resolved".into(), value: json!({"id": request.id, "outcome": outcome.as_str()}) },
         );
         if outcome != SecretOutcome::Stored {
-            // The row of a stored secret (`secret.set`) is written when the value arrives.
-            let actor = if outcome == SecretOutcome::Declined { "user" } else { "system" };
-            self.audit_interaction(
-                &ctx.run_id,
-                actor,
-                "secret.request",
-                Some("aiw_secret_request"),
-                Some(outcome.as_str()),
-                &request.target,
-            );
+            // The row of a stored secret (`secret.set`) is written when the value arrives. A `declined` with
+            // a hint is the engine closing the request (the destination changed), not the person declining.
+            let actor = if outcome == SecretOutcome::Declined && hint.is_none() { "user" } else { "system" };
+            let detail = match hint {
+                Some(_) => format!("{} (destinazione cambiata dopo la richiesta)", request.target),
+                None => request.target.clone(),
+            };
+            self.audit_interaction(&ctx.run_id, actor, "secret.request", Some("aiw_secret_request"), Some(outcome.as_str()), &detail);
         }
         match outcome {
             SecretOutcome::Stored => json_output(json!({"outcome": "stored", "target": request.target})),
-            other => json_output(json!({"outcome": other.as_str()})),
+            other => {
+                let mut result = json!({"outcome": other.as_str()});
+                if let Some(hint) = hint {
+                    result["hint"] = json!(hint);
+                }
+                json_output(result)
+            }
         }
     }
 
@@ -803,6 +827,26 @@ impl Engine {
         let mut all: Vec<SecretRequest> = self.0.secret_requests.lock().unwrap().values().map(|p| p.request.clone()).collect();
         all.sort_by(|a, b| a.id.cmp(&b.id));
         all
+    }
+
+    /// A value that was being written was not stored. The request is open again for another try, unless the
+    /// destination `changed` (the person was shown another one: the request is closed with `declined` and a
+    /// hint for the model).
+    fn release_secret(&self, id: &str, changed: bool) {
+        let closing = {
+            let mut all = self.0.secret_requests.lock().unwrap();
+            match all.get_mut(id) {
+                Some(_) if changed => all.remove(id).map(|p| (p, (SecretOutcome::Declined, Some(CHANGED_HINT)))),
+                Some(p) => {
+                    p.busy = false;
+                    None
+                }
+                None => None,
+            }
+        };
+        if let Some((p, end)) = closing {
+            let _ = p.tx.send(end);
+        }
     }
 
     /// The person gives the secret (`provide`) or declines (`decline`). `owner` says whether the caller has
@@ -826,28 +870,35 @@ impl Engine {
                     }
                 };
                 match pending {
-                    Some(p) => p.tx.send(SecretOutcome::Declined).map_err(|_| not_open("richiesta", id)),
+                    Some(p) => p.tx.send((SecretOutcome::Declined, None)).map_err(|_| not_open("richiesta", id)),
                     None => Err(not_open("richiesta", id)),
                 }
             }
             "provide" => {
                 let value = clean_value(answer.value)?;
                 // The request is claimed (no second value meanwhile) but stays in the list until the value is stored.
-                let (target, run_id) = {
+                let (target, identity, run_id) = {
                     let mut all = self.0.secret_requests.lock().unwrap();
                     let p = all.get_mut(id).ok_or_else(|| not_open("richiesta", id))?;
                     if p.busy {
                         return Err(Error::Conflict("il valore è in fase di salvataggio".into()));
                     }
                     p.busy = true;
-                    (p.request.target.clone(), p.request.run_id.clone())
+                    (p.request.target.clone(), p.identity.clone(), p.request.run_id.clone())
                 };
-                let written = self.store_secret(&target, &value).await;
-                match written {
+                // The destination is looked at again right before the write: the person was shown where the value
+                // goes when the request was made, and it goes there or nowhere. A destination that cannot be resolved
+                // any more (the connector is gone) is a destination that changed.
+                let resolved = match resolve_target(self, &target) {
+                    Ok(r) if r.identity == identity => r,
+                    _ => {
+                        self.release_secret(id, true);
+                        return Err(Error::Conflict(DESTINATION_CHANGED.into()));
+                    }
+                };
+                match self.write_secret(&resolved.target, Some(&value)).await {
                     Err(e) => {
-                        if let Some(p) = self.0.secret_requests.lock().unwrap().get_mut(id) {
-                            p.busy = false;
-                        }
+                        self.release_secret(id, false);
                         Err(without_value(e, &value))
                     }
                     Ok(()) => {
@@ -855,7 +906,7 @@ impl Engine {
                         let pending = self.0.secret_requests.lock().unwrap().remove(id);
                         // The run may have been cancelled while the value was being written: it is stored all the same.
                         if let Some(p) = pending {
-                            let _ = p.tx.send(SecretOutcome::Stored);
+                            let _ = p.tx.send((SecretOutcome::Stored, None));
                         }
                         Ok(())
                     }
@@ -1454,6 +1505,35 @@ mod tests {
         format!("http://127.0.0.1:{port}")
     }
 
+    /// A fake Hugging Face that accepts `good` and writes down the `Authorization` header of every request it gets
+    /// (a destination that would have been sent the value shows it here).
+    async fn fake_hf_recording(good: &'static str) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        use axum::http::{HeaderMap, StatusCode};
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let app = axum::Router::new().route(
+            "/api/whoami-v2",
+            axum::routing::get(move |h: HeaderMap| {
+                let log = log.clone();
+                async move {
+                    let given = h.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+                    log.lock().unwrap().push(given.clone());
+                    if given == format!("Bearer {good}") {
+                        (StatusCode::OK, axum::Json(json!({"name": "tester"})))
+                    } else {
+                        (StatusCode::UNAUTHORIZED, axum::Json(json!({"error": "Invalid credentials"})))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://127.0.0.1:{port}"), seen)
+    }
+
     /// Every place a value could leak to, as text: the events of the run (live and as stored), the messages
     /// of the session with their tool calls, the whole activity log, the confirmations and the requests
     /// still open, what the model was sent, and the result of the tool.
@@ -1680,6 +1760,118 @@ mod tests {
         write.await.unwrap().unwrap();
         assert!(e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured);
         assert!(e.secret_requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_provider_whose_endpoint_changed_after_the_request_gets_no_value_and_the_request_is_closed() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let shown_to_the_person = fake_hf(GOOD_TOKEN).await;
+        // Another endpoint on the same host: the words the person saw are the same, the place is not.
+        let (elsewhere, seen_there) = fake_hf_recording(GOOD_TOKEN).await;
+        e.set_provider_auth("hf", None, Some(shown_to_the_person)).await.unwrap();
+        let turns = vec![
+            ScriptedBackend::tool_turn(
+                "s1",
+                "aiw_secret_request",
+                json!({"target": "provider_token:hf", "label": "Token di Hugging Face"}),
+            ),
+            ScriptedBackend::text_turn("Va bene."),
+        ];
+        let (session, run, backend) = assistant_run(&e, turns, "Aggiungi il token", OWNER).await;
+        let req = next_secret(&e).await;
+        assert_eq!(req.destination, "Hugging Face (127.0.0.1)");
+        // From another chat, or from the API: the provider now sends its requests to a different endpoint.
+        e.set_provider_auth("hf", None, Some(elsewhere)).await.unwrap();
+
+        let err = e.respond_secret(&req.id, provide(GOOD_TOKEN), true).await.unwrap_err();
+        assert!(matches!(err, Error::Conflict(_)) && err.status() == 409, "{err:?}");
+        assert_eq!(err.to_string(), "La destinazione è cambiata dopo la richiesta: chiedi di nuovo il segreto");
+        assert!(!err.to_string().contains(GOOD_TOKEN) && !format!("{err:?}").contains(GOOD_TOKEN));
+        // The value went nowhere: the new endpoint was never asked (it would have been sent the token to check it).
+        assert!(seen_there.lock().unwrap().is_empty(), "the token reached the new endpoint: {:?}", seen_there.lock().unwrap());
+        assert!(!e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured);
+        assert!(e.0.store.get_doc::<crate::models::ProviderDoc>("model_provider", "hf").unwrap().is_none_or(|d| d.token.is_none()));
+        assert!(!e.known_secrets().iter().any(|s| s == GOOD_TOKEN));
+
+        // The request is closed (not open for a retry that would only fail again), and the model is told what happened.
+        wait_finished(&e, &run).await;
+        assert!(e.secret_requests().is_empty());
+        assert!(matches!(e.respond_secret(&req.id, provide(GOOD_TOKEN), true).await, Err(Error::NotFound(_))));
+        assert_eq!(customs(&e, &run, "aiw.secret_resolved"), [json!({"id": req.id, "outcome": "declined"})]);
+        let said = tool_result(&e, &session);
+        assert_eq!(said["outcome"], "declined", "{said}");
+        assert!(said["hint"].as_str().is_some_and(|h| h.contains("destinazione") && h.contains("chiedilo di nuovo")), "{said}");
+        assert_eq!(e.messages(&session).unwrap().last().unwrap().content, "Va bene.");
+        // The activity log says the engine closed it, and has no row of a stored secret.
+        assert!(e.audit().iter().all(|a| a.action != "secret.set"));
+        let row = e.audit().into_iter().find(|a| a.action == "secret.request").expect("the closing is logged");
+        assert_eq!((row.actor.as_str(), row.decision.as_deref()), ("system", Some("declined")));
+        assert!(row.detail.starts_with("provider_token:hf") && row.detail.contains("destinazione cambiata"), "{}", row.detail);
+        // The value is in none of the places the model or the history see ("provider_token:hf" shows the search looks at the right text).
+        let all = everything(&e, &session, &run, &backend);
+        assert!(all.contains("provider_token:hf") && all.contains("destinazione"));
+        assert!(!all.contains(GOOD_TOKEN), "the value is in the events, the messages, the audit, the requests or the prompt");
+    }
+
+    #[tokio::test]
+    async fn a_connector_that_changed_after_the_request_gets_no_value_and_a_harmless_edit_does_not_matter() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let http = e.save_mcp_server(http_connector()).await.unwrap().config.id;
+        let stdio = e.save_mcp_server(stdio_connector()).await.unwrap().config.id;
+        let stored = |id: &str| e.0.store.get_doc::<McpServerConfig>("mcp", id).unwrap().unwrap();
+        let ask = |target: String| {
+            let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+            let ctx = test_ctx(&e, Some(OWNER));
+            tokio::spawn(async move { tool.call(secret_args(&target), &ctx).await })
+        };
+
+        // The header is sent to another URL than the one shown: nothing is written.
+        let task = ask(format!("mcp_header:{http}:Authorization"));
+        let req = next_secret(&e).await;
+        let mut cfg = stored(&http);
+        cfg.url = Some("https://altro.example.org/mcp".into());
+        e.save_mcp_server(cfg).await.unwrap();
+        let err = e.respond_secret(&req.id, provide(HEADER_VALUE), true).await.unwrap_err();
+        assert!(matches!(err, Error::Conflict(_)) && err.to_string().contains("La destinazione è cambiata"), "{err:?}");
+        let said = finished(task).await;
+        assert_eq!(said["outcome"], "declined");
+        assert!(said["hint"].is_string());
+        assert_eq!(stored(&http).headers.as_ref().unwrap()["Authorization"], "", "nothing was written");
+        assert!(e.secret_requests().is_empty());
+
+        // The variable would be passed to another command than the one shown: nothing is written.
+        let task = ask(format!("mcp_env:{stdio}:GITHUB_TOKEN"));
+        let req = next_secret(&e).await;
+        let mut cfg = stored(&stdio);
+        cfg.args = Some(vec!["-y".into(), "server-diverso".into()]);
+        e.save_mcp_server(cfg).await.unwrap();
+        assert!(matches!(e.respond_secret(&req.id, provide(ENV_VALUE), true).await, Err(Error::Conflict(_))));
+        assert_eq!(finished(task).await["outcome"], "declined");
+        assert_eq!(stored(&stdio).env.as_ref().unwrap()["GITHUB_TOKEN"], "", "nothing was written");
+
+        // A connector that is gone is a destination that changed too, not an error to retry.
+        let task = ask(format!("mcp_header:{http}:Authorization"));
+        let req = next_secret(&e).await;
+        e.remove_mcp_server(&http).await.unwrap();
+        assert!(matches!(e.respond_secret(&req.id, provide(HEADER_VALUE), true).await, Err(Error::Conflict(_))));
+        assert_eq!(finished(task).await["outcome"], "declined");
+        assert!(e.secret_requests().is_empty());
+
+        // What does not decide where the value goes may change: another header of the connector, the value of another variable.
+        let task = ask(format!("mcp_env:{stdio}:GITHUB_TOKEN"));
+        let req = next_secret(&e).await;
+        let mut cfg = stored(&stdio);
+        cfg.env.as_mut().unwrap().insert("MODE".into(), json!("altro"));
+        e.save_mcp_server(cfg).await.unwrap();
+        e.respond_secret(&req.id, provide(ENV_VALUE), true).await.unwrap();
+        assert_eq!(finished(task).await, json!({"outcome": "stored", "target": format!("mcp_env:{stdio}:GITHUB_TOKEN")}));
+        assert_eq!(stored(&stdio).env.as_ref().unwrap()["GITHUB_TOKEN"], ENV_VALUE);
+        assert_eq!(stored(&stdio).env.as_ref().unwrap()["MODE"], "altro");
+
+        // The values that were refused are not in the activity log, and the other one is only stored.
+        let audit = serde_json::to_string(&e.audit()).unwrap();
+        assert!(!audit.contains(HEADER_VALUE) && !audit.contains(ENV_VALUE));
+        assert_eq!(e.audit().iter().filter(|a| a.action == "secret.set").count(), 1);
     }
 
     #[tokio::test]

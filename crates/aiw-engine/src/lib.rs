@@ -133,7 +133,11 @@ pub(crate) struct PendingQuestion {
 /// destination the moment it arrives (see `management::interaction`).
 pub(crate) struct PendingSecret {
     request: SecretRequest,
-    tx: oneshot::Sender<SecretOutcome>,
+    /// How the wait ends, and what else the model is told (a `hint`) when the outcome alone would mislead.
+    tx: oneshot::Sender<(SecretOutcome, Option<&'static str>)>,
+    /// The destination as it was resolved when the request was made (raw, never shown or sent anywhere):
+    /// the value is written only if the destination is still the same one.
+    identity: String,
     /// A value is being written to the destination: no second answer meanwhile.
     busy: bool,
 }
