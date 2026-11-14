@@ -212,6 +212,9 @@ impl RunHost for EngineHost {
         let (parent_tools, parent_delegate) = (&parent.agent.tools, &parent.agent.delegate_tools);
         input.agent.tools = narrow_tools_delegating(parent_tools, parent_delegate, &input.agent.tools, explicit);
         input.agent.delegate_tools = narrow_tools_delegating(parent_tools, parent_delegate, &input.agent.delegate_tools, explicit);
+        // The management tools (`aiw_*`, `ask_user`) are for the agent the person talks to: a sub-agent never gets one.
+        input.agent.tools.retain(|t| !crate::management::is_management(t));
+        input.agent.delegate_tools.retain(|t| !crate::management::is_management(t));
         // The members of a team share its state (the tool is harmless: it touches nothing outside the run).
         input.in_team = parent.in_team;
         input.shared = parent.shared.clone();
