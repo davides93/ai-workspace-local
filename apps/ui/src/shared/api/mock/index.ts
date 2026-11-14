@@ -825,9 +825,11 @@ export class MockTransport implements Transport {
   }
   async backgroundCheckNow() { return this.backgroundNow(); }
 
+  /** The run of the Assistente that is going on in a session (`assistant.ts`): a conversation opened again re-attaches to it, like the live one. */
+  private assistantRuns = new Map<string, string>();
   async activeRun(sessionId?: string) {
     if (sessionId !== undefined && !sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
-    return null;
+    return (sessionId !== undefined ? this.assistantRuns.get(sessionId) : undefined) ?? null;
   }
   /** The screenshots the demo emitted for the session's runs, in the order they were taken. */
   async sessionImages(sessionId: string): Promise<SessionImage[]> {
@@ -946,10 +948,13 @@ export class MockTransport implements Transport {
 
   // Questions of the agent and requests for a secret: the scripted runs of `assistant.ts` wait on them.
   private readonly ask = new AskStore();
+  /** `device`: this browser is a paired device, which may not provide secrets (403, as the server answers); `?scope=device` in the address of the demo. */
+  secretScope: "full" | "device" = "full";
   async questions(): Promise<Question[]> { return this.ask.openQuestions(); }
   async answerQuestion(id: string, reply: QuestionReply) { this.ask.answerQuestion(id, reply); }
   async secretRequests(): Promise<SecretRequest[]> { return this.ask.openSecrets(); }
   async answerSecretRequest(id: string, reply: SecretReply): Promise<{ stored?: boolean }> {
+    if (this.secretScope === "device") throw new ApiError(403, "questo dispositivo non può fornire segreti: serve l'accesso completo");
     return this.ask.answerSecret(id, reply, (target, value) => this.storeSecret(target, value));
   }
   /** Writes a secret where its target says. The demo only marks the provider as set up: the value is checked and dropped, never kept. */
@@ -1159,6 +1164,7 @@ export class MockTransport implements Transport {
   /** The Assistente's questions and requests for a secret (`assistant.ts`): the same in every session, whatever its agent. */
   private async assistantRun(runId: string, sessionId: string, script: AssistantScript) {
     await sleep(150);
+    this.assistantRuns.set(sessionId, runId);
     await runAssistantScript({
       runId, threadId: sessionId, ask: this.ask, nid, now,
       emit: (e) => this.emit(runId, e),
@@ -1173,7 +1179,9 @@ export class MockTransport implements Transport {
         (sessionMessages[sessionId] ??= []).push(...stored);
         this.finish(sessionId, final);
       },
-    }, script);
+    }, script).finally(() => {
+      if (this.assistantRuns.get(sessionId) === runId) this.assistantRuns.delete(sessionId);
+    });
   }
 
   private async scriptedRun(runId: string, sessionId: string, input: string) {

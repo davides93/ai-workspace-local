@@ -336,7 +336,10 @@ export async function createTransport(): Promise<Transport> {
     // `?scenario=first-run`: a demo that starts empty (used by the end-to-end tests).
     const scenario = params.get("scenario");
     if (isMockScenario(scenario)) applyMockScenario(scenario);
-    return new MockTransport();
+    const demo = new MockTransport();
+    // `?scope=device`: the demo as a paired device, which may not provide secrets (the end-to-end tests of the card that says so).
+    if (params.get("scope") === "device") demo.secretScope = "device";
+    return demo;
   }
   if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
     const { TauriTransport } = await import("./tauri");

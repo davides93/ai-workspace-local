@@ -1,5 +1,8 @@
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useHash } from "../../app/router";
 import { sessionForRun } from "../../shared/lib/runIndex";
+import { qk } from "../../shared/query/keys";
 import { Icon } from "../../shared/ui";
 import { useSessions } from "../chat/api";
 import { useQuestions, useSecretRequests } from "./api";
@@ -19,8 +22,13 @@ export function AskCenter() {
   const open = openChatSession(useHash());
   const q = waitingElsewhere(questions, open, sessionForRun);
   const s = waitingElsewhere(secrets, open, sessionForRun);
+  const target = q.length + s.length > 0 ? bannerSession([...q, ...s], sessionForRun) : null;
+  // The title the banner names may be older than the run that is waiting (a conversation is named after its first message).
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (target) void qc.invalidateQueries({ queryKey: qk.sessions.list() });
+  }, [target, qc]);
   if (q.length + s.length === 0) return null;
-  const target = bannerSession([...q, ...s], sessionForRun);
   const title = target ? sessions?.find((x) => x.id === target)?.title : undefined;
   return (
     <div className="ask-banner" role="status">
