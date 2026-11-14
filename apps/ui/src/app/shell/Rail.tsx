@@ -31,7 +31,7 @@ export function Rail({ current, onOpenPalette }: { current?: RouteId; onOpenPale
         </Link>
       )}
       <DeviceChip />
-      <button type="button" className="rail-search" onClick={onOpenPalette} title={t("shell.cerca_e_comandi_ctrl_k")} aria-label={t("shell.cerca_e_comandi_ctrl_k")}>
+      <button type="button" className="rail-search" onClick={onOpenPalette} title={t("shell.cerca_e_comandi_ctrl_k")} aria-label={t("shell.cerca_nome_accessibile")}>
         <Icon name="search" size={16} />
         <span className="nav-text">{t("shell.cerca")}</span>
         <kbd className="nav-text">Ctrl K</kbd>

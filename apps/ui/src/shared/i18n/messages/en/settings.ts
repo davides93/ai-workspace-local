@@ -91,7 +91,7 @@ export const settingsEn: Record<keyof typeof settingsIt, string> = {
   "settings.salvato_nello_strato": "\"{title}\" saved in the {layer} layer",
   "settings.non_disponibile": "not available",
   "settings.controllo_avviato": "Check started",
-  "settings.ripristina_nello_strato": "Restore {title} in the {layer} layer",
+  "settings.ripristina_nello_strato": "Reset {title} in the {layer} layer",
   "settings.toglie_il_valore_dallo_strato": "Removes the value from the {layer} layer",
   "settings.questo_strato_non_definisce_un": "This layer doesn't define a value",
   "settings.installed_version": "Installed version {version}",
