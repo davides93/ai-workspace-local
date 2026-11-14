@@ -93,7 +93,8 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
     case "prepare": sentence = t(device ? "home.ti_consiglio_per_dispositivo" : "home.ti_consiglio_per_questo_dispositivo", { model: state.model.name, size: formatBytes(state.model.size_bytes), device: device?.name ?? "", detail: state.model.fit_detail }); break;
     case "connect": sentence = t("home.hai_gia_sul_disco_lo", { name: state.model.name }); break;
     case "no-runtime": sentence = t("home.su_questo_dispositivo_non_c"); action = "developer"; break;
-    case "no-model": sentence = t("home.nessun_modello_del_catalogo_e"); action = "models"; break;
+    // The sentence names the button below it (it opens the catalog in the Developer view): same label, so they never drift apart.
+    case "no-model": sentence = t("home.nessun_modello_del_catalogo_e", { action: t("home.mostra_tutte_le_sezioni") }); action = "models"; break;
     case "loading": sentence = t("home.cerco_il_modello_piu_adatto"); action = "none"; break;
   }
 
