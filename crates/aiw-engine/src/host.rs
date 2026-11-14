@@ -1,7 +1,7 @@
 //! The engine side of [`aiw_agent::RunHost`] and [`aiw_workflow::WorkflowHost`].
 
 use crate::Engine;
-use aiw_agent::{narrow_sandbox, narrow_tools, AgentRunner, RunHost, RunInput, Skill};
+use aiw_agent::{narrow_sandbox, narrow_tools_delegating, AgentRunner, RunHost, RunInput, Skill};
 use aiw_core::api::{ApprovalOutcome, ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun, WorkflowStep};
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
@@ -205,7 +205,16 @@ impl RunHost for EngineHost {
         input.tool_ctx.mcp_run = parent.tool_ctx.mcp_run.clone();
         // Same for the sandbox and the tool list.
         input.tool_ctx.sandbox = narrow_sandbox(parent.tool_ctx.sandbox, input.tool_ctx.sandbox);
-        input.agent.tools = narrow_tools(&parent.agent.tools, &input.agent.tools);
+        // The parent hands out its own tools and the ones it only delegates (`delegate_tools`); a `*`
+        // there never covers a tool that needs an explicit grant.
+        let registry = self.engine.tool_registry();
+        let explicit = |name: &str| registry.get(name).is_some_and(|t| t.explicit_grant());
+        let (parent_tools, parent_delegate) = (&parent.agent.tools, &parent.agent.delegate_tools);
+        input.agent.tools = narrow_tools_delegating(parent_tools, parent_delegate, &input.agent.tools, explicit);
+        input.agent.delegate_tools = narrow_tools_delegating(parent_tools, parent_delegate, &input.agent.delegate_tools, explicit);
+        // The management tools (`aiw_*`, `ask_user`) are for the agent the person talks to: a sub-agent never gets one.
+        input.agent.tools.retain(|t| !crate::management::is_management(t));
+        input.agent.delegate_tools.retain(|t| !crate::management::is_management(t));
         // The members of a team share its state (the tool is harmless: it touches nothing outside the run).
         input.in_team = parent.in_team;
         input.shared = parent.shared.clone();
@@ -402,5 +411,106 @@ impl aiw_workflow::WorkflowHost for EngineHost {
 
     fn clear_state(&self, run_id: &str) {
         let _ = self.engine.0.store.clear_workflow_state(run_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{engine, wait_finished};
+    use aiw_core::api::AgentProfile;
+    use aiw_runtimes::ScriptedBackend;
+
+    struct Delegated {
+        e: Engine,
+        parent_tools: Vec<String>,
+        child_tools: Vec<String>,
+        run: String,
+        _dirs: (tempfile::TempDir, tempfile::TempDir),
+    }
+
+    /// `parent` delegates to `child` (a copy of `coder` that lists only `child_tools`), the child
+    /// calls `child_turn`; the result has the names of the tools each run was offered.
+    async fn delegate(parent: AgentProfile, child_tools: &[&str], child_turn: Vec<ChatDelta>) -> Delegated {
+        let backend = ScriptedBackend::new(vec![
+            ScriptedBackend::tool_turn("d1", "agent", json!({"agent": "figlio", "task": "fai il lavoro"})),
+            child_turn,
+            ScriptedBackend::text_turn("fatto dal figlio"),
+            ScriptedBackend::text_turn("tutto a posto"),
+        ]);
+        let (e, data, ws) = engine(vec![]).await;
+        e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+        let mut child = e.agent("coder").unwrap();
+        child.id = "figlio".into();
+        child.name = "Figlio".into();
+        child.tools = child_tools.iter().map(|s| s.to_string()).collect();
+        e.save_agent(child).unwrap();
+        e.save_agent(parent.clone()).unwrap();
+        let s = e.create_session(&parent.id, None).unwrap();
+        let run = e.start_run(&s.id, "delega".into()).await.unwrap();
+        for _ in 0..200 {
+            if let Some(a) = e.approvals().first() {
+                e.respond_approval(&a.id.clone(), true, false).unwrap();
+            }
+            if e.run_done(&run) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        wait_finished(&e, &run).await;
+        let names = |i: usize| -> Vec<String> {
+            let mut v: Vec<String> = backend.requests.lock().unwrap()[i].tools.iter().map(|t| t.function.name.clone()).collect();
+            v.sort();
+            v
+        };
+        Delegated { e, parent_tools: names(0), child_tools: names(1), run, _dirs: (data, ws) }
+    }
+
+    fn parent(id: &str, tools: &[&str], delegate: &[&str], mode: &str) -> AgentProfile {
+        AgentProfile {
+            id: id.into(),
+            name: id.into(),
+            tools: tools.iter().map(|s| s.to_string()).collect(),
+            delegate_tools: delegate.iter().map(|s| s.to_string()).collect(),
+            mode: mode.into(),
+            ..AgentProfile::clone(&crate::defaults::agents().into_iter().find(|a| a.id == "planner").unwrap())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sub_agent_gets_its_own_tools_through_delegate_tools_and_never_a_freer_mode() {
+        let write = ScriptedBackend::tool_turn("w1", "write_file", json!({"path": "figlio.txt", "content": "ciao"}));
+        let Delegated { e, parent_tools, child_tools, run, .. } =
+            delegate(parent("capo", &["agent", "todo"], &["*"], "ask"), &["write_file", "channel_send", "todo"], write).await;
+        // The parent offers only what it lists; the child gets its own tools, except the one that needs an explicit grant.
+        assert_eq!(parent_tools, ["agent", "todo"]);
+        assert_eq!(child_tools, ["todo", "write_file"], "channel_send needs an explicit grant the parent never gave");
+        // The child is `auto-edit` but its parent is `ask`: the write waits for the person.
+        let asked = e.run_events(&run).iter().any(|x| matches!(&x.event.event, AgEvent::Custom { name, value } if name == "aiw.approval_request" && value["tool"] == "write_file"));
+        assert!(asked, "the child's write_file must ask: the mode never gets freer than the parent's");
+        assert!(e.audit().iter().any(|a| a.tool.as_deref() == Some("write_file") && a.decision.as_deref() == Some("approved")));
+    }
+
+    #[tokio::test]
+    async fn without_delegate_tools_a_sub_agent_still_only_gets_the_tools_of_its_parent() {
+        let Delegated { parent_tools, child_tools, .. } = delegate(
+            parent("capo2", &["agent", "todo"], &[], "ask"),
+            &["write_file", "channel_send", "todo"],
+            ScriptedBackend::text_turn("niente da fare"),
+        )
+        .await;
+        assert_eq!(parent_tools, ["agent", "todo"]);
+        assert_eq!(child_tools, ["todo"], "the intersection with the parent, exactly as before delegate_tools existed");
+    }
+
+    #[test]
+    fn delegate_tools_is_absent_from_the_stored_form_when_empty_and_old_documents_still_load() {
+        let a = parent("x", &["todo"], &[], "ask");
+        assert!(serde_json::to_value(&a).unwrap().get("delegate_tools").is_none());
+        let with = AgentProfile { delegate_tools: vec!["*".into()], ..a.clone() };
+        assert_eq!(serde_json::to_value(&with).unwrap()["delegate_tools"], json!(["*"]));
+        let mut old = serde_json::to_value(&a).unwrap();
+        old.as_object_mut().unwrap().remove("delegate_tools");
+        assert_eq!(serde_json::from_value::<AgentProfile>(old).unwrap().delegate_tools, Vec::<String>::new());
     }
 }

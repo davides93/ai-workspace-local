@@ -549,7 +549,7 @@ async fn a_second_run_on_a_busy_session_is_refused() {
     // Simulate a run in progress for the session.
     e.0.runs.lock().unwrap().insert(
         "run_busy".into(),
-        RunHandle { session_id: Some(s.id.clone()), cancel: CancellationToken::new(), events: vec![], done: false },
+        RunHandle { session_id: Some(s.id.clone()), cancel: CancellationToken::new(), events: vec![], done: false, origin: None },
     );
     assert!(matches!(e.start_run(&s.id, "di nuovo".into()).await, Err(Error::Conflict(_))));
     // Deleting the session stops that run.

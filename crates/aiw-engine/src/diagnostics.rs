@@ -61,7 +61,7 @@ fn log_tail(dir: &Path, max: usize) -> Option<(String, Vec<String>)> {
 }
 
 /// What a line of log can carry that the redactor of the traces does not know: `token=…`, `password: …`, credentials in URLs.
-fn scrub_line(re: &[(Regex, &'static str)], s: &str) -> String {
+pub(crate) fn scrub_line(re: &[(Regex, &'static str)], s: &str) -> String {
     let mut out = s.to_string();
     for (r, to) in re {
         out = r.replace_all(&out, *to).into_owned();
@@ -69,7 +69,7 @@ fn scrub_line(re: &[(Regex, &'static str)], s: &str) -> String {
     out
 }
 
-fn line_patterns() -> Vec<(Regex, &'static str)> {
+pub(crate) fn line_patterns() -> Vec<(Regex, &'static str)> {
     [
         (r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=\-]{6,}", "${1} ••••••"),
         (r#"(?i)((?:api[_-]?key|token|secret|passw(?:or)?d|authorization|cookie|signature)["']?\s*[:=]\s*["']?)[^\s"',;&]+"#, "${1}••••••"),
@@ -83,7 +83,7 @@ fn line_patterns() -> Vec<(Regex, &'static str)> {
 
 impl Engine {
     /// The exact values of the secrets this installation stores: the list the redactor is told to hide.
-    fn known_secrets(&self) -> Vec<String> {
+    pub(crate) fn known_secrets(&self) -> Vec<String> {
         let mut out = crate::traces::mcp_secret_values(&self.0.store);
         let schema = self.0.config.schema();
         for (k, f) in &schema.properties {
@@ -97,6 +97,15 @@ impl Engine {
         for kind in ["secret", "peer_token", "model_provider", "remote_agent", "channel", "mcp_oauth"] {
             for doc in store.list_docs::<Value>(kind).unwrap_or_default() {
                 collect_secret_strings(&doc, &mut out);
+            }
+        }
+        // The secret settings of the engines (`api_key`, …): only the fields their manifest marks, as for the app's own settings.
+        for m in self.0.runtimes.manifests() {
+            let Ok(values) = self.0.runtimes.settings(&m.id) else { continue };
+            for k in m.settings.properties.iter().filter(|(_, f)| f.secret).map(|(k, _)| k) {
+                if let Some(s) = values.get(k).and_then(Value::as_str).filter(|s| !s.is_empty() && *s != SECRET_MASK) {
+                    out.push(s.to_string());
+                }
             }
         }
         for cfg in store.list_docs::<McpServerConfig>("mcp").unwrap_or_default() {
