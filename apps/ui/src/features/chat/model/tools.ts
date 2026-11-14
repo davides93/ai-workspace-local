@@ -28,7 +28,7 @@ const CATEGORIES: Record<ToolCategoryId, Omit<ToolCategory, "id">> = {
 
 const BY_NAME: Record<string, ToolCategoryId> = {
   read_file: "read", list_dir: "read",
-  write_file: "edit", edit_file: "edit", move_file: "edit",
+  write_file: "edit", edit_file: "edit", move_file: "edit", copy_file: "edit", delete_file: "edit",
   glob: "search", grep: "search",
   shell: "shell", code: "shell",
   web_fetch: "web", web_search: "web",

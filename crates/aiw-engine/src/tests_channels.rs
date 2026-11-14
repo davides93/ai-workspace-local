@@ -311,10 +311,17 @@ async fn read_only_mode_cannot_write_or_ask() {
     // The agent of the run is plan mode, read-only sandbox, with only reading tools and never `channel_send`.
     let a = r.e.channel_agent(channels::RunKind::ReadOnly, "operator").unwrap();
     assert_eq!((a.mode.as_str(), a.sandbox.as_str()), ("plan", "read-only"));
-    for t in ["write_file", "edit_file", "shell", "move_file", "channel_send", "memory_save"] {
+    for t in ["write_file", "edit_file", "shell", "move_file", "copy_file", "delete_file", "channel_send", "memory_save"] {
         assert!(!a.tools.iter().any(|x| x == t), "{t} must not be offered: {:?}", a.tools);
     }
     assert!(a.tools.iter().any(|x| x == "read_file"));
+    // Even an agent that names the file writers (or has `*`) gets none of them in a read-only run.
+    let mut greedy = r.e.agent("operator").unwrap();
+    greedy.tools = vec!["*".into(), "copy_file".into(), "delete_file".into(), "move_file".into()];
+    let ro = r.e.readonly_tools(&greedy, true);
+    for t in ["copy_file", "delete_file", "move_file", "write_file"] {
+        assert!(!ro.iter().any(|x| x == t), "{t} must not be offered: {ro:?}");
+    }
     // An allow rule of the person cannot lift it: the session's policy only keeps `deny` rules.
     let s = &r.e.sessions().unwrap()[0];
     let msgs = r.e.messages(&s.id).unwrap();

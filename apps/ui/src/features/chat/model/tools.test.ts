@@ -7,6 +7,9 @@ describe("toolCategory", () => {
     expect(toolCategory("list_dir").id).toBe("read");
     expect(toolCategory("write_file")).toMatchObject({ id: "edit", icon: "edit" });
     expect(toolCategory("edit_file").id).toBe("edit");
+    expect(toolCategory("move_file").id).toBe("edit");
+    expect(toolCategory("copy_file").id).toBe("edit");
+    expect(toolCategory("delete_file").id).toBe("edit");
     expect(toolCategory("grep").id).toBe("search");
     expect(toolCategory("shell")).toMatchObject({ id: "shell", icon: "terminal" });
     expect(toolCategory("web_fetch").id).toBe("web");

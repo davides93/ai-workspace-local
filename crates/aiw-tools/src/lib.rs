@@ -217,12 +217,8 @@ impl ToolContext {
         checkpoint::read_meta(&checkpoint::run_dir(dir, &self.run_id)).is_some_and(|m| m.created.contains(&key))
     }
 
-    /// Copies `path` into the checkpoint folder before it is overwritten (once per run).
-    pub fn checkpoint(&self, path: &Path) {
-        let Some(dir) = &self.checkpoint_dir else { return };
-        if !path.is_file() || self.created_by_run(path) {
-            return;
-        }
+    /// Where the original of `path` is (or would be) stored in the checkpoint of this run.
+    fn checkpoint_target(&self, dir: &Path, path: &Path) -> PathBuf {
         // Same folder structure as the workspace (files outside it go under `_esterni`), built
         // from path components so that Windows drive prefixes and separators are handled.
         let (mut target, rel) = match path.strip_prefix(&self.workspace_root) {
@@ -234,6 +230,23 @@ impl ToolContext {
                 target.push(part);
             }
         }
+        target
+    }
+
+    /// True when a rewind of this run can bring `path` back: its original is saved in the checkpoint
+    /// or the run created it. Always true when the run has no checkpoint folder (nothing to rewind).
+    pub fn can_rewind(&self, path: &Path) -> bool {
+        let Some(dir) = &self.checkpoint_dir else { return true };
+        self.created_by_run(path) || self.checkpoint_target(dir, path).is_file()
+    }
+
+    /// Copies `path` into the checkpoint folder before it is overwritten (once per run).
+    pub fn checkpoint(&self, path: &Path) {
+        let Some(dir) = &self.checkpoint_dir else { return };
+        if !path.is_file() || self.created_by_run(path) {
+            return;
+        }
+        let target = self.checkpoint_target(dir, path);
         if target.exists() {
             return;
         }

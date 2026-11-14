@@ -175,7 +175,7 @@ async fn the_filter_picks_one_item_and_the_agent_writes_a_read_only_proposal() {
         assert!(reqs[0].messages[1].text().contains("fattura-001.pdf") && reqs[0].tools.is_empty());
         let names: Vec<&str> = reqs[1].tools.iter().map(|t| t.function.name.as_str()).collect();
         assert!(
-            !names.is_empty() && names.iter().all(|n| !["write_file", "edit_file", "shell", "move_file", "agent", "handoff"].contains(n)),
+            !names.is_empty() && names.iter().all(|n| !["write_file", "edit_file", "shell", "move_file", "copy_file", "delete_file", "agent", "handoff"].contains(n)),
             "{names:?}"
         );
     }

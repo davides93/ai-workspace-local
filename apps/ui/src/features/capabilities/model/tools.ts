@@ -18,7 +18,7 @@ export type RiskFilter = ToolRisk | "all";
 export const isBrowserTool = (t: Pick<ToolInfo, "name">) => t.name.startsWith("browser_");
 export const isComputerTool = (t: Pick<ToolInfo, "name">) => t.name.startsWith("computer_");
 
-const FILE_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "move_file", "delete_file", "make_dir"]);
+const FILE_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "move_file", "copy_file", "delete_file", "make_dir"]);
 
 /**
  * Implemented by the agent loop itself (todo, agent, skill, render_ui, code): always on, listed so that an agent
