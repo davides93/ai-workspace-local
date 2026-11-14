@@ -1163,10 +1163,21 @@ mod tests {
         axum::Json(Value::Array(all)).into_response()
     }
 
-    async fn hf_info(AxState(f): AxState<Hf>, AxPath((o, n)): AxPath<(String, String)>) -> axum::response::Response {
+    /// Does the request carry the token of the tests? (A gated repository answers 401 without it.)
+    fn has_token(h: &HeaderMap) -> bool {
+        h.get("authorization").and_then(|v| v.to_str().ok()) == Some(format!("Bearer {PROVIDER_TOKEN}").as_str())
+    }
+
+    async fn hf_info(AxState(f): AxState<Hf>, AxPath((o, n)): AxPath<(String, String)>, h: HeaderMap) -> axum::response::Response {
         let repo = format!("{o}/{n}");
         if !f.files.keys().any(|(r, _)| *r == repo) {
             return StatusCode::NOT_FOUND.into_response();
+        }
+        if repo == "acme/gated-GGUF" {
+            f.log.lock().unwrap().push(format!("info {repo} token={}", has_token(&h)));
+            if !has_token(&h) {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
         }
         axum::Json(json!({"id": repo, "sha": "feedface00000000000000000000000000000000", "tags": ["gguf", "text-generation"],
             "pipeline_tag": "text-generation", "library_name": "gguf", "downloads": 500, "likes": 9}))
@@ -1196,7 +1207,10 @@ mod tests {
     ) -> axum::response::Response {
         let repo = format!("{o}/{n}");
         f.log.lock().unwrap().push(format!("resolve {repo}/{file}"));
-        let Some(b) = f.files.get(&(repo, file)) else { return StatusCode::NOT_FOUND.into_response() };
+        let Some(b) = f.files.get(&(repo.clone(), file)) else { return StatusCode::NOT_FOUND.into_response() };
+        if repo == "acme/gated-GGUF" && !has_token(&h) {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
         if f.stall.load(Ordering::SeqCst) {
             let first = b[..1000.min(b.len())].to_vec();
             let stream = futures::stream::unfold(0u8, move |i| {
@@ -1240,6 +1254,7 @@ mod tests {
             ("acme/tiny-GGUF", "tiny-Q8_0.gguf", gguf(9000)),
             ("acme/other-GGUF", "other-Q4_K_M.gguf", gguf(6000)),
             ("acme/huge-GGUF", "huge-Q4_K_M.gguf", gguf(6000)),
+            ("acme/gated-GGUF", "gated-Q4_K_M.gguf", gguf(6000)),
             ("Qwen/Qwen3-0.6B-GGUF", "Qwen3-0.6B-Q8_0.gguf", gguf(8000)),
             // The repo of the 70B catalog entry, with a small file: the fit comes from the catalog, not from what the fake serves.
             ("bartowski/Llama-3.3-70B-Instruct-GGUF", "Llama-3.3-70B-Instruct-Q4_K_M.gguf", gguf(6000)),
@@ -2242,6 +2257,39 @@ mod tests {
         assert_eq!(told.len(), 5, "{told:?}");
         assert!(told[0].contains("ora usa") && told[2].contains("eliminato") && told[3].contains("avviato"), "{told:?}");
         assert!(told[4].contains("installazione manuale"), "the engine's refusal reaches the model: {}", told[4]);
+    }
+
+    #[tokio::test]
+    async fn a_gated_model_needs_the_token_of_the_provider_which_the_tool_uses_but_never_shows() {
+        let (e, _d, _w) = engine_on(16).await;
+        let (base, fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base)).unwrap();
+        let args = json!({"provider": "hf", "model": "acme/gated-GGUF", "variant": "Q4_K_M"});
+        // Without a token the provider says no: the model is told what is missing and how it is given (never in the chat).
+        let err = call(&e, "aiw_model_download", args.clone()).await.unwrap_err();
+        assert!(matches!(err, Error::Unauthorized(_)) && err.to_string().starts_with("Non riesco ad avviare il download:"), "{err}");
+        assert!(err.to_string().contains("aiw_secret_request") && err.to_string().contains("mai scrivendolo nella chat"), "{err}");
+        assert!(e.downloads().is_empty());
+        // The token is stored the way the app stores it (the person typed it in the protected field).
+        e.0.hub.set_auth("hf", Some(Some(PROVIDER_TOKEN.into())), None).unwrap();
+        e.0.store
+            .put_doc(
+                "model_provider",
+                "hf",
+                &crate::models::ProviderDoc { id: "hf".into(), token: Some(PROVIDER_TOKEN.into()), endpoint: None },
+            )
+            .unwrap();
+        let said = call(&e, "aiw_model_download", args).await.unwrap();
+        let done = wait_download(&e, &download_id(&said), "done").await;
+        assert_eq!(done.received, gguf(6000).len() as u64);
+        assert!(fake.log.lock().unwrap().iter().any(|l| l == "info acme/gated-GGUF token=true"), "the provider did get the token");
+        // ...and yet the token is nowhere the model, the history or the audit trail can see it.
+        assert!(!said.contains(PROVIDER_TOKEN), "{said}");
+        let search = call(&e, "aiw_model_search", json!({"provider": "hf", "model": "acme/gated-GGUF"})).await.unwrap();
+        assert!(!search.contains(PROVIDER_TOKEN), "{search}");
+        assert!(e.audit().iter().all(|a| !serde_json::to_string(a).unwrap().contains(PROVIDER_TOKEN)));
+        assert!(!serde_json::to_string(&e.downloads()).unwrap().contains(PROVIDER_TOKEN));
+        assert!(!serde_json::to_string(&e.model_providers()).unwrap().contains(PROVIDER_TOKEN));
     }
 
     #[test]
