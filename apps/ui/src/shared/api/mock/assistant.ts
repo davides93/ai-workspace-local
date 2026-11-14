@@ -236,7 +236,7 @@ export async function runAssistantScript(d: AssistantDriver, script: AssistantSc
     const started = `Download avviato: Qwen3-4B ${variant} (${size}).`;
     const ok = await d.tool("aiw_model_download", dl, started, dlId, { reason: `Scarica il modello Qwen3-4B (${pick.label}) nella cartella dei modelli.`, risk: "medium" });
     record(dlId, "aiw_model_download", dl, ok ? started : "Negato dall'utente.");
-    return end(ok ? "Fatto: il download è partito, lo trovi in Modelli." : "Ok, non scarico nulla.");
+    return end(ok ? "Fatto: il download è partito." : "Ok, non scarico nulla.");
   }
 
   if (script === "multiple") {

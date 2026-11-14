@@ -113,7 +113,8 @@ for (const size of SIZES) {
       test("banner for a question that waits in another conversation", async ({ page }, info) => {
         await chatWith(page, "Scarica un modello", { theme, session: SESSION });
         await expect(log(page).getByRole("form", { name: "Quale modello?" })).toBeVisible();
-        await page.evaluate(() => { location.hash = "/models"; });
+        // Another conversation of the chat (the simple interface has no other section to go to).
+        await page.evaluate(() => { location.hash = "/chat/ses_cv"; });
         const banner = page.getByRole("status").filter({ hasText: "L'assistente ha una domanda in attesa" });
         await expect(banner).toBeVisible();
         await expectNoBlockingViolations(page, info);
