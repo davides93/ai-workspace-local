@@ -256,6 +256,16 @@ test.describe("a secret typed in the message box", () => {
     await expect(conversation(page).getByText(`Ecco la chiave ${FAKE_KEY}`)).toBeVisible();
   });
 
+  test("developer mode stays as it was: no warning and no extra space, for a person who types a key there", async ({ page }) => {
+    await openApp(page, "/chat/ses_pdf", { mode: "developer" });
+    await messageBox(page).fill(`Usa questa chiave ${FAKE_KEY} per il servizio`);
+    await expect(page.getByRole("status").filter({ hasText: "Sembra una chiave o un token" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Togli il testo e chiedi il campo protetto" })).toHaveCount(0);
+    await expect(page.locator(".ws-secret")).toHaveCount(0);
+    // Nothing blocks sending either.
+    await expect(page.getByRole("button", { name: "Invia" })).toBeEnabled();
+  });
+
   test("an ordinary message raises nothing", async ({ page }) => {
     await openApp(page, "/chat/ses_pdf");
     await messageBox(page).fill("Riordina i PDF in Downloads, ho pulito il disk-usage-analyzer-tool-vecchio");

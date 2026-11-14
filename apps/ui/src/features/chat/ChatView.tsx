@@ -307,10 +307,14 @@ export function ChatView() {
           </div>
         )}
         {simple && !noSessions && <DownloadsStrip />}
-        <SecretWarning
-          text={input}
-          onAskProtectedField={() => { setInput(tr("chat.segreto_richiesta_testo")); setFocusTick((n) => n + 1); }}
-        />
+        {/* Simple interface only: the protected field is the Assistente's tool (`aiw_secret_request`); the session open in Developer
+            mode is usually the operator's, which has no such tool, so the button would ask for something it cannot do. */}
+        {simple && (
+          <SecretWarning
+            text={input}
+            onAskProtectedField={() => { setInput(tr("chat.segreto_richiesta_testo")); setFocusTick((n) => n + 1); }}
+          />
+        )}
         <Composer
           attachments={{ items: attachments.files, onAdd: attachments.add, onRemove: attachments.remove }}
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}

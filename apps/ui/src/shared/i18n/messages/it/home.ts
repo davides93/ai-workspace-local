@@ -62,7 +62,6 @@ export const homeIt = {
   "home.preparo_la_chat": "Preparo la chat…",
   "home.riprova": "Riprova",
   "home.mostra_tutte_le_sezioni": "Mostra tutte le sezioni",
-  "home.cerca_un_modello": "Cerca un modello",
   "home.dettagli_del_dispositivo": "Dettagli del dispositivo",
   "home.passi_su_completati": "{done} passi su {length} completati",
   "home.nasconde_questo_elenco": "Nasconde questo elenco",

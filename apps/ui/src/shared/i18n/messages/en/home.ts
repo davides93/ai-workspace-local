@@ -64,7 +64,6 @@ export const homeEn: Record<keyof typeof homeIt, string> = {
   "home.preparo_la_chat": "Preparing the chat…",
   "home.riprova": "Try again",
   "home.mostra_tutte_le_sezioni": "Show all sections",
-  "home.cerca_un_modello": "Look for a model",
   "home.dettagli_del_dispositivo": "Device details",
   "home.passi_su_completati": "{done} of {length} steps completed",
   "home.nasconde_questo_elenco": "Hides this list",
