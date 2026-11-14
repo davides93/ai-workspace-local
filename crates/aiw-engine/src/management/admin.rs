@@ -13,6 +13,10 @@
 //! * a connector never takes a secret value: only the NAMES of its secret variables and headers, whose
 //!   values arrive later through the protected field; the command of a `stdio` server is confirmed
 //!   (`approve_mcp_server`) only when it is the one the confirmation card showed;
+//! * a connector keeps the secret values it has stored only while it points at the same place: an edit that
+//!   changes its address (`http`) or its command or arguments (`stdio`) empties them (the names stay), says so
+//!   to the model and on the card, and the secrets are asked for again with `aiw_secret_request`: text that
+//!   talks the agent into pointing a connector elsewhere must not send what was saved to the new place;
 //! * an agent made here stays inside a safe envelope: mode `plan` or `ask`, sandbox `read-only` or
 //!   `workspace-write`, no `*`, no management tool, no tool that needs an explicit grant, no
 //!   `delegate_tools`; the agents the app ships (the Assistant included) are not touched;
@@ -103,7 +107,7 @@ impl Kind {
         match self {
             Kind::SettingSet => "Cambia un'impostazione ordinaria di AI Workspace (per esempio tema, lingua, ricerca web, assistente proattivo, ricordi). Chiede sempre la conferma dell'utente e risponde con il valore di prima, così puoi rimetterlo (`value: null` torna al predefinito). Non cambia i segreti (per quelli usa aiw_secret_request), le impostazioni di macchina (aiw_setting_set_protected) né le protezioni dell'app (regole, sandbox, rete, TLS, tempi di conferma): quelle si cambiano dalla vista Sviluppatore. Guarda prima chiavi e valori con aiw_inspect (topic settings).",
             Kind::SettingSetProtected => "Cambia una delle sole impostazioni di macchina ammesse: workspace.root (cartella di lavoro), models.dir (cartella dei modelli), server.lan (accesso dalla rete locale), update.channel, update.auto_check, update.auto_download. È un'azione delicata: chiede sempre la conferma dell'utente. Risponde con il valore di prima. Tutte le altre impostazioni hanno altri strumenti o non si cambiano da qui.",
-            Kind::ConnectorSave => "Aggiunge o modifica un connettore (server MCP) che dà all'assistente nuovi strumenti. Con `stdio` si avvia un comando su questo computer: la conferma mostra la riga di comando e, se l'utente la accetta, quel comando viene anche autorizzato. Con `http` ci si collega a un indirizzo. In `env` e `headers` vanno solo valori che non sono segreti. Token, chiavi e password si dichiarano solo per nome in `secret_env` e `secret_headers`: il valore lo inserisce poi l'utente con aiw_secret_request, mai in chat. Per modificarne uno passa `id` (da aiw_inspect, topic connectors) e ripeti `command` e `args`; i segreti già salvati restano.",
+            Kind::ConnectorSave => "Aggiunge o modifica un connettore (server MCP) che dà all'assistente nuovi strumenti. Con `stdio` si avvia un comando su questo computer: la conferma mostra la riga di comando e, se l'utente la accetta, quel comando viene anche autorizzato. Con `http` ci si collega a un indirizzo. In `env` e `headers` vanno solo valori che non sono segreti. Token, chiavi e password si dichiarano solo per nome in `secret_env` e `secret_headers`: il valore lo inserisce poi l'utente con aiw_secret_request, mai in chat. Per modificarne uno passa `id` (da aiw_inspect, topic connectors) e ripeti `command` e `args`. I segreti già salvati restano solo se indirizzo, comando e argomenti non cambiano: se la modifica punta a una destinazione diversa vengono tolti (restano i nomi) e vanno richiesti di nuovo con aiw_secret_request; la conferma lo segnala.",
             Kind::ConnectorRemove => "Rimuove un connettore (server MCP) con le sue variabili, intestazioni e accessi salvati. Azione delicata: chiede sempre la conferma dell'utente e non si annulla. Trova gli `id` con aiw_inspect (topic connectors).",
             Kind::AgentSave => "Crea o modifica un assistente dell'utente, con dei limiti: `mode` solo plan o ask, `sandbox` solo read-only o workspace-write, `tools` elencati uno per uno (niente `*`, niente strumenti aiw_*, niente strumenti a concessione esplicita). Non si possono creare né modificare l'Assistente e gli altri assistenti integrati: per cambiarne uno se ne crea una copia con un altro nome. Per modificare un assistente creato dall'utente passa `id` (da aiw_inspect, topic agents). Chiede sempre la conferma dell'utente.",
             Kind::AgentDelete => "Elimina un assistente creato dall'utente (non quelli integrati). Azione delicata: chiede sempre la conferma dell'utente e non si annulla. Trova gli `id` con aiw_inspect (topic agents).",
@@ -226,7 +230,18 @@ impl Tool for Admin {
             Kind::SettingSet | Kind::SettingSetProtected => opt_str(args, "key").ok().flatten().map(|k| clip(&k, 120)),
             Kind::ConnectorSave => {
                 let cfg = connector_config(&e, &parse_connector(args).ok()?, true).ok()?;
-                Some(connector_target(&cfg))
+                let mut line = connector_target(&cfg);
+                // An edit that points the connector elsewhere takes its saved secrets away: the card says so, after the
+                // target, so that a rule written for the address or the command still matches the start of the line.
+                let taken = secrets_taken_away(stored_before(&e, &cfg).as_ref(), &cfg);
+                if !taken.is_empty() {
+                    let names: Vec<String> = taken.iter().map(|(_, name)| text(name, 60)).collect();
+                    line.push_str(&format!(
+                        " · attenzione: la destinazione cambia e i segreti salvati verranno tolti ({})",
+                        names.join(", ")
+                    ));
+                }
+                Some(line)
             }
             Kind::ConnectorRemove => {
                 let id = opt_str(args, "id").ok().flatten()?;
@@ -790,7 +805,9 @@ fn check_entries(
 
 /// The configuration a call to `aiw_connector_save` stands for. `inherit`: what the call does not repeat
 /// (command, arguments, variable names) is taken from the connector it edits; without it only what the
-/// call itself says counts, which is what the confirmation card showed.
+/// call itself says counts, which is what the confirmation card showed. The secret names of an edit stay
+/// declared, but their stored values go along only if the connector does not point somewhere else
+/// ([`destination_changed`]): otherwise they are empty and have to be asked for again.
 fn connector_config(e: &Engine, a: &ConnectorArgs, inherit: bool) -> Result<McpServerConfig> {
     let others = stored_connectors(e);
     let stored = match &a.id {
@@ -874,11 +891,13 @@ fn connector_config(e: &Engine, a: &ConnectorArgs, inherit: bool) -> Result<McpS
                 ("env", "secret_env"),
                 valid_env_name,
             )?;
+            // The secret values already stored stay only while the command and the arguments are the same ones.
+            let keeps = same_kind.filter(|s| !destination_changed(s, &cfg));
             cfg.env = entries(
                 a.env.as_deref(),
                 a.secret_env.as_deref(),
                 same_kind.filter(|_| inherit).and_then(|s| s.env.as_ref()),
-                same_kind.and_then(|s| s.env.as_ref()),
+                keeps.and_then(|s| s.env.as_ref()),
             );
             // A new server is isolated like the interface proposes (when this system can); an edit keeps its isolation.
             cfg.sandbox = match same_kind {
@@ -908,11 +927,13 @@ fn connector_config(e: &Engine, a: &ConnectorArgs, inherit: bool) -> Result<McpS
                 ("headers", "secret_headers"),
                 valid_header_name,
             )?;
+            // The secret values already stored stay only while the address is the same one.
+            let keeps = same_kind.filter(|s| !destination_changed(s, &cfg));
             cfg.headers = entries(
                 a.headers.as_deref(),
                 a.secret_headers.as_deref(),
                 same_kind.and_then(|s| s.headers.as_ref()),
-                same_kind.and_then(|s| s.headers.as_ref()),
+                keeps.and_then(|s| s.headers.as_ref()),
             );
         }
         other => return Err(Error::Invalid(format!("trasporto `{}` non valido: usa stdio oppure http", clip(other, 30)))),
@@ -964,23 +985,62 @@ fn check_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-/// The secret variables and headers of a connector, by name and by the `target` that
-/// `aiw_secret_request` takes, and whether each has a value: never the value.
-fn secret_slots(cfg: &McpServerConfig) -> Vec<Value> {
-    let mut slots = Vec::new();
+/// The secret variables and headers of a connector: the kind of `target` that `aiw_secret_request` takes
+/// (`mcp_env` or `mcp_header`), the name, and whether it has a value. Never the value.
+fn secret_entries(cfg: &McpServerConfig) -> Vec<(&'static str, String, bool)> {
+    let mut out = Vec::new();
     for (kind, map) in [("mcp_env", &cfg.env), ("mcp_header", &cfg.headers)] {
         for (name, value) in map.iter().flatten().filter(|(k, _)| crate::secrets::is_secret_name(k)) {
             let set = !value.is_null() && value.as_str().is_none_or(|s| !s.is_empty());
-            slots.push(json!({"name": name, "target": format!("{kind}:{}:{name}", cfg.id), "set": set}));
+            out.push((kind, name.clone(), set));
         }
     }
-    slots
+    out
+}
+
+/// The secret variables and headers of a connector, by name and by the `target` that
+/// `aiw_secret_request` takes, and whether each has a value: never the value.
+fn secret_slots(cfg: &McpServerConfig) -> Vec<Value> {
+    secret_entries(cfg)
+        .into_iter()
+        .map(|(kind, name, set)| json!({"name": name, "target": format!("{kind}:{}:{name}", cfg.id), "set": set}))
+        .collect()
+}
+
+/// Does `after` point the connector somewhere else than `before` does? For `http`, another address (compared
+/// the way `save_mcp_server` stores it, trimmed); for `stdio`, another command or other arguments (the line
+/// the confirmation of the command is about); another kind of connector is another destination, too. Any
+/// textual difference counts: clearing too much is the safe side.
+fn destination_changed(before: &McpServerConfig, after: &McpServerConfig) -> bool {
+    if before.transport != after.transport {
+        return true;
+    }
+    if after.transport == "stdio" {
+        before.command.as_deref().map(str::trim).unwrap_or_default() != after.command.as_deref().map(str::trim).unwrap_or_default()
+            || before.args.as_deref().unwrap_or_default() != after.args.as_deref().unwrap_or_default()
+    } else {
+        before.url.as_deref().map(str::trim).unwrap_or_default() != after.url.as_deref().map(str::trim).unwrap_or_default()
+    }
+}
+
+/// The connector that `cfg` edits, as it is stored now (secret values included: never show them); `None` for a new one.
+fn stored_before(e: &Engine, cfg: &McpServerConfig) -> Option<McpServerConfig> {
+    (!cfg.id.is_empty()).then(|| stored_connectors(e).into_iter().find(|c| c.id == cfg.id)).flatten()
+}
+
+/// The secrets (kind of `target`, name) that hold a value in `before` and that saving `after` takes away because it
+/// points the connector somewhere else. Decided from the connector as it is stored, once, for the card and the answer.
+fn secrets_taken_away(before: Option<&McpServerConfig>, after: &McpServerConfig) -> Vec<(&'static str, String)> {
+    let Some(before) = before.filter(|b| destination_changed(b, after)) else { return Vec::new() };
+    secret_entries(before).into_iter().filter(|(_, _, set)| *set).map(|(kind, name, _)| (kind, name)).collect()
 }
 
 async fn connector_save(e: &Engine, args: &Value) -> Result<Value> {
     let a = parse_connector(args)?;
     let cfg = connector_config(e, &a, true)?;
     let creating = cfg.id.is_empty();
+    // What the edit takes away, from the connector as it is stored before the save.
+    let taken = secrets_taken_away(stored_before(e, &cfg).as_ref(), &cfg);
     // The command line the confirmation card showed, and the fingerprint of everything the card showed: the
     // command, its arguments and the names of its variables, as the call itself wrote them.
     let shown_hash =
@@ -1004,11 +1064,39 @@ async fn connector_save(e: &Engine, args: &Value) -> Result<Value> {
             note.push_str("Il comando di questo connettore non è stato confermato qui (la conferma non lo mostrava per intero): l'utente lo conferma dall'app. ");
         }
     }
-    e.audit_user("connector.save", &format!("{} ({id}): {}", stored.name, connector_target(&stored)));
+    // The names as they are shown (cut and cleaned like any text from the store); the targets below keep them as they are.
+    let removed: Vec<String> = taken.iter().map(|(_, name)| text(name, 60)).collect();
+    let mut audited = format!("{} ({id}): {}", stored.name, connector_target(&stored));
+    if !removed.is_empty() {
+        audited.push_str(&format!(" · segreti salvati tolti: {}", removed.join(", ")));
+    }
+    e.audit_user("connector.save", &audited);
 
     let info = e.mcp_servers().into_iter().find(|s| s.config.id == id);
     let slots = secret_slots(&stored);
-    let missing: Vec<String> = slots.iter().filter(|s| s["set"] == false).filter_map(|s| s["target"].as_str().map(String::from)).collect();
+    // Said first: the secrets the edit took away, and how to ask for them again (those whose name is still declared).
+    let to_ask: Vec<String> = taken
+        .iter()
+        .map(|(kind, name)| format!("{kind}:{id}:{name}"))
+        .filter(|t| slots.iter().any(|s| s["target"] == t.as_str()))
+        .collect();
+    if !removed.is_empty() {
+        note.push_str(&format!(
+            "Il connettore punta a una destinazione diversa: i segreti salvati sono stati tolti ({})",
+            removed.join(", ")
+        ));
+        if to_ask.is_empty() {
+            note.push_str(". ");
+        } else {
+            note.push_str(&format!("; chiedi di nuovo ciascuno con aiw_secret_request (target {}). ", to_ask.join(", ")));
+        }
+    }
+    let missing: Vec<String> = slots
+        .iter()
+        .filter(|s| s["set"] == false)
+        .filter_map(|s| s["target"].as_str().map(String::from))
+        .filter(|t| !to_ask.contains(t))
+        .collect();
     if !missing.is_empty() {
         note.push_str(&format!(
             "Manca il valore dei segreti dichiarati: non chiederlo in chat, usa aiw_secret_request con il target di ciascuno ({}). ",
@@ -1018,7 +1106,7 @@ async fn connector_save(e: &Engine, args: &Value) -> Result<Value> {
     if let Some(error) = info.as_ref().and_then(|i| i.error.as_deref()).filter(|_| stored.enabled) {
         note.push_str(&format!("Stato: {}. ", status_text(error, &stored)));
     }
-    Ok(json!({
+    let mut answer = json!({
         "id": id,
         "name": stored.name,
         "created": creating,
@@ -1030,7 +1118,11 @@ async fn connector_save(e: &Engine, args: &Value) -> Result<Value> {
         "tools": info.as_ref().map(|i| i.tools.len()),
         "secrets": slots,
         "note": note.trim(),
-    }))
+    });
+    if !removed.is_empty() {
+        answer["secrets_removed"] = json!(removed);
+    }
+    Ok(answer)
 }
 
 async fn connector_remove(e: &Engine, args: &Value) -> Result<Value> {
@@ -2353,6 +2445,175 @@ mod tests {
         assert!(!answer.to_string().contains(FAKE_SECRET), "{answer}");
         assert!(answer["note"].as_str().unwrap().contains("Stato"), "the status is still told: {answer}");
         assert!(answer["note"].as_str().unwrap().contains(SECRET_MASK), "{answer}");
+    }
+
+    /// What an `http` connector made through the API has stored: an address and a header with a secret value.
+    fn remote_with_a_secret(id: &str, url: &str) -> McpServerConfig {
+        let mut remote = made_through_the_api(id, "remoto", "http");
+        remote.url = Some(url.into());
+        remote.headers =
+            Some(json!({"Authorization": format!("Bearer {FAKE_SECRET}"), "Accept": "application/json"}).as_object().unwrap().clone());
+        remote
+    }
+
+    /// What a `stdio` connector made through the API has stored: a command and a variable with a secret value.
+    fn program_with_a_secret(id: &str) -> McpServerConfig {
+        let mut cli = made_through_the_api(id, "cli", "stdio");
+        cli.args = Some(vec!["--verbose".into()]);
+        cli.env = Some(json!({"API_KEY": FAKE_SECRET, "MODE": "a"}).as_object().unwrap().clone());
+        cli
+    }
+
+    #[tokio::test]
+    async fn pointing_a_connector_at_another_address_takes_its_saved_secret_away_and_the_old_value_is_nowhere() {
+        const NEW_URL: &str = "http://127.0.0.1:9/altro/mcp";
+        let call = json!({"id": "srv-http", "url": NEW_URL, "enabled": false});
+        let (e, _d, _w) =
+            engine(vec![ScriptedBackend::tool_turn("c1", "aiw_connector_save", call.clone()), ScriptedBackend::text_turn("Fatto.")]).await;
+        e.save_mcp_server(remote_with_a_secret("srv-http", "http://127.0.0.1:9/mcp")).await.unwrap();
+        // Control: the app knows this value, so the checks below would find it if it came out anywhere.
+        assert!(e.known_secrets().iter().any(|s| s.contains(FAKE_SECRET)));
+
+        // The card says that the saved secret goes, and names it (never its value); the target stays first.
+        let tool = e.tool_registry().get("aiw_connector_save").unwrap();
+        let line = tool.subject(&call).unwrap();
+        assert!(line.starts_with(NEW_URL), "a rule written for the address still matches the start of the line: {line}");
+        assert!(line.contains("i segreti salvati verranno tolti") && line.contains("Authorization"), "{line}");
+        assert!(!line.contains(FAKE_SECRET));
+
+        let (card, answer, left) = confirmed_call(&e).await;
+        assert_eq!(card.tool, "aiw_connector_save");
+        assert!(card.reason.contains("i segreti salvati verranno tolti") && card.reason.contains(NEW_URL), "{}", card.reason);
+        // The old value is in none of what the run left behind (card, messages, events, audit), nor in the answer.
+        assert!(!left.contains(FAKE_SECRET), "the secret is in what the edit left behind: {left}");
+        assert!(!answer.to_string().contains(FAKE_SECRET), "{answer}");
+        // The model is told, in Italian, which secrets went and how to ask for each again.
+        let note = answer["note"].as_str().unwrap();
+        assert!(note.contains("Il connettore punta a una destinazione diversa: i segreti salvati sono stati tolti"), "{note}");
+        assert!(
+            note.contains("(Authorization)") && note.contains("aiw_secret_request (target mcp_header:srv-http:Authorization)"),
+            "{note}"
+        );
+        assert_eq!(note.matches("mcp_header:srv-http:Authorization").count(), 1, "one instruction, not two: {note}");
+        assert_eq!(answer["secrets_removed"], json!(["Authorization"]));
+        assert_eq!(answer["secrets"], json!([{"name": "Authorization", "target": "mcp_header:srv-http:Authorization", "set": false}]));
+        assert_eq!(answer["target"], NEW_URL);
+        assert!(e.audit().iter().any(|a| a.action == "connector.save" && a.detail.ends_with("segreti salvati tolti: Authorization")));
+        // The store: the name is still declared and empty, the plain header stayed, the address is the new one.
+        let saved = stored(&e, "srv-http");
+        assert_eq!(Value::Object(saved.headers.clone().unwrap()), json!({"Authorization": "", "Accept": "application/json"}));
+        assert_eq!(saved.url.as_deref(), Some(NEW_URL));
+        assert!(!serde_json::to_string(&saved).unwrap().contains(FAKE_SECRET));
+        assert!(!e.known_secrets().iter().any(|s| s.contains(FAKE_SECRET)), "the app does not keep the value any more");
+    }
+
+    #[tokio::test]
+    async fn an_edit_that_keeps_the_address_the_command_and_the_arguments_keeps_the_saved_secrets() {
+        let (e, _d, _w) = engine(vec![]).await;
+        e.save_mcp_server(remote_with_a_secret("srv-http", "http://127.0.0.1:9/mcp")).await.unwrap();
+        let tool = e.tool_registry().get("aiw_connector_save").unwrap();
+        let still_there = |e: &Engine| stored(e, "srv-http").headers.unwrap()["Authorization"] == json!(format!("Bearer {FAKE_SECRET}"));
+        // Only `enabled`, only the name, and the same address written with spaces around it (`save_mcp_server` trims it).
+        for call in [
+            json!({"id": "srv-http", "enabled": false}),
+            json!({"id": "srv-http", "name": "remoto-2", "enabled": false}),
+            json!({"id": "srv-http", "url": "  http://127.0.0.1:9/mcp  ", "enabled": false}),
+            json!({"id": "srv-http", "transport": "http", "url": "http://127.0.0.1:9/mcp", "secret_headers": ["Authorization"], "enabled": false}),
+        ] {
+            let line = tool.subject(&call).unwrap();
+            assert!(!line.contains("segreti") && !line.contains("tolti"), "no warning for {call}: {line}");
+            let answer = ok(&e, "aiw_connector_save", call.clone()).await;
+            assert!(still_there(&e), "the secret was lost by {call}");
+            assert!(answer.get("secrets_removed").is_none() && !answer["note"].as_str().unwrap().contains("destinazione"), "{answer}");
+            assert_eq!(answer["secrets"], json!([{"name": "Authorization", "target": "mcp_header:srv-http:Authorization", "set": true}]));
+            assert!(!answer.to_string().contains(FAKE_SECRET));
+        }
+        assert!(e.audit().iter().all(|a| !a.detail.contains("segreti salvati tolti")));
+
+        // The same for a command line: the same command and arguments (and arguments stored as an empty list, which the
+        // call cannot tell from none) keep the secret of the variable.
+        let mut cli = program_with_a_secret("srv-cli");
+        cli.args = Some(vec![]);
+        e.save_mcp_server(cli).await.unwrap();
+        let call = json!({"id": "srv-cli", "name": "cli-2", "enabled": false});
+        assert!(!tool.subject(&call).unwrap().contains("tolti"));
+        let answer = ok(&e, "aiw_connector_save", call).await;
+        assert_eq!(stored(&e, "srv-cli").env.unwrap()["API_KEY"], FAKE_SECRET);
+        assert!(answer.get("secrets_removed").is_none(), "{answer}");
+    }
+
+    #[tokio::test]
+    async fn another_argument_or_another_command_takes_the_saved_secret_of_a_stdio_connector_away() {
+        const OTHER: &str = "/another/program";
+        let (e, _d, _w) = engine(vec![]).await;
+        let tool = e.tool_registry().get("aiw_connector_save").unwrap();
+        e.save_mcp_server(program_with_a_secret("srv-cli")).await.unwrap();
+
+        // A different argument.
+        let call = json!({"id": "srv-cli", "name": "cli", "transport": "stdio", "command": PROGRAM, "args": ["--other"], "enabled": false});
+        let line = tool.subject(&call).unwrap();
+        assert!(line.starts_with(&format!("{PROGRAM} --other")), "{line}");
+        assert!(line.contains("i segreti salvati verranno tolti") && line.contains("API_KEY") && !line.contains(FAKE_SECRET), "{line}");
+        let answer = ok(&e, "aiw_connector_save", call).await;
+        let note = answer["note"].as_str().unwrap();
+        assert!(note.contains("destinazione diversa") && note.contains("tolti (API_KEY)"), "{note}");
+        assert!(note.contains("aiw_secret_request (target mcp_env:srv-cli:API_KEY)"), "{note}");
+        assert_eq!(answer["secrets_removed"], json!(["API_KEY"]));
+        assert!(!answer.to_string().contains(FAKE_SECRET), "{answer}");
+        let saved = stored(&e, "srv-cli");
+        assert_eq!(Value::Object(saved.env.clone().unwrap()), json!({"API_KEY": "", "MODE": "a"}), "the plain variable stayed");
+        assert_eq!(saved.args, Some(vec!["--other".to_string()]));
+        assert!(e.audit().iter().any(|a| a.action == "connector.save" && a.detail.ends_with("segreti salvati tolti: API_KEY")));
+        assert!(!serde_json::to_string(&saved).unwrap().contains(FAKE_SECRET));
+
+        // The person gives the value again (what `aiw_secret_request` does); then a different command, with the same arguments
+        // inherited, takes it away once more.
+        let mut again = stored(&e, "srv-cli");
+        again.env.as_mut().unwrap().insert("API_KEY".into(), json!(FAKE_SECRET));
+        e.save_mcp_server(again).await.unwrap();
+        let call = json!({"id": "srv-cli", "name": "cli", "transport": "stdio", "command": OTHER, "enabled": false});
+        assert!(tool.subject(&call).unwrap().contains("i segreti salvati verranno tolti"));
+        let answer = ok(&e, "aiw_connector_save", call).await;
+        assert_eq!(answer["secrets_removed"], json!(["API_KEY"]));
+        let saved = stored(&e, "srv-cli");
+        assert_eq!((saved.command.as_deref(), saved.env.unwrap()["API_KEY"].clone()), (Some(OTHER), json!("")));
+        assert!(!answer.to_string().contains(FAKE_SECRET));
+
+        // Declaring the same name again in the edit does not bring the old value back.
+        let mut again = stored(&e, "srv-cli");
+        again.env.as_mut().unwrap().insert("API_KEY".into(), json!(FAKE_SECRET));
+        e.save_mcp_server(again).await.unwrap();
+        let call = json!({"id": "srv-cli", "name": "cli", "transport": "stdio", "command": PROGRAM, "args": [], "secret_env": ["API_KEY"], "enabled": false});
+        let answer = ok(&e, "aiw_connector_save", call).await;
+        assert_eq!(stored(&e, "srv-cli").env.unwrap()["API_KEY"], "");
+        assert_eq!(answer["secrets_removed"], json!(["API_KEY"]));
+    }
+
+    #[tokio::test]
+    async fn another_kind_of_connector_leaves_the_saved_secrets_behind_and_the_answer_says_so() {
+        let (e, _d, _w) = engine(vec![]).await;
+        e.save_mcp_server(remote_with_a_secret("srv-http", "http://127.0.0.1:9/mcp")).await.unwrap();
+        // The same connector turned into a command: the header secret has nowhere to go, the answer names it all the same.
+        let call = json!({"id": "srv-http", "transport": "stdio", "command": PROGRAM, "enabled": false});
+        let tool = e.tool_registry().get("aiw_connector_save").unwrap();
+        assert!(tool.subject(&call).unwrap().contains("i segreti salvati verranno tolti (Authorization)"));
+        let answer = ok(&e, "aiw_connector_save", call).await;
+        let note = answer["note"].as_str().unwrap();
+        assert!(note.contains("destinazione diversa") && note.contains("tolti (Authorization)"), "{note}");
+        assert!(!note.contains("aiw_secret_request (target"), "that name is not declared any more: {note}");
+        assert_eq!(answer["secrets_removed"], json!(["Authorization"]));
+        let saved = stored(&e, "srv-http");
+        assert!(saved.headers.is_none() && !serde_json::to_string(&saved).unwrap().contains(FAKE_SECRET));
+        // A new connector has nothing stored, so it takes nothing away.
+        let call = json!({"name": "nuovo", "transport": "http", "url": "http://127.0.0.1:9/nuovo", "secret_headers": ["Authorization"], "enabled": false});
+        assert!(!tool.subject(&call).unwrap().contains("tolti"));
+        let answer = ok(&e, "aiw_connector_save", call).await;
+        assert!(
+            answer.get("secrets_removed").is_none() && answer["note"].as_str().unwrap().contains("Manca il valore dei segreti"),
+            "{answer}"
+        );
+        // The description the model reads says when the saved secrets stay.
+        assert!(tool.description().contains("restano solo se") && tool.description().contains("tolti"));
     }
 
     // ------------------------------------------------------------------ agents
