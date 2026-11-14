@@ -8,7 +8,7 @@
 //! * every tool refuses to work outside a chat run the server started for a person
 //!   (`require_origin`), and the ones that change something also unless that person is the owner
 //!   (`require_owner`); both before the arguments are even read;
-//! * the answer is short text or JSON, never longer than [`MAX_CHARS`] characters, and it never
+//! * the answer is short text or JSON, never longer than [`MAX_OUTPUT`] bytes, and it never
 //!   holds a secret: provider text goes through the redactor of the diagnostics, and the finished
 //!   answer (or error) is cleaned of the exact values of every secret the app stores;
 //! * an error of the engine reaches the model in Italian, calmly, with what it can do next.
@@ -24,8 +24,9 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, OnceLock, Weak};
 
-/// Longest answer, in characters: the limit the agent loop puts on a tool result.
-const MAX_CHARS: usize = 24_000;
+/// Longest answer, in bytes: the agent loop keeps a tool result of at most this many bytes
+/// (`MAX_TOOL_OUTPUT` in `runner.rs`, compared with `str::len`) and cuts a longer one in the middle.
+const MAX_OUTPUT: usize = 24_000;
 /// A stored value shorter than this is not hunted for in the answer: it would also match ordinary words.
 const MIN_SECRET_LEN: usize = 6;
 /// Entries of a search when the caller does not say, and the most it may ask for.
@@ -134,11 +135,15 @@ fn finish(e: &Engine, answer: Answer) -> String {
         }
         Answer::Text(t) => scrub_str(&t, &secrets),
     };
-    if text.chars().count() <= MAX_CHARS {
+    if text.len() <= MAX_OUTPUT {
         return text;
     }
-    let cut: String = text.chars().take(MAX_CHARS - 80).collect();
-    format!("{cut}… [risposta troncata: restringi la richiesta]")
+    const CUT: &str = "… [risposta troncata: restringi la richiesta]";
+    let mut end = MAX_OUTPUT - CUT.len();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{CUT}", &text[..end])
 }
 
 /// The error the model reads: the same kind of error with its text cleaned of every stored
@@ -2111,15 +2116,15 @@ mod tests {
         e.0.hub.set_auth("hf", None, Some(base)).unwrap();
         *fake.echo.lock().unwrap() = Some("x".repeat(60_000));
         let out = call(&e, "aiw_model_search", json!({"provider": "hf", "query": "echo"})).await.unwrap();
-        assert!(out.chars().count() <= MAX_CHARS, "{}", out.chars().count());
+        assert!(out.len() <= MAX_OUTPUT, "{} bytes", out.len());
         assert!(out.contains("acme/tiny-GGUF"), "the text of the provider is cut, not the answer: {}", &out[..200.min(out.len())]);
         let long = call(&e, "aiw_model_search", json!({"limit": 30})).await.unwrap();
-        assert!(long.chars().count() <= MAX_CHARS);
+        assert!(long.len() <= MAX_OUTPUT, "{} bytes", long.len());
         // The last line of defence cuts what is still too long, and says how to narrow it down.
-        let huge = finish(&e, Answer::Text("x".repeat(MAX_CHARS * 3)));
-        assert!(huge.chars().count() <= MAX_CHARS && huge.ends_with("restringi la richiesta]"), "{}", huge.chars().count());
-        let huge = finish(&e, Answer::Json(json!({"testo": "y".repeat(MAX_CHARS * 2)})));
-        assert!(huge.chars().count() <= MAX_CHARS && huge.contains("troncata"));
+        let huge = finish(&e, Answer::Text("x".repeat(MAX_OUTPUT * 3)));
+        assert!(huge.len() <= MAX_OUTPUT && huge.ends_with("restringi la richiesta]"), "{} bytes", huge.len());
+        let huge = finish(&e, Answer::Json(json!({"testo": "y".repeat(MAX_OUTPUT * 2)})));
+        assert!(huge.len() <= MAX_OUTPUT && huge.contains("troncata"), "{} bytes", huge.len());
         // An error is kept short too.
         let err = safe_error(&e, Error::Upstream("z".repeat(5000)));
         assert!(err.to_string().chars().count() <= 901, "{}", err.to_string().chars().count());
@@ -2290,6 +2295,20 @@ mod tests {
         assert!(e.audit().iter().all(|a| !serde_json::to_string(a).unwrap().contains(PROVIDER_TOKEN)));
         assert!(!serde_json::to_string(&e.downloads()).unwrap().contains(PROVIDER_TOKEN));
         assert!(!serde_json::to_string(&e.model_providers()).unwrap().contains(PROVIDER_TOKEN));
+    }
+
+    #[tokio::test]
+    async fn an_answer_stays_within_the_bytes_the_agent_loop_keeps_not_only_its_characters() {
+        let (e, _d, _w) = engine_on(16).await;
+        // 20 000 characters that are 40 000 bytes: the runner cuts a tool result by bytes, in the middle.
+        for answer in [Answer::Text("è".repeat(20_000)), Answer::Json(json!({"testo": "…".repeat(10_000)}))] {
+            let out = finish(&e, answer);
+            assert!(out.len() <= MAX_OUTPUT, "{} bytes", out.len());
+            assert!(out.ends_with("restringi la richiesta]"), "the cut says how to narrow the request down");
+        }
+        // What fits is left alone, accents included.
+        let fits = "è".repeat(10_000);
+        assert_eq!(finish(&e, Answer::Text(fits.clone())), fits);
     }
 
     #[test]
