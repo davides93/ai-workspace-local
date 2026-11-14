@@ -833,6 +833,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn declaring_secrets_the_owner_gets_aiw_secret_request_without_a_value_and_the_run_waits_for_the_rest_endpoint() {
+        const FAKE_KEY: &str = "FAKE_BRAVE_KEY_agui_7d6c5b4a3f";
+        let args = json!({"target": "setting:search.brave_api_key", "label": "Chiave di Brave", "reason": "Serve per cercare sul web"});
+        let turns = vec![ScriptedBackend::tool_turn("s1", "aiw_secret_request", args), ScriptedBackend::text_turn("Chiave salvata.")];
+        let (app, e, _d, _w) = fixture(turns).await;
+        let res = post_raw(&app, "assistant", input_with("thr-s0", both()), &[]).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let rid = header(&res, "x-aiw-run-id");
+        let mut body = res.into_body();
+        let seen = read_until(&mut body, "aiw.secret_request").await;
+        let evs = frames(&seen);
+        // The call is seen like any other (name and arguments), and the request comes next as a custom event.
+        let start = evs.iter().find(|v| v["type"] == "TOOL_CALL_START").expect("the call of the tool");
+        assert_eq!(start["toolCallName"], "aiw_secret_request");
+        let ev = customs(&evs, "aiw.secret_request").pop().expect("the request event");
+        // Exactly the fields of the contract: where the value goes in words, and no field that could hold a value.
+        let mut keys: Vec<&str> = ev.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["destination", "expires_at", "id", "label", "reason", "run_id", "target"]);
+        assert_eq!(
+            (ev["target"].as_str(), ev["label"].as_str(), ev["reason"].as_str(), ev["run_id"].as_str()),
+            (Some("setting:search.brave_api_key"), Some("Chiave di Brave"), Some("Serve per cercare sul web"), Some(rid.as_str()))
+        );
+        assert_eq!(ev["destination"], "Impostazione «Chiave di Brave Search» (search.brave_api_key), salvata su questo computer");
+        assert!(ev["id"].as_str().is_some_and(|i| i.starts_with("sec_")) && ev["expires_at"].as_str().is_some_and(|t| t.ends_with('Z')));
+        // The run waits for the person: no result yet, nothing ended, and the request is listed (without a value).
+        assert!(evs.iter().all(|v| v["type"] != "TOOL_CALL_RESULT" && v["type"] != "RUN_FINISHED"));
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!e.run_done(&rid), "the run waits for the person");
+        let open = e.secret_requests();
+        assert_eq!((open.len(), open[0].id.as_str()), (1, ev["id"].as_str().unwrap()));
+        // The value comes on the REST endpoint, in a request of its own: the stream goes on with the result and ends,
+        // and the value is in none of it.
+        let id = ev["id"].as_str().unwrap();
+        let (st, v) = crate::dispatch(
+            app.clone(),
+            "POST",
+            &format!("/api/secret-requests/{id}"),
+            Some(json!({"action": "provide", "value": FAKE_KEY})),
+        )
+        .await;
+        assert_eq!((st, v), (200, json!({"stored": true})));
+        let all = format!("{seen}{}", rest_of(body).await);
+        let evs = frames(&all);
+        assert_eq!(evs.last().unwrap()["type"], "RUN_FINISHED");
+        assert_eq!(customs(&evs, "aiw.secret_resolved"), [json!({"id": id, "outcome": "stored"})]);
+        assert_eq!(
+            tool_result_of(&evs, start["toolCallId"].as_str().unwrap()),
+            json!({"outcome": "stored", "target": "setting:search.brave_api_key"})
+        );
+        assert!(!all.contains(FAKE_KEY), "the value is in the stream of the run");
+        assert!(e.secret_requests().is_empty());
+    }
+
+    #[tokio::test]
     async fn declaring_only_questions_or_being_a_device_a_secret_request_is_unsupported_at_once() {
         let args = json!({"target": "provider_token:hf", "label": "Token di Hugging Face"});
         let turns = vec![
