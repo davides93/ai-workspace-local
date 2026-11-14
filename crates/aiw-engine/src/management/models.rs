@@ -15,7 +15,7 @@
 
 use super::{require_origin, require_owner};
 use crate::{Engine, Inner};
-use aiw_core::api::{CatalogModel, RemoteModel, RemoteModelDetail, RuntimeCompat, SECRET_MASK};
+use aiw_core::api::{CatalogModel, PullRequest, RemoteModel, RemoteModelDetail, RuntimeCompat, SECRET_MASK};
 use aiw_core::{Error, Result};
 use aiw_models::hub::SearchQuery;
 use aiw_tools::{Risk, Tool, ToolContext, ToolOutput};
@@ -34,7 +34,7 @@ const MAX_LIMIT: usize = 30;
 
 pub(crate) fn tools(e: &Engine) -> Vec<Arc<dyn Tool>> {
     let weak = Arc::downgrade(&e.0);
-    vec![Arc::new(Search(weak))]
+    vec![Arc::new(Search(weak.clone())), Arc::new(Download(weak))]
 }
 
 // ------------------------------------------------------------------ shared helpers
@@ -391,6 +391,196 @@ fn detail(provider: &str, d: &RemoteModelDetail) -> Value {
     item
 }
 
+// ------------------------------------------------------------------ aiw_model_download
+
+/// What a call of `aiw_model_download` asks for, once its arguments are checked.
+#[derive(Debug, PartialEq)]
+enum DownloadPlan {
+    /// Stop the download with this id.
+    Cancel(String),
+    /// Start one: the request of the engine and the short line the confirmation card shows.
+    Pull { request: PullRequest, subject: String },
+}
+
+/// An address without what could be a secret: no user or password, no query, no fragment.
+fn url_safe(raw: &str) -> String {
+    let Ok(mut u) = reqwest::Url::parse(raw.trim()) else { return "(indirizzo non leggibile)".into() };
+    let _ = u.set_username("");
+    let _ = u.set_password(None);
+    u.set_query(None);
+    u.set_fragment(None);
+    u.to_string()
+}
+
+/// The address of a file to download: http or https, and nothing that looks like a credential in it
+/// (the model could only have read it somewhere it should not have, and it would end up on the card).
+fn check_url(raw: &str) -> Result<()> {
+    let Ok(u) = reqwest::Url::parse(raw) else { return Err(Error::Invalid("l'indirizzo del file non è valido".into())) };
+    if !matches!(u.scheme(), "http" | "https") {
+        return Err(Error::Invalid("l'indirizzo del file deve iniziare con http:// o https://".into()));
+    }
+    if !u.username().is_empty() || u.password().is_some() {
+        return Err(Error::Invalid(
+            "l'indirizzo contiene un nome utente o una password: non lo uso. Serve un indirizzo senza credenziali; se il servizio chiede un accesso va configurato dall'utente, non scritto nella chat.".into(),
+        ));
+    }
+    if let Some((name, _)) = u.query_pairs().find(|(k, _)| crate::secrets::is_secret_name(k)) {
+        return Err(Error::Invalid(format!(
+            "l'indirizzo contiene un parametro che sembra un segreto («{}»): non lo uso. Serve un indirizzo senza credenziali.",
+            clip(&name, 40)
+        )));
+    }
+    Ok(())
+}
+
+/// Reads the arguments: exactly one of `id`, `provider` + `model` (+ `variant`), `url`, or `cancel` alone.
+fn download_plan(args: &Value) -> Result<DownloadPlan> {
+    let (id, provider, model, variant, url, cancel) = (
+        text_arg(args, "id"),
+        text_arg(args, "provider").map(|p| p.to_lowercase()),
+        text_arg(args, "model"),
+        text_arg(args, "variant"),
+        text_arg(args, "url"),
+        text_arg(args, "cancel"),
+    );
+    let hub = provider.is_some() || model.is_some() || variant.is_some();
+    if let Some(cancel) = cancel {
+        if id.is_some() || hub || url.is_some() {
+            return Err(Error::Invalid("`cancel` si usa da solo: per annullare un download serve solo il suo id".into()));
+        }
+        return Ok(DownloadPlan::Cancel(cancel));
+    }
+    match [id.is_some(), hub, url.is_some()].iter().filter(|x| **x).count() {
+        0 => {
+            return Err(Error::Invalid(
+                "indica che cosa scaricare: `id` (un modello del catalogo), oppure `provider` e `model` (con `variant`), oppure `url`; per annullare un download usa `cancel`. I nomi si cercano con aiw_model_search.".into(),
+            ))
+        }
+        1 => {}
+        _ => return Err(Error::Invalid("indica una sola origine: `id`, oppure `provider` e `model`, oppure `url`".into())),
+    }
+    if let Some(id) = id {
+        return Ok(DownloadPlan::Pull { subject: format!("catalogo:{id}"), request: PullRequest::Catalog { id } });
+    }
+    if let Some(url) = url {
+        check_url(&url)?;
+        return Ok(DownloadPlan::Pull { subject: url_safe(&url), request: PullRequest::Url { url, file_name: None, sha256: None } });
+    }
+    let (Some(provider), Some(model)) = (provider, model) else {
+        return Err(Error::Invalid("per un modello di un provider servono `provider` e `model` (la `variant` è facoltativa)".into()));
+    };
+    // The catalog is a provider too: its entries are asked for by id.
+    if provider == "catalog" {
+        return Ok(DownloadPlan::Pull { subject: format!("catalogo:{model}"), request: PullRequest::Catalog { id: model } });
+    }
+    let subject = match &variant {
+        Some(v) => format!("{provider}:{model} ({v})"),
+        None => format!("{provider}:{model}"),
+    };
+    Ok(DownloadPlan::Pull { subject, request: PullRequest::Hub { provider, model, variant: variant.unwrap_or_default(), revision: None } })
+}
+
+struct Download(Weak<Inner>);
+
+#[async_trait::async_trait]
+impl Tool for Download {
+    fn name(&self) -> &str {
+        "aiw_model_download"
+    }
+
+    fn description(&self) -> &str {
+        "Avvia il download di un modello, oppure lo annulla. Indica una sola origine: `id` (un modello del catalogo, da aiw_model_search), oppure `provider` + `model` (+ `variant`; vuota = la consigliata), oppure `url` di un file. Risponde subito con l'id del download, che prosegue in background: l'avanzamento si legge con aiw_inspect (topic downloads). Con `cancel` (l'id di un download) lo ferma. Chiede sempre la conferma dell'utente."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Id di un modello del catalogo (da aiw_model_search)."},
+                "provider": {"type": "string", "enum": ["hf", "ollama", "modelscope"], "description": "Servizio da cui scaricare, insieme a `model`."},
+                "model": {"type": "string", "description": "Riferimento del modello nel servizio (per hf: proprietario/nome)."},
+                "variant": {"type": "string", "description": "Variante da scaricare (per esempio Q4_K_M). Vuota: la consigliata, o l'unica."},
+                "url": {"type": "string", "description": "Indirizzo http(s) di un file di modello, senza credenziali."},
+                "cancel": {"type": "string", "description": "Id di un download da annullare (da aiw_inspect, topic downloads). Da solo."}
+            }
+        })
+    }
+
+    fn risk(&self) -> Risk {
+        Risk::Write
+    }
+
+    fn explicit_grant(&self) -> bool {
+        true
+    }
+
+    /// What the confirmation card shows: the model, the address (without credentials) or the download to stop.
+    fn subject(&self, args: &Value) -> Option<String> {
+        match download_plan(args).ok()? {
+            DownloadPlan::Cancel(id) => Some(format!("annulla {id}")),
+            DownloadPlan::Pull { subject, .. } => Some(subject),
+        }
+    }
+
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let engine = engine_of(&self.0)?;
+        require_owner(&engine, ctx)?;
+        match download(&engine, &args, ctx).await {
+            Ok(said) => Ok(ToolOutput::text(finish(&engine, Answer::Text(said)))),
+            Err(err) => Err(safe_error(&engine, err)),
+        }
+    }
+}
+
+async fn download(e: &Engine, args: &Value, ctx: &ToolContext) -> Result<String> {
+    let (request, subject) = match download_plan(args)? {
+        DownloadPlan::Cancel(id) => return cancel(e, &id),
+        DownloadPlan::Pull { request, subject } => (request, subject),
+    };
+    let mut label = subject.clone();
+    let mut warning = String::new();
+    if let PullRequest::Catalog { id } = &request {
+        if let Some(entry) = e.catalog().into_iter().find(|c| &c.id == id) {
+            label = entry.name.clone();
+            if entry.installed {
+                return Ok(format!(
+                    "«{}» è già installato: non serve scaricarlo di nuovo. Per usarlo con un assistente: aiw_model_use.",
+                    entry.name
+                ));
+            }
+            if entry.fit == "no" {
+                warning = format!(
+                    " Attenzione: questo modello non è adatto a questo dispositivo ({}): probabilmente non girerà bene.",
+                    text(&entry.fit_detail, 160)
+                );
+            }
+        }
+    }
+    let p = cancellable(ctx, e.pull_model(request)).await.map_err(|err| explain("Non riesco ad avviare il download", err))?;
+    let size = if p.total > 0 { format!(", {} MB", mb(p.total)) } else { String::new() };
+    Ok(format!(
+        "Download avviato: «{}» (stato: {}{size}). Id del download: {}. Prosegue in background: l'avanzamento si vede con aiw_inspect (topic downloads); per fermarlo usa aiw_model_download con cancel = {}. Quando è finito il modello compare in aiw_inspect (topic models) e si sceglie con aiw_model_use.{warning}",
+        text(&label, 120),
+        p.status,
+        p.id,
+        p.id
+    ))
+}
+
+fn cancel(e: &Engine, id: &str) -> Result<String> {
+    let p = e
+        .cancel_download(id)
+        .map_err(|err| explain("Non riesco ad annullare il download (gli id si vedono con aiw_inspect, topic downloads)", err))?;
+    let what = if p.model_ref.is_empty() { p.model_id.clone() } else { p.model_ref.clone() };
+    Ok(match p.status.as_str() {
+        "cancelled" => format!(
+            "Download di «{}» annullato. I dati già scaricati restano da parte: un nuovo download dello stesso modello riprende da dove era arrivato.",
+            text(&what, 120)
+        ),
+        other => format!("Il download di «{}» non è in corso (stato: {other}): non c'era niente da annullare.", text(&what, 120)),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,7 +682,11 @@ mod tests {
             .files
             .iter()
             .filter(|((r, _), _)| *r == repo)
-            .map(|((_, p), b)| json!({"type": "file", "oid": "gitsha", "size": 100, "path": p, "lfs": {"oid": sha(b), "size": b.len()}}))
+            .map(|((_, p), b)| {
+                // The tree of `acme/huge-GGUF` claims a size no disk can hold.
+                let size = if repo == "acme/huge-GGUF" { 1u64 << 50 } else { b.len() as u64 };
+                json!({"type": "file", "oid": "gitsha", "size": 100, "path": p, "lfs": {"oid": sha(b), "size": size}})
+            })
             .collect();
         v.sort_by_key(|e| e["path"].as_str().unwrap_or_default().to_string());
         axum::Json(Value::Array(v)).into_response()
@@ -548,7 +742,10 @@ mod tests {
             ("acme/tiny-GGUF", "tiny-Q4_K_M.gguf", gguf(6000)),
             ("acme/tiny-GGUF", "tiny-Q8_0.gguf", gguf(9000)),
             ("acme/other-GGUF", "other-Q4_K_M.gguf", gguf(6000)),
+            ("acme/huge-GGUF", "huge-Q4_K_M.gguf", gguf(6000)),
             ("Qwen/Qwen3-0.6B-GGUF", "Qwen3-0.6B-Q8_0.gguf", gguf(8000)),
+            // The repo of the 70B catalog entry, with a small file: the fit comes from the catalog, not from what the fake serves.
+            ("bartowski/Llama-3.3-70B-Instruct-GGUF", "Llama-3.3-70B-Instruct-Q4_K_M.gguf", gguf(6000)),
         ] {
             files.insert((repo.to_string(), path.to_string()), bytes);
         }
@@ -730,6 +927,223 @@ mod tests {
         let err = call(&e, "aiw_model_search", json!({"provider": "hf", "model": format!("acme/{PROVIDER_TOKEN}")})).await.unwrap_err();
         assert!(!err.to_string().contains(PROVIDER_TOKEN), "{err}");
         assert!(err.to_string().contains(SECRET_MASK), "{err}");
+    }
+
+    // ------------------------------------------------------------------ download
+
+    async fn wait_download(e: &Engine, id: &str, want: &str) -> aiw_core::api::DownloadProgress {
+        for _ in 0..300 {
+            if let Some(d) = e.downloads().into_iter().find(|d| d.id == id) {
+                if d.status == want {
+                    return d;
+                }
+                assert!(!matches!(d.status.as_str(), "error" | "cancelled"), "the download ended as {d:?}, not {want}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        panic!("download {id} never reached {want}");
+    }
+
+    /// Waits until the fake Hub has been asked for `what` (the download is really in flight).
+    async fn wait_asked(fake: &Hf, what: &str) {
+        for _ in 0..300 {
+            if fake.log.lock().unwrap().iter().any(|l| l == what) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        panic!("the fake Hub was never asked for {what}: {:?}", fake.log.lock().unwrap());
+    }
+
+    fn download_id(said: &str) -> String {
+        let start = said.find("Id del download: ").expect("the answer has the id") + "Id del download: ".len();
+        said[start..].split('.').next().unwrap().to_string()
+    }
+
+    #[test]
+    fn the_arguments_of_a_download_name_exactly_one_thing_and_the_card_says_which() {
+        let plan = |a: Value| download_plan(&a);
+        let pull = |a: Value| match plan(a).unwrap() {
+            DownloadPlan::Pull { request, subject } => (request, subject),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(pull(json!({"id": "qwen3-4b"})), (PullRequest::Catalog { id: "qwen3-4b".into() }, "catalogo:qwen3-4b".to_string()));
+        assert_eq!(
+            pull(json!({"provider": "HF", "model": " acme/tiny-GGUF ", "variant": "Q8_0"})),
+            (
+                PullRequest::Hub { provider: "hf".into(), model: "acme/tiny-GGUF".into(), variant: "Q8_0".into(), revision: None },
+                "hf:acme/tiny-GGUF (Q8_0)".to_string()
+            )
+        );
+        // No variant: the engine picks the recommended one (an empty text, as on the API).
+        let (request, subject) = pull(json!({"provider": "hf", "model": "acme/tiny-GGUF", "variant": ""}));
+        assert!(matches!(request, PullRequest::Hub { ref variant, .. } if variant.is_empty()) && subject == "hf:acme/tiny-GGUF");
+        // The catalog named as a provider is the same as an id.
+        assert_eq!(pull(json!({"provider": "catalog", "model": "qwen3-4b"})).0, PullRequest::Catalog { id: "qwen3-4b".into() });
+        assert_eq!(plan(json!({"cancel": " dl_1 "})).unwrap(), DownloadPlan::Cancel("dl_1".into()));
+        // An address on the card has no credentials, query or fragment, even when it is let through.
+        let (request, subject) = pull(json!({"url": "https://ex.org/m/tiny-Q4_K_M.gguf?download=true#x"}));
+        assert!(matches!(request, PullRequest::Url { file_name: None, sha256: None, .. }));
+        assert_eq!(subject, "https://ex.org/m/tiny-Q4_K_M.gguf");
+
+        let bad = |a: Value, why: &str| {
+            let err = plan(a.clone()).unwrap_err();
+            assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains(why), "{a}: {err}");
+        };
+        bad(json!({}), "indica che cosa scaricare");
+        bad(json!({"variant": "Q4_K_M"}), "servono `provider` e `model`");
+        bad(json!({"provider": "hf"}), "servono `provider` e `model`");
+        bad(json!({"id": "qwen3-4b", "url": "https://ex.org/a.gguf"}), "una sola origine");
+        bad(json!({"id": "qwen3-4b", "provider": "hf", "model": "a/b"}), "una sola origine");
+        bad(json!({"cancel": "dl_1", "id": "qwen3-4b"}), "da solo");
+        bad(json!({"url": "ftp://ex.org/a.gguf"}), "http");
+        bad(json!({"url": "non un indirizzo"}), "non è valido");
+        bad(json!({"url": "https://utente:segreta@ex.org/a.gguf"}), "nome utente o una password");
+        bad(json!({"url": "https://ex.org/a.gguf?token=abc123"}), "«token»");
+        bad(json!({"url": "https://ex.org/a.gguf?X-Api-Key=abc123"}), "«X-Api-Key»");
+        // Whatever it is that is wrong, the card does not break: it just has nothing to say.
+        let tool = Download(Weak::new());
+        assert_eq!(tool.subject(&json!({})), None);
+        assert_eq!(tool.subject(&json!({"cancel": "dl_9"})).as_deref(), Some("annulla dl_9"));
+        assert_eq!(tool.subject(&json!({"url": "https://u:p@ex.org/a.gguf"})), None, "an address with credentials is never shown");
+        assert_eq!(url_safe("https://u:p@ex.org:8443/a/b?token=zz#f"), "https://ex.org:8443/a/b");
+    }
+
+    #[tokio::test]
+    async fn a_catalog_model_downloads_from_the_hub_installs_and_is_then_reported_as_installed() {
+        let (e, data, _w) = engine_on(16).await;
+        let (base, fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base)).unwrap();
+        let said = call(&e, "aiw_model_download", json!({"id": "qwen3-0.6b"})).await.unwrap();
+        assert!(said.starts_with("Download avviato: «Qwen3 0.6B»"), "{said}");
+        assert!(said.contains("aiw_inspect (topic downloads)") && said.contains("cancel ="), "{said}");
+        let id = download_id(&said);
+        assert!(id.starts_with("dl_"), "{id}");
+        let done = wait_download(&e, &id, "done").await;
+        assert_eq!((done.files_done, done.received), (1, gguf(8000).len() as u64));
+        let file = data.path().join("models/hf/Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf");
+        assert_eq!(std::fs::read(&file).unwrap(), gguf(8000));
+        assert!(
+            e.models().iter().any(|m| m.source.as_deref().is_some_and(|s| s.starts_with("hf:Qwen/Qwen3-0.6B-GGUF@"))),
+            "{:?}",
+            e.models()
+        );
+        // The engine wrote its own audit line, and only that file was fetched from the Hub.
+        assert!(e.audit().iter().any(|a| a.action == "model.pull" && a.detail.contains("qwen3-0.6b")));
+        assert_eq!(fake.log.lock().unwrap().iter().filter(|l| l.starts_with("resolve")).count(), 1);
+        // The catalog now says it is installed, and a second request does not download it again.
+        let entry = call_json(&e, "aiw_model_search", json!({"query": "qwen3-0.6b"})).await;
+        assert_eq!(entry["items"].as_array().unwrap().iter().find(|i| i["id"] == "qwen3-0.6b").unwrap()["installed"], true);
+        let again = call(&e, "aiw_model_download", json!({"id": "qwen3-0.6b"})).await.unwrap();
+        assert!(again.contains("già installato") && again.contains("aiw_model_use"), "{again}");
+        assert_eq!(fake.log.lock().unwrap().iter().filter(|l| l.starts_with("resolve")).count(), 1, "nothing was fetched again");
+    }
+
+    #[tokio::test]
+    async fn a_hub_model_and_a_plain_address_download_and_a_download_in_flight_can_be_cancelled_and_resumed() {
+        let (e, data, _w) = engine_on(16).await;
+        let (base, fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base.clone())).unwrap();
+        // A model of the Hub, by variant.
+        let said = call(&e, "aiw_model_download", json!({"provider": "hf", "model": "acme/tiny-GGUF", "variant": "Q8_0"})).await.unwrap();
+        assert!(said.starts_with("Download avviato: «hf:acme/tiny-GGUF (Q8_0)»"), "{said}");
+        let finished = download_id(&said);
+        wait_download(&e, &finished, "done").await;
+        assert!(data.path().join("models/hf/acme/tiny-GGUF/tiny-Q8_0.gguf").is_file());
+        // Without a variant the engine takes the recommended one (here the only one).
+        let said = call(&e, "aiw_model_download", json!({"provider": "hf", "model": "acme/other-GGUF"})).await.unwrap();
+        wait_download(&e, &download_id(&said), "done").await;
+        assert!(data.path().join("models/hf/acme/other-GGUF/other-Q4_K_M.gguf").is_file());
+        // A file by its address.
+        let url = format!("{base}/acme/tiny-GGUF/resolve/main/tiny-Q4_K_M.gguf");
+        let said = call(&e, "aiw_model_download", json!({"url": url})).await.unwrap();
+        wait_download(&e, &download_id(&said), "done").await;
+        assert!(e.models().iter().any(|m| m.source.as_deref().is_some_and(|s| s.starts_with("url:"))), "{:?}", e.models());
+
+        // One that stalls half way: it is running, and then it is cancelled.
+        fake.stall.store(true, std::sync::atomic::Ordering::SeqCst);
+        let said = call(&e, "aiw_model_download", json!({"provider": "hf", "model": "acme/tiny-GGUF", "variant": "Q4_K_M"})).await.unwrap();
+        let id = download_id(&said);
+        wait_asked(&fake, "resolve acme/tiny-GGUF/tiny-Q4_K_M.gguf").await;
+        assert!(matches!(e.downloads().iter().find(|d| d.id == id).unwrap().status.as_str(), "queued" | "running"));
+        let stopped = call(&e, "aiw_model_download", json!({"cancel": id})).await.unwrap();
+        assert!(stopped.contains("annullato") && stopped.contains("riprende da dove era arrivato"), "{stopped}");
+        assert_eq!(e.downloads().iter().find(|d| d.id == id).unwrap().status, "cancelled");
+        assert!(!data.path().join("models/hf/acme/tiny-GGUF/tiny-Q4_K_M.gguf").exists(), "a cancelled download leaves no model");
+        assert!(e.audit().iter().any(|a| a.action == "model.pull_cancel"));
+        // Cancelling again is harmless; a download that is already over says so; an id nobody has is a clear error.
+        assert_eq!(call(&e, "aiw_model_download", json!({"cancel": id})).await.unwrap(), stopped);
+        let over = call(&e, "aiw_model_download", json!({"cancel": finished})).await.unwrap();
+        assert!(over.contains("non è in corso") && over.contains("done"), "{over}");
+        let err = call(&e, "aiw_model_download", json!({"cancel": "dl_nope"})).await.unwrap_err();
+        assert!(
+            matches!(err, Error::NotFound(_))
+                && err.to_string().contains("Non riesco ad annullare")
+                && err.to_string().contains("topic downloads"),
+            "{err}"
+        );
+        // The same download asked for again goes through to the end.
+        fake.stall.store(false, std::sync::atomic::Ordering::SeqCst);
+        let said = call(&e, "aiw_model_download", json!({"provider": "hf", "model": "acme/tiny-GGUF", "variant": "Q4_K_M"})).await.unwrap();
+        let done = wait_download(&e, &download_id(&said), "done").await;
+        assert_eq!(done.received, gguf(6000).len() as u64);
+        assert!(data.path().join("models/hf/acme/tiny-GGUF/tiny-Q4_K_M.gguf").is_file());
+    }
+
+    #[tokio::test]
+    async fn a_download_that_cannot_start_reports_the_engines_reason_in_italian_and_nothing_is_queued() {
+        let (e, _d, _w) = engine_on(16).await;
+        let (base, fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base)).unwrap();
+        let fail = |args: Value| {
+            let e = e.clone();
+            async move { call(&e, "aiw_model_download", args).await.unwrap_err() }
+        };
+        let err = fail(json!({"provider": "hf", "model": "acme/tiny-GGUF", "variant": "Q1"})).await;
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().starts_with("Non riesco ad avviare il download:"), "{err}");
+        assert!(
+            err.to_string().contains("variante `Q1` non trovata") && err.to_string().contains("Q4_K_M, Q8_0"),
+            "the choices are in the message: {err}"
+        );
+        let err = fail(json!({"id": "non-esiste"})).await;
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().contains("non trovato nel catalogo"), "{err}");
+        let err = fail(json!({"id": "apple-fm-system"})).await;
+        assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("sono già nel dispositivo"), "{err}");
+        let err = fail(json!({"provider": "hf", "model": "acme/missing-GGUF", "variant": "Q4_K_M"})).await;
+        assert!(matches!(err, Error::NotFound(_)), "{err}");
+        let err = fail(json!({"provider": "dropbox", "model": "x"})).await;
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().contains("dropbox"), "{err}");
+        let err = fail(json!({"provider": "hf", "model": "acme/huge-GGUF", "variant": "Q4_K_M"})).await;
+        assert!(matches!(err, Error::InsufficientStorage(_)) && err.to_string().contains("più piccolo"), "{err}");
+        // Arguments that carry a credential are refused before anything leaves the machine.
+        let asked = fake.log.lock().unwrap().len();
+        let err = fail(json!({"url": "https://utente:segreta@127.0.0.1:9/a.gguf"})).await;
+        assert!(matches!(err, Error::Invalid(_)) && !err.to_string().contains("segreta"), "{err}");
+        assert_eq!(fake.log.lock().unwrap().len(), asked);
+        // A Hub nobody answers for.
+        e.0.hub.set_auth("hf", None, Some("http://127.0.0.1:1".into())).unwrap();
+        let err = fail(json!({"provider": "hf", "model": "acme/tiny-GGUF", "variant": "Q4_K_M"})).await;
+        assert!(matches!(err, Error::Upstream(_)) && err.to_string().contains("riprovare più tardi"), "{err}");
+        assert!(e.downloads().is_empty(), "no failed request left a download behind: {:?}", e.downloads());
+    }
+
+    #[tokio::test]
+    async fn a_model_that_does_not_fit_the_device_is_downloaded_with_a_warning_and_one_that_fits_without() {
+        let (e, _d, _w) = engine_on(4).await;
+        let (base, fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base)).unwrap();
+        fake.stall.store(true, std::sync::atomic::Ordering::SeqCst);
+        // The 70B model does not fit in 4 GB: the owner decides, but the answer says what the search said.
+        let big = e.catalog().into_iter().find(|c| c.id == "llama-3.3-70b").unwrap();
+        assert_eq!(big.fit, "no");
+        let said = call(&e, "aiw_model_download", json!({"id": "llama-3.3-70b"})).await.unwrap();
+        assert!(said.starts_with("Download avviato: «Llama 3.3 70B"), "{said}");
+        assert!(said.contains("Attenzione: questo modello non è adatto a questo dispositivo"), "{said}");
+        call(&e, "aiw_model_download", json!({"cancel": download_id(&said)})).await.unwrap();
+        // A catalog model that fits says nothing of the kind.
+        let said = call(&e, "aiw_model_download", json!({"id": "qwen3-0.6b"})).await.unwrap();
+        assert!(!said.contains("Attenzione"), "{said}");
+        call(&e, "aiw_model_download", json!({"cancel": download_id(&said)})).await.unwrap();
     }
 
     #[test]
