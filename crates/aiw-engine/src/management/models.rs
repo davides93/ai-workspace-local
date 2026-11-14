@@ -34,7 +34,14 @@ const MAX_LIMIT: usize = 30;
 
 pub(crate) fn tools(e: &Engine) -> Vec<Arc<dyn Tool>> {
     let weak = Arc::downgrade(&e.0);
-    vec![Arc::new(Search(weak.clone())), Arc::new(Download(weak.clone())), Arc::new(Use(weak))]
+    vec![
+        Arc::new(Search(weak.clone())),
+        Arc::new(Download(weak.clone())),
+        Arc::new(Use(weak.clone())),
+        Arc::new(Delete(weak.clone())),
+        Arc::new(RuntimeControl(weak.clone())),
+        Arc::new(RuntimeInstall(weak)),
+    ]
 }
 
 // ------------------------------------------------------------------ shared helpers
@@ -623,33 +630,59 @@ fn installed_catalog_model(models: &[LocalModel], c: &CatalogModel) -> Option<Lo
         .cloned()
 }
 
-/// The installed model the person (or the model) means: by id, by name, or by catalog id once it is installed.
-fn local_model(e: &Engine, wanted: &str) -> Result<LocalModel> {
+/// What a name the model gave stands for among the models of this device.
+enum Lookup {
+    /// An installed model.
+    Found(LocalModel),
+    /// An entry of the catalog that is not installed (yet).
+    InCatalog(CatalogModel),
+    Missing,
+}
+
+/// The installed model the person (or the model) means: by id, by name (when it is only one
+/// model's: two quantizations of a model share it), or by catalog id once the entry is installed.
+fn lookup(e: &Engine, wanted: &str) -> Result<Lookup> {
     let models = e.models();
     let lower = wanted.to_lowercase();
     let by_id = models.iter().find(|m| m.id == wanted).or_else(|| models.iter().find(|m| m.id.to_lowercase() == lower));
     if let Some(m) = by_id {
-        return Ok(m.clone());
+        return Ok(Lookup::Found(m.clone()));
     }
-    // A name is enough when it is only one model's (two quantizations of a model share it).
     let named: Vec<&LocalModel> = models.iter().filter(|m| m.name.to_lowercase() == lower).collect();
     match named.as_slice() {
-        [m] => return Ok((*m).clone()),
+        [m] => return Ok(Lookup::Found((*m).clone())),
         [] => {}
         many => {
             let ids = many.iter().take(6).map(|m| m.id.as_str()).collect::<Vec<_>>().join(", ");
             return Err(Error::Invalid(format!("più modelli si chiamano «{}»: indica l'id ({ids})", text(wanted, 80))));
         }
     }
-    if let Some(entry) = e.catalog().into_iter().find(|c| c.id == wanted) {
-        return installed_catalog_model(&models, &entry).ok_or_else(|| {
-            Error::NotFound(format!(
-                "«{}» è nel catalogo ma non è ancora installato: scaricalo prima con aiw_model_download (id {})",
-                entry.name, entry.id
-            ))
-        });
+    Ok(match e.catalog().into_iter().find(|c| c.id == wanted) {
+        Some(entry) => match installed_catalog_model(&models, &entry) {
+            Some(m) => Lookup::Found(m),
+            None => Lookup::InCatalog(entry),
+        },
+        None => Lookup::Missing,
+    })
+}
+
+fn missing_model(wanted: &str) -> Error {
+    Error::NotFound(format!(
+        "modello `{}` non trovato tra quelli installati: guarda l'elenco con aiw_inspect (topic models)",
+        text(wanted, 80)
+    ))
+}
+
+/// An installed model to use: the one `lookup` finds, or an error that says what to do first.
+fn local_model(e: &Engine, wanted: &str) -> Result<LocalModel> {
+    match lookup(e, wanted)? {
+        Lookup::Found(m) => Ok(m),
+        Lookup::InCatalog(entry) => Err(Error::NotFound(format!(
+            "«{}» è nel catalogo ma non è ancora installato: scaricalo prima con aiw_model_download (id {})",
+            entry.name, entry.id
+        ))),
+        Lookup::Missing => Err(missing_model(wanted)),
     }
-    Err(Error::NotFound(format!("modello `{wanted}` non trovato tra quelli installati: guarda l'elenco con aiw_inspect (topic models)")))
 }
 
 /// The profile that pins `m`: the one a former call made (same model), or a new one under a free id.
@@ -789,6 +822,259 @@ fn use_model(e: &Engine, args: &Value) -> Result<String> {
         text(&model.name, 100),
         profile.id,
         text(&engine_name, 60)
+    ))
+}
+
+// ------------------------------------------------------------------ aiw_model_delete
+
+struct Delete(Weak<Inner>);
+
+#[async_trait::async_trait]
+impl Tool for Delete {
+    fn name(&self) -> &str {
+        "aiw_model_delete"
+    }
+
+    fn description(&self) -> &str {
+        "Elimina dal disco un modello scaricato (non si può annullare: per riaverlo va riscaricato). `model`: l'id di un modello installato (da aiw_inspect, topic models). I modelli di altre app (Ollama, LM Studio) non si toccano. Risponde dicendo quali assistenti usavano quel modello. Chiede sempre la conferma dell'utente."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "required": ["model"],
+            "properties": {
+                "model": {"type": "string", "description": "Id del modello installato da eliminare."}
+            }
+        })
+    }
+
+    fn risk(&self) -> Risk {
+        Risk::Exec
+    }
+
+    fn explicit_grant(&self) -> bool {
+        true
+    }
+
+    fn subject(&self, args: &Value) -> Option<String> {
+        text_arg(args, "model")
+    }
+
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let engine = engine_of(&self.0)?;
+        require_owner(&engine, ctx)?;
+        match delete_model(&engine, &args) {
+            Ok(said) => Ok(ToolOutput::text(finish(&engine, Answer::Text(said)))),
+            Err(err) => Err(safe_error(&engine, err)),
+        }
+    }
+}
+
+fn delete_model(e: &Engine, args: &Value) -> Result<String> {
+    let Some(wanted) = text_arg(args, "model") else {
+        return Err(Error::Invalid("manca `model`: indica l'id di un modello installato (da aiw_inspect, topic models)".into()));
+    };
+    let model = match lookup(e, &wanted).map_err(|err| explain("Non riesco a eliminare il modello", err))? {
+        Lookup::Found(m) => m,
+        Lookup::InCatalog(entry) => {
+            return Err(Error::NotFound(format!(
+                "Non riesco a eliminare il modello: «{}» è nel catalogo ma non è installato, non c'è niente da eliminare",
+                entry.name
+            )))
+        }
+        Lookup::Missing => return Err(explain("Non riesco a eliminare il modello", missing_model(&wanted))),
+    };
+    // Who used it, to say so: a profile that runs it stops working when the file is gone.
+    let profiles: Vec<aiw_core::api::InferenceProfile> =
+        e.profiles().unwrap_or_default().into_iter().filter(|p| p.model == model.id).collect();
+    let users: Vec<String> = e
+        .agents()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| profiles.iter().any(|p| p.id == a.inference_profile))
+        .map(|a| a.name)
+        .collect();
+    e.delete_model(&model.id).map_err(|err| explain("Non riesco a eliminare il modello", err))?;
+    let mb_freed = mb(model.size_bytes);
+    let mut said = format!(
+        "Modello «{}» eliminato dal disco (circa {mb_freed} MB liberati). Non si può annullare: per riaverlo va riscaricato.",
+        text(&model.name, 100)
+    );
+    if !profiles.is_empty() {
+        let names = profiles.iter().map(|p| format!("`{}`", p.id)).collect::<Vec<_>>().join(", ");
+        said.push_str(&format!(" Attenzione: lo usavano i profili {names}"));
+        if !users.is_empty() {
+            said.push_str(&format!(" (assistenti: {})", users.iter().map(|u| text(u, 60)).collect::<Vec<_>>().join(", ")));
+        }
+        said.push_str(": non funzioneranno finché non gli si dà un altro modello (aiw_model_use).");
+    }
+    Ok(said)
+}
+
+// ------------------------------------------------------------------ aiw_runtime_control
+
+/// The id of the engine a call is about, and the action: `start` or `stop`.
+fn runtime_args(args: &Value) -> Result<(String, &'static str)> {
+    let Some(runtime) = text_arg(args, "runtime") else {
+        return Err(Error::Invalid("manca `runtime`: indica l'id di un motore (da aiw_inspect, topic runtimes)".into()));
+    };
+    let action = match text_arg(args, "action").map(|a| a.to_lowercase()).as_deref() {
+        Some("start") => "start",
+        Some("stop") => "stop",
+        Some(other) => {
+            return Err(Error::Invalid(format!(
+                "azione sconosciuta «{}»: usa start o stop (per rileggere lo stato dei motori c'è aiw_inspect con refresh)",
+                text(other, 40)
+            )))
+        }
+        None => return Err(Error::Invalid("manca `action`: usa start o stop".into())),
+    };
+    Ok((runtime, action))
+}
+
+struct RuntimeControl(Weak<Inner>);
+
+#[async_trait::async_trait]
+impl Tool for RuntimeControl {
+    fn name(&self) -> &str {
+        "aiw_runtime_control"
+    }
+
+    fn description(&self) -> &str {
+        "Avvia o ferma un motore di esecuzione già installato (per esempio llama-server o Ollama). `runtime`: l'id del motore (da aiw_inspect, topic runtimes); `action`: start o stop; `model`: facoltativo, il modello da caricare all'avvio. Per installarne uno nuovo c'è aiw_runtime_install. Chiede sempre la conferma dell'utente."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "required": ["runtime", "action"],
+            "properties": {
+                "runtime": {"type": "string", "description": "Id del motore (da aiw_inspect, topic runtimes)."},
+                "action": {"type": "string", "enum": ["start", "stop"], "description": "start: avvia; stop: ferma."},
+                "model": {"type": "string", "description": "Solo per start: il modello installato da caricare."}
+            }
+        })
+    }
+
+    fn risk(&self) -> Risk {
+        Risk::Write
+    }
+
+    fn explicit_grant(&self) -> bool {
+        true
+    }
+
+    fn subject(&self, args: &Value) -> Option<String> {
+        let (runtime, action) = runtime_args(args).ok()?;
+        Some(match text_arg(args, "model") {
+            Some(model) if action == "start" => format!("{action} {runtime} ({model})"),
+            _ => format!("{action} {runtime}"),
+        })
+    }
+
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let engine = engine_of(&self.0)?;
+        require_owner(&engine, ctx)?;
+        match runtime_control(&engine, &args).await {
+            Ok(said) => Ok(ToolOutput::text(finish(&engine, Answer::Text(said)))),
+            Err(err) => Err(safe_error(&engine, err)),
+        }
+    }
+}
+
+async fn runtime_control(e: &Engine, args: &Value) -> Result<String> {
+    let (runtime, action) = runtime_args(args)?;
+    // The model by the name the person knows: an installed model's id, else what the engine is told as it is.
+    let model = match text_arg(args, "model") {
+        Some(wanted) if action == "start" => Some(match lookup(e, &wanted)? {
+            Lookup::Found(m) => m.id,
+            _ => wanted,
+        }),
+        _ => None,
+    };
+    let what = if action == "start" { "avviare" } else { "fermare" };
+    let info = e.runtime_action(&runtime, action, model).await.map_err(|err| {
+        explain(&format!("Non riesco a {what} il motore `{runtime}` (i motori si vedono con aiw_inspect, topic runtimes)"), err)
+    })?;
+    let detail = info.status_detail.as_deref().filter(|d| !d.is_empty()).map(|d| format!(": {}", text(d, 160))).unwrap_or_default();
+    let loaded = if info.loaded_models.is_empty() {
+        String::new()
+    } else {
+        format!(" Modelli caricati: {}.", info.loaded_models.iter().take(5).map(|m| text(m, 80)).collect::<Vec<_>>().join(", "))
+    };
+    let state = format!("stato: {}{detail}", info.status);
+    let active = matches!(info.status.as_str(), "running" | "starting");
+    Ok(match (action, active) {
+        ("start", true) => format!("Motore «{}» avviato ({state}).{loaded}", text(&info.name, 60)),
+        ("start", false) => format!("Ho chiesto l'avvio di «{}», ma non risulta attivo ({state}). Si può controllare con aiw_inspect (topic runtimes, id {runtime}).", text(&info.name, 60)),
+        (_, false) => format!("Motore «{}» fermato ({state}).", text(&info.name, 60)),
+        (_, true) => format!("Ho chiesto di fermare «{}», ma risulta ancora attivo ({state}): un motore integrato nell'app non si ferma.{loaded}", text(&info.name, 60)),
+    })
+}
+
+// ------------------------------------------------------------------ aiw_runtime_install
+
+struct RuntimeInstall(Weak<Inner>);
+
+#[async_trait::async_trait]
+impl Tool for RuntimeInstall {
+    fn name(&self) -> &str {
+        "aiw_runtime_install"
+    }
+
+    fn description(&self) -> &str {
+        "Installa un motore di esecuzione sul computer (esegue i comandi del suo piano di installazione: prima leggili con aiw_inspect, topic runtimes, id del motore). `runtime`: l'id del motore. L'installazione prosegue in background e può durare qualche minuto. Chiede sempre la conferma dell'utente."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "required": ["runtime"],
+            "properties": {
+                "runtime": {"type": "string", "description": "Id del motore da installare (da aiw_inspect, topic runtimes)."}
+            }
+        })
+    }
+
+    fn risk(&self) -> Risk {
+        Risk::Exec
+    }
+
+    fn explicit_grant(&self) -> bool {
+        true
+    }
+
+    /// The card shows only the id of the engine: the commands are read beforehand with `aiw_inspect`.
+    fn subject(&self, args: &Value) -> Option<String> {
+        text_arg(args, "runtime")
+    }
+
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let engine = engine_of(&self.0)?;
+        require_owner(&engine, ctx)?;
+        match runtime_install(&engine, &args).await {
+            Ok(said) => Ok(ToolOutput::text(finish(&engine, Answer::Text(said)))),
+            Err(err) => Err(safe_error(&engine, err)),
+        }
+    }
+}
+
+async fn runtime_install(e: &Engine, args: &Value) -> Result<String> {
+    let Some(runtime) = text_arg(args, "runtime") else {
+        return Err(Error::Invalid("manca `runtime`: indica l'id di un motore (da aiw_inspect, topic runtimes)".into()));
+    };
+    let job = e.runtime_install_start(&runtime, false).await.map_err(|err| {
+        explain(
+            &format!("Non riesco a installare il motore `{runtime}` (i motori e i loro piani si vedono con aiw_inspect, topic runtimes)"),
+            err,
+        )
+    })?;
+    let name = e.runtimes().into_iter().find(|r| r.id == runtime).map(|r| r.name).unwrap_or_else(|| runtime.clone());
+    Ok(format!(
+        "Installazione di «{}» avviata ({} passaggi). Prosegue in background e può durare qualche minuto: lo stato si legge con aiw_inspect (topic runtimes, id {runtime}); quando è finita il motore risulta installato.",
+        text(&name, 60),
+        job.steps
     ))
 }
 
@@ -1534,6 +1820,428 @@ mod tests {
         );
         assert_eq!(profile_of(&e, "assistant"), "auto:agent");
         assert!(e.profile("edge-model").is_err());
+    }
+
+    // ------------------------------------------------------------------ delete
+
+    #[tokio::test]
+    async fn a_model_is_deleted_from_the_disk_and_the_answer_says_who_was_using_it() {
+        let (e, data, _w) = with_models().await;
+        call(&e, "aiw_model_use", json!({"model": "tiny-q4_k_m"})).await.unwrap();
+        call(&e, "aiw_model_use", json!({"model": "tiny-q4_k_m", "agent": "planner"})).await.unwrap();
+        let file = e.0.models_dir.join("tiny-Q4_K_M.gguf");
+        assert!(file.is_file());
+        let tool = e.tool_registry().get("aiw_model_delete").unwrap();
+        assert_eq!(tool.subject(&json!({"model": "tiny-q4_k_m"})).as_deref(), Some("tiny-q4_k_m"));
+        let said = call(&e, "aiw_model_delete", json!({"model": "tiny-q4_k_m"})).await.unwrap();
+        assert!(said.starts_with("Modello «Qwen3 Test» eliminato dal disco") && said.contains("Non si può annullare"), "{said}");
+        assert!(
+            said.contains("lo usavano i profili `tiny-q4-k-m`") && said.contains("Assistente") && said.contains("Pianificatore"),
+            "{said}"
+        );
+        assert!(said.contains("aiw_model_use"), "it says how to give them another model: {said}");
+        assert!(!file.exists());
+        assert!(e.models().iter().all(|m| m.id != "tiny-q4_k_m") && e.models().iter().any(|m| m.id == "mini-q8_0"), "only that one went");
+        assert!(e.audit().iter().any(|a| a.action == "model.delete"));
+        // A model nobody used says nothing of the kind.
+        let said = call(&e, "aiw_model_delete", json!({"model": "Mini-Q8_0"})).await.unwrap();
+        assert!(said.contains("eliminato") && !said.contains("Attenzione"), "{said}");
+        assert!(e.models().is_empty());
+        drop(data);
+    }
+
+    #[tokio::test]
+    async fn deleting_what_cannot_be_deleted_reports_the_engines_reason_and_touches_nothing() {
+        let (e, data, _w) = with_models().await;
+        let fail = |args: Value| {
+            let e = e.clone();
+            async move { call(&e, "aiw_model_delete", args).await.unwrap_err() }
+        };
+        let err = fail(json!({})).await;
+        assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("manca `model`"), "{err}");
+        let err = fail(json!({"model": "non-esiste"})).await;
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().starts_with("Non riesco a eliminare il modello:"), "{err}");
+        assert!(err.to_string().contains("non trovato") && err.to_string().contains("aiw_inspect (topic models)"), "{err}");
+        let err = fail(json!({"model": "qwen3-4b"})).await;
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().contains("è nel catalogo ma non è installato"), "{err}");
+        let err = fail(json!({"model": "qwen3 test"})).await;
+        assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("indica l'id"), "two models with a name: {err}");
+        // A model of another app is read-only for AIW: the engine says so and the file stays.
+        let blob = data.path().join("ollama/blobs/sha256-aa");
+        std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        std::fs::write(&blob, gguf(6000)).unwrap();
+        let manifest = data.path().join("ollama/manifests/registry.ollama.ai/library/qwen3/4b");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        std::fs::write(
+            &manifest,
+            json!({"layers": [{"mediaType": "application/vnd.ollama.image.model", "digest": "sha256:aa"}]}).to_string(),
+        )
+        .unwrap();
+        e.set_external_roots(aiw_models::ExternalRoots { ollama: Some(data.path().join("ollama")), ..Default::default() });
+        let id = e.models().into_iter().find(|m| m.origin == "ollama").expect("the Ollama model is listed").id;
+        let err = fail(json!({"model": id})).await;
+        assert!(
+            matches!(err, Error::Invalid(_)) && err.to_string().contains("sola lettura") && err.to_string().contains("Ollama"),
+            "{err}"
+        );
+        assert!(blob.is_file() && e.0.models_dir.join("tiny-Q4_K_M.gguf").is_file() && e.0.models_dir.join("mini-Q8_0.gguf").is_file());
+    }
+
+    // ------------------------------------------------------------------ engines
+
+    /// An engine that fails with an error that repeats the key it was given.
+    struct LeakyEngine;
+
+    #[async_trait::async_trait]
+    impl aiw_runtimes::ChatBackend for LeakyEngine {
+        async fn list_models(&self) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn chat(
+            &self,
+            _req: aiw_runtimes::ChatRequest,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<aiw_runtimes::DeltaStream> {
+            Err(Error::Unsupported("prova".into()))
+        }
+        fn availability(&self) -> std::result::Result<(), String> {
+            Err(format!("rifiutato dal server con la chiave {PROVIDER_TOKEN} e basta"))
+        }
+    }
+
+    #[test]
+    fn the_arguments_of_an_engine_call_are_an_id_and_start_or_stop() {
+        assert_eq!(runtime_args(&json!({"runtime": " ollama ", "action": "Start"})).unwrap(), ("ollama".to_string(), "start"));
+        assert_eq!(runtime_args(&json!({"runtime": "ollama", "action": "stop"})).unwrap().1, "stop");
+        for (bad, why) in [
+            (json!({"action": "start"}), "manca `runtime`"),
+            (json!({"runtime": "ollama"}), "manca `action`"),
+            (json!({"runtime": "ollama", "action": "refresh"}), "azione sconosciuta «refresh»"),
+            (json!({"runtime": "ollama", "action": "rm -rf"}), "usa start o stop"),
+        ] {
+            let err = runtime_args(&bad).unwrap_err();
+            assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains(why), "{bad}: {err}");
+        }
+        let tool = RuntimeControl(Weak::new());
+        assert_eq!(
+            tool.subject(&json!({"runtime": "llama-server", "action": "start", "model": "qwen3-4b"})).as_deref(),
+            Some("start llama-server (qwen3-4b)")
+        );
+        assert_eq!(
+            tool.subject(&json!({"runtime": "llama-server", "action": "stop", "model": "qwen3-4b"})).as_deref(),
+            Some("stop llama-server")
+        );
+        assert_eq!(tool.subject(&json!({"runtime": "llama-server"})), None);
+        assert_eq!(RuntimeInstall(Weak::new()).subject(&json!({"runtime": "ollama"})).as_deref(), Some("ollama"));
+    }
+
+    #[tokio::test]
+    async fn an_engine_is_started_and_stopped_through_the_engine_and_the_answer_says_what_state_it_is_really_in() {
+        let (e, _d, _w) = with_models().await;
+        let said = call(&e, "aiw_runtime_control", json!({"runtime": "llama-embedded", "action": "start"})).await.unwrap();
+        assert!(said.starts_with("Motore «llama.cpp (embedded)» avviato (stato: running"), "{said}");
+        assert!(e.audit().iter().any(|a| a.action == "runtime.start"));
+        // An engine built into the app cannot be stopped: the answer does not pretend it was.
+        let said = call(&e, "aiw_runtime_control", json!({"runtime": "llama-embedded", "action": "stop"})).await.unwrap();
+        assert!(said.contains("risulta ancora attivo") && said.contains("integrato nell'app"), "{said}");
+        // An engine that is not there is the engine's NotFound, with where to look.
+        for action in ["start", "stop"] {
+            let err = call(&e, "aiw_runtime_control", json!({"runtime": "nessun-motore", "action": action})).await.unwrap_err();
+            assert!(matches!(err, Error::NotFound(_)), "{action}: {err:?}");
+            assert!(
+                err.to_string().contains("`nessun-motore`") && err.to_string().contains("aiw_inspect, topic runtimes"),
+                "{action}: {err}"
+            );
+        }
+        // A sidecar that is not installed: the engine says so (an engine to install, not a crash).
+        e.0.runtimes.refresh_one("llama-server").await.unwrap();
+        if e.runtimes().iter().any(|r| r.id == "llama-server" && r.status == "installable") {
+            let err = call(&e, "aiw_runtime_control", json!({"runtime": "llama-server", "action": "start"})).await.unwrap_err();
+            assert!(matches!(err, Error::Unsupported(_)) && err.to_string().contains("non è installato"), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_state_of_an_engine_never_carries_a_key_to_the_model() {
+        let (e, _d, _w) = engine_on(16).await;
+        e.update_runtime_settings("remote-openai", serde_json::from_value(json!({ "api_key": PROVIDER_TOKEN })).unwrap()).unwrap();
+        e.register_native_runtime("remote-openai", Arc::new(LeakyEngine));
+        e.0.runtimes.refresh_one("remote-openai").await.unwrap();
+        // The engine's status really repeats the key (a remote engine is "started" by looking at it again).
+        let status = e.runtimes().into_iter().find(|r| r.id == "remote-openai").unwrap();
+        assert!(status.status_detail.as_deref().unwrap_or_default().contains(PROVIDER_TOKEN), "{status:?}");
+        let said = call(&e, "aiw_runtime_control", json!({"runtime": "remote-openai", "action": "start"})).await.unwrap();
+        assert!(!said.contains(PROVIDER_TOKEN), "{said}");
+        assert!(said.contains("non risulta attivo") && said.contains("rifiutato dal server") && said.contains(SECRET_MASK), "{said}");
+    }
+
+    #[tokio::test]
+    async fn installing_an_engine_calls_the_engine_and_what_it_refuses_comes_back_in_italian() {
+        let (e, _d, _w) = engine_on(16).await;
+        let err = call(&e, "aiw_runtime_install", json!({})).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("manca `runtime`"), "{err}");
+        let err = call(&e, "aiw_runtime_install", json!({"runtime": "nessun-motore"})).await.unwrap_err();
+        assert!(
+            matches!(err, Error::NotFound(_)) && err.to_string().starts_with("Non riesco a installare il motore `nessun-motore`"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("aiw_inspect, topic runtimes"), "{err}");
+        // An engine with no recipe (a remote service) is for the person to set up: the engine says so, nothing is run.
+        let err = call(&e, "aiw_runtime_install", json!({"runtime": "remote-openai"})).await.unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)) && err.to_string().contains("installazione manuale"), "{err}");
+        assert!(e.runtime_install_status("remote-openai").is_none());
+        assert!(!e.audit().iter().any(|a| a.action == "runtime.install"), "nothing was installed, nothing was recorded as installed");
+    }
+
+    // ------------------------------------------------------------------ the six tools together
+
+    const TOOL_NAMES: [&str; 6] =
+        ["aiw_model_search", "aiw_model_download", "aiw_model_use", "aiw_model_delete", "aiw_runtime_control", "aiw_runtime_install"];
+
+    #[tokio::test]
+    async fn the_six_tools_are_registered_with_the_risks_of_the_contract_and_need_an_explicit_grant() {
+        use crate::management::{ALL, MODIFYING, STRONG};
+        let (e, _d, _w) = engine_on(16).await;
+        let made = tools(&e);
+        assert_eq!(made.iter().map(|t| t.name().to_string()).collect::<Vec<_>>(), TOOL_NAMES);
+        for tool in &made {
+            let name = tool.name();
+            assert!(ALL.contains(&name) && crate::management::is_management(name), "{name}");
+            assert!(e.tool_registry().get(name).is_some(), "{name} is registered by the engine");
+            assert!(tool.explicit_grant(), "{name}: a `*` in an agent's tools must not include it");
+            assert!(tool.available().is_ok());
+            assert!(tool.description().chars().count() > 80, "{name}: a description the model can decide from");
+            // The ones that change something tell the model that the owner is asked first.
+            assert_eq!(tool.description().contains("Chiede sempre la conferma dell'utente"), name != "aiw_model_search", "{name}");
+            let schema = tool.parameters();
+            assert_eq!(schema["type"], "object", "{name}");
+            assert!(schema["properties"].as_object().is_some_and(|p| !p.is_empty()), "{name}");
+            // The risk is the one of the list the policy rules are built from.
+            let expected = if MODIFYING.contains(&name) {
+                Risk::Write
+            } else if STRONG.contains(&name) {
+                Risk::Exec
+            } else {
+                Risk::Network
+            };
+            assert_eq!(tool.risk(), expected, "{name}");
+        }
+        // The contract lists these six and nothing else of this file's area.
+        let ours: Vec<&str> = MODIFYING
+            .iter()
+            .chain(STRONG.iter())
+            .copied()
+            .filter(|n| n.starts_with("aiw_model_") || n.starts_with("aiw_runtime_"))
+            .collect();
+        let mut ours_sorted = ours.clone();
+        ours_sorted.sort_unstable();
+        let mut expected: Vec<&str> = TOOL_NAMES.iter().copied().filter(|n| *n != "aiw_model_search").collect();
+        expected.sort_unstable();
+        assert_eq!(ours_sorted, expected);
+        // The search is the only one that does not need the confirmation of the owner.
+        assert!(!MODIFYING.contains(&"aiw_model_search") && !STRONG.contains(&"aiw_model_search"));
+        // A tool does not work for a profile that does not list it, even with `*`.
+        assert!(!e.agent("operator").unwrap().tools.iter().any(|t| TOOL_NAMES.contains(&t.as_str())));
+    }
+
+    #[tokio::test]
+    async fn outside_a_chat_run_of_the_owner_every_tool_refuses_before_reading_its_arguments_and_nothing_changes() {
+        let (e, _d, _w) = with_models().await;
+        let no_origin = test_ctx(&e, None);
+        let phone = test_ctx(&e, Some(RunOrigin { owner: false, questions: true, secrets: false }));
+        let real_args = [
+            ("aiw_model_search", json!({})),
+            ("aiw_model_download", json!({"id": "qwen3-0.6b"})),
+            ("aiw_model_use", json!({"model": "tiny-q4_k_m"})),
+            ("aiw_model_delete", json!({"model": "tiny-q4_k_m"})),
+            ("aiw_runtime_control", json!({"runtime": "llama-embedded", "action": "stop"})),
+            ("aiw_runtime_install", json!({"runtime": "remote-openai"})),
+        ];
+        for (name, args) in &real_args {
+            let tool = e.tool_registry().get(name).unwrap();
+            // No origin (a workflow, the MCP server, a channel, a sub-agent): refused, whatever the arguments are.
+            for a in [args.clone(), Value::Null, json!({"model": 3})] {
+                let err = tool.call(a.clone(), &no_origin).await.unwrap_err();
+                assert!(
+                    matches!(err, Error::Denied(_)) && err.to_string().contains("disponibile solo all'Assistente in una chat"),
+                    "{name} {a}: {err}"
+                );
+            }
+            // A paired phone without full access: tools that change something refuse, reading works.
+            if *name == "aiw_model_search" {
+                assert!(tool.call(args.clone(), &phone).await.is_ok());
+            } else {
+                for a in [args.clone(), Value::Null] {
+                    let err = tool.call(a.clone(), &phone).await.unwrap_err();
+                    assert!(matches!(err, Error::Denied(_)) && err.to_string().contains("accesso completo"), "{name} {a}: {err}");
+                }
+            }
+            // The engine's own entry for workflows and the MCP server refuses before anybody is asked.
+            let call = e.execute_tool("mcp_1", "agent", "client", name, args.clone());
+            let err =
+                tokio::time::timeout(std::time::Duration::from_secs(5), call).await.expect("must not wait for a confirmation").unwrap_err();
+            assert!(matches!(err, Error::Denied(_)), "{name}: {err:?}");
+        }
+        assert!(e.approvals().is_empty());
+        assert!(e.downloads().is_empty(), "nothing was downloaded");
+        assert_eq!(profile_of(&e, "assistant"), "auto:agent");
+        assert!(e.0.models_dir.join("tiny-Q4_K_M.gguf").is_file(), "nothing was deleted");
+        assert!(e.audit().iter().all(|a| !a.action.starts_with("runtime.") && a.action != "model.use" && a.action != "model.delete"));
+    }
+
+    #[tokio::test]
+    async fn no_answer_is_longer_than_the_agent_loop_accepts_even_when_a_provider_sends_a_huge_text() {
+        let (e, _d, _w) = engine_on(16).await;
+        let (base, fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base)).unwrap();
+        *fake.echo.lock().unwrap() = Some("x".repeat(60_000));
+        let out = call(&e, "aiw_model_search", json!({"provider": "hf", "query": "echo"})).await.unwrap();
+        assert!(out.chars().count() <= MAX_CHARS, "{}", out.chars().count());
+        assert!(out.contains("acme/tiny-GGUF"), "the text of the provider is cut, not the answer: {}", &out[..200.min(out.len())]);
+        let long = call(&e, "aiw_model_search", json!({"limit": 30})).await.unwrap();
+        assert!(long.chars().count() <= MAX_CHARS);
+        // The last line of defence cuts what is still too long, and says how to narrow it down.
+        let huge = finish(&e, Answer::Text("x".repeat(MAX_CHARS * 3)));
+        assert!(huge.chars().count() <= MAX_CHARS && huge.ends_with("restringi la richiesta]"), "{}", huge.chars().count());
+        let huge = finish(&e, Answer::Json(json!({"testo": "y".repeat(MAX_CHARS * 2)})));
+        assert!(huge.chars().count() <= MAX_CHARS && huge.contains("troncata"));
+        // An error is kept short too.
+        let err = safe_error(&e, Error::Upstream("z".repeat(5000)));
+        assert!(err.to_string().chars().count() <= 901, "{}", err.to_string().chars().count());
+    }
+
+    // ------------------------------------------------------------------ the Assistant's run, end to end
+
+    const NEXT_APPROVAL_TRIES: usize = 250;
+
+    async fn next_approval(e: &Engine) -> aiw_core::api::ApprovalRequest {
+        for _ in 0..NEXT_APPROVAL_TRIES {
+            if let Some(a) = e.approvals().into_iter().next() {
+                return a;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("no confirmation was asked");
+    }
+
+    #[tokio::test]
+    async fn a_run_of_the_assistant_that_downloads_a_model_stops_for_the_owner_and_only_the_owner_lets_it_go_on() {
+        use aiw_runtimes::ScriptedBackend;
+        let turns = vec![
+            ScriptedBackend::tool_turn("c1", "aiw_model_download", json!({"id": "qwen3-0.6b"})),
+            ScriptedBackend::text_turn("Ho avviato il download del modello."),
+        ];
+        let (e, _d, _w) = engine(turns).await;
+        let (base, fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base)).unwrap();
+        // The file stalls half way: when the run is over the download is still going, so it can be seen and stopped.
+        fake.stall.store(true, Ordering::SeqCst);
+        let s = e.create_session("assistant", None).unwrap();
+        let run = e.start_run_from(&s.id, "scarica un modello leggero".into(), None, None, vec![], Some(OWNER)).await.unwrap();
+
+        let req = next_approval(&e).await;
+        assert_eq!(req.tool, "aiw_model_download");
+        assert_eq!(req.risk, "medium");
+        assert!(
+            req.reason.contains("cambiare la configurazione dell'app") && req.reason.ends_with("catalogo:qwen3-0.6b"),
+            "{}",
+            req.reason
+        );
+        // While the confirmation is pending nothing has been asked of the Hub and nothing is downloading.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert!(e.downloads().is_empty() && !e.run_done(&run));
+        assert!(!fake.log.lock().unwrap().iter().any(|l| l.starts_with("resolve")));
+        // A channel or a paired phone answers through `respond_approval`: refused, the request stays open, still nothing started.
+        let err = e.respond_approval(&req.id, true, false).unwrap_err();
+        assert!(matches!(err, Error::Denied(_)), "{err:?}");
+        let err = e.respond_approval_as(&req.id, true, true, false).unwrap_err();
+        assert!(matches!(err, Error::Denied(_)), "{err:?}");
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert_eq!(e.approvals().len(), 1, "the request is still open");
+        assert!(e.downloads().is_empty() && !e.run_done(&run));
+        assert!(!fake.log.lock().unwrap().iter().any(|l| l.starts_with("resolve")));
+
+        // The owner allows it, once: the run goes on and the download starts.
+        e.respond_approval_as(&req.id, true, false, true).unwrap();
+        crate::tests::wait_finished(&e, &run).await;
+        let downloads = e.downloads();
+        assert_eq!(downloads.len(), 1, "{downloads:?}");
+        let told = e.messages(&s.id).unwrap().into_iter().find(|m| m.role == "tool").unwrap().content;
+        assert!(told.starts_with("Download avviato: «Qwen3 0.6B»") && told.contains(&downloads[0].id), "{told}");
+        assert_eq!(e.messages(&s.id).unwrap().last().unwrap().content, "Ho avviato il download del modello.");
+        assert!(e.audit().iter().any(|a| a.tool.as_deref() == Some("aiw_model_download") && a.decision.as_deref() == Some("approved")));
+        // And it is the tool that stops it, through the same door.
+        let stopped = call(&e, "aiw_model_download", json!({"cancel": downloads[0].id})).await.unwrap();
+        assert!(stopped.contains("annullato"), "{stopped}");
+    }
+
+    #[tokio::test]
+    async fn when_the_owner_says_no_nothing_is_downloaded_and_the_agent_is_told_not_to_insist() {
+        use aiw_runtimes::ScriptedBackend;
+        let turns = vec![
+            ScriptedBackend::tool_turn("c1", "aiw_model_download", json!({"id": "qwen3-0.6b"})),
+            ScriptedBackend::text_turn("Va bene, non scarico nulla."),
+        ];
+        let (e, _d, _w) = engine(turns).await;
+        let (base, fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base)).unwrap();
+        let s = e.create_session("assistant", None).unwrap();
+        let run = e.start_run_from(&s.id, "scarica un modello".into(), None, None, vec![], Some(OWNER)).await.unwrap();
+        let req = next_approval(&e).await;
+        e.respond_approval_as(&req.id, false, false, true).unwrap();
+        crate::tests::wait_finished(&e, &run).await;
+        assert!(e.downloads().is_empty());
+        assert!(!fake.log.lock().unwrap().iter().any(|l| l.starts_with("resolve")));
+        let told = e.messages(&s.id).unwrap().into_iter().find(|m| m.role == "tool").unwrap().content;
+        assert!(told.contains("Negato dall'utente") && told.contains("Non ripetere"), "{told}");
+    }
+
+    #[tokio::test]
+    async fn the_changing_tools_ask_every_time_with_the_risk_of_their_class_even_after_allow_for_the_session() {
+        use aiw_runtimes::ScriptedBackend;
+        let turns = vec![
+            ScriptedBackend::tool_turn("c1", "aiw_model_use", json!({"model": "tiny-q4_k_m"})),
+            ScriptedBackend::tool_turn("c2", "aiw_model_use", json!({"model": "mini-q8_0"})),
+            ScriptedBackend::tool_turn("c3", "aiw_model_delete", json!({"model": "tiny-q4_k_m"})),
+            ScriptedBackend::tool_turn("c4", "aiw_runtime_control", json!({"runtime": "llama-embedded", "action": "start"})),
+            ScriptedBackend::tool_turn("c5", "aiw_runtime_install", json!({"runtime": "remote-openai"})),
+            ScriptedBackend::text_turn("Fatto."),
+        ];
+        let (e, _d, _w) = engine(turns).await;
+        for name in ["tiny-Q4_K_M.gguf", "mini-Q8_0.gguf"] {
+            std::fs::write(e.0.models_dir.join(name), gguf(6000)).unwrap();
+        }
+        let s = e.create_session("assistant", None).unwrap();
+        let run = e.start_run_from(&s.id, "sistema i modelli".into(), None, None, vec![], Some(OWNER)).await.unwrap();
+        // «Consenti per la sessione» (remember = true) is asked for each time and never sticks.
+        for (tool, risk, subject) in [
+            ("aiw_model_use", "medium", "tiny-q4_k_m → assistant"),
+            ("aiw_model_use", "medium", "mini-q8_0 → assistant"),
+            ("aiw_model_delete", "high", "tiny-q4_k_m"),
+            ("aiw_runtime_control", "medium", "start llama-embedded"),
+            ("aiw_runtime_install", "high", "remote-openai"),
+        ] {
+            let req = next_approval(&e).await;
+            assert_eq!((req.tool.as_str(), req.risk.as_str()), (tool, risk), "{}", req.reason);
+            assert!(req.reason.ends_with(subject), "{}", req.reason);
+            e.respond_approval_as(&req.id, true, true, true).unwrap();
+            // Wait for this request to be gone before looking for the next one.
+            for _ in 0..NEXT_APPROVAL_TRIES {
+                if e.approvals().iter().all(|a| a.id != req.id) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+        crate::tests::wait_finished(&e, &run).await;
+        assert!(!e.session_allow(&s.id).lock().unwrap().iter().any(|t| TOOL_NAMES.contains(&t.as_str())), "never allowed for the session");
+        // What the owner allowed happened: the model is pinned, the other one was removed, the engine started; the install said no.
+        assert_eq!(profile_of(&e, "assistant"), "mini-q8-0");
+        assert!(!e.0.models_dir.join("tiny-Q4_K_M.gguf").exists() && e.0.models_dir.join("mini-Q8_0.gguf").is_file());
+        let told: Vec<String> = e.messages(&s.id).unwrap().into_iter().filter(|m| m.role == "tool").map(|m| m.content).collect();
+        assert_eq!(told.len(), 5, "{told:?}");
+        assert!(told[0].contains("ora usa") && told[2].contains("eliminato") && told[3].contains("avviato"), "{told:?}");
+        assert!(told[4].contains("installazione manuale"), "the engine's refusal reaches the model: {}", told[4]);
     }
 
     #[test]
