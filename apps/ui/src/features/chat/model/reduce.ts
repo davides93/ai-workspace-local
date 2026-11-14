@@ -1,6 +1,7 @@
 import type { AgEvent, AiwImage, ApprovalRequest } from "../../../shared/api/types";
 import { applyA2ui, type A2uiMessage } from "../a2ui";
-import { ATTACHMENTS_EVENT, CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, modelLabel, rolesNoteText, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
+import { ASK_TOOL, asQuestionOutcome, asSecretOutcome, parseQuestion, parseQuestionResult, parseSecret, parseSecretResult, QUESTION_EVENT, QUESTION_RESOLVED_EVENT, SECRET_EVENT, SECRET_RESOLVED_EVENT, SECRET_TOOL, toAnswer } from "../../ask/model";
+import { ATTACHMENTS_EVENT, CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, modelLabel, readsExternalContent, rolesNoteText, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
 import { resultStatus } from "./tools";
 
 import { t, t as tr } from "../../../shared/i18n";
@@ -58,6 +59,11 @@ export function settle(items: Item[]): Item[] {
       changed = true;
       return { ...it, resolved: false };
     }
+    // Nobody can answer a question or provide a secret of a run that is over.
+    if ((it.kind === "question" || it.kind === "secret") && it.outcome === undefined) {
+      changed = true;
+      return { ...it, outcome: "cancelled" };
+    }
     return it;
   });
   return changed ? next : items;
@@ -84,7 +90,7 @@ export function reduce(items: Item[], e: AgEvent): Item[] {
     case "TOOL_CALL_ARGS":
       return update(items, "tool", e.toolCallId, (it) => ({ ...it, args: it.args + e.delta }));
     case "TOOL_CALL_RESULT":
-      return update(items, "tool", e.toolCallId, (it) => ({ ...it, result: e.content, status: resultStatus(e.content), endedAt: e.timestamp }));
+      return closeAsk(items, e.toolCallId, e.content) ?? update(items, "tool", e.toolCallId, (it) => ({ ...it, result: e.content, status: resultStatus(e.content), endedAt: e.timestamp }));
     case "SUBAGENT_STARTED":
       return [...items, { kind: "subagent", id: e.subagentId, name: e.name, ...(e.runId ? { runId: e.runId } : {}) }];
     case "SUBAGENT_FINISHED":
@@ -129,6 +135,49 @@ function routeLines(v: RuntimeEvent): string[] {
   for (const a of v.alternatives ?? []) lines.push(tr("chat.alternativa", { name: a.name ?? a.runtime ?? "", reason: a.reason ?? "" }));
   for (const x of v.excluded ?? []) lines.push(tr("chat.escluso", { name: x.name ?? x.runtime ?? "", reason: x.reason ?? "" }));
   return lines.filter((l) => l !== "");
+}
+
+/**
+ * The row of a question or a request for a secret takes the place of the card of the tool call that asked it (the event
+ * carries no call id: the call is the first one of that tool, in this turn, still running: the ones before it already have
+ * their row). Without such a call the row is added at the end.
+ */
+function openAsk(items: Item[], tool: string, row: (callId: string | undefined) => Item): Item[] {
+  let turn = 0;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].kind === "user" || items[i].kind === "action") {
+      turn = i + 1;
+      break;
+    }
+  }
+  for (let i = turn; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === "tool" && it.name === tool && it.status === "running") {
+      const next = items.slice();
+      next[i] = row(it.id);
+      return next;
+    }
+  }
+  return [...items, row(undefined)];
+}
+
+/**
+ * The result of the `ask_user` or `aiw_secret_request` call closes its row when the event that closes it was missed.
+ * `null`: no open row stands for this call (the normal tool card takes the result).
+ */
+function closeAsk(items: Item[], callId: string, content: string): Item[] | null {
+  const i = items.findIndex((x) => (x.kind === "question" || x.kind === "secret") && x.callId === callId);
+  if (i < 0) return null;
+  const it = items[i];
+  if ((it.kind !== "question" && it.kind !== "secret") || it.outcome !== undefined) return items;
+  const next = items.slice();
+  if (it.kind === "question") {
+    const r = parseQuestionResult(content);
+    next[i] = { ...it, outcome: r?.outcome ?? "cancelled", answer: r?.answer ?? null };
+  } else {
+    next[i] = { ...it, outcome: parseSecretResult(content) ?? "cancelled" };
+  }
+  return next;
 }
 
 function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
@@ -185,7 +234,30 @@ function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
     case "aiw.format_error":
       return [...items, { kind: "note", id: `fe-${items.length}`, text: tr("chat.la_risposta_non_rispetta_lo") }];
     case "aiw.approval_request":
-      return [...items, { kind: "approval", req: value as ApprovalRequest }];
+      return [...items, { kind: "approval", req: value as ApprovalRequest, ...(readsExternalContent(items) ? { afterExternal: true } : {}) }];
+    case QUESTION_EVENT: {
+      const q = parseQuestion(value);
+      // The same question again (the events of a run replayed on re-attach): the row is already there.
+      if (!q || items.some((x) => x.kind === "question" && x.id === q.id)) return items;
+      return openAsk(items, ASK_TOOL, (callId) => ({ kind: "question", id: q.id, ...(callId ? { callId } : {}), q }));
+    }
+    case QUESTION_RESOLVED_EVENT: {
+      const v = (value ?? {}) as { id?: string; outcome?: string; answer?: unknown };
+      return items.map((x) =>
+        x.kind === "question" && x.id === v.id && x.outcome === undefined ? { ...x, outcome: asQuestionOutcome(v.outcome) ?? "cancelled", answer: toAnswer(v.answer) } : x,
+      );
+    }
+    case SECRET_EVENT: {
+      const req = parseSecret(value);
+      if (!req || items.some((x) => x.kind === "secret" && x.id === req.id)) return items;
+      return openAsk(items, SECRET_TOOL, (callId) => ({ kind: "secret", id: req.id, ...(callId ? { callId } : {}), req }));
+    }
+    case SECRET_RESOLVED_EVENT: {
+      const v = (value ?? {}) as { id?: string; outcome?: string };
+      return items.map((x) =>
+        x.kind === "secret" && x.id === v.id && x.outcome === undefined ? { ...x, outcome: asSecretOutcome(v.outcome) ?? "cancelled" } : x,
+      );
+    }
     case "aiw.approval_resolved": {
       const v = value as { id: string; allowed: boolean };
       return items.map((x) => (x.kind === "approval" && x.req.id === v.id ? { ...x, resolved: v.allowed } : x));

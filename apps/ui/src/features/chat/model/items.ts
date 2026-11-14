@@ -1,4 +1,4 @@
-import type { ApprovalRequest, Attachment } from "../../../shared/api/types";
+import type { ApprovalRequest, Attachment, Question, QuestionAnswer, QuestionOutcome, SecretOutcome, SecretRequest } from "../../../shared/api/types";
 import type { SurfaceState } from "../a2ui";
 
 import { t } from "../../../shared/i18n";
@@ -23,7 +23,15 @@ export type Item =
   | { kind: "text"; id: string; text: string; streaming: boolean }
   | { kind: "reasoning"; id: string; text: string; streaming: boolean; startedAt?: number; endedAt?: number }
   | { kind: "tool"; id: string; name: string; args: string; result?: string; status: ToolStatus; images?: ToolImage[]; startedAt?: number; endedAt?: number }
-  | { kind: "approval"; req: ApprovalRequest; resolved?: boolean }
+  /** `afterExternal`: the turn had read content from outside (web, browser, mail, MCP, a sub-agent) before this request. */
+  | { kind: "approval"; req: ApprovalRequest; resolved?: boolean; afterExternal?: boolean }
+  /**
+   * A question of the agent (`ask_user`, event `aiw.question`). `callId`: the tool call it stands for (its card is not shown).
+   * While `outcome` is missing the question waits for an answer; afterwards the row is a one-line summary.
+   */
+  | { kind: "question"; id: string; callId?: string; q: Question; outcome?: QuestionOutcome; answer?: QuestionAnswer | null }
+  /** A request for a secret (`aiw_secret_request`, event `aiw.secret_request`). It never holds a value: there is none to hold. */
+  | { kind: "secret"; id: string; callId?: string; req: SecretRequest; outcome?: SecretOutcome }
   | { kind: "subagent"; id: string; name: string; /** Run of the sub-agent, when the backend named it: its events are its trace. */ runId?: string; result?: string; interrupted?: boolean }
   | { kind: "note"; id: string; text: string }
   /** A small warning about the attachments of the run (`aiw.attachments`): the model cannot see images. */
@@ -38,6 +46,24 @@ export type Item =
 
 export type ToolItem = Extract<Item, { kind: "tool" }>;
 export type ApprovalItem = Extract<Item, { kind: "approval" }>;
+export type QuestionItem = Extract<Item, { kind: "question" }>;
+export type SecretItem = Extract<Item, { kind: "secret" }>;
+
+/** Tools that bring content from outside the computer: what they return can carry instructions the person did not write. */
+const EXTERNAL_TOOL = /^(web_|browser_|mail_|mcp__)/;
+
+/**
+ * Did the current turn (the rows after the last message of the person) read content from outside: a `web_*`, `browser_*`,
+ * `mail_*` or `mcp__*` tool, or a sub-agent? A confirmation asked after that deserves a second look.
+ */
+export function readsExternalContent(items: readonly Item[]): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === "user" || it.kind === "action") return false;
+    if (it.kind === "subagent" || (it.kind === "tool" && EXTERNAL_TOOL.test(it.name))) return true;
+  }
+  return false;
+}
 
 /** Summary line of a reasoning row: while it goes on, afterwards how long it took (known for live runs only). */
 export function reasoningLabel(it: Extract<Item, { kind: "reasoning" }>): string {
