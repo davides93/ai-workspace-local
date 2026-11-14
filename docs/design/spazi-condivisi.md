@@ -1,6 +1,6 @@
 # Spazi e pagine condivise agente-utente con revisioni
 
-Data: 2026-11-14 · Stato: **Proposta - da decidere** · Riferimento: issue #74 (priorità P3, discovery)
+Data: 2026-11-14 · Stato: **Decisione approvata dal proprietario il 14 novembre 2026** · Riferimento: issue #74 (priorità P3, discovery)
 
 Questo documento è una discovery, non un'implementazione. Propone e motiva; la decisione finale spetta al proprietario del progetto. Non cambia codice né altri documenti.
 
@@ -127,3 +127,8 @@ Si propone di **non implementare subito** e di fare prima la misura del paragraf
 Motivi: riusa il modello «proposta, approva, scrivi» già presente in `crates/aiw-engine/src/store/proposals.rs` e `crates/aiw-engine/src/learning.rs`; una fonte unica funziona anche sul telefono accoppiato; il blocco ottimistico è semplice da provare con test; il costo è una migrazione e un gruppo di rotte, non una nuova infrastruttura. L'opzione A non copre le modifiche dell'utente né il telefono; la C risolve un problema che non c'è.
 
 La decisione finale spetta al proprietario del progetto. Fino ad allora la issue #74 resta una discovery: il documento qui descritto è la risposta richiesta dall'accettazione (casi d'uso, modello dati, criteri per l'MVP).
+
+
+## 10. Decisione del proprietario — 14 novembre 2026
+
+Il proprietario ha approvato la proposta: misurare prima l’utilità per due settimane con i criteri del paragrafo 6; poi, se le soglie sono soddisfatte, procedere con l’opzione B (pagine locali in SQLite, revisioni, proposte e approvazione). Questa decisione conclude la discovery di #74. La misurazione e l’eventuale implementazione sono attività successive: il merge di questo documento non implementa le pagine.
