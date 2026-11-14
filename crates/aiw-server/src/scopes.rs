@@ -51,6 +51,8 @@ const RULES: &[(&str, &str, Required)] = &[
     ("*", "/v1/**", GATEWAY),
     ("*", "/a2a", A2A),
     ("*", "/mcp", MCP),
+    // AG-UI: starts an agent with its tools, so a `gateway` token is not enough (same as `/api/sessions/**`).
+    ("POST", "/agui/*", DEVICE),
     // System.
     ("GET", "/api/system", DEVICE),
     ("POST", "/api/kill", DEVICE),

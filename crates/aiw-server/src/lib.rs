@@ -2,6 +2,7 @@
 //! and the Tauri shells in-process (tower `oneshot`), so every client sees one API.
 
 mod a2a;
+mod agui;
 mod anthropic;
 mod backup_api;
 mod extract;
@@ -62,6 +63,8 @@ fn ok<T>(v: T) -> ApiResult<T> {
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Engine,
+    /// AG-UI `threadId` -> session id, in memory only (see `agui`).
+    pub(crate) agui_threads: agui::Threads,
 }
 
 /// What the authentication middleware decided about a request, for the handlers that need to know.
@@ -237,7 +240,7 @@ async fn auth(State(st): State<AppState>, mut req: Request, next: Next) -> Respo
 
 /// Builds the full API router. `ui_dir` serves the web UI (`apps/ui/dist`) when present.
 pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
-    let st = AppState { engine };
+    let st = AppState { engine, agui_threads: Default::default() };
     let api = Router::new()
         .route("/api/system", get(system))
         .route("/api/kill", post(kill))
@@ -408,7 +411,8 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/v1/messages/count_tokens", post(anthropic::count_tokens))
         .route("/v1/audio/transcriptions", post(audio_transcriptions).layer(DefaultBodyLimit::max(VOICE_BODY_LIMIT)))
         .route("/v1/audio/speech", post(audio_speech).layer(DefaultBodyLimit::max(SPEECH_BODY_LIMIT)))
-        .route("/mcp", post(mcp_server::handle).get(mcp_server::get_stream).delete(|| async { StatusCode::OK }));
+        .route("/mcp", post(mcp_server::handle).get(mcp_server::get_stream).delete(|| async { StatusCode::OK }))
+        .route("/agui/{agent}", post(agui::run_agent).layer(DefaultBodyLimit::max(RUN_BODY_LIMIT)));
     let mut app = api.method_not_allowed_fallback(method_not_allowed).with_state(st.clone());
     app = match ui_dir.filter(|d| d.join("index.html").exists()) {
         // The single-page UI answers every path that is not the server's own.
@@ -461,7 +465,7 @@ async fn hardening_headers(req: Request, next: middleware::Next) -> Response {
 /// matches is an error for the caller, not a page of the UI.
 fn is_backend_path(path: &str) -> bool {
     let under = |prefix: &str| path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'));
-    ["/api", "/v1", "/hooks", "/.well-known"].iter().any(|p| under(p)) || path.starts_with("/mcp") || path.starts_with("/a2a")
+    ["/api", "/v1", "/hooks", "/.well-known", "/agui"].iter().any(|p| under(p)) || path.starts_with("/mcp") || path.starts_with("/a2a")
 }
 
 fn unknown_route() -> Response {
