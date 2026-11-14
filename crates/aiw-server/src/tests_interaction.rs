@@ -145,9 +145,22 @@ async fn a_question_is_listed_answered_declined_and_checked_over_the_api() {
     let (st, v) = as_device(&app, &phone, "POST", &uri, Some(bad)).await;
     assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
     assert!(v["error"].as_str().unwrap().contains("opzione che non esiste"), "{v}");
-    for body in [json!({"action": "boh"}), json!({"action": "answer"}), json!({"action": "answer", "selected": ["q4", "q8"]})] {
+    for body in [
+        json!({"action": "boh"}),
+        json!({"action": "answer"}),
+        json!({"action": "answer", "selected": ["q4", "q8"]}),
+        // A body of the wrong type is a 400 like the other wrong answers (not axum's 422), and the question stays open.
+        json!({"action": "answer", "selected": "q4"}),
+        json!({"action": "answer", "confirmed": "sì"}),
+        json!({"action": "answer", "values": ["x"]}),
+        json!({"selected": ["q4"]}),
+        json!({}),
+        json!(["q4"]),
+    ] {
         assert_eq!(dispatch(app.clone(), "POST", &uri, Some(body.clone())).await.0, 400, "{body}");
     }
+    let (st, text) = raw_post(&app, &uri, "{\"action\":\"answer\",\"selected\":[\"q4\"").await;
+    assert_eq!(st, 400, "{text}");
     assert_eq!(listed(&app, "/api/questions").await.len(), 1);
     assert!(!e.run_done(&run), "the run is still waiting");
     // The right answer, with the four fields, from the device.

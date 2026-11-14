@@ -1543,6 +1543,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_secret_for_each_kind_of_destination_leaves_no_trace_in_the_run_the_history_or_the_audit() {
+        let (e, _d, _w) = engine(vec![]).await;
+        e.set_provider_auth("hf", None, Some(fake_hf(GOOD_TOKEN).await)).await.unwrap();
+        let http = e.save_mcp_server(http_connector()).await.unwrap().config.id;
+        let stdio = e.save_mcp_server(stdio_connector()).await.unwrap().config.id;
+        let (runtime, key) = e
+            .runtimes()
+            .into_iter()
+            .find_map(|r| r.settings_schema.properties.iter().find(|(_, f)| f.secret).map(|(k, _)| (r.id.clone(), k.clone())))
+            .expect("an engine with a secret setting");
+        // One request for each of the five kinds of destination, in the same run, one after the other.
+        let given: Vec<(String, &str)> = vec![
+            ("provider_token:hf".into(), GOOD_TOKEN),
+            (format!("mcp_header:{http}:Authorization"), HEADER_VALUE),
+            (format!("mcp_env:{stdio}:GITHUB_TOKEN"), ENV_VALUE),
+            ("setting:search.brave_api_key".into(), SETTING_VALUE),
+            (format!("runtime_setting:{runtime}:{key}"), RUNTIME_VALUE),
+        ];
+        let mut turns = vec![];
+        for (i, (target, _)) in given.iter().enumerate() {
+            turns.push(ScriptedBackend::tool_turn(&format!("s{i}"), "aiw_secret_request", json!({"target": target, "label": "Segreto"})));
+        }
+        turns.push(ScriptedBackend::text_turn("Salvati tutti."));
+        let (session, run, backend) = assistant_run(&e, turns, "Aggiungi tutti i segreti", OWNER).await;
+        for (target, value) in &given {
+            let req = next_secret(&e).await;
+            assert_eq!(&req.target, target);
+            e.respond_secret(&req.id, provide(value), true).await.unwrap();
+        }
+        wait_finished(&e, &run).await;
+        assert_eq!(e.messages(&session).unwrap().last().unwrap().content, "Salvati tutti.");
+        assert_eq!(customs(&e, &run, "aiw.secret_resolved").len(), given.len());
+        assert_eq!(e.audit().iter().filter(|a| a.action == "secret.set").count(), given.len());
+        // Every value is stored, and every one is a secret the engine knows by value now.
+        let known = e.known_secrets();
+        for (_, value) in &given {
+            assert!(known.iter().any(|s| s == value), "{value} is not stored where the engine reads it");
+        }
+        // And in none of the places the model, the client or the history see. The targets show the search looks at the right text.
+        let all = everything(&e, &session, &run, &backend);
+        for (target, value) in &given {
+            assert!(all.contains(target.as_str()), "{target} is not in the text searched: the search would prove nothing");
+            assert!(!all.contains(value), "{value} (for {target}) is in the events, the messages, the audit, the requests or the prompt");
+        }
+    }
+
+    #[tokio::test]
     async fn a_secret_refused_by_the_destination_leaves_the_request_open_for_another_try() {
         let (e, _d, _w) = engine(vec![]).await;
         e.set_provider_auth("hf", None, Some(fake_hf(GOOD_TOKEN).await)).await.unwrap();
