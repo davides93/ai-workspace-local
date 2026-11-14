@@ -20,8 +20,8 @@ e circa 18 strumenti in più negli elenchi.
   `aiw_runtime_control`, `aiw_runtime_install`, `aiw_setting_set`, `aiw_setting_set_protected`, `aiw_connector_save`, `aiw_connector_remove`, `aiw_agent_save`,
   `aiw_agent_delete`, `aiw_memory_review`, `aiw_memory_delete`, `aiw_secret_request`, `aiw_secret_clear` e `ask_user`. Sono strumenti del registro: passano da policy,
   hook, audit e approvazioni. Le 14 modifiche chiedono **sempre** conferma (regola `ask` incorporata, anche in `auto` e `yolo`, mai «Consenti per la sessione») e la
-  conferma vale solo dal proprietario (`respond_approval_as`: un token `device`, il token `owner` dalla LAN senza TLS, un canale ricevono 403 o l'errore e la richiesta
-  resta aperta). Funzionano solo in un run di primo livello avviato dal server (`RunOrigin`); un subagente, un workflow, il server MCP di AIW (che non li elenca), un
+  conferma vale solo dal proprietario (`respond_approval_as`: un token `device` o il token `owner` dalla LAN senza TLS ricevono 403, la risposta di un canale è rifiutata, e la
+  richiesta resta aperta). Funzionano solo in un run di primo livello avviato dal server (`RunOrigin`); un subagente, un workflow, il server MCP di AIW (che non li elenca), un
   canale, l'assistente proattivo, A2A e `aiw run` sul terminale li rifiutano.
 - **Chiavi di impostazione**: `aiw_setting_set` cambia solo chiavi classificate per nome come ordinarie (un test fallisce se una chiave nuova dello schema non è
   classificata); `aiw_setting_set_protected` accetta sei chiavi di macchina (`workspace.root`, `models.dir`, `server.lan`, `update.channel`, `update.auto_check`,

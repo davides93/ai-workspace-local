@@ -139,8 +139,9 @@ chiusa. Non c'è un ripiego come per le domande: l'attesa non ha limite di tempo
 modificano qualcosa (e `aiw_secret_clear`) chiedono sempre conferma, in qualunque modalità dell'agente e anche dopo
 «Consenti per la sessione» (che per loro non esiste: `remember` è ignorato). `POST /api/approvals/{id}` ha ambito
 `device`, ma per una richiesta di uno strumento di gestione risponde `403` («Questa richiesta può essere decisa solo
-dal proprietario…») se chi risponde non ha accesso completo: un token `device`, il token `owner` presentato dalla LAN
-senza TLS, un messaggio Telegram, Slack o email (i canali rispondono come non proprietari). La richiesta resta aperta.
+dal proprietario…») se chi risponde non ha accesso completo: un token `device` o il token `owner` presentato dalla LAN
+senza TLS. La richiesta resta aperta. Anche la risposta di un canale (Telegram, Slack, email) è rifiutata per queste
+richieste: i canali rispondono come non proprietari.
 Hanno accesso completo le richieste dal computer stesso senza token e quelle col token `owner` su TLS. Le conferme
 degli strumenti ordinari (`write_file`, `shell`, …) si possono ancora dare con un token `device`.
 
