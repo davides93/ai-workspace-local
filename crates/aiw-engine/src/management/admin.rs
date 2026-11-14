@@ -809,6 +809,21 @@ fn connector_config(e: &Engine, a: &ConnectorArgs, inherit: bool) -> Result<McpS
                     )));
                 }
             }
+            // `--api-key abc`: the value of a flag that names a secret is an argument of its own.
+            if let Some(args) = &a.args {
+                if let Some(i) = (0..args.len()).find(|&i| {
+                    args[i].starts_with('-')
+                        && !args[i].contains('=')
+                        && crate::secrets::is_secret_name(&args[i])
+                        && args.get(i + 1).is_some_and(|next| !next.starts_with('-'))
+                }) {
+                    return Err(Error::Invalid(format!(
+                        "L'argomento n. {} (`{}`) è il nome di un segreto seguito da un valore: non scrivere il valore qui. Se il programma legge il segreto da una variabile d'ambiente, dichiara il nome in `secret_env` e fai inserire il valore all'utente con aiw_secret_request; se il valore non è un segreto, scrivi flag e valore insieme con =.",
+                        i + 1,
+                        clip(&args[i], 60)
+                    )));
+                }
+            }
             cfg.command = Some(command);
             cfg.args = a.args.clone().or_else(|| same_kind.filter(|_| inherit).and_then(|s| s.args.clone())).filter(|v| !v.is_empty());
             check_entries(
@@ -1005,7 +1020,7 @@ fn is_assistant(id: &str) -> bool {
     id == crate::defaults::ASSISTANT_ID
 }
 
-/// Why an agent with these settings is outside what the tool manages, if it is. `who` opens the sentence.
+/// Why an agent with these settings is outside what the tool manages (and so is not made or edited from the chat), if it is.
 fn envelope_problem(e: &Engine, a: &AgentProfile) -> Option<String> {
     if !["plan", "ask"].contains(&a.mode.as_str()) {
         return Some(format!("la modalità «{}» non è tra quelle ammesse (solo plan e ask)", a.mode));
@@ -1804,6 +1819,10 @@ mod tests {
                 json!({"name": "a", "transport": "stdio", "command": PROGRAM, "args": ["--ok", "--api-key=fake-key-12345678"]}),
                 "argomento n. 2",
             ),
+            (
+                json!({"name": "a", "transport": "stdio", "command": PROGRAM, "args": ["--ok", "--api-key", "fake-key-12345678"]}),
+                "argomento n. 2",
+            ),
             (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "env": {"Mode": "a", "MODE": "b"}}), "più volte"),
             (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "env": {"1MODE": "a"}}), "non è un nome valido"),
             (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "url": "http://127.0.0.1:9/mcp"}), "valgono solo per http"),
@@ -1841,7 +1860,7 @@ mod tests {
         let answer = ok(
             &e,
             "aiw_connector_save",
-            json!({"name": "ok", "transport": "stdio", "command": PROGRAM, "env": {"LANG": "it_IT.UTF-8", "RETRIES": 3, "VERBOSE": true}, "enabled": false}),
+            json!({"name": "ok", "transport": "stdio", "command": PROGRAM, "args": ["--auth-type=basic", "--verbose", "--keyboard"], "env": {"LANG": "it_IT.UTF-8", "RETRIES": 3, "VERBOSE": true}, "enabled": false}),
         )
         .await;
         let saved = stored(&e, answer["id"].as_str().unwrap());
