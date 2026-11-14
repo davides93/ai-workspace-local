@@ -120,6 +120,64 @@ pub(crate) fn require_owner(engine: &Engine, ctx: &ToolContext) -> Result<RunOri
     Ok(origin)
 }
 
+// ------------------------------------------------------------------ text for the model
+//
+// What a management tool tells the model, the confirmation card, the events and the audit goes through
+// these helpers, so that every area hides the same things in the same way.
+
+/// `s` cut to `max` characters (with an ellipsis when it was longer).
+pub(super) fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max).collect::<String>())
+    }
+}
+
+/// Free text from elsewhere (an error, a memory, an argument): `token=…`, `password: …`, `Bearer …` and
+/// credentials in URLs are hidden by the redactor of the diagnostics.
+pub(super) fn redact(s: &str) -> String {
+    static PATTERNS: std::sync::OnceLock<Vec<(regex::Regex, &'static str)>> = std::sync::OnceLock::new();
+    crate::diagnostics::scrub_line(PATTERNS.get_or_init(crate::diagnostics::line_patterns), s)
+}
+
+/// [`clip`], then [`redact`].
+pub(super) fn text(s: &str, max: usize) -> String {
+    redact(&clip(s, max))
+}
+
+/// An address without what could be a secret: no user or password, no query, no fragment, and a path
+/// segment that looks like a token (long) cut.
+pub(super) fn url_safe(raw: &str) -> String {
+    let Ok(mut u) = reqwest::Url::parse(raw.trim()) else { return "(indirizzo non leggibile)".into() };
+    let _ = u.set_username("");
+    let _ = u.set_password(None);
+    u.set_query(None);
+    u.set_fragment(None);
+    let path: Vec<String> =
+        u.path().split('/').map(|s| if s.chars().count() > 20 { "omesso".to_string() } else { s.to_string() }).collect();
+    u.set_path(&path.join("/"));
+    u.to_string()
+}
+
+/// The arguments of a command line, without what follows a flag that names a secret (`--token abc`)
+/// and with `--key=abc` hidden by the redactor.
+pub(super) fn args_safe(args: &[String]) -> Vec<String> {
+    let mut hide_next = false;
+    args.iter()
+        .map(|a| {
+            let masked = std::mem::replace(&mut hide_next, false);
+            if masked {
+                return aiw_core::api::SECRET_MASK.to_string();
+            }
+            if a.starts_with('-') && !a.contains('=') && crate::secrets::is_secret_name(a) {
+                hide_next = true;
+            }
+            text(a, 200)
+        })
+        .collect()
+}
+
 /// Registers the management tools of every area. Called once, when the engine starts.
 pub(crate) fn register(engine: &Engine) {
     for tool in

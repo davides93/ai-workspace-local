@@ -12,13 +12,13 @@
 //!   redactor of the diagnostics;
 //! * the finished answer is cleaned of the exact values of every secret the app stores.
 
-use super::require_origin;
+use super::{args_safe, clip, require_origin, text, url_safe};
 use crate::{Engine, Inner};
 use aiw_core::api::{AgentProfile, McpServerInfo, RuntimeInfo, SECRET_MASK};
 use aiw_core::{Error, Result};
 use aiw_tools::{Risk, Tool, ToolContext, ToolOutput};
 use serde_json::{json, Map, Value};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, Weak};
 
 /// What the tool can look at.
 pub(crate) const TOPICS: [&str; 10] =
@@ -150,57 +150,6 @@ fn scrub(v: &mut Value, secrets: &[String]) {
 }
 
 // ------------------------------------------------------------------ helpers
-
-fn clip(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(max).collect::<String>())
-    }
-}
-
-/// Free text from elsewhere (an error, a memory, an argument): `token=…`, `password: …`,
-/// `Bearer …` and credentials in URLs are hidden by the redactor of the diagnostics.
-fn redact(s: &str) -> String {
-    static PATTERNS: OnceLock<Vec<(regex::Regex, &'static str)>> = OnceLock::new();
-    crate::diagnostics::scrub_line(PATTERNS.get_or_init(crate::diagnostics::line_patterns), s)
-}
-
-fn text(s: &str, max: usize) -> String {
-    redact(&clip(s, max))
-}
-
-/// An address without what could be a secret: no user or password, no query, no fragment, and a
-/// path segment that looks like a token (long) cut.
-fn url_safe(raw: &str) -> String {
-    let Ok(mut u) = reqwest::Url::parse(raw.trim()) else { return "(indirizzo non leggibile)".into() };
-    let _ = u.set_username("");
-    let _ = u.set_password(None);
-    u.set_query(None);
-    u.set_fragment(None);
-    let path: Vec<String> =
-        u.path().split('/').map(|s| if s.chars().count() > 20 { "omesso".to_string() } else { s.to_string() }).collect();
-    u.set_path(&path.join("/"));
-    u.to_string()
-}
-
-/// The arguments of a command line, without what follows a flag that names a secret (`--token abc`)
-/// and with `--key=abc` hidden by the redactor.
-fn args_safe(args: &[String]) -> Vec<String> {
-    let mut hide_next = false;
-    args.iter()
-        .map(|a| {
-            let masked = std::mem::replace(&mut hide_next, false);
-            if masked {
-                return SECRET_MASK.to_string();
-            }
-            if a.starts_with('-') && !a.contains('=') && crate::secrets::is_secret_name(a) {
-                hide_next = true;
-            }
-            text(a, 200)
-        })
-        .collect()
-}
 
 fn hit(query: &Option<String>, fields: &[&str]) -> bool {
     query.as_ref().is_none_or(|q| {
