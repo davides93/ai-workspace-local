@@ -27,6 +27,7 @@ import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimization
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 import * as training from "./training";
+import { AskStore, assistantScript, checkProviderToken, runAssistantScript, type AssistantScript } from "./assistant";
 
 /** A simulated download: files transferred one after the other, then verified. */
 interface MockJob {
@@ -147,6 +148,7 @@ export class MockTransport implements Transport {
   async system() { return structuredClone(system); }
   async kill() {
     for (const [, p] of this.pendingApprovals) p.resolve(false);
+    this.ask.cancelRun();
     audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "kill", detail: "Kill switch premuto dalla UI" });
   }
 
@@ -942,14 +944,22 @@ export class MockTransport implements Transport {
     p.resolve(decision === "allow");
   }
 
-  // Questions and secret requests: filled in by the scripted runs of `assistant.ts` (nothing waits yet).
-  async questions(): Promise<Question[]> { return []; }
-  async answerQuestion(_id: string, _reply: QuestionReply) {
-    throw new ApiError(404, "domanda non trovata (forse già chiusa)");
+  // Questions of the agent and requests for a secret: the scripted runs of `assistant.ts` wait on them.
+  private readonly ask = new AskStore();
+  async questions(): Promise<Question[]> { return this.ask.openQuestions(); }
+  async answerQuestion(id: string, reply: QuestionReply) { this.ask.answerQuestion(id, reply); }
+  async secretRequests(): Promise<SecretRequest[]> { return this.ask.openSecrets(); }
+  async answerSecretRequest(id: string, reply: SecretReply): Promise<{ stored?: boolean }> {
+    return this.ask.answerSecret(id, reply, (target, value) => this.storeSecret(target, value));
   }
-  async secretRequests(): Promise<SecretRequest[]> { return []; }
-  async answerSecretRequest(_id: string, _reply: SecretReply): Promise<{ stored?: boolean }> {
-    throw new ApiError(404, "richiesta non trovata (forse già chiusa)");
+  /** Writes a secret where its target says. The demo only marks the provider as set up: the value is checked and dropped, never kept. */
+  private storeSecret(target: string, value: string): void {
+    checkProviderToken(target, value);
+    if (target.startsWith("provider_token:")) {
+      const id = target.slice("provider_token:".length);
+      this.providerAuth.set(id, { ...this.providerAuth.get(id), configured: true });
+    }
+    audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "secret.set", detail: target });
   }
 
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void) {
@@ -960,6 +970,7 @@ export class MockTransport implements Transport {
     return () => set.delete(onEvent);
   }
   async cancelRun(runId: string) {
+    this.ask.cancelRun(runId);
     this.emit(runId, { type: "RUN_ERROR", message: "Run annullato dall'utente", code: "cancelled" });
   }
 
@@ -1061,8 +1072,8 @@ export class MockTransport implements Transport {
   }
 
   /** `image`: a screenshot the tool produced, sent as the `aiw.image` custom event (base64 data, no `data:` prefix). */
-  private async toolCall(runId: string, name: string, args: unknown, result: string, approval?: { reason: string; risk: ApprovalRequest["risk"] }, image?: { mime: string; data: string }) {
-    const toolCallId = nid("call");
+  private async toolCall(runId: string, name: string, args: unknown, result: string, approval?: { reason: string; risk: ApprovalRequest["risk"] }, image?: { mime: string; data: string }, callId?: string) {
+    const toolCallId = callId ?? nid("call");
     this.emit(runId, { type: "TOOL_CALL_START", toolCallId, toolCallName: name });
     this.emit(runId, { type: "TOOL_CALL_ARGS", toolCallId, delta: JSON.stringify(args) });
     this.emit(runId, { type: "TOOL_CALL_END", toolCallId });
@@ -1145,7 +1156,29 @@ export class MockTransport implements Transport {
     this.finish(sessionId, reply);
   }
 
+  /** The Assistente's questions and requests for a secret (`assistant.ts`): the same in every session, whatever its agent. */
+  private async assistantRun(runId: string, sessionId: string, script: AssistantScript) {
+    await sleep(150);
+    await runAssistantScript({
+      runId, threadId: sessionId, ask: this.ask, nid, now,
+      emit: (e) => this.emit(runId, e),
+      say: async (text) => {
+        const m = nid("m");
+        this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m, role: "assistant" });
+        await this.streamText(runId, m, text, "text");
+        this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m });
+      },
+      tool: (name, args, result, id, approval) => this.toolCall(runId, name, args, result, approval, undefined, id),
+      finish: (stored, final) => {
+        (sessionMessages[sessionId] ??= []).push(...stored);
+        this.finish(sessionId, final);
+      },
+    }, script);
+  }
+
   private async scriptedRun(runId: string, sessionId: string, input: string) {
+    const script = assistantScript(input);
+    if (script) return this.assistantRun(runId, sessionId, script);
     if (sessions.find((x) => x.id === sessionId)?.agent_id === "browser") return this.browserRun(runId, sessionId);
     if (sessions.find((x) => x.id === sessionId)?.agent_id === "teacher") return this.teacherRun(runId, sessionId, input);
     await sleep(150);
