@@ -1714,4 +1714,268 @@ mod tests {
         let told = e.messages(&s.id).unwrap().into_iter().find(|m| m.role == "tool").unwrap().content;
         assert!(told.contains("Negato dall'utente") && told.contains("Non ripetere"), "{told}");
     }
+
+    // ------------------------------------------------------------------ connectors
+
+    fn stored(e: &Engine, id: &str) -> McpServerConfig {
+        e.0.store.get_doc::<McpServerConfig>("mcp", id).unwrap().unwrap_or_else(|| panic!("connector {id} is not stored"))
+    }
+
+    /// The connector as the API shows it.
+    fn info(e: &Engine, id: &str) -> aiw_core::api::McpServerInfo {
+        e.mcp_servers().into_iter().find(|s| s.config.id == id).unwrap()
+    }
+
+    const PROGRAM: &str = "/definitely/not/a/program";
+
+    #[tokio::test]
+    async fn a_stdio_connector_is_saved_with_secret_names_only_and_the_command_on_the_card_is_confirmed() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let args = json!({
+            "name": "Github", "transport": "stdio", "command": PROGRAM, "args": ["--flag", "due parole"],
+            "env": {"MODE": "a"}, "secret_env": ["GITHUB_TOKEN"], "enabled": false
+        });
+        // The card shows what will run: the command line, as the person would read it.
+        let tool = e.tool_registry().get("aiw_connector_save").unwrap();
+        assert_eq!(tool.subject(&args).as_deref(), Some("/definitely/not/a/program --flag \"due parole\""));
+        let answer = ok(&e, "aiw_connector_save", args).await;
+        let id = answer["id"].as_str().unwrap().to_string();
+        assert!(id.starts_with("mcp_") && answer["created"] == true && answer["name"] == "Github", "{answer}");
+        assert_eq!(answer["target"], "/definitely/not/a/program --flag \"due parole\"");
+
+        let saved = stored(&e, &id);
+        assert_eq!((saved.transport.as_str(), saved.command.as_deref(), saved.enabled), ("stdio", Some(PROGRAM), false));
+        assert_eq!(saved.args, Some(vec!["--flag".to_string(), "due parole".to_string()]));
+        // The secret is declared by its name and holds nothing yet; the plain variable keeps its value.
+        assert_eq!(Value::Object(saved.env.clone().unwrap()), json!({"MODE": "a", "GITHUB_TOKEN": ""}));
+        let isolation = if aiw_tools::sandbox::can_wrap_process() { "workspace-write" } else { "off" };
+        assert_eq!(saved.sandbox, isolation, "a new server is isolated as the interface proposes, where the system can");
+        // The command the card showed is confirmed: it will not wait for a second confirmation in the app.
+        assert!(e.mcp_approved(&saved));
+        assert_eq!(answer["command_confirmed"], true);
+        assert!(e.audit().iter().any(|a| a.action == "mcp_approve" && a.detail.contains("--flag")), "the confirmation is in the audit");
+        assert!(e.audit().iter().any(|a| a.action == "connector.save" && a.detail.contains(&id)));
+        // Control: the same server saved through the API, not through the tool, has no confirmation.
+        let mut plain = saved.clone();
+        plain.id = String::new();
+        plain.name = "altro".into();
+        let other = e.save_mcp_server(plain).await.unwrap();
+        assert!(!e.mcp_approved(&stored(&e, &other.config.id)), "only the tool confirms, and only what it showed");
+        // What the model reads: the names and whether a value is set, and the target to ask for it; never a value.
+        assert_eq!(answer["secrets"], json!([{"name": "GITHUB_TOKEN", "target": format!("mcp_env:{id}:GITHUB_TOKEN"), "set": false}]));
+        assert!(answer["note"].as_str().unwrap().contains("aiw_secret_request"), "{answer}");
+        assert!(!answer.to_string().contains("\"a\""), "no value of an environment variable in the answer: {answer}");
+    }
+
+    #[tokio::test]
+    async fn an_enabled_stdio_connector_starts_once_its_command_is_confirmed() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let answer = ok(&e, "aiw_connector_save", json!({"name": "locale", "transport": "stdio", "command": PROGRAM})).await;
+        let id = answer["id"].as_str().unwrap();
+        // Without the confirmation of the tool it would be waiting in the app (`approval_required`); with it, it was started
+        // (this command does not exist, so the connection fails, but the attempt is made).
+        assert_ne!(info(&e, id).status, "approval_required");
+        assert!(!info(&e, id).approval_required);
+        assert!(e.mcp_client(id).is_some(), "the confirmed command was started");
+        assert_eq!(answer["command_confirmed"], true);
+        assert_ne!(answer["status"], "approval_required");
+        // A connector of the same name is refused, and so is an `id` that does not exist.
+        let message = refused(&e, "aiw_connector_save", json!({"name": "locale", "transport": "stdio", "command": PROGRAM})).await;
+        assert!(message.contains("Esiste già un connettore") && message.contains(id), "{message}");
+        let err = run(&e, "aiw_connector_save", json!({"id": "mcp_inventato", "name": "x", "transport": "stdio", "command": PROGRAM}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().contains("ometti `id`"), "{err}");
+        e.remove_mcp_server(id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_connector_never_takes_a_secret_value_in_its_command_environment_headers_or_address() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let github = "ghp_fakefakefakefakefake0123456789";
+        let cases: Vec<(Value, &str)> = vec![
+            (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "env": {"GITHUB_TOKEN": github}}), "secret_env"),
+            (
+                json!({"name": "a", "transport": "stdio", "command": PROGRAM, "env": {"DATABASE_URL": "postgres://utente:fake-pass-0042@db/x"}}),
+                "credenziali",
+            ),
+            (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "secret_env": ["PLAIN_NAME"]}), "non ha un nome da segreto"),
+            (
+                json!({"name": "a", "transport": "stdio", "command": PROGRAM, "args": ["--ok", "--api-key=fake-key-12345678"]}),
+                "argomento n. 2",
+            ),
+            (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "env": {"Mode": "a", "MODE": "b"}}), "più volte"),
+            (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "env": {"1MODE": "a"}}), "non è un nome valido"),
+            (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "url": "http://127.0.0.1:9/mcp"}), "valgono solo per http"),
+            (
+                json!({"name": "a", "transport": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"Authorization": "Bearer fake-token-1234567"}}),
+                "secret_headers",
+            ),
+            (
+                json!({"name": "a", "transport": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"X-Note": "Bearer fake-token-1234567"}}),
+                "credenziali",
+            ),
+            (
+                json!({"name": "a", "transport": "http", "url": "http://127.0.0.1:9/mcp", "secret_headers": ["Accept"]}),
+                "non ha un nome da segreto",
+            ),
+            (json!({"name": "a", "transport": "http", "url": "https://utente:fake-pass-0042@example.com/mcp"}), "credenziali"),
+            (json!({"name": "a", "transport": "http", "url": "https://example.com/mcp?token=fake-token-9"}), "credenziali"),
+            (json!({"name": "a", "transport": "http", "url": "ftp://example.com/mcp"}), "indirizzo non valido"),
+            (json!({"name": "a", "transport": "http", "url": "http://127.0.0.1:9/mcp", "command": PROGRAM}), "valgono solo per stdio"),
+            (json!({"name": "a", "transport": "stdio"}), "manca `command`"),
+            (json!({"name": "a", "transport": "http"}), "manca `url`"),
+            (json!({"name": "a", "transport": "grpc", "url": "http://x"}), "trasporto"),
+            (json!({"transport": "http", "url": "http://127.0.0.1:9/mcp"}), "manca `name`"),
+        ];
+        for (args, expected) in cases {
+            let message = refused(&e, "aiw_connector_save", args.clone()).await;
+            assert!(message.contains(expected), "{args}: {message}");
+            for fake in [github, "fake-pass-0042", "fake-key-12345678", "fake-token-1234567", "fake-token-9"] {
+                assert!(!message.contains(fake), "the refusal repeats a secret value: {message}");
+            }
+        }
+        assert!(e.mcp_servers().is_empty(), "a refused call stored nothing");
+        assert!(e.audit().iter().all(|a| a.action != "connector.save" && a.action != "mcp_approve"));
+        // The same names and values are fine when they are not secrets.
+        let answer = ok(
+            &e,
+            "aiw_connector_save",
+            json!({"name": "ok", "transport": "stdio", "command": PROGRAM, "env": {"LANG": "it_IT.UTF-8", "RETRIES": 3, "VERBOSE": true}, "enabled": false}),
+        )
+        .await;
+        let saved = stored(&e, answer["id"].as_str().unwrap());
+        assert_eq!(Value::Object(saved.env.unwrap()), json!({"LANG": "it_IT.UTF-8", "RETRIES": "3", "VERBOSE": "true"}));
+    }
+
+    #[tokio::test]
+    async fn a_secret_stays_when_a_connector_is_edited_and_an_http_server_needs_no_command_confirmation() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let created = ok(
+            &e,
+            "aiw_connector_save",
+            json!({"name": "Remoto", "transport": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"Accept": "application/json"}, "secret_headers": ["Authorization"], "enabled": false}),
+        )
+        .await;
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(Value::Object(stored(&e, &id).headers.unwrap()), json!({"Accept": "application/json", "Authorization": ""}));
+        assert_eq!(created["command_confirmed"], true, "nothing to confirm for an address");
+        assert!(
+            e.0.store.get_doc::<Value>("mcp_approval", &id).unwrap().is_none(),
+            "no command confirmation was recorded for an http server"
+        );
+        assert!(e.audit().iter().all(|a| a.action != "mcp_approve"));
+        assert_eq!(created["target"], "http://127.0.0.1:9/mcp");
+        // The person puts the value in (what `aiw_secret_request` will do): the API keeps it and shows a mask.
+        let mut with_secret = stored(&e, &id);
+        with_secret.headers.as_mut().unwrap().insert("Authorization".into(), json!(format!("Bearer {FAKE_SECRET}")));
+        e.save_mcp_server(with_secret).await.unwrap();
+        assert_eq!(info(&e, &id).config.headers.unwrap()["Authorization"], SECRET_MASK);
+
+        // An edit that repeats the secret name keeps the value, and one that does not mention headers keeps everything.
+        let edited = ok(
+            &e,
+            "aiw_connector_save",
+            json!({"id": id, "name": "Remoto", "transport": "http", "headers": {"Accept": "text/plain"}, "secret_headers": ["Authorization"]}),
+        )
+        .await;
+        assert_eq!(edited["created"], false);
+        let headers = stored(&e, &id).headers.unwrap();
+        assert_eq!(headers["Authorization"], json!(format!("Bearer {FAKE_SECRET}")), "the secret survived the edit");
+        assert_eq!(headers["Accept"], "text/plain");
+        assert_eq!(edited["secrets"], json!([{"name": "Authorization", "target": format!("mcp_header:{id}:Authorization"), "set": true}]));
+        assert!(!edited.to_string().contains(FAKE_SECRET));
+        ok(&e, "aiw_connector_save", json!({"id": "Remoto", "enabled": false, "name": "Remoto-2"})).await;
+        let headers = stored(&e, &id).headers.unwrap();
+        assert_eq!(
+            (headers["Authorization"].clone(), headers["Accept"].clone()),
+            (json!(format!("Bearer {FAKE_SECRET}")), json!("text/plain"))
+        );
+        assert_eq!(stored(&e, &id).name, "Remoto-2");
+        // Leaving the secret name out of an edit that lists them removes it, value included.
+        ok(&e, "aiw_connector_save", json!({"id": id, "name": "Remoto-2", "secret_headers": []})).await;
+        assert_eq!(Value::Object(stored(&e, &id).headers.unwrap()), json!({"Accept": "text/plain"}));
+    }
+
+    #[tokio::test]
+    async fn the_tool_confirms_a_command_only_when_the_card_showed_all_of_it() {
+        let (e, _d, _w) = engine(vec![]).await;
+        // A server made through the API, still waiting for the person's confirmation.
+        let waiting = e
+            .save_mcp_server(McpServerConfig {
+                id: "srv".into(),
+                name: "srv".into(),
+                transport: "stdio".into(),
+                command: Some(PROGRAM.into()),
+                args: Some(vec!["--flag".into()]),
+                url: None,
+                env: Some(json!({"MODE": "a"}).as_object().unwrap().clone()),
+                headers: None,
+                enabled: false,
+                sampling: false,
+                oauth_client_id: None,
+                sandbox: "off".into(),
+                sandbox_network: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(waiting.config.sandbox, "off");
+        assert!(!e.mcp_approved(&stored(&e, "srv")));
+        // A call that does not repeat the command is not a confirmation of it.
+        let answer = ok(&e, "aiw_connector_save", json!({"id": "srv", "name": "srv", "enabled": false})).await;
+        assert!(!e.mcp_approved(&stored(&e, "srv")) && answer["command_confirmed"] == false, "{answer}");
+        assert!(answer["note"].as_str().unwrap().contains("non è stato confermato qui"), "{answer}");
+        // Nor one that repeats the command but leaves out the arguments and variables it inherits.
+        let answer = ok(&e, "aiw_connector_save", json!({"id": "srv", "name": "srv", "command": PROGRAM, "enabled": false})).await;
+        assert!(!e.mcp_approved(&stored(&e, "srv")) && answer["command_confirmed"] == false, "{answer}");
+        // One that shows all of it is. The isolation of the server stays what it was.
+        let all = json!({"id": "srv", "name": "srv", "transport": "stdio", "command": PROGRAM, "args": ["--flag"], "env": {"MODE": "a"}, "enabled": false});
+        let answer = ok(&e, "aiw_connector_save", all.clone()).await;
+        assert!(e.mcp_approved(&stored(&e, "srv")) && answer["command_confirmed"] == true, "{answer}");
+        assert_eq!(stored(&e, "srv").sandbox, "off");
+        // The value of a variable is not part of the confirmation: changing it does not ask again.
+        let mut changed = all.clone();
+        changed["env"] = json!({"MODE": "b"});
+        ok(&e, "aiw_connector_save", changed).await;
+        assert!(e.mcp_approved(&stored(&e, "srv")));
+        assert_eq!(stored(&e, "srv").env.unwrap()["MODE"], "b");
+        // A different argument is a different command: the engine drops the confirmation and the tool, which showed it, gives it again.
+        let mut other = all.clone();
+        other["args"] = json!(["--other"]);
+        let answer = ok(&e, "aiw_connector_save", other).await;
+        assert!(e.mcp_approved(&stored(&e, "srv")) && answer["command_confirmed"] == true);
+        assert_eq!(stored(&e, "srv").args, Some(vec!["--other".to_string()]));
+        assert_eq!(e.audit().iter().filter(|a| a.action == "mcp_approve").count(), 2, "one confirmation for each command shown");
+        // Control: the confirmation the engine keeps is the one of the stored command, so the old command is not approved any more.
+        assert!(!e.mcp_approved(&McpServerConfig { args: Some(vec!["--flag".into()]), ..stored(&e, "srv") }));
+    }
+
+    #[tokio::test]
+    async fn a_connector_is_removed_with_what_it_had_saved() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let created = ok(
+            &e,
+            "aiw_connector_save",
+            json!({"name": "Da togliere", "transport": "stdio", "command": PROGRAM, "env": {"MODE": "a"}, "secret_env": ["API_KEY"], "enabled": false}),
+        )
+        .await;
+        let id = created["id"].as_str().unwrap().to_string();
+        let mut with_secret = stored(&e, &id);
+        with_secret.env.as_mut().unwrap().insert("API_KEY".into(), json!(FAKE_SECRET));
+        e.save_mcp_server(with_secret).await.unwrap();
+        assert!(e.0.store.get_doc::<Value>("mcp_approval", &id).unwrap().is_some());
+
+        let tool = e.tool_registry().get("aiw_connector_remove").unwrap();
+        let card = tool.subject(&json!({"id": "Da_togliere"})).unwrap();
+        assert!(card.contains("Da_togliere") && card.contains(PROGRAM), "{card}");
+        let answer = ok(&e, "aiw_connector_remove", json!({"id": "Da_togliere"})).await;
+        assert_eq!((answer["removed"].clone(), answer["variables"].clone()), (json!(id), json!(["API_KEY", "MODE"])));
+        assert!(!answer.to_string().contains(FAKE_SECRET) && !answer.to_string().contains("\"a\""), "{answer}");
+        assert!(e.mcp_servers().is_empty());
+        assert!(e.0.store.get_doc::<Value>("mcp_approval", &id).unwrap().is_none(), "the confirmation of its command went with it");
+        assert!(e.audit().iter().any(|a| a.action == "connector.remove" && a.detail.contains(&id)));
+        let err = run(&e, "aiw_connector_remove", json!({"id": id})).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().contains("aiw_inspect"), "{err}");
+        assert!(tool.subject(&json!({"id": "inesistente"})).is_none());
+    }
 }
