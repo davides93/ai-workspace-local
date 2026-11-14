@@ -824,6 +824,74 @@ mod tests {
         assert_eq!(narrow_tools_delegating(&assistant.tools, &assistant.delegate_tools, &greedy, explicit), ["read_file"]);
     }
 
+    // ------------------------------------------------------------------ how much the Assistant sends the model
+
+    /// The text the Assistant puts in front of the model on every call: its system prompt and the schemas of
+    /// its tools. A small local model has a small window, and the compaction of the agent loop looks at the
+    /// messages only (`estimate_tokens` in `aiw-agent`), not at the schemas, so the size is measured here and
+    /// printed (`cargo test -p aiw-engine the_assistant_sends -- --nocapture`). The band is wide on purpose: it
+    /// catches a jump (a tool added with a huge schema, a prompt that doubled), not a few lines of text. The
+    /// numbers are in characters; the token estimates in the docs are characters / 3.5, an estimate and not a
+    /// count of any tokenizer.
+    #[tokio::test]
+    async fn the_assistant_sends_the_model_a_prompt_and_tool_schemas_of_a_size_that_is_measured_and_bounded() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let backend = ScriptedBackend::new(vec![ScriptedBackend::text_turn("Ciao.")]);
+        e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+        let chars = |s: &str| s.chars().count();
+
+        // What is in the profile and in the registry: the prompt of the profile, and name + description +
+        // parameters of each listed tool that is registered (the seven internal tools are not in the registry).
+        let assistant = e.agent("assistant").unwrap();
+        let registry = e.tool_registry();
+        let registered: Vec<_> = assistant.tools.iter().filter_map(|n| registry.get(n)).collect();
+        let registry_chars: usize = registered
+            .iter()
+            .map(|t| chars(t.name()) + chars(t.description()) + chars(&serde_json::to_string(&t.parameters()).unwrap()))
+            .sum();
+        let prompt_chars = chars(&assistant.system_prompt);
+
+        // What really goes out in the first call of a run: the whole system message (the profile's prompt, the
+        // rules every agent gets, the mode and the sandbox) and the tools offered, internal ones included,
+        // serialised as the request carries them.
+        let s = e.create_session("assistant", None).unwrap();
+        let run = e.start_run_from(&s.id, "ciao".into(), None, None, vec![], Some(OWNER)).await.unwrap();
+        wait_finished(&e, &run).await;
+        let requests = backend.requests.lock().unwrap();
+        let first = &requests[0];
+        let system_chars = chars(&first.messages[0].text());
+        let offered: Vec<&str> = first.tools.iter().map(|t| t.function.name.as_str()).collect();
+        let schema_chars = chars(&serde_json::to_string(&first.tools).unwrap());
+        let total_chars = system_chars + schema_chars;
+        let tokens = |c: usize| (c as f64 / 3.5).round() as usize;
+
+        println!("assistant: profile prompt {prompt_chars} characters, system message of the first call {system_chars}");
+        println!(
+            "assistant: {} of {} listed tools registered, {registry_chars} characters of name, description and parameters",
+            registered.len(),
+            assistant.tools.len()
+        );
+        println!("assistant: {} tools offered in the first call, {schema_chars} characters of schemas ({offered:?})", offered.len());
+        println!(
+            "assistant: first call, system message + schemas = {total_chars} characters, about {} tokens (characters / 3.5)",
+            tokens(total_chars)
+        );
+        let mut per_tool: Vec<(usize, &str)> =
+            first.tools.iter().map(|t| (chars(&serde_json::to_string(t).unwrap()), t.function.name.as_str())).collect();
+        per_tool.sort_unstable_by(|a, b| b.cmp(a));
+        println!("assistant: the largest schemas: {:?}", &per_tool[..per_tool.len().min(6)]);
+
+        // Every tool of the profile that exists is offered: the schemas are measured on what a run really sends.
+        assert!(registered.len() >= 10 && offered.len() >= registered.len(), "{} registered, {} offered", registered.len(), offered.len());
+        assert!(first.messages[0].text().contains(&assistant.system_prompt), "the system message holds the profile's prompt");
+        // A wide band (about five times the measured size at most, and not near zero): a jump fails, ordinary edits do not.
+        assert!((1_500..12_000).contains(&prompt_chars), "{prompt_chars}");
+        assert!((prompt_chars..16_000).contains(&system_chars), "{system_chars}");
+        assert!((5_000..50_000).contains(&registry_chars), "{registry_chars}");
+        assert!((registry_chars..60_000).contains(&schema_chars), "{schema_chars}");
+        assert!((8_000..80_000).contains(&total_chars), "{total_chars}");
+    }
+
     #[tokio::test]
     async fn no_other_agent_is_offered_the_assistant_and_a_read_only_run_of_it_cannot_delegate_or_manage() {
         // The agents of the Developer view keep the same list of sub-agents as before the Assistant existed.
