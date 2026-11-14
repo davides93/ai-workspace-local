@@ -671,7 +671,7 @@ fn connector_target(cfg: &McpServerConfig) -> String {
 /// line or the address as stored ("Questo server esegue il comando `…`", "error sending request for url (…)"),
 /// and what is stored can hold a secret: the quoted line or address becomes the safe form, and so does any
 /// piece of it that the message cuts out (a token-like path segment, the query, the value of a secret flag).
-fn status_text(error: &str, cfg: &McpServerConfig) -> String {
+pub(super) fn status_text(error: &str, cfg: &McpServerConfig) -> String {
     let mut out = error.to_string();
     if cfg.transport == "stdio" {
         out = out.replace(&command_line(cfg), &connector_target(cfg));

@@ -12,6 +12,7 @@
 //!   redactor of the diagnostics;
 //! * the finished answer is cleaned of the exact values of every secret the app stores.
 
+use super::admin::status_text;
 use super::{args_safe, clip, require_origin, text, url_safe};
 use crate::{Engine, Inner};
 use aiw_core::api::{AgentProfile, McpServerInfo, RuntimeInfo, SECRET_MASK};
@@ -435,7 +436,7 @@ fn connector(s: &McpServerInfo, detail: bool) -> Value {
     let shown = if detail { MAX_ITEMS } else { 10 };
     json!({
         "id": c.id, "name": c.name, "transport": c.transport, "enabled": c.enabled, "status": s.status,
-        "error": s.error.as_deref().map(|x| text(x, 200)), "approval_required": s.approval_required, "signed_in": s.signed_in,
+        "error": s.error.as_deref().map(|x| status_text(x, c)), "approval_required": s.approval_required, "signed_in": s.signed_in,
         "tools_total": s.tools.len(), "tools": s.tools.iter().take(shown).collect::<Vec<_>>(),
         "url": c.url.as_deref().map(url_safe), "command": c.command.as_deref().map(|x| text(x, 200)),
         "args": c.args.as_deref().map(args_safe), "env": entry_names(&c.env), "headers": entry_names(&c.headers),
@@ -667,6 +668,35 @@ mod tests {
 
     async fn ask(e: &Engine, args: Value) -> String {
         render(e, &args).await.unwrap_or_else(|err| panic!("{args}: {err}"))
+    }
+
+    #[tokio::test]
+    async fn the_error_of_a_connector_that_waits_for_confirmation_does_not_quote_the_secrets_of_its_command_line() {
+        let (e, _d, _w) = engine(vec![]).await;
+        // The engine says «Questo server esegue il comando `…`» with the command line as stored, and the redactor of free text
+        // knows neither `--access-key=` nor a value that follows `--token` after a space.
+        const SPACED: &str = "FAKE_ARG_SPACED_VALUE_1c2d3e";
+        let cfg = McpServerConfig {
+            command: Some("/definitely/not/a/program".into()),
+            args: Some(vec![format!("--access-key={ARG_ACCESS_KEY}"), "--token".into(), SPACED.into(), format!("--auth={ARG_AUTH}")]),
+            env: None,
+            enabled: true,
+            ..stdio_server()
+        };
+        let id = e.save_mcp_server(cfg).await.unwrap().config.id;
+        let detail = ask(&e, json!({"topic": "connectors", "id": id})).await;
+        let list = ask(&e, json!({"topic": "connectors"})).await;
+        for (said, one) in [(&detail, false), (&list, true)] {
+            // Control: the engine does say it, and the line is there in its safe form.
+            let value: Value = serde_json::from_str(said).unwrap();
+            let error = if one { &value["connectors"]["items"][0]["error"] } else { &value["error"] };
+            let error = error.as_str().unwrap_or_else(|| panic!("a connector that waits for confirmation says so: {said}"));
+            assert!(error.contains("Questo server esegue il comando"), "{error}");
+            assert!(error.contains("--access-key=••••••") && error.contains("--token ••••••"), "{error}");
+            for fake in [ARG_ACCESS_KEY, ARG_AUTH, SPACED] {
+                assert!(!said.contains(fake), "{fake} is in the answer: {said}");
+            }
+        }
     }
 
     #[tokio::test]
