@@ -107,7 +107,7 @@ impl Live {
     }
 
     /// Reads to the end of the stream, which closes with the run.
-    async fn to_the_end(&mut self) -> Vec<Value> {
+    async fn read_the_rest(&mut self) -> Vec<Value> {
         let read = async { while self.more().await {} };
         tokio::time::timeout(Duration::from_secs(10), read).await.unwrap_or_else(|_| panic!("the stream does not end: {}", self.text));
         frames_of(&format!("{}\n", self.text))
@@ -243,7 +243,7 @@ async fn one_run_of_the_assistant_over_agui_asks_takes_a_secret_and_waits_for_th
     assert_eq!((st, v), (200, json!({})));
 
     // 4. The rest of the stream ends with the run.
-    let evs = live.to_the_end().await;
+    let evs = live.read_the_rest().await;
     let all = live.text.clone();
     let names = names_of(&evs);
     assert_eq!(names.first().map(String::as_str), Some("RUN_STARTED"));
@@ -380,7 +380,7 @@ async fn without_a_declaration_the_agent_asks_in_text_and_cannot_take_a_secret_b
     // The owner says no: the run goes on, and the setting stays as it was.
     let (st, v) = dispatch(app.clone(), "POST", &uri, Some(deny)).await;
     assert_eq!((st, v), (200, json!({})));
-    let evs = live.to_the_end().await;
+    let evs = live.read_the_rest().await;
     assert_eq!(evs.last().unwrap()["type"], "RUN_FINISHED");
     assert_eq!(customs(&evs, "aiw.approval_resolved"), [json!({"id": a["id"], "allowed": false})]);
     assert_eq!(theme(&e), before, "a refused change changes nothing");
