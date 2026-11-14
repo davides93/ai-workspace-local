@@ -58,6 +58,29 @@ describe("HttpTransport", () => {
     expect(JSON.parse(calls[6].body!)).toEqual({ action: "accept", content: { n: 1 } });
   });
 
+  it("calls the question and secret-request paths with the bodies of the contract", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url, body: init.body as string | undefined });
+      return new Response("{}", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.questions();
+    await t.answerQuestion("ask 1", { action: "answer", selected: ["q4"], other: null, confirmed: null, values: null });
+    await t.answerQuestion("ask 1", { action: "decline" });
+    await t.secretRequests();
+    await t.answerSecretRequest("sec 1", { action: "provide", value: "hf_TEST_ONLY_not_a_real_token" });
+    await t.answerSecretRequest("sec 1", { action: "decline" });
+    expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
+      "GET /questions", "POST /questions/ask%201", "POST /questions/ask%201",
+      "GET /secret-requests", "POST /secret-requests/sec%201", "POST /secret-requests/sec%201",
+    ]);
+    expect(JSON.parse(calls[1].body!)).toEqual({ action: "answer", selected: ["q4"], other: null, confirmed: null, values: null });
+    expect(JSON.parse(calls[2].body!)).toEqual({ action: "decline" });
+    expect(JSON.parse(calls[4].body!)).toEqual({ action: "provide", value: "hf_TEST_ONLY_not_a_real_token" });
+    expect(JSON.parse(calls[5].body!)).toEqual({ action: "decline" });
+  });
+
   it("calls the paths of the contract", async () => {
     const calls: { method: string; url: string; body?: string }[] = [];
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {

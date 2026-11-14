@@ -48,6 +48,9 @@ export const qk = {
   },
 
   approvals: () => ["approvals"] as const,
+  /** Questions of the agent and requests for a secret (`features/ask`). */
+  questions: () => ["questions"] as const,
+  secretRequests: () => ["secret-requests"] as const,
   runEvents: (runId: string) => ["runs", "events", runId] as const,
 
   lessons: {

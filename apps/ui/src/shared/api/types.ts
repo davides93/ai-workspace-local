@@ -643,6 +643,11 @@ export interface AgentProfile {
   roles?: AgentRoles;
   /** Ids of the document collections this agent can search with `kb_search`. Absent or empty: all of them. */
   knowledge?: string[];
+  /**
+   * Tools a sub-agent of this agent receives, instead of the intersection with the tools of its parent
+   * (the Assistente delegates work without offering its own `aiw_*` tools). Absent: the intersection.
+   */
+  delegate_tools?: string[];
 }
 
 /** The four jobs a model can have inside one run (plan, act, check, summarize). */
@@ -1409,6 +1414,75 @@ export interface McpElicitationAnswer {
   action: "accept" | "decline" | "cancel";
   content?: Record<string, string | number | boolean>;
 }
+
+// ---------- Questions and secret requests of the agent (tools `ask_user` and `aiw_secret_request`) ----------
+
+export type QuestionKind = "choice" | "confirm" | "form";
+
+export interface QuestionOption {
+  id: string;
+  label: string;
+  description?: string | null;
+}
+
+/** A field of a `form` question. */
+export interface QuestionField {
+  name: string;
+  label: string;
+  type: "string" | "number" | "integer" | "boolean" | "enum";
+  /** The values of an `enum` field. */
+  options?: string[];
+  required?: boolean;
+  placeholder?: string | null;
+}
+
+/** A question the agent asks the person and waits for (`GET /api/questions`, event `aiw.question`). Fields in snake_case. */
+export interface Question {
+  id: string;
+  run_id: string;
+  kind: QuestionKind;
+  title?: string | null;
+  message: string;
+  options: QuestionOption[];
+  multiple: boolean;
+  allow_other: boolean;
+  fields: QuestionField[];
+  confirm_label?: string | null;
+  deny_label?: string | null;
+  expires_at?: string | null;
+}
+
+/** How a question ended (`aiw.question_resolved`). `unsupported`: the client cannot show questions. */
+export type QuestionOutcome = "answered" | "declined" | "timeout" | "cancelled" | "unsupported";
+
+/** What the person answered; the fields that do not apply to the kind of question are `null`. */
+export interface QuestionAnswer {
+  selected: string[] | null;
+  other: string | null;
+  confirmed: boolean | null;
+  values: Record<string, string | number | boolean> | null;
+}
+
+/** Body of `POST /api/questions/{id}`: an answer or «Non ora». */
+export type QuestionReply = ({ action: "answer" } & QuestionAnswer) | { action: "decline" };
+
+/** A request for a secret (`GET /api/secret-requests`, event `aiw.secret_request`). It never carries a value: the value goes only in the body of the answer. */
+export interface SecretRequest {
+  id: string;
+  run_id: string;
+  /** What the secret is for, e.g. `provider_token:hf`: the reference the model uses to name it. */
+  target: string;
+  label: string;
+  reason?: string | null;
+  /** Where the engine will write it, in words (computed by the engine, not by the model). */
+  destination: string;
+  expires_at?: string | null;
+}
+
+export type SecretOutcome = "stored" | "declined" | "timeout" | "cancelled" | "unsupported";
+
+/** Body of `POST /api/secret-requests/{id}`. The value lives here and nowhere else. */
+export type SecretReply = { action: "provide"; value: string } | { action: "decline" };
 
 // ---------- Config & audit ----------
 export interface ConfigLayer {

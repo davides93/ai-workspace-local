@@ -8,7 +8,7 @@ import { mockRoute } from "./route";
 import { mockSpeak, mockTtsStatus } from "./voice";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
+  AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest,
   ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, SessionImage, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
@@ -940,6 +940,16 @@ export class MockTransport implements Transport {
     this.pendingApprovals.delete(id);
     audit.unshift({ id: nid("a"), ts: now(), run_id: p.req.run_id, actor: "user", action: "approval", tool: p.req.tool, decision: decision === "allow" ? "approved" : "rejected", detail: JSON.stringify(p.req.args) });
     p.resolve(decision === "allow");
+  }
+
+  // Questions and secret requests: filled in by the scripted runs of `assistant.ts` (nothing waits yet).
+  async questions(): Promise<Question[]> { return []; }
+  async answerQuestion(_id: string, _reply: QuestionReply) {
+    throw new ApiError(404, "domanda non trovata (forse già chiusa)");
+  }
+  async secretRequests(): Promise<SecretRequest[]> { return []; }
+  async answerSecretRequest(_id: string, _reply: SecretReply): Promise<{ stored?: boolean }> {
+    throw new ApiError(404, "richiesta non trovata (forse già chiusa)");
   }
 
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void) {
