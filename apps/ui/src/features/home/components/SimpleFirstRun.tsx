@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { LanguageSelect } from "../../../app/LanguageSelect";
 import { navigate } from "../../../app/router";
 import { useUiMode } from "../../../app/useUiMode";
-import { defaultAgentId } from "../../../shared/lib/agents";
+import { simpleAgentId } from "../../../shared/lib/agents";
 import { errorMessage } from "../../../shared/lib/errors";
 import { formatBytes, formatPercent } from "../../../shared/lib/format";
 import { Button, Meter, Panel } from "../../../shared/ui";
@@ -17,7 +17,11 @@ import { t, t as tr } from "../../../shared/i18n";
 /**
  * First run of the simple interface: one sentence and one button. "Prepara tutto" downloads the
  * model the adviser recommends (progress stays here), makes sure the default agent uses it once it
- * is on disk (nothing to do with `auto:agent`, the default profile is patched otherwise) and opens a new chat. With a model already ready the button is just "Inizia una chat".
+ * is on disk (nothing to do with `auto:agent`, the default profile is patched otherwise) and opens a new chat with the
+ * Assistente. With a model already ready the button is just "Inizia una chat". It lives inside the chat; `onDismiss`
+ * (the «Nascondi» button) is optional because there it stays until something works.
+ * Where this panel cannot help (no engine, nothing fits) the way out is «Mostra tutte le sezioni»: it switches to
+ * developer mode and opens the page that has what is missing, since the simple interface has no such page.
  */
 export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, followsAdviser, onDismiss }: {
   state: SimpleFirstRun;
@@ -27,7 +31,7 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
   device?: SystemInfo["device"];
   /** The default agent's profile is `auto:*`: it picks up the downloaded model by itself. */
   followsAdviser?: boolean;
-  onDismiss: () => void;
+  onDismiss?: () => void;
 }) {
   const [, setMode] = useUiMode();
   const downloads = useDownloads();
@@ -40,7 +44,7 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
   const [failure, setFailure] = useState<string | null>(null);
   const started = useRef(false);
 
-  const agentId = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
+  const agentId = simpleAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
   const rec = state.kind === "prepare" ? state.model : undefined;
   const job = rec ? downloads.data?.find((d) => d.model_id === rec.id && isActiveDownload(d)) : undefined;
   const lastJob = rec ? downloads.data?.find((d) => d.model_id === rec.id) : undefined;
@@ -65,6 +69,11 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [working, state, agentId]);
+
+  const showAll = (to: string) => {
+    setMode("developer");
+    navigate(to);
+  };
 
   const failedDownload = working && !job && lastJob?.status === "error" ? lastJob.error ?? t("home.download_non_riuscito") : null;
 
@@ -95,7 +104,7 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
   return (
     <Panel
       title={t("home.per_iniziare")} icon="sparkle" className="hm-firstrun"
-      actions={<Button size="sm" variant="ghost" onClick={onDismiss} title={tr("home.nasconde_questo_riquadro")}>{t("home.nascondi")}</Button>}
+      actions={onDismiss && <Button size="sm" variant="ghost" onClick={onDismiss} title={tr("home.nasconde_questo_riquadro")}>{t("home.nascondi")}</Button>}
     >
       <div className="stack stack-lg">
         <LanguageSelect />
@@ -110,8 +119,8 @@ export function SimpleFirstRunPanel({ state, models, runtimes, profile, device, 
         {error && <p className="mh-alert warn" role="alert">{error}</p>}
         <div className="row">
           {action === "go" && <Button variant="primary" icon={state.kind === "chat" ? "plus" : "download"} disabled={busy && !error} onClick={go}>{error && working ? t("home.riprova") : label}</Button>}
-          {action === "developer" && <Button onClick={() => setMode("developer")}>{t("home.mostra_tutte_le_sezioni")}</Button>}
-          {action === "models" && <Button variant="primary" onClick={() => navigate("/models/discover")}>{t("home.cerca_un_modello")}</Button>}
+          {action === "developer" && <Button onClick={() => showAll("/")}>{t("home.mostra_tutte_le_sezioni")}</Button>}
+          {action === "models" && <Button variant="primary" onClick={() => showAll("/models/discover")}>{t("home.mostra_tutte_le_sezioni")}</Button>}
         </div>
       </div>
     </Panel>

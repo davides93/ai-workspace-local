@@ -1,5 +1,6 @@
 import { Link } from "../../../app/router";
 import type { ReactNode } from "react";
+import { SIMPLE_AGENT_ID } from "../../../shared/lib/agents";
 import { Icon, IconButton, Led, Pill, type PillTone } from "../../../shared/ui";
 import type { AgentProfile, InferenceProfile, Session } from "../../../shared/api/types";
 import { modeInfo, RUN_STATUS_LABEL, sandboxInfo } from "../model/labels";
@@ -21,12 +22,17 @@ function Meta({ icon, label, tone = "neutral", title, children }: { icon: string
 /**
  * Header of the conversation: title and controls, then who works on it (agent, profile and model,
  * approval mode, sandbox, worktree) so the safety setup is never out of sight.
+ * The simple interface keeps the title, the state, the model (as text: the profiles page is not there) and the
+ * approval mode; the agent only when it is not the Assistente, and neither sandbox nor worktree. On a phone it
+ * has a «Menu» button, since there is no tab bar.
  */
-export function ChatHeader({ session, agent, profile, running, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser }: {
+export function ChatHeader({ session, agent, profile, running, simple = false, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser, onOpenMenu }: {
   session: Session | null;
   agent: AgentProfile | null;
   profile: InferenceProfile | null;
   running: boolean;
+  /** The simple interface: fewer details, nothing that leads to a hidden section. */
+  simple?: boolean;
   /** Present when the session list is off-canvas. */
   sessionsButton?: { onClick: () => void; expanded: boolean };
   inspectorOpen: boolean;
@@ -34,6 +40,8 @@ export function ChatHeader({ session, agent, profile, running, sessionsButton, i
   onOpenWorktree: () => void;
   /** Present on devices whose agent browser is a panel that can be closed (iPhone, iPad, Android). */
   onOpenBrowser?: () => void;
+  /** Simple interface: opens the menu (shown on phones only, where there is no rail). */
+  onOpenMenu?: () => void;
 }) {
   const mode = modeInfo(agent?.mode);
   const sandbox = sandboxInfo(agent?.sandbox);
@@ -48,19 +56,22 @@ export function ChatHeader({ session, agent, profile, running, sessionsButton, i
         )}
         {onOpenBrowser && <IconButton aria-label={t("chat.browser_dell_agente")} title={t("chat.apri_il_browser_dell_agente")} icon="globe" onClick={onOpenBrowser} />}
         <IconButton aria-label={t("chat.pannello_del_run")} aria-pressed={inspectorOpen} icon="panel" onClick={onToggleInspector} className={inspectorOpen ? "is-on" : undefined} />
+        {onOpenMenu && <IconButton aria-label={t("shell.menu")} icon="more" aria-haspopup="dialog" className="ws-menu-btn" onClick={onOpenMenu} />}
       </div>
       {session && agent && (
         <ul className="ws-head-meta" aria-label={t("chat.come_lavora_questa_sessione")}>
-          <Meta icon="agent" label={t("chat.agente")} title={agent.description || agent.name}>{agent.name}</Meta>
+          {(!simple || agent.id !== SIMPLE_AGENT_ID) && <Meta icon="agent" label={t("chat.agente")} title={agent.description || agent.name}>{agent.name}</Meta>}
           {profile && (
             <Meta icon="cube" label={t("chat.modello")} title={t("chat.profilo", { name: profile.name, runtime_id: profile.runtime_id, p: profile.model || "nessun modello" })}>
-              <Link className="ws-meta-text" to="/models/profiles" title={t("chat.gestisci_i_profili_di_inferenza")}>{profile.name}</Link>
+              {simple
+                ? <span className="ws-meta-text">{profile.name}</span>
+                : <Link className="ws-meta-text" to="/models/profiles" title={t("chat.gestisci_i_profili_di_inferenza")}>{profile.name}</Link>}
               {profile.model && <span className="mono ws-meta-model">{profile.model}</span>}
             </Meta>
           )}
           <Meta icon="shield" label={t("chat.approvazione")} tone={mode.tone} title={`${mode.label}: ${mode.hint}`}>{mode.label}</Meta>
-          <Meta icon="lock" label={t("chat.sandbox")} tone={sandbox.tone} title={`${sandbox.label}: ${sandbox.hint}`}>{sandbox.label}</Meta>
-          {session.worktree && (
+          {!simple && <Meta icon="lock" label={t("chat.sandbox")} tone={sandbox.tone} title={`${sandbox.label}: ${sandbox.hint}`}>{sandbox.label}</Meta>}
+          {!simple && session.worktree && (
             <li>
               <button type="button" className="pill neutral mono pill-btn" onClick={onOpenWorktree} title={t("chat.worktree_isolato", { path: session.worktree.path })}>
                 <Icon name="branch" size={13} />
