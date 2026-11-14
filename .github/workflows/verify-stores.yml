@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       build:
-        description: Store build number to verify
-        default: '5011'
-        required: true
+        description: Store build number to verify (empty = current app configuration)
+        default: ''
+        required: false
 permissions:
   contents: read
 jobs:
