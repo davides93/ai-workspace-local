@@ -1978,4 +1978,308 @@ mod tests {
         assert!(matches!(err, Error::NotFound(_)) && err.to_string().contains("aiw_inspect"), "{err}");
         assert!(tool.subject(&json!({"id": "inesistente"})).is_none());
     }
+
+    // ------------------------------------------------------------------ agents
+
+    /// A call that makes (or, with `id`, edits) an agent: the three required fields and whatever else is given.
+    fn make(name: &str, tools: Value, extra: Value) -> Value {
+        let mut args = json!({"name": name, "system_prompt": "Sei un assistente di prova.", "tools": tools});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            args[k] = v;
+        }
+        args
+    }
+
+    #[tokio::test]
+    async fn an_agent_is_made_and_edited_from_the_chat_inside_the_safe_envelope() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let created = ok(
+            &e,
+            "aiw_agent_save",
+            make("Revisore di codice", json!(["read_file", "grep", "todo", "todo", " "]), json!({"description": "Rilegge il codice"})),
+        )
+        .await;
+        assert_eq!(created["id"], "revisore-di-codice");
+        assert_eq!(
+            (created["created"].clone(), created["mode"].clone(), created["sandbox"].clone(), created["model"].clone()),
+            (json!(true), json!("ask"), json!("workspace-write"), json!("auto:agent"))
+        );
+        assert_eq!(created["tools"], json!(["read_file", "grep", "todo"]), "duplicates and blanks are dropped");
+        let agent = e.agent("revisore-di-codice").unwrap();
+        assert_eq!((agent.name.as_str(), agent.description.as_str(), agent.max_turns), ("Revisore di codice", "Rilegge il codice", 30));
+        assert_eq!(agent.system_prompt, "Sei un assistente di prova.");
+        assert!(agent.delegate_tools.is_empty() && agent.budget.is_none() && agent.roles.is_none());
+        assert!(e
+            .audit()
+            .iter()
+            .any(|a| a.action == "agent.save" && a.detail.contains("revisore-di-codice") && a.detail.contains("nuovo")));
+        let tool = e.tool_registry().get("aiw_agent_save").unwrap();
+        assert_eq!(tool.subject(&make("Revisore di codice", json!([]), json!({}))).as_deref(), Some("Revisore di codice"));
+        assert_eq!(tool.subject(&json!({"id": "revisore-di-codice"})).as_deref(), Some("revisore-di-codice"));
+
+        // The same name again is another agent, and the answer says the first one exists.
+        let again = ok(
+            &e,
+            "aiw_agent_save",
+            make("Revisore di codice", json!(["todo"]), json!({"mode": "plan", "sandbox": "read-only", "model": "auto:reasoning"})),
+        )
+        .await;
+        assert_eq!(again["id"], "revisore-di-codice-2");
+        assert!(again["note"].as_str().unwrap().contains("revisore-di-codice"), "{again}");
+        let second = e.agent("revisore-di-codice-2").unwrap();
+        assert_eq!(
+            (second.mode.as_str(), second.sandbox.as_str(), second.inference_profile.as_str()),
+            ("plan", "read-only", "auto:reasoning")
+        );
+        // An existing profile is a valid model, and so is an MCP tool of a server that is not connected now.
+        let third = ok(&e, "aiw_agent_save", make("Con profilo", json!(["mcp__github__list_issues"]), json!({"model": "default"}))).await;
+        assert_eq!(third["model"], "default");
+        // Names with accents and symbols make a plain id; a name with nothing usable makes `agente`.
+        assert_eq!(ok(&e, "aiw_agent_save", make("Più città!", json!([]), json!({}))).await["id"], "piu-citta");
+        assert_eq!(ok(&e, "aiw_agent_save", make("???", json!([]), json!({}))).await["id"], "agente");
+
+        // An edit changes what it is given and keeps the rest, including what the tool cannot set.
+        let mut mine = e.agent("revisore-di-codice").unwrap();
+        mine.max_turns = 12;
+        mine.budget = Some(aiw_core::api::BudgetLimits { max_tokens: Some(5000), ..Default::default() });
+        e.save_agent(mine).unwrap();
+        let edited =
+            ok(&e, "aiw_agent_save", json!({"id": "revisore-di-codice", "system_prompt": "Nuove istruzioni.", "mode": "plan"})).await;
+        assert_eq!(
+            (edited["created"].clone(), edited["id"].clone(), edited["mode"].clone()),
+            (json!(false), json!("revisore-di-codice"), json!("plan"))
+        );
+        let edited = e.agent("revisore-di-codice").unwrap();
+        assert_eq!(edited.system_prompt, "Nuove istruzioni.");
+        assert_eq!((edited.name.as_str(), edited.description.as_str(), edited.max_turns), ("Revisore di codice", "Rilegge il codice", 12));
+        assert_eq!(edited.tools, ["read_file", "grep", "todo"]);
+        assert_eq!(edited.budget.unwrap().max_tokens, Some(5000));
+        assert_eq!((edited.sandbox.as_str(), edited.mode.as_str()), ("workspace-write", "plan"));
+    }
+
+    #[tokio::test]
+    async fn an_agent_made_from_the_chat_is_refused_whenever_it_would_be_freer_than_the_envelope() {
+        let (e, _d, _w) = engine(vec![]).await;
+        // The tools the contract keeps out really are the ones that need an explicit grant.
+        for explicit in ["channel_send", "training_harness"] {
+            assert!(
+                e.tool_registry().get(explicit).is_some_and(|t| t.explicit_grant()),
+                "{explicit} is no longer an explicit-grant tool: pick another"
+            );
+        }
+        let agents_before = e.agents().unwrap();
+        let cases: Vec<(Value, &str)> = vec![
+            (make("x", json!(["todo"]), json!({"mode": "yolo"})), "`mode` può essere solo plan o ask"),
+            (make("x", json!(["todo"]), json!({"mode": "auto"})), "`mode` può essere solo plan o ask"),
+            (make("x", json!(["todo"]), json!({"mode": "auto-edit"})), "`mode` può essere solo plan o ask"),
+            (make("x", json!(["todo"]), json!({"sandbox": "off"})), "`sandbox` può essere solo"),
+            (make("x", json!(["*"]), json!({})), "uno per uno"),
+            (make("x", json!(["todo", "aiw_inspect"]), json!({})), "strumento di gestione"),
+            (make("x", json!(["aiw_setting_set"]), json!({})), "strumento di gestione"),
+            (make("x", json!(["aiw_secret_request"]), json!({})), "strumento di gestione"),
+            (make("x", json!(["ask_user"]), json!({})), "strumento di gestione"),
+            (make("x", json!(["channel_send"]), json!({})), "concessione esplicita"),
+            (make("x", json!(["training_harness"]), json!({})), "concessione esplicita"),
+            (make("x", json!(["handoff"]), json!({})), "sposta la conversazione"),
+            (make("x", json!(["todo"]), json!({"delegate_tools": ["*"]})), "`delegate_tools` non si imposta da qui"),
+            (make("x", json!(["strumento_inventato"]), json!({})), "strumenti sconosciuti"),
+            (make("x", json!(["todo"]), json!({"model": "non-esiste"})), "aiw_model_use"),
+            (make(&"n".repeat(81), json!(["todo"]), json!({})), "troppo lungo"),
+            (json!({"name": "x", "system_prompt": "p"}), "manca `tools`"),
+            (json!({"name": "x", "tools": []}), "manca `system_prompt`"),
+            (json!({"system_prompt": "p", "tools": []}), "manca `name`"),
+            (json!({"id": "inventato", "name": "x"}), "ometti `id`"),
+        ];
+        for (args, expected) in cases {
+            let message = refused(&e, "aiw_agent_save", args.clone()).await;
+            assert!(message.contains(expected), "{args}: {message}");
+        }
+        // The Assistant and the other agents the app ships are not created over and not edited, even with harmless fields.
+        let assistant_before = e.agent("assistant").unwrap();
+        let operator_before = e.agent("operator").unwrap();
+        let err = run(&e, "aiw_agent_save", make("Assistente", json!(["todo"]), json!({"id": "assistant"}))).await.unwrap_err();
+        assert!(matches!(err, Error::Denied(_)) && err.to_string().contains("L'Assistente non si crea né si modifica"), "{err}");
+        for id in ["operator", "coder", "planner", "teacher", "browser", "desktop"] {
+            let message = refused(&e, "aiw_agent_save", make("Copia", json!(["todo"]), json!({"id": id, "mode": "plan"}))).await;
+            assert!(message.contains("integrato") && message.contains("una copia"), "{id}: {message}");
+        }
+        assert_eq!(e.agent("assistant").unwrap(), assistant_before);
+        assert_eq!(e.agent("operator").unwrap(), operator_before);
+        assert_eq!(e.agents().unwrap(), agents_before, "a refusal stored nothing");
+        assert!(e.audit().iter().all(|a| a.action != "agent.save"));
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_already_has_more_than_the_envelope_is_not_edited_from_the_chat() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let planner = e.agent("planner").unwrap();
+        let custom = |id: &str, f: &dyn Fn(&mut AgentProfile)| {
+            let mut a = AgentProfile { id: id.into(), name: id.into(), ..planner.clone() };
+            f(&mut a);
+            e.save_agent(a).unwrap();
+        };
+        custom("libero", &|a| a.mode = "auto-edit".into());
+        custom("senza-sandbox", &|a| a.sandbox = "off".into());
+        custom("jolly", &|a| a.tools = vec!["*".into()]);
+        custom("deleghe", &|a| a.delegate_tools = vec!["*".into()]);
+        custom("con-gestione", &|a| a.tools = vec!["aiw_inspect".into()]);
+        for id in ["libero", "senza-sandbox", "jolly", "deleghe", "con-gestione"] {
+            let before = e.agent(id).unwrap();
+            let message = refused(&e, "aiw_agent_save", json!({"id": id, "name": "Nuovo nome"})).await;
+            assert!(message.contains("vista Sviluppatore") && message.contains("già permessi"), "{id}: {message}");
+            assert_eq!(e.agent(id).unwrap(), before);
+        }
+        // One made inside the envelope cannot be widened by an edit either.
+        let made = ok(&e, "aiw_agent_save", make("Ristretto", json!(["todo"]), json!({"mode": "plan", "sandbox": "read-only"}))).await;
+        let id = made["id"].as_str().unwrap();
+        for widen in [
+            json!({"mode": "yolo"}),
+            json!({"sandbox": "off"}),
+            json!({"tools": ["*"]}),
+            json!({"tools": ["aiw_inspect"]}),
+            json!({"delegate_tools": ["todo"]}),
+        ] {
+            let mut args = json!({"id": id});
+            for (k, v) in widen.as_object().unwrap() {
+                args[k] = v.clone();
+            }
+            refused(&e, "aiw_agent_save", args).await;
+        }
+        let kept = e.agent(id).unwrap();
+        assert_eq!(
+            (kept.mode.as_str(), kept.sandbox.as_str(), kept.tools.as_slice()),
+            ("plan", "read-only", ["todo".to_string()].as_slice())
+        );
+        // Within the envelope an edit may change the permissions.
+        ok(&e, "aiw_agent_save", json!({"id": id, "mode": "ask", "sandbox": "workspace-write"})).await;
+        assert_eq!(e.agent(id).unwrap().mode, "ask");
+    }
+
+    #[tokio::test]
+    async fn only_an_agent_made_by_the_person_is_deleted_and_not_one_that_is_in_use() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let made = ok(&e, "aiw_agent_save", make("Da eliminare", json!(["todo"]), json!({}))).await;
+        let id = made["id"].as_str().unwrap().to_string();
+        let tool = e.tool_registry().get("aiw_agent_delete").unwrap();
+        assert_eq!(tool.subject(&json!({"id": id})).as_deref(), Some("«Da eliminare» (da-eliminare)"));
+        // The agents the app ships stay, whoever asks.
+        for builtin in ["assistant", "operator", "coder", "planner", "teacher", "browser", "desktop"] {
+            let err = run(&e, "aiw_agent_delete", json!({"id": builtin})).await.unwrap_err();
+            assert!(matches!(err, Error::Denied(_)) && err.to_string().contains("integrato"), "{builtin}: {err}");
+            assert!(e.agent(builtin).is_ok());
+        }
+        let err = run(&e, "aiw_agent_delete", json!({"id": "non-c-e"})).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().contains("aiw_inspect"), "{err}");
+        // A team that uses it, and the settings that name it, keep it from being deleted (and nothing is lost).
+        e.save_team(aiw_core::api::TeamDef {
+            id: "t1".into(),
+            name: "Squadra".into(),
+            description: String::new(),
+            strategy: "pipeline".into(),
+            supervisor: None,
+            members: vec![aiw_core::api::TeamMember { agent: id.clone(), role: String::new() }],
+            aggregator: None,
+            budget: None,
+            output_schema: None,
+        })
+        .unwrap();
+        let message = refused(&e, "aiw_agent_delete", json!({"id": id})).await;
+        assert!(message.contains("team") && message.contains("Squadra"), "{message}");
+        e.delete_team("t1").unwrap();
+        ok(&e, "aiw_setting_set", json!({"key": "agent.default", "value": id})).await;
+        let message = refused(&e, "aiw_agent_delete", json!({"id": id})).await;
+        assert!(message.contains("agent.default") && message.contains("aiw_setting_set"), "{message}");
+        assert!(e.agent(&id).is_ok());
+        ok(&e, "aiw_setting_set", json!({"key": "agent.default", "value": "operator"})).await;
+        // Now it goes, and the answer says it does not come back.
+        let answer = ok(&e, "aiw_agent_delete", json!({"id": id})).await;
+        assert_eq!((answer["deleted"].clone(), answer["name"].clone()), (json!(id), json!("Da eliminare")));
+        assert!(answer["note"].as_str().unwrap().contains("non si annulla"), "{answer}");
+        assert!(e.agent(&id).is_err());
+        assert!(e.audit().iter().any(|a| a.action == "agent.delete" && a.detail.contains(&id)));
+    }
+
+    // ------------------------------------------------------------------ memories
+
+    fn remember(e: &Engine, text: &str) -> aiw_core::api::Memory {
+        e.memory_create(aiw_core::api::MemoryCreate { text: text.into(), ..Default::default() }).unwrap()
+    }
+
+    fn propose(e: &Engine, text: &str) -> aiw_core::api::Memory {
+        e.memory_store(text, "fact", "all", false, None, None, "proposed").unwrap().0
+    }
+
+    #[tokio::test]
+    async fn a_memory_is_restored_approved_or_rejected_and_only_when_it_is_in_the_right_state() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let coffee = remember(&e, "Mi piace il caffè senza zucchero");
+        // Restoring a memory that was never forgotten is refused with the engine's words, and nothing changes.
+        let err = run(&e, "aiw_memory_review", json!({"id": coffee.id, "action": "restore"})).await.unwrap_err();
+        assert!(matches!(err, Error::Conflict(_)) && err.to_string().contains("non è dimenticato"), "{err}");
+        e.memory_forget(&coffee.id).unwrap();
+        assert_eq!(e.memory(&coffee.id).unwrap().status, "forgotten");
+        let tool = e.tool_registry().get("aiw_memory_review").unwrap();
+        assert_eq!(tool.subject(&json!({"id": coffee.id, "action": "restore"})), Some(format!("restore {}", coffee.id)));
+        let answer = ok(&e, "aiw_memory_review", json!({"id": coffee.id, "action": "restore"})).await;
+        assert_eq!((answer["action"].clone(), answer["memory"]["status"].clone()), (json!("restore"), json!("active")));
+        assert_eq!(e.memory(&coffee.id).unwrap().status, "active");
+        assert!(e.audit().iter().any(|a| a.action == "memory.restore" && a.detail.contains(&coffee.id)));
+
+        // A proposal of the assistant is confirmed, or discarded for good.
+        let yes = propose(&e, "Preferisce lavorare la sera");
+        let no = propose(&e, "Ha un gatto di nome Pippo");
+        assert_eq!((yes.status.as_str(), no.status.as_str()), ("proposed", "proposed"));
+        let answer = ok(&e, "aiw_memory_review", json!({"id": yes.id, "action": "approve"})).await;
+        assert_eq!(answer["memory"]["status"], "active");
+        assert_eq!(e.memory(&yes.id).unwrap().status, "active");
+        let answer = ok(&e, "aiw_memory_review", json!({"id": no.id, "action": "reject"})).await;
+        assert!(answer["note"].as_str().unwrap().contains("eliminata per sempre"), "{answer}");
+        assert!(matches!(e.memory(&no.id), Err(Error::NotFound(_))));
+        // What is not a proposal cannot be rejected (that would delete a memory the person has), and what is
+        // not forgotten cannot be restored.
+        let err = run(&e, "aiw_memory_review", json!({"id": coffee.id, "action": "reject"})).await.unwrap_err();
+        assert!(matches!(err, Error::Conflict(_)), "{err}");
+        assert_eq!(e.memory(&coffee.id).unwrap().status, "active", "the refusal deleted nothing");
+        let err = run(&e, "aiw_memory_review", json!({"id": coffee.id, "action": "approve"})).await.unwrap_err();
+        assert!(matches!(err, Error::Conflict(_)), "{err}");
+        assert!(refused(&e, "aiw_memory_review", json!({"id": coffee.id, "action": "forget"})).await.contains("azione sconosciuta"));
+        let err = run(&e, "aiw_memory_review", json!({"id": "mem_inventato", "action": "approve"})).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound(_)), "{err}");
+        assert!(refused(&e, "aiw_memory_review", json!({"id": coffee.id})).await.contains("manca `action`"));
+        // The answer shows a short text, never a whole long memory.
+        let long = remember(&e, &format!("{} fine", "parola ".repeat(120)));
+        e.memory_forget(&long.id).unwrap();
+        let answer = ok(&e, "aiw_memory_review", json!({"id": long.id, "action": "restore"})).await;
+        assert!(answer["memory"]["text"].as_str().unwrap().chars().count() <= 161, "{answer}");
+    }
+
+    #[tokio::test]
+    async fn a_memory_or_every_memory_is_deleted_for_good_and_the_call_must_say_which() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let one = remember(&e, "Il compleanno è a maggio");
+        let two = remember(&e, "Usa il tema scuro");
+        remember(&e, "Lavora a Catania");
+        let tool = e.tool_registry().get("aiw_memory_delete").unwrap();
+        assert!(tool.subject(&json!({"id": one.id})).unwrap().contains("compleanno"));
+        assert_eq!(tool.subject(&json!({"all": true})).as_deref(), Some("tutti i ricordi"));
+        // Nothing, or both, is not a request.
+        assert!(refused(&e, "aiw_memory_delete", json!({})).await.contains("manca `id`"));
+        assert!(refused(&e, "aiw_memory_delete", json!({"id": one.id, "all": true})).await.contains("non tutti e due"));
+        assert!(refused(&e, "aiw_memory_delete", json!({"all": false})).await.contains("manca `id`"));
+        assert_eq!(e.memories(Some("all"), None).unwrap().len(), 3);
+        // One.
+        let answer = ok(&e, "aiw_memory_delete", json!({"id": one.id})).await;
+        assert_eq!(answer["deleted"]["id"], json!(one.id));
+        assert!(answer["note"].as_str().unwrap().contains("non si annulla"));
+        assert!(matches!(e.memory(&one.id), Err(Error::NotFound(_))));
+        let err = run(&e, "aiw_memory_delete", json!({"id": one.id})).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound(_)), "{err}");
+        assert!(e.memory(&two.id).is_ok(), "the others are still there");
+        assert!(e.audit().iter().any(|a| a.action == "memory.delete" && a.detail.contains(&one.id)));
+        // All of them, with the count.
+        let answer = ok(&e, "aiw_memory_delete", json!({"all": true})).await;
+        assert_eq!(answer["deleted"], 2);
+        assert!(e.memories(Some("all"), None).unwrap().is_empty());
+        assert!(e.audit().iter().any(|a| a.action == "memory.delete_all" && a.detail.contains("2 ricordi")));
+    }
 }
