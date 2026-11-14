@@ -10,7 +10,7 @@
 use crate::extract::{Json, Path};
 use crate::{ApiError, AppState};
 use aiw_core::api::AttachmentUpload;
-use aiw_core::events::SeqEvent;
+use aiw_core::events::{AgEvent, SeqEvent};
 use aiw_core::Error;
 use aiw_engine::Engine;
 use axum::extract::State;
@@ -164,12 +164,48 @@ struct Follow {
     queue: VecDeque<SeqEvent>,
     next_seq: u64,
     finished: bool,
+    /// `RUN_STARTED` (or a terminal event) has been seen: nothing is held back any more.
+    started: bool,
+    /// Events the engine emits before the agent loop sends `RUN_STARTED` (routing, runtime choice,
+    /// attachment warnings), held until it arrives so that the stream opens with it.
+    held: Vec<SeqEvent>,
+    /// Events ready to go out, in order.
+    ready: VecDeque<SeqEvent>,
     guard: CancelGuard,
 }
 
 impl Follow {
-    /// The next event of the run, `None` once the terminal one has been delivered.
+    /// The next event to send, `None` once the terminal one has been delivered. AG-UI wants
+    /// `RUN_STARTED` first: the `CUSTOM` events that precede it in the run log are sent right behind it
+    /// (their `id:` is then out of order, which clients do not rely on). A run that ends before
+    /// `RUN_STARTED` is sent as it happened.
     async fn next(&mut self) -> Option<SeqEvent> {
+        loop {
+            if let Some(e) = self.ready.pop_front() {
+                return Some(e);
+            }
+            let e = self.next_raw().await?;
+            if self.started {
+                return Some(e);
+            }
+            match &e.event.event {
+                AgEvent::RunStarted { .. } => {
+                    self.started = true;
+                    self.ready.push_back(e);
+                    self.ready.extend(self.held.drain(..));
+                }
+                ev if ev.is_terminal() => {
+                    self.started = true;
+                    self.ready.extend(self.held.drain(..));
+                    self.ready.push_back(e);
+                }
+                _ => self.held.push(e),
+            }
+        }
+    }
+
+    /// The next event of the run in log order, `None` once the terminal one has been taken.
+    async fn next_raw(&mut self) -> Option<SeqEvent> {
         loop {
             if self.finished {
                 return None;
@@ -247,6 +283,9 @@ pub(crate) async fn run_agent(
         queue,
         next_seq: 0,
         finished: false,
+        started: false,
+        held: vec![],
+        ready: VecDeque::new(),
         guard: CancelGuard { engine: s.engine.clone(), run_id: run_id.clone(), armed: true },
     };
     let events = stream::unfold(follow, |mut f| async move {
@@ -266,6 +305,7 @@ pub(crate) async fn run_agent(
 mod tests {
     use super::*;
     use crate::tests_security::{fixture, req, send, LAN};
+    use aiw_core::events::TimedEvent;
     use aiw_runtimes::ScriptedBackend;
     use axum::http::StatusCode;
     use axum::Router;
@@ -604,6 +644,45 @@ mod tests {
                 assert_eq!(v["error"], "percorso non trovato");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn the_stream_opens_with_run_started_even_when_the_engine_emitted_other_events_first() {
+        let (_app, e, _d, _w) = fixture(vec![]).await;
+        let ev = |seq: u64, event: AgEvent| SeqEvent { seq, event: TimedEvent::now(event) };
+        let custom = |name: &str| AgEvent::Custom { name: name.into(), value: json!({}) };
+        let started = || AgEvent::RunStarted { thread_id: "i".into(), run_id: "i".into() };
+        let finished = || AgEvent::RunFinished { thread_id: "i".into(), run_id: "i".into(), result: None };
+        let follow = |events: Vec<SeqEvent>| Follow {
+            rx: e.subscribe(),
+            engine: e.clone(),
+            run_id: "run_x".into(),
+            thread_id: "t".into(),
+            client_run_id: "r".into(),
+            queue: events.into(),
+            next_seq: 0,
+            finished: false,
+            started: false,
+            held: vec![],
+            ready: VecDeque::new(),
+            guard: CancelGuard { engine: e.clone(), run_id: "run_x".into(), armed: false },
+        };
+        let order = |mut f: Follow| async move {
+            let mut out = vec![];
+            while let Some(e) = f.next().await {
+                out.push(e.seq);
+            }
+            out
+        };
+        // Routing events come before the agent loop starts: RUN_STARTED still leads, the others keep their order.
+        let evs =
+            vec![ev(0, custom("aiw.route")), ev(1, custom("aiw.runtime")), ev(2, started()), ev(3, custom("aiw.x")), ev(4, finished())];
+        assert_eq!(order(follow(evs)).await, vec![2, 0, 1, 3, 4]);
+        // The usual order is untouched.
+        assert_eq!(order(follow(vec![ev(0, started()), ev(1, custom("aiw.x")), ev(2, finished())])).await, vec![0, 1, 2]);
+        // A run that fails before it starts: what happened, as it happened, and the stream ends.
+        let err = AgEvent::RunError { message: "no".into(), code: None };
+        assert_eq!(order(follow(vec![ev(0, custom("aiw.route")), ev(1, err)])).await, vec![0, 1]);
     }
 
     #[test]

@@ -17,7 +17,9 @@ l'**ingresso standard** del protocollo: un client AG-UI (`HttpAgent` di `@ag-ui/
    unite, una per riga) e i suoi file;
 2. sceglie la sessione AIW del `threadId` (o ne crea una), come descritto nella sezione «Thread e sessioni»;
 3. avvia il run e risponde `200` con `Content-Type: text/event-stream`: ogni evento è una riga `data: <json>` (con
-   `id:` uguale al numero d'ordine dell'evento nel run). Nei soli eventi `RUN_STARTED` e `RUN_FINISHED` i campi
+   `id:` uguale al numero d'ordine dell'evento nel run). Lo stream si apre sempre con `RUN_STARTED`: gli eventi `CUSTOM`
+   che il motore emette prima (scelta del profilo, avvisi sugli allegati) arrivano subito dopo, quindi in quel caso gli
+   `id:` non sono in ordine crescente. Nei soli eventi `RUN_STARTED` e `RUN_FINISHED` i campi
    `threadId` e `runId` sono quelli **inviati dal client**; il run interno ha un altro id, che trovi nell'intestazione
    `x-aiw-run-id`. L'intestazione `x-aiw-session-id` dice quale sessione AIW ha ricevuto il messaggio;
 4. chiude lo stream subito dopo `RUN_FINISHED` o `RUN_ERROR`.
