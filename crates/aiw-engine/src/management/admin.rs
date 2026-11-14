@@ -22,7 +22,10 @@
 //!   connector that is already stored (card, answer, audit, engine messages) is always shown in the safe
 //!   form of [`connector_target`], because what is stored can hold a secret the model must not see.
 
-use super::{args_safe_up_to, clip, hidden_values, redact, require_owner, text, url_safe};
+use super::{
+    args_safe_up_to, clip, hidden_values, is_flag, is_secret_flag, names_a_secret, names_only_what_it_is_about, redact, require_owner,
+    secret_assignment, text, url_safe,
+};
 use crate::{Engine, Inner};
 use aiw_core::api::{AgentProfile, McpServerConfig, SECRET_MASK};
 use aiw_core::config::{is_management_forbidden_key, is_management_protected_key, management_protected_keys};
@@ -695,6 +698,35 @@ fn status_text(error: &str, cfg: &McpServerConfig) -> String {
     text(&out, 200)
 }
 
+/// What the model may write in the command line beyond what [`looks_secret`] sees: no value for a name that says
+/// it is a secret, neither as the next argument (`--api-key abc`, `--token -abc`) nor in the same one
+/// (`--key=abc`, `--access-key=abc`, `-e API_KEY=abc`). A name that only says what its value is about
+/// (`--auth-type=basic`, `--key-file=/percorso`) may take one in the same argument. The refusal names the flag,
+/// never the value.
+fn check_args_names(args: &[String]) -> Result<()> {
+    const WAY_OUT: &str = "Se il programma legge il segreto da una variabile d'ambiente, dichiara il nome in `secret_env` e fai inserire il valore all'utente con aiw_secret_request.";
+    const NOT_A_SECRET: &str = "Se il valore non è un segreto e il nome del flag finisce con tipo, modalità, metodo, schema, file o percorso, scrivi flag e valore insieme con = (per esempio `--auth-type=basic`, `--key-file=/percorso`); negli altri casi chiedi all'utente di aggiungere l'argomento dalla scheda del connettore.";
+    let secret_value_name = |name: &str| names_a_secret(name) && !names_only_what_it_is_about(name);
+    for (i, arg) in args.iter().enumerate() {
+        if let Some(given) = secret_assignment(arg, secret_value_name) {
+            return Err(Error::Invalid(format!(
+                "L'argomento n. {} dà un valore a `{}`, un nome che indica un segreto: non scrivere il valore qui. {WAY_OUT} {NOT_A_SECRET}",
+                i + 1,
+                clip(given.name, 60)
+            )));
+        }
+        // `--api-key abc`: the value of a flag that names a secret is an argument of its own, unless the next one is a flag.
+        if is_secret_flag(arg) && args.get(i + 1).is_some_and(|next| !is_flag(next)) {
+            return Err(Error::Invalid(format!(
+                "L'argomento n. {} (`{}`) è il nome di un segreto seguito da un valore: non scrivere il valore qui. {WAY_OUT} {NOT_A_SECRET}",
+                i + 1,
+                clip(arg, 60)
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn valid_env_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -831,20 +863,8 @@ fn connector_config(e: &Engine, a: &ConnectorArgs, inherit: bool) -> Result<McpS
                     )));
                 }
             }
-            // `--api-key abc`: the value of a flag that names a secret is an argument of its own.
             if let Some(args) = &a.args {
-                if let Some(i) = (0..args.len()).find(|&i| {
-                    args[i].starts_with('-')
-                        && !args[i].contains('=')
-                        && crate::secrets::is_secret_name(&args[i])
-                        && args.get(i + 1).is_some_and(|next| !next.starts_with('-'))
-                }) {
-                    return Err(Error::Invalid(format!(
-                        "L'argomento n. {} (`{}`) è il nome di un segreto seguito da un valore: non scrivere il valore qui. Se il programma legge il segreto da una variabile d'ambiente, dichiara il nome in `secret_env` e fai inserire il valore all'utente con aiw_secret_request; se il valore non è un segreto, scrivi flag e valore insieme con =.",
-                        i + 1,
-                        clip(&args[i], 60)
-                    )));
-                }
+                check_args_names(args)?;
             }
             cfg.command = Some(command);
             cfg.args = a.args.clone().or_else(|| same_kind.filter(|_| inherit).and_then(|s| s.args.clone())).filter(|v| !v.is_empty());
@@ -1840,7 +1860,7 @@ mod tests {
     async fn a_connector_never_takes_a_secret_value_in_its_command_environment_headers_or_address() {
         let (e, _d, _w) = engine(vec![]).await;
         let github = "ghp_fakefakefakefakefake0123456789";
-        let cases: Vec<(Value, &str)> = vec![
+        let mut cases: Vec<(Value, &str)> = vec![
             (json!({"name": "a", "transport": "stdio", "command": PROGRAM, "env": {"GITHUB_TOKEN": github}}), "secret_env"),
             (
                 json!({"name": "a", "transport": "stdio", "command": PROGRAM, "env": {"DATABASE_URL": "postgres://utente:fake-pass-0042@db/x"}}),
@@ -1889,12 +1909,40 @@ mod tests {
             (json!({"name": "a", "transport": "grpc", "url": "http://x"}), "trasporto"),
             (json!({"transport": "http", "url": "http://127.0.0.1:9/mcp"}), "manca `name`"),
         ];
+        // The value of a flag that names a secret in the same argument (`--key=…`) is refused whatever the redactor knows of the
+        // name; so is a value that starts with a dash after such a flag, a variable in the form `NAME=value` and one nested in a flag.
+        let stdio = |args: Value| json!({"name": "a", "transport": "stdio", "command": PROGRAM, "args": args});
+        cases.extend([
+            (stdio(json!(["-e", "MY_PRIVATE_KEY=fake-variable-0006"])), "argomento n. 2"),
+            (stdio(json!(["--ok", "--env=DB_AUTH=fake-nested-0007"])), "argomento n. 2"),
+            (stdio(json!(["--token", "-fake-dash-value-0008"])), "argomento n. 1"),
+            (stdio(json!(["--ok", "--password", "-fake-dash-value-0008"])), "argomento n. 2"),
+            (stdio(json!(["--auth-type", "basic"])), "argomento n. 1"),
+            (stdio(json!(["--token", "--password", "fake-chain-0009"])), "argomento n. 2"),
+            (stdio(json!(["--key=••••••"])), "argomento n. 1"),
+            (stdio(json!(["--auth-type-token=basic"])), "argomento n. 1"),
+        ]);
         for (args, expected) in cases {
             let message = refused(&e, "aiw_connector_save", args.clone()).await;
             assert!(message.contains(expected), "{args}: {message}");
-            for fake in [github, "fake-pass-0042", "fake-key-12345678", "fake-token-1234567", "fake-token-9"] {
+            for fake in [
+                github,
+                "fake-pass-0042",
+                "fake-key-12345678",
+                "fake-token-1234567",
+                "fake-token-9",
+                "fake-variable-0006",
+                "fake-nested-0007",
+                "fake-dash-value-0008",
+                "fake-chain-0009",
+            ] {
                 assert!(!message.contains(fake), "the refusal repeats a secret value: {message}");
             }
+        }
+        for (flag, value) in INLINE_SECRET_FLAGS {
+            let message = refused(&e, "aiw_connector_save", stdio(json!(["--ok", format!("{flag}={value}")]))).await;
+            assert!(message.contains("argomento n. 2") && message.contains(&format!("`{flag}`")), "{flag}: {message}");
+            assert!(!message.contains(value), "the refusal repeats the value of {flag}: {message}");
         }
         assert!(e.mcp_servers().is_empty(), "a refused call stored nothing");
         assert!(e.audit().iter().all(|a| a.action != "connector.save" && a.action != "mcp_approve"));
@@ -1907,6 +1955,17 @@ mod tests {
         .await;
         let saved = stored(&e, answer["id"].as_str().unwrap());
         assert_eq!(Value::Object(saved.env.unwrap()), json!({"LANG": "it_IT.UTF-8", "RETRIES": "3", "VERBOSE": "true"}));
+        // A name that says only what its value is about may take one in the same argument, and a flag that names a secret may be
+        // followed by another flag (it has no value then); the card and the answer still hide them like any secret name.
+        let args = ["--key-file=/percorso/chiave.json", "--credentials-path=/etc/x", "--no-auth", "--verbose", "-v", "--keyboard"];
+        let answer =
+            ok(&e, "aiw_connector_save", json!({"name": "ok2", "transport": "stdio", "command": PROGRAM, "args": args, "enabled": false}))
+                .await;
+        assert_eq!(stored(&e, answer["id"].as_str().unwrap()).args, Some(args.map(String::from).to_vec()));
+        assert_eq!(
+            answer["target"],
+            json!(format!("{PROGRAM} --key-file={SECRET_MASK} --credentials-path={SECRET_MASK} --no-auth {SECRET_MASK} -v --keyboard"))
+        );
     }
 
     #[tokio::test]

@@ -199,6 +199,26 @@ pub(super) fn names_a_secret(name: &str) -> bool {
     crate::secrets::is_secret_name(name)
 }
 
+/// A name that contains a secret word but says what the value is about, not that it is one
+/// (`--auth-type`, `--key-file`, `--credentials-path`): its value may be written by the model. Only what the
+/// name ends with counts, so a longer name (`--key-file-contents`) is still taken for a secret. Reading the
+/// arguments back never makes this exception: hiding too much is the safe side.
+pub(super) fn names_only_what_it_is_about(name: &str) -> bool {
+    let last = name.rsplit(['-', '_', '.']).next().unwrap_or_default().to_ascii_lowercase();
+    ["type", "mode", "method", "scheme", "file", "path"].contains(&last.as_str())
+}
+
+/// Is `arg` a flag (`-v`, `--verbose`), as opposed to the value of the flag before it? A value that starts
+/// with a dash (`-abc123`) is not one.
+pub(super) fn is_flag(arg: &str) -> bool {
+    let mut chars = arg.chars();
+    match (chars.next(), chars.next(), chars.next()) {
+        (Some('-'), Some(c), None) => c.is_ascii_alphabetic(),
+        (Some('-'), Some('-'), Some(c)) => c.is_ascii_alphabetic(),
+        _ => false,
+    }
+}
+
 /// The arguments of a command line, without the value that follows a flag that names a secret
 /// (`--token abc`) nor the value given to a name that names one (`--key=abc`, `KEY=abc`): the name stays,
 /// the value is [`SECRET_MASK`](aiw_core::api::SECRET_MASK). A name that only contains a secret word
@@ -282,6 +302,43 @@ mod tests {
     use std::time::Duration;
 
     const OWNER: RunOrigin = RunOrigin { owner: true, questions: true, secrets: true };
+
+    #[test]
+    fn a_value_given_to_a_secret_name_is_found_wherever_the_name_stands() {
+        let find = |a: &str| secret_assignment(a, names_a_secret).map(|g| (g.name.to_string(), g.prefix.to_string(), g.value.to_string()));
+        let found = |name: &str, prefix: &str, value: &str| Some((name.to_string(), prefix.to_string(), value.to_string()));
+        assert_eq!(find("--key=abc"), found("--key", "--key=", "abc"));
+        assert_eq!(find("--access-key="), found("--access-key", "--access-key=", ""));
+        assert_eq!(find("MY_PRIVATE_KEY=a=b"), found("MY_PRIVATE_KEY", "MY_PRIVATE_KEY=", "a=b"));
+        assert_eq!(find("--env=DB_AUTH=abc"), found("DB_AUTH", "--env=DB_AUTH=", "abc"));
+        assert_eq!(find("--url=https://h.example/mcp?a=1&token=abc"), found("token", "--url=https://h.example/mcp?a=1&token=", "abc"));
+        assert_eq!(find("--città-key=abc"), found("-key", "--città-key=", "abc"));
+        // No secret name before an `=`, or no `=` at all: nothing to hide here (a host that holds a secret word is not a name).
+        for none in
+            ["--port=8080", "--verbose", "", "=", "=key", "è=1", "https://auth.example.org/keys?a=1", "--token", "key", "--path=/a b/key"]
+        {
+            assert!(find(none).is_none(), "{none}");
+        }
+    }
+
+    #[test]
+    fn a_name_that_says_what_its_value_is_about_is_told_from_one_that_says_it_is_a_secret_and_a_flag_from_a_value() {
+        for about in ["--auth-type", "--key-file", "--credentials-path", "AUTH_MODE", "--token.method", "--auth-scheme", "--KEY-FILE"] {
+            assert!(names_a_secret(about) && names_only_what_it_is_about(about), "{about}");
+        }
+        for secret in
+            ["--key", "--access-key", "--private-key", "--auth", "--credentials", "--auth-type-token", "--key-file-contents", "TOKEN"]
+        {
+            assert!(names_a_secret(secret) && !names_only_what_it_is_about(secret), "{secret}");
+        }
+        for flag in ["-v", "--verbose", "--no-auth", "-X"] {
+            assert!(is_flag(flag), "{flag}");
+        }
+        for value in ["-abc123", "-1", "--", "-", "abc", "", "--1abc", "-é", "---x"] {
+            assert!(!is_flag(value), "{value}");
+        }
+        assert!(is_secret_flag("--token") && is_secret_flag("-key") && !is_secret_flag("--token=a") && !is_secret_flag("token"));
+    }
 
     /// A management tool that changes "something": it checks the owner like the real ones do and counts the calls.
     struct FakeChange {
