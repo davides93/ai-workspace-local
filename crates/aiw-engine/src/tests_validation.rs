@@ -275,11 +275,12 @@ async fn the_internal_tools_are_listed_and_cannot_be_switched() {
     e.set_tool_enabled("shell", false).unwrap();
     assert!(!e.tools().iter().find(|t| t.name == "shell").unwrap().enabled);
     assert!(matches!(e.set_tool_enabled("inesistente", false), Err(Error::NotFound(_))));
-    // Every name an agent of the app lists is a name of this list.
+    // Every name an agent of the app lists is a name of this list, except the management tools of the
+    // Assistant that a build has not registered yet (the parts of the build that register them are separate).
     let listed: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
     for a in e.agents().unwrap() {
         for t in a.tools.iter().filter(|t| *t != "*") {
-            assert!(listed.contains(t), "{} lists `{t}`, which GET /api/tools does not show", a.id);
+            assert!(listed.contains(t) || crate::management::is_known(t), "{} lists `{t}`, which GET /api/tools does not show", a.id);
         }
     }
 }

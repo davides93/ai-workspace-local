@@ -1606,7 +1606,9 @@ impl Engine {
             .agents()
             .unwrap_or_default()
             .into_iter()
-            .filter(|a| a.id != agent.id)
+            // The Assistant is the agent the person talks to: as a sub-agent it would have none of its management
+            // tools, so the other agents are not offered it (their `agent` and `handoff` tools stay as they were).
+            .filter(|a| a.id != agent.id && a.id != defaults::ASSISTANT_ID)
             .map(|a| (a.id, a.description))
             .chain(self.remote_subagents())
             .collect();

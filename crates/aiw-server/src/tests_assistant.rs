@@ -234,3 +234,50 @@ async fn the_policy_page_shows_only_the_rules_of_the_person() {
     assert_eq!(policy["rules"], own["rules"]);
     assert!(!policy.to_string().contains("aiw_"), "{policy}");
 }
+
+#[tokio::test]
+async fn the_assistant_is_listed_and_saved_back_by_the_api_and_the_tool_list_breaks_on_nothing() {
+    let (app, e, _d, _w) = fixture(vec![]).await;
+    let (st, agents) = dispatch(app.clone(), "GET", "/api/agents", None).await;
+    assert_eq!(st, 200, "{agents}");
+    let a = agents.as_array().unwrap().iter().find(|a| a["id"] == "assistant").expect("the Assistant is among the agents").clone();
+    assert_eq!((a["name"].as_str(), a["mode"].as_str(), a["sandbox"].as_str()), (Some("Assistente"), Some("ask"), Some("workspace-write")));
+    assert_eq!(a["inference_profile"], "auto:agent");
+    assert_eq!(a["max_turns"], 40);
+    assert_eq!(a["delegate_tools"], json!(["*"]));
+    assert_eq!(a["tools"].as_array().unwrap().len(), 25);
+    // Its tool list names tools this build has not registered: the editor of the Developer view saves it back all the same,
+    // and the extra field survives.
+    let (st, saved) = dispatch(app.clone(), "PUT", "/api/agents/assistant", Some(a.clone())).await;
+    assert_eq!(st, 200, "{saved}");
+    assert_eq!(saved["delegate_tools"], json!(["*"]));
+    assert_eq!(saved["tools"], a["tools"]);
+    // An agent seeded by the app is not deleted.
+    let (st, body) = dispatch(app.clone(), "DELETE", "/api/agents/assistant", None).await;
+    assert_eq!(st, 409, "{body}");
+    // The Developer view's list of tools holds what is registered (the engine registers `aiw_inspect`) and answers 200.
+    let (st, tools) = dispatch(app.clone(), "GET", "/api/tools", None).await;
+    assert_eq!(st, 200);
+    let names: Vec<&str> = tools.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"aiw_inspect") && names.contains(&"shell"), "{names:?}");
+    let inspect = tools.as_array().unwrap().iter().find(|t| t["name"] == "aiw_inspect").unwrap();
+    assert_eq!(inspect["risk"], "read");
+    // A run of the Assistant started from the chat route works with the tools it has, and `aiw_inspect` answers in it.
+    e.register_native_runtime(
+        "llama-embedded",
+        Arc::new(ScriptedBackend::new(vec![
+            ScriptedBackend::tool_turn("i1", "aiw_inspect", json!({"topic": "overview"})),
+            ScriptedBackend::text_turn("Vedo il tuo computer."),
+        ])),
+    );
+    let (_, ses) = dispatch(app.clone(), "POST", "/api/sessions", Some(json!({"agent_id": "assistant"}))).await;
+    let sid = ses["id"].as_str().unwrap().to_string();
+    let (st, run) =
+        dispatch(app.clone(), "POST", &format!("/api/sessions/{sid}/runs"), Some(json!({"input": "come sta il mio computer?"}))).await;
+    assert_eq!(st, 200, "{run}");
+    wait_done(&e, run["run_id"].as_str().unwrap()).await;
+    let messages = e.messages(&sid).unwrap();
+    let result = messages.iter().find(|m| m.role == "tool").expect("the tool answered").content.clone();
+    assert!(result.contains("installed_models") && !result.contains("disponibile solo"), "{result}");
+    assert_eq!(messages.last().unwrap().content, "Vedo il tuo computer.");
+}
