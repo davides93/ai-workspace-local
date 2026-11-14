@@ -20,7 +20,7 @@
 //! audit row (`secret.set`) holds the `target` only, and an error of the destination is cleaned of
 //! the value before it is returned.
 
-use super::inspect::{args_safe, clip, url_safe};
+use super::{args_safe, clip, url_safe};
 use super::{require_origin, require_owner};
 use crate::{Engine, Inner, PendingQuestion, PendingSecret};
 use aiw_core::api::*;

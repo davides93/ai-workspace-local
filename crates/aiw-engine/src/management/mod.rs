@@ -120,6 +120,150 @@ pub(crate) fn require_owner(engine: &Engine, ctx: &ToolContext) -> Result<RunOri
     Ok(origin)
 }
 
+// ------------------------------------------------------------------ text for the model
+//
+// What a management tool tells the model, the confirmation card, the events and the audit goes through
+// these helpers, so that every area hides the same things in the same way.
+
+/// `s` cut to `max` characters (with an ellipsis when it was longer).
+pub(super) fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max).collect::<String>())
+    }
+}
+
+/// Free text from elsewhere (an error, a memory, an argument): `token=…`, `password: …`, `Bearer …` and
+/// credentials in URLs are hidden by the redactor of the diagnostics.
+pub(super) fn redact(s: &str) -> String {
+    static PATTERNS: std::sync::OnceLock<Vec<(regex::Regex, &'static str)>> = std::sync::OnceLock::new();
+    crate::diagnostics::scrub_line(PATTERNS.get_or_init(crate::diagnostics::line_patterns), s)
+}
+
+/// [`clip`], then [`redact`].
+pub(super) fn text(s: &str, max: usize) -> String {
+    redact(&clip(s, max))
+}
+
+/// An address without what could be a secret: no user or password, no query, no fragment, and a path
+/// segment that looks like a token (long) cut.
+pub(super) fn url_safe(raw: &str) -> String {
+    let Ok(mut u) = reqwest::Url::parse(raw.trim()) else { return "(indirizzo non leggibile)".into() };
+    let _ = u.set_username("");
+    let _ = u.set_password(None);
+    u.set_query(None);
+    u.set_fragment(None);
+    let path: Vec<String> =
+        u.path().split('/').map(|s| if s.chars().count() > 20 { "omesso".to_string() } else { s.to_string() }).collect();
+    u.set_path(&path.join("/"));
+    u.to_string()
+}
+
+/// A value given to a name in one argument (`--key=abc`, `KEY=abc`, `--env=KEY=abc`, `…?access-key=abc`).
+pub(super) struct Assignment<'a> {
+    /// The name, as written (`--access-key`).
+    pub name: &'a str,
+    /// The argument up to and including the `=` that gives the value (`--env=KEY=`).
+    pub prefix: &'a str,
+    /// What follows that `=`, to the end of the argument.
+    pub value: &'a str,
+}
+
+/// The first value of `arg` that is given to a name `is_secret` says is a secret. The name is the run of
+/// letters, digits, `_`, `.` and `-` just before each `=`, so a flag (`--key`), a variable (`API_KEY`), a
+/// name nested in a flag (`--env=API_KEY=abc`) and a query parameter (`?access-key=abc`) are all found,
+/// while the host or the path of an address that has no `=` of its own is not taken for a name.
+pub(super) fn secret_assignment<'a>(arg: &'a str, is_secret: impl Fn(&str) -> bool) -> Option<Assignment<'a>> {
+    let mut from = 0;
+    while let Some(offset) = arg[from..].find('=') {
+        let eq = from + offset;
+        let before = &arg[..eq];
+        let start = before
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !(c.is_ascii_alphanumeric() || "_.-".contains(*c)))
+            .map_or(0, |(i, c)| i + c.len_utf8());
+        let name = &before[start..];
+        if !name.is_empty() && is_secret(name) {
+            return Some(Assignment { name, prefix: &arg[..=eq], value: &arg[eq + 1..] });
+        }
+        from = eq + 1;
+    }
+    None
+}
+
+/// Does the name of a flag or variable look like a secret? The word list of the connectors' secret headers
+/// and variables, so that what the interface hides and what is hidden here never drift apart.
+pub(super) fn names_a_secret(name: &str) -> bool {
+    crate::secrets::is_secret_name(name)
+}
+
+/// A name that contains a secret word but says what the value is about, not that it is one
+/// (`--auth-type`, `--key-file`, `--credentials-path`): its value may be written by the model. Only what the
+/// name ends with counts, so a longer name (`--key-file-contents`) is still taken for a secret. Reading the
+/// arguments back never makes this exception: hiding too much is the safe side.
+pub(super) fn names_only_what_it_is_about(name: &str) -> bool {
+    let last = name.rsplit(['-', '_', '.']).next().unwrap_or_default().to_ascii_lowercase();
+    ["type", "mode", "method", "scheme", "file", "path"].contains(&last.as_str())
+}
+
+/// Is `arg` a flag (`-v`, `--verbose`), as opposed to the value of the flag before it? A value that starts
+/// with a dash (`-abc123`) is not one.
+pub(super) fn is_flag(arg: &str) -> bool {
+    let mut chars = arg.chars();
+    match (chars.next(), chars.next(), chars.next()) {
+        (Some('-'), Some(c), None) => c.is_ascii_alphabetic(),
+        (Some('-'), Some('-'), Some(c)) => c.is_ascii_alphabetic(),
+        _ => false,
+    }
+}
+
+/// The arguments of a command line, without the value that follows a flag that names a secret
+/// (`--token abc`) nor the value given to a name that names one (`--key=abc`, `KEY=abc`): the name stays,
+/// the value is [`SECRET_MASK`](aiw_core::api::SECRET_MASK). A name that only contains a secret word
+/// (`--keyboard=it`, `--auth-type=basic`) is taken for one, too. Each argument is cut at 200 characters.
+pub(super) fn args_safe(args: &[String]) -> Vec<String> {
+    args_safe_up_to(args, 200)
+}
+
+/// [`args_safe`] with the length at which each argument is cut.
+pub(super) fn args_safe_up_to(args: &[String], max: usize) -> Vec<String> {
+    let mut hide_next = false;
+    args.iter()
+        .map(|a| {
+            let masked = std::mem::replace(&mut hide_next, false);
+            // A flag that names a secret hides the argument after it, even when that one is hidden itself.
+            hide_next = is_secret_flag(a);
+            if masked {
+                return aiw_core::api::SECRET_MASK.to_string();
+            }
+            match secret_assignment(a, names_a_secret) {
+                Some(assignment) => format!("{}{}", text(assignment.prefix, max), aiw_core::api::SECRET_MASK),
+                None => text(a, max),
+            }
+        })
+        .collect()
+}
+
+/// A flag with no `=` whose name says that the argument after it is a secret (`--token`, `--api-key`).
+pub(super) fn is_secret_flag(arg: &str) -> bool {
+    arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg)
+}
+
+/// The values [`args_safe`] hides, so that a text that quotes one of them alone can be cleaned too.
+pub(super) fn hidden_values(args: &[String]) -> Vec<&str> {
+    let mut out = Vec::new();
+    for (i, a) in args.iter().enumerate() {
+        if let Some(assignment) = secret_assignment(a, names_a_secret) {
+            out.push(assignment.value);
+        } else if is_secret_flag(a) {
+            out.extend(args.get(i + 1).map(String::as_str));
+        }
+    }
+    out
+}
+
 /// Registers the management tools of every area. Called once, when the engine starts.
 pub(crate) fn register(engine: &Engine) {
     for tool in
@@ -158,6 +302,43 @@ mod tests {
     use std::time::Duration;
 
     const OWNER: RunOrigin = RunOrigin { owner: true, questions: true, secrets: true };
+
+    #[test]
+    fn a_value_given_to_a_secret_name_is_found_wherever_the_name_stands() {
+        let find = |a: &str| secret_assignment(a, names_a_secret).map(|g| (g.name.to_string(), g.prefix.to_string(), g.value.to_string()));
+        let found = |name: &str, prefix: &str, value: &str| Some((name.to_string(), prefix.to_string(), value.to_string()));
+        assert_eq!(find("--key=abc"), found("--key", "--key=", "abc"));
+        assert_eq!(find("--access-key="), found("--access-key", "--access-key=", ""));
+        assert_eq!(find("MY_PRIVATE_KEY=a=b"), found("MY_PRIVATE_KEY", "MY_PRIVATE_KEY=", "a=b"));
+        assert_eq!(find("--env=DB_AUTH=abc"), found("DB_AUTH", "--env=DB_AUTH=", "abc"));
+        assert_eq!(find("--url=https://h.example/mcp?a=1&token=abc"), found("token", "--url=https://h.example/mcp?a=1&token=", "abc"));
+        assert_eq!(find("--città-key=abc"), found("-key", "--città-key=", "abc"));
+        // No secret name before an `=`, or no `=` at all: nothing to hide here (a host that holds a secret word is not a name).
+        for none in
+            ["--port=8080", "--verbose", "", "=", "=key", "è=1", "https://auth.example.org/keys?a=1", "--token", "key", "--path=/a b/key"]
+        {
+            assert!(find(none).is_none(), "{none}");
+        }
+    }
+
+    #[test]
+    fn a_name_that_says_what_its_value_is_about_is_told_from_one_that_says_it_is_a_secret_and_a_flag_from_a_value() {
+        for about in ["--auth-type", "--key-file", "--credentials-path", "AUTH_MODE", "--token.method", "--auth-scheme", "--KEY-FILE"] {
+            assert!(names_a_secret(about) && names_only_what_it_is_about(about), "{about}");
+        }
+        for secret in
+            ["--key", "--access-key", "--private-key", "--auth", "--credentials", "--auth-type-token", "--key-file-contents", "TOKEN"]
+        {
+            assert!(names_a_secret(secret) && !names_only_what_it_is_about(secret), "{secret}");
+        }
+        for flag in ["-v", "--verbose", "--no-auth", "-X"] {
+            assert!(is_flag(flag), "{flag}");
+        }
+        for value in ["-abc123", "-1", "--", "-", "abc", "", "--1abc", "-é", "---x"] {
+            assert!(!is_flag(value), "{value}");
+        }
+        assert!(is_secret_flag("--token") && is_secret_flag("-key") && !is_secret_flag("--token=a") && !is_secret_flag("token"));
+    }
 
     /// A management tool that changes "something": it checks the owner like the real ones do and counts the calls.
     struct FakeChange {
