@@ -132,6 +132,29 @@ async fn mcp_secret_values_are_masked_in_exports() {
     assert_eq!(r.messages[1]["content"], format!("Il token è {REDACTED} e basta"));
 }
 
+/// A token the app stores that is not an MCP one (a model provider's, a secret setting) and has no shape a pattern
+/// could recognise: only its exact value gives it away. The export must hide it all the same.
+#[tokio::test]
+async fn every_secret_the_app_stores_is_masked_in_exports_not_only_the_mcp_ones() {
+    const PROVIDER: &str = "provider-9f8e7d6c5b4a3210";
+    const SETTING: &str = "brave-1a2b3c4d5e6f7089";
+    let turns = vec![ScriptedBackend::text_turn(&format!("Con {PROVIDER} scarico, e {SETTING} cerca."))];
+    let (e, _d, _w) = engine(turns).await;
+    e.set_provider_auth("hf", Some(Some(PROVIDER.into())), Some("http://127.0.0.1:9".into())).await.unwrap();
+    e.set_config("global", "search.brave_api_key", json!(SETTING)).unwrap();
+    let s = e.create_session("operator", None).unwrap();
+    let run = e.start_run(&s.id, format!("il mio token è {PROVIDER}")).await.unwrap();
+    wait_finished(&e, &run).await;
+    let masked = to_jsonl(&e.export_traces(&TraceFilter::default()).unwrap()).unwrap();
+    assert!(!masked.contains(PROVIDER) && !masked.contains(SETTING), "{masked}");
+    assert!(
+        masked.contains(&format!("il mio token è {REDACTED}")) && masked.contains(&format!("Con {REDACTED} scarico, e {REDACTED} cerca."))
+    );
+    // Without masking the values are there: the check above looks at something real.
+    let plain = to_jsonl(&e.export_traces(&TraceFilter { redact: false, ..Default::default() }).unwrap()).unwrap();
+    assert!(plain.contains(PROVIDER) && plain.contains(SETTING));
+}
+
 #[tokio::test]
 async fn tool_messages_citing_excluded_paths_lose_their_content() {
     let turns = vec![

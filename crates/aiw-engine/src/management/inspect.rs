@@ -151,7 +151,7 @@ fn scrub(v: &mut Value, secrets: &[String]) {
 
 // ------------------------------------------------------------------ helpers
 
-fn clip(s: &str, max: usize) -> String {
+pub(super) fn clip(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
@@ -172,7 +172,7 @@ fn text(s: &str, max: usize) -> String {
 
 /// An address without what could be a secret: no user or password, no query, no fragment, and a
 /// path segment that looks like a token (long) cut.
-fn url_safe(raw: &str) -> String {
+pub(super) fn url_safe(raw: &str) -> String {
     let Ok(mut u) = reqwest::Url::parse(raw.trim()) else { return "(indirizzo non leggibile)".into() };
     let _ = u.set_username("");
     let _ = u.set_password(None);
@@ -186,7 +186,7 @@ fn url_safe(raw: &str) -> String {
 
 /// The arguments of a command line, without what follows a flag that names a secret (`--token abc`)
 /// and with `--key=abc` hidden by the redactor.
-fn args_safe(args: &[String]) -> Vec<String> {
+pub(super) fn args_safe(args: &[String]) -> Vec<String> {
     let mut hide_next = false;
     args.iter()
         .map(|a| {

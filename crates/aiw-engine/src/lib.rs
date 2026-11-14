@@ -123,6 +123,28 @@ pub(crate) struct PendingApproval {
     session_id: Option<String>,
 }
 
+/// A question of `ask_user` waiting for the person (see `management::interaction`).
+pub(crate) struct PendingQuestion {
+    question: Question,
+    tx: oneshot::Sender<(QuestionOutcome, Option<QuestionAnswer>)>,
+}
+
+/// A request for a secret waiting for the person. It never holds a value: the value is written to its
+/// destination the moment it arrives (see `management::interaction`).
+pub(crate) struct PendingSecret {
+    request: SecretRequest,
+    /// How the wait ends, and what else the model is told (a `hint`) when the outcome alone would mislead.
+    tx: oneshot::Sender<(SecretOutcome, Option<&'static str>)>,
+    /// The destination as it was resolved when the request was made (raw, never shown or sent anywhere):
+    /// the value is written only if the destination is still the same one.
+    identity: String,
+    /// A value is being written to the destination: no second answer meanwhile.
+    busy: bool,
+    /// The time of the request ran out while a value was being written: the request is closed with
+    /// `timeout` as soon as that write ends without storing the value.
+    expired: bool,
+}
+
 /// Body and stored form of the policy. `rules` is required: a body without it must not be read
 /// as "no rules" and wipe the existing ones.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -169,6 +191,10 @@ pub(crate) struct Inner {
     pub mcp: Mutex<HashMap<String, Arc<McpClient>>>,
     /// Questions an MCP server asked the person (`elicitation/create`), waiting for an answer.
     pub elicitations: Mutex<HashMap<String, (McpElicitation, oneshot::Sender<aiw_tools::mcp::Elicited>)>>,
+    /// Questions of `ask_user` waiting for the person, by id.
+    pub questions: Mutex<HashMap<String, PendingQuestion>>,
+    /// Requests for a secret of `aiw_secret_request` waiting for the person, by id.
+    pub secret_requests: Mutex<HashMap<String, PendingSecret>>,
     /// OAuth sign-ins in progress, by `state` (see `mcp_oauth`).
     pub oauth_pending: Mutex<HashMap<String, mcp_oauth::PendingAuth>>,
     pub store: Store,
@@ -331,6 +357,8 @@ impl Engine {
             route_failures: Default::default(),
             mcp: Default::default(),
             elicitations: Default::default(),
+            questions: Default::default(),
+            secret_requests: Default::default(),
             oauth_pending: Default::default(),
             store,
             runs: Default::default(),
@@ -671,8 +699,12 @@ impl Engine {
         });
     }
 
-    /// Kill switch: cancels runs, rejects approvals, stops AIW-started sidecars and the browser.
+    /// Kill switch: cancels runs, rejects approvals, closes the questions and the requests for a
+    /// secret that wait for the person, stops AIW-started sidecars and the browser.
     pub async fn kill(&self) -> Value {
+        // The questions and the requests for a secret close first, each with its own outcome: the tool
+        // that waits for one wakes up with `cancelled` and writes the closing event itself, before the run ends.
+        let (n_questions, n_secrets) = self.close_interactions();
         let runs: Vec<CancellationToken> = self.0.runs.lock().unwrap().values().filter(|r| !r.done).map(|r| r.cancel.clone()).collect();
         for c in &runs {
             c.cancel();
@@ -691,16 +723,18 @@ impl Engine {
         let sidecars = self.0.runtimes.stop_all().await;
         let browser = self.0.browser.close().await;
         let detail = format!(
-            "{} run, {} conferme, {} addestramenti, {} canali, {} sidecar fermati{}",
+            "{} run, {} conferme, {} domande, {} richieste di segreti, {} addestramenti, {} canali, {} sidecar fermati{}",
             runs.len(),
             n_appr,
+            n_questions,
+            n_secrets,
             training.len(),
             channels_stopped,
             sidecars,
             if browser { ", browser chiuso" } else { "" }
         );
         self.audit_system("kill", &detail);
-        json!({"runs": runs.len(), "approvals": n_appr, "training": training.len(), "channels": channels_stopped, "sidecars": sidecars, "browser": browser})
+        json!({"runs": runs.len(), "approvals": n_appr, "questions": n_questions, "secret_requests": n_secrets, "training": training.len(), "channels": channels_stopped, "sidecars": sidecars, "browser": browser})
     }
 
     // ------------------------------------------------------------------ runtimes
