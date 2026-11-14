@@ -66,7 +66,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       # Windows arm64: rustup and an arm64-native libclang (bindgen) before the toolchain action.
@@ -276,7 +276,7 @@ jobs:
         run: |
           rpm_version=$(node -p "require('./src-tauri/tauri.conf.json').version.replace('-', '~')")
           npx tauri build --bundles rpm --config "{\"version\":\"$rpm_version\"}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: aiw-desktop-${{ matrix.os }}
           path: |
@@ -359,7 +359,7 @@ jobs:
           src=target/release/aiw
           if [ "$RUNNER_OS" = "Windows" ]; then src=/c/t/release/aiw.exe; fi
           cp "$src" "dist/${{ matrix.asset }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: aiw-daemon-${{ matrix.os }}
           path: dist/${{ matrix.asset }}
@@ -458,7 +458,7 @@ jobs:
           src=target/release/aiw
           if [ "$RUNNER_OS" = "Windows" ]; then src=/c/t/release/aiw.exe; fi
           cp "$src" "dist/${{ matrix.asset }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: aiw-daemon-${{ matrix.os }}-cuda12
           path: dist/${{ matrix.asset }}
@@ -482,7 +482,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: aiw-*
