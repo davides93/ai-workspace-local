@@ -11,6 +11,7 @@ import type { MessageKey } from "./it";
 import { activityEn } from "./messages/en/activity";
 import { agentsEn } from "./messages/en/agents";
 import { approvalsEn } from "./messages/en/approvals";
+import { askEn } from "./messages/en/ask";
 import { capabilitiesEn } from "./messages/en/capabilities";
 import { channelsEn } from "./messages/en/channels";
 import { chatEn } from "./messages/en/chat";
@@ -41,6 +42,7 @@ export const en: Record<MessageKey, string> = {
   ...activityEn,
   ...agentsEn,
   ...approvalsEn,
+  ...askEn,
   ...capabilitiesEn,
   ...channelsEn,
   ...chatEn,

@@ -2,7 +2,7 @@ import { t } from "../i18n";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
+  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -218,6 +218,18 @@ export interface Transport {
   runEvents(runId: string): Promise<AgEvent[]>;
   approvals(): Promise<ApprovalRequest[]>;
   respondApproval(id: string, decision: "allow" | "deny", remember?: boolean): Promise<void>;
+  /** Questions of the agent waiting for the person (GET /api/questions). */
+  questions(): Promise<Question[]>;
+  /** Answers a question, or declines it («Non ora»). 400: the answer does not fit (the question stays open); 404: already closed. */
+  answerQuestion(id: string, reply: QuestionReply): Promise<void>;
+  /** Requests for a secret waiting for the person (GET /api/secret-requests): never with a value. */
+  secretRequests(): Promise<SecretRequest[]>;
+  /**
+   * Provides the secret asked for, or declines. The value goes in this call and is kept nowhere (not in a cache, not in
+   * the stored conversation). 400/401: the destination refused it (the request stays open); 403: this device may not
+   * provide secrets; 404: already closed.
+   */
+  answerSecretRequest(id: string, reply: SecretReply): Promise<{ stored?: boolean }>;
 
   workflows(): Promise<WorkflowDef[]>;
   saveWorkflow(w: WorkflowDef): Promise<WorkflowDef>;
@@ -324,7 +336,10 @@ export async function createTransport(): Promise<Transport> {
     // `?scenario=first-run`: a demo that starts empty (used by the end-to-end tests).
     const scenario = params.get("scenario");
     if (isMockScenario(scenario)) applyMockScenario(scenario);
-    return new MockTransport();
+    const demo = new MockTransport();
+    // `?scope=device`: the demo as a paired device, which may not provide secrets (the end-to-end tests of the card that says so).
+    if (params.get("scope") === "device") demo.secretScope = "device";
+    return demo;
   }
   if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
     const { TauriTransport } = await import("./tauri");

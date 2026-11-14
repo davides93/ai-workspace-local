@@ -22,6 +22,9 @@
 .apv-compact .apv-tool { font-size: var(--fs-sm); }
 .apv-reason { margin: 0; font-size: var(--fs-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
 
+.apv-external { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--r-sm); background: var(--warn-soft); color: var(--fg); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.apv-external > svg { flex: none; margin-top: 1px; color: var(--warn); }
+
 .apv-args { min-width: 0; }
 .apv-args > summary { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; list-style: none; }
 .apv-args > summary::-webkit-details-marker { display: none; }
