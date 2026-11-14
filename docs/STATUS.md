@@ -1,5 +1,16 @@
 # Stato dell'app e come procedere
 
+> Aggiornamento 14 novembre 2026 · release v0.5.0-beta.10, build store 5012. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
+
+## Aggiornamento dopo le PR #90–#97
+
+- Integrati fix delle porte sidecar, aggiornamenti Actions/UI, primo endpoint AG-UI, copia/cancellazione con checkpoint e recupero delle catture della chat dopo il ricaricamento.
+- AG-UI è un primo taglio: mapping thread in memoria; stato, contesto e tool client ignorati; nessuna prova con client AG-UI reale. Requisiti residui nella issue #69, guida in `docs/agui.md`.
+- Spazi condivisi: decisione di discovery approvata, non implementazione. Prima si misurano due settimane di utilizzo; dettagli in `docs/design/spazi-condivisi.md` e follow-up #101.
+- Verifica combinata locale macOS: fmt/clippy, 1139 test Rust passati (8 ignorati), 999 test UI, typecheck/build, 8 E2E e 221 test di accessibilità. Questo non sostituisce i test con servizi/modelli/dispositivi reali.
+- Issue completate chiuse tramite merge: #8, #74 e task #98–#100. #18, #28, #69 e la roadmap #5 restano aperte per i requisiti residui.
+- TypeScript resta 5.9: l’aggiornamento a 7 (#84) richiede prima la compatibilità degli script i18n con l’API JS.
+
 > 2026-11-03 · v0.4 · Basato su un audit del codice (non della documentazione) eseguito per layer, con
 > verifica avversariale di ogni lacuna e riferimenti `file:riga`, aggiornato dopo i giri di verifica
 > end to end, la revisione di sicurezza e la revisione dell'agent loop. Le voci **v0.4** indicano cosa
@@ -67,7 +78,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 
 | Funzione | Stato | Note |
 |---|---|---|
-| File: read, write, edit, list, glob, grep, move | ✅ | **v0.4** confinamento anche rispetto ai symlink; radici di lettura che sono symlink ignorate; `read_file` limitato a 16 MB, `grep` controlla la dimensione prima di leggere |
+| File: read, write, edit, list, glob, grep, move, copy, delete | ✅ | **v0.4** confinamento anche rispetto ai symlink; radici di lettura che sono symlink ignorate; `read_file` limitato a 16 MB, `grep` controlla la dimensione prima di leggere; copia/cancellazione hanno checkpoint e rewind, `delete_file` richiede concessione esplicita |
 | Shell in sandbox: bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) | 🟡 | Linux: rete chiusa di default (`sandbox.shell_network`), cartella dei dati e credenziali (`sandbox.deny_read`) nascoste, variabili segrete tolte: **provato con bwrap vero**. macOS: stessa cosa con un profilo Seatbelt, **solo il testo del profilo è provato**, mai eseguito su un Mac. Windows: **rete non chiudibile e letture non nascondibili** (integrità bassa limita solo le scritture); le variabili segrete sono tolte. Le regole di policy leggono ogni comando di una riga composta |
 | `web_fetch` anti-SSRF | ✅ **v0.4** | redirect rivalidati a ogni salto, DNS fissato, IPv6 e range speciali bloccati; lettura limitata a 5 MB |
 | Ricerca web | 🟡 | strumento `web_search` (`aiw-tools/src/search.rs`) con `search.provider` = `auto` \| `duckduckgo` \| `searxng` \| `brave` \| `off`; chiave di Brave mascherata dall'API e solo a livello di macchina, indirizzo di SearXNG validato; sezione «Ricerca web» nelle Impostazioni; l'assistente proattivo la usa solo a `act_readonly`. **Mai provata contro i provider veri da questo ambiente**: i test usano un server locale con risposte scritte a mano nella forma attesa. Il parser di DuckDuckGo dipende dall'HTML della pagina `html.duckduckgo.com` e può smettere di funzionare se cambia; DuckDuckGo può chiedere una verifica anti-bot (l'errore lo dice). Gli agenti predefiniti già salvati non ricevono `web_search` da soli (solo le nuove installazioni) |

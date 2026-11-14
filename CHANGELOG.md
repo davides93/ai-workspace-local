@@ -2,6 +2,16 @@
 
 ## Non rilasciato
 
+## 0.5.0-beta.10 - pre-release
+
+- Runtime: `free_port` non riassegna porte appena consegnate a sidecar concorrenti; diagnostica dei test più utile.
+- GitHub Actions aggiornate alle major compatibili; UI su Vite 8/plugin React 6, aggiornamenti minor/patch e correzioni accessibilità senza disattivare regole.
+- Primo endpoint `POST /agui/{agent}` con SSE, allegati inline e annullamento alla chiusura: test in-process, client reale e interoperabilità completa ancora da verificare (#69).
+- Nuovi `copy_file` e `delete_file` con checkpoint/rewind; cancellazione con concessione esplicita.
+- Le catture dei tool sono recuperate dalla sessione e rimangono visibili dopo il ricaricamento della chat.
+- Discovery spazi condivisi approvata: misurazione per due settimane prima dell’eventuale MVP locale con revisioni. Nessuna pagina condivisa implementata.
+- Note storiche della prima beta corrette nel repository e nella GitHub Release; roadmap e issue aggiornate.
+
 ## 0.5.0-beta.9 - pre-release
 
 - Correzione dei test del router dipendenti dalla RAM/GPU del runner e del percorso dell’helper Foundation Models nel packaging Mac App Store; build store 5011.
