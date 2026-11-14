@@ -776,6 +776,11 @@ pub struct AgentProfile {
     /// of them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knowledge: Vec<String>,
+    /// Tools this agent can hand to its sub-agents without using them itself (`"*"`: every tool
+    /// that does not need an explicit grant). A sub-agent gets its own list narrowed to
+    /// `tools` + `delegate_tools` of the parent. Empty: only `tools` count, as always.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegate_tools: Vec<String>,
 }
 
 /// The four jobs a model can have inside one agent run.

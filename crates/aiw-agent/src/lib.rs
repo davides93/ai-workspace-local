@@ -20,7 +20,7 @@ pub mod thinking;
 pub use budget::RunBudget;
 pub use hooks::HookConfig;
 pub use internal::{internal_tools, InternalTool};
-pub use narrow::{narrow_sandbox, narrow_tools};
+pub use narrow::{narrow_sandbox, narrow_tools, narrow_tools_delegating};
 pub use policy::{Decision, Policy, PolicyRule};
 pub use runner::{to_msgs, user_msg, AgentRunner, RunHost, RunInput, RunOutcome, UserExtra};
 pub use skills::Skill;
@@ -144,6 +144,7 @@ mod tests {
                 candidate_profiles: vec![],
                 roles: None,
                 knowledge: vec![],
+                delegate_tools: vec![],
             },
             profile: InferenceProfile {
                 id: "p".into(),

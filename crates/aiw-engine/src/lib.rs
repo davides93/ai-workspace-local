@@ -1016,6 +1016,7 @@ impl Engine {
                     candidate_profiles: vec![],
                     roles: None,
                     knowledge: vec![],
+                    delegate_tools: vec![],
                 }
             }
         };
