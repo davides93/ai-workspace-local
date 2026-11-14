@@ -15,7 +15,7 @@
 
 use super::{require_origin, require_owner};
 use crate::{Engine, Inner};
-use aiw_core::api::{CatalogModel, PullRequest, RemoteModel, RemoteModelDetail, RuntimeCompat, SECRET_MASK};
+use aiw_core::api::{CatalogModel, LocalModel, ModelSource, PullRequest, RemoteModel, RemoteModelDetail, RuntimeCompat, SECRET_MASK};
 use aiw_core::{Error, Result};
 use aiw_models::hub::SearchQuery;
 use aiw_tools::{Risk, Tool, ToolContext, ToolOutput};
@@ -34,7 +34,7 @@ const MAX_LIMIT: usize = 30;
 
 pub(crate) fn tools(e: &Engine) -> Vec<Arc<dyn Tool>> {
     let weak = Arc::downgrade(&e.0);
-    vec![Arc::new(Search(weak.clone())), Arc::new(Download(weak))]
+    vec![Arc::new(Search(weak.clone())), Arc::new(Download(weak.clone())), Arc::new(Use(weak))]
 }
 
 // ------------------------------------------------------------------ shared helpers
@@ -579,6 +579,217 @@ fn cancel(e: &Engine, id: &str) -> Result<String> {
         ),
         other => format!("Il download di «{}» non è in corso (stato: {other}): non c'era niente da annullare.", text(&what, 120)),
     })
+}
+
+// ------------------------------------------------------------------ aiw_model_use
+
+/// The agent whose model is set when the call does not say.
+const DEFAULT_AGENT: &str = "assistant";
+/// What «auto» stands for: the profile that follows the model the adviser picks for an agent.
+const AUTO_PROFILE: &str = "auto:agent";
+
+/// Lowercase ASCII slug of a name (`qwen3-0.6b-q8_0` is `qwen3-0-6b-q8-0`); never empty and never `auto:…`.
+fn slug(name: &str) -> String {
+    let s: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let s: String = s.chars().take(40).collect::<String>().trim_end_matches('-').to_string();
+    if s.is_empty() {
+        "modello".into()
+    } else {
+        s
+    }
+}
+
+/// The local model an installed catalog entry became (its file in the models folder, or its repository).
+fn installed_catalog_model(models: &[LocalModel], c: &CatalogModel) -> Option<LocalModel> {
+    let ModelSource::Hf { repo, file } = &c.source else { return None };
+    let wanted_file = file.rsplit('/').next().unwrap_or(file);
+    models
+        .iter()
+        .find(|m| {
+            if file.is_empty() {
+                m.source.as_deref().and_then(|s| s.strip_prefix("hf:")).is_some_and(|s| s.split(['@', '#']).next() == Some(repo.as_str()))
+            } else {
+                m.path.as_deref().and_then(|p| std::path::Path::new(p).file_name()).and_then(|n| n.to_str()) == Some(wanted_file)
+            }
+        })
+        .cloned()
+}
+
+/// The installed model the person (or the model) means: by id, by name, or by catalog id once it is installed.
+fn local_model(e: &Engine, wanted: &str) -> Result<LocalModel> {
+    let models = e.models();
+    let lower = wanted.to_lowercase();
+    let by_id = models.iter().find(|m| m.id == wanted).or_else(|| models.iter().find(|m| m.id.to_lowercase() == lower));
+    if let Some(m) = by_id {
+        return Ok(m.clone());
+    }
+    // A name is enough when it is only one model's (two quantizations of a model share it).
+    let named: Vec<&LocalModel> = models.iter().filter(|m| m.name.to_lowercase() == lower).collect();
+    match named.as_slice() {
+        [m] => return Ok((*m).clone()),
+        [] => {}
+        many => {
+            let ids = many.iter().take(6).map(|m| m.id.as_str()).collect::<Vec<_>>().join(", ");
+            return Err(Error::Invalid(format!("più modelli si chiamano «{}»: indica l'id ({ids})", text(wanted, 80))));
+        }
+    }
+    if let Some(entry) = e.catalog().into_iter().find(|c| c.id == wanted) {
+        return installed_catalog_model(&models, &entry).ok_or_else(|| {
+            Error::NotFound(format!(
+                "«{}» è nel catalogo ma non è ancora installato: scaricalo prima con aiw_model_download (id {})",
+                entry.name, entry.id
+            ))
+        });
+    }
+    Err(Error::NotFound(format!("modello `{wanted}` non trovato tra quelli installati: guarda l'elenco con aiw_inspect (topic models)")))
+}
+
+/// The profile that pins `m`: the one a former call made (same model), or a new one under a free id.
+/// The runtime is left to the router, as the profiles of the adviser do, so that an engine that is
+/// stopped or installed later is picked up by itself.
+fn pinned_profile(e: &Engine, m: &LocalModel) -> Result<(aiw_core::api::InferenceProfile, bool)> {
+    let profiles = e.profiles()?;
+    let base = slug(&m.id);
+    let (mut id, mut n) = (base.clone(), 2);
+    loop {
+        match profiles.iter().find(|p| p.id == id) {
+            Some(p) if p.model == m.id => return Ok((p.clone(), false)),
+            Some(_) => {
+                id = format!("{base}-{n}");
+                n += 1;
+            }
+            None => break,
+        }
+    }
+    let fit = crate::adviser::local_fit(m, &e.device());
+    let context = crate::adviser::context_for(m.context_length, fit);
+    // `defaults::profile` makes the profile called `default`: the id and the name are this model's, so
+    // the global default (the fallback of every `auto:*` agent) is never touched.
+    let mut profile = crate::defaults::profile(format!("Modello scelto con l'Assistente: {}", m.name), "auto", &m.id, context);
+    profile.id = id;
+    profile.name = m.name.clone();
+    Ok((profile, true))
+}
+
+struct Use(Weak<Inner>);
+
+#[async_trait::async_trait]
+impl Tool for Use {
+    fn name(&self) -> &str {
+        "aiw_model_use"
+    }
+
+    fn description(&self) -> &str {
+        "Sceglie il modello che usa un assistente (di predefinito l'Assistente stesso). `model`: l'id di un modello già installato (da aiw_inspect, topic models; per uno del catalogo va bene anche il suo id), oppure `auto` per tornare alla scelta automatica del modello consigliato. Il modello deve essere già scaricato e un motore deve poterlo eseguire. Risponde con quello che usava prima, per poterlo rimettere. Chiede sempre la conferma dell'utente."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "required": ["model"],
+            "properties": {
+                "model": {"type": "string", "description": "Id di un modello installato, oppure `auto` (il modello consigliato per questo dispositivo)."},
+                "agent": {"type": "string", "description": "Id dell'assistente (da aiw_inspect, topic agents). Predefinito: assistant."}
+            }
+        })
+    }
+
+    fn risk(&self) -> Risk {
+        Risk::Write
+    }
+
+    fn explicit_grant(&self) -> bool {
+        true
+    }
+
+    /// What the confirmation card shows: which model, for which assistant.
+    fn subject(&self, args: &Value) -> Option<String> {
+        let model = text_arg(args, "model")?;
+        Some(format!("{model} → {}", text_arg(args, "agent").unwrap_or_else(|| DEFAULT_AGENT.into())))
+    }
+
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let engine = engine_of(&self.0)?;
+        require_owner(&engine, ctx)?;
+        match use_model(&engine, &args) {
+            Ok(said) => Ok(ToolOutput::text(finish(&engine, Answer::Text(said)))),
+            Err(err) => Err(safe_error(&engine, err)),
+        }
+    }
+}
+
+fn use_model(e: &Engine, args: &Value) -> Result<String> {
+    let Some(wanted) = text_arg(args, "model") else {
+        return Err(Error::Invalid(
+            "manca `model`: indica l'id di un modello installato (da aiw_inspect, topic models) oppure `auto`".into(),
+        ));
+    };
+    let agent_id = text_arg(args, "agent").unwrap_or_else(|| DEFAULT_AGENT.into());
+    // The agent first: an assistant that does not exist leaves nothing behind.
+    let mut agent = e
+        .agent(&agent_id)
+        .map_err(|_| Error::NotFound(format!("assistente `{agent_id}` non trovato: guarda l'elenco con aiw_inspect (topic agents)")))?;
+    let before = agent.inference_profile.clone();
+
+    if wanted.eq_ignore_ascii_case("auto") || wanted.eq_ignore_ascii_case(AUTO_PROFILE) {
+        agent.inference_profile = AUTO_PROFILE.into();
+        let name = agent.name.clone();
+        e.save_agent(agent).map_err(|err| explain("Non riesco a cambiare il modello dell'assistente", err))?;
+        e.audit_user("model.use", &format!("{agent_id}: {before} → {AUTO_PROFILE}"));
+        let now = match e.recommend().agent.installed {
+            Some(c) => format!("Adesso significa «{}».", text(&c.name, 100)),
+            None => "Per ora nessun modello installato è adatto: se ne può scaricare uno (aiw_model_search).".into(),
+        };
+        return Ok(format!(
+            "«{}» ({agent_id}) ora sceglie da solo il modello consigliato per questo dispositivo ({AUTO_PROFILE}). {now} Prima usava: {before}.",
+            text(&name, 100)
+        ));
+    }
+
+    let model = local_model(e, &wanted).map_err(|err| explain("Non riesco a scegliere il modello", err))?;
+    let route = e.route(&model.id, None, false);
+    let Some(best) = route.candidates.first() else {
+        let why =
+            route.excluded.iter().take(4).map(|x| format!("{}: {}", x.runtime_name, text(&x.reason, 80))).collect::<Vec<_>>().join("; ");
+        return Err(Error::Conflict(format!(
+            "Nessun motore può eseguire «{}» su questo dispositivo{}. Non ho cambiato nulla: si può installare o avviare un motore adatto (aiw_inspect, topic runtimes).",
+            text(&model.name, 100),
+            if why.is_empty() { String::new() } else { format!(" ({why})") }
+        )));
+    };
+    let engine_name = best.runtime_name.clone();
+
+    let (profile, created) = pinned_profile(e, &model).map_err(|err| explain("Non riesco a preparare il profilo del modello", err))?;
+    let profile = if created {
+        e.save_profile(profile).map_err(|err| explain("Non riesco a preparare il profilo del modello", err))?
+    } else {
+        profile
+    };
+    let name = agent.name.clone();
+    agent.inference_profile = profile.id.clone();
+    if let Err(err) = e.save_agent(agent) {
+        // The profile this call just made is of no use to anybody: do not leave it behind.
+        if created {
+            let _ = e.0.store.delete_doc("profile", &profile.id);
+        }
+        return Err(explain("Non riesco a cambiare il modello dell'assistente", err));
+    }
+    e.audit_user("model.use", &format!("{agent_id}: {before} → {} ({})", profile.id, model.id));
+    Ok(format!(
+        "«{}» ({agent_id}) ora usa «{}» (profilo `{}`; il motore lo sceglie l'app, adesso «{}»). Prima usava: {before}. Per tornare alla scelta automatica: aiw_model_use con model = auto.",
+        text(&name, 100),
+        text(&model.name, 100),
+        profile.id,
+        text(&engine_name, 60)
+    ))
 }
 
 #[cfg(test)]
@@ -1144,6 +1355,185 @@ mod tests {
         let said = call(&e, "aiw_model_download", json!({"id": "qwen3-0.6b"})).await.unwrap();
         assert!(!said.contains("Attenzione"), "{said}");
         call(&e, "aiw_model_download", json!({"cancel": download_id(&said)})).await.unwrap();
+    }
+
+    // ------------------------------------------------------------------ use
+
+    /// A 16 GB device where a scripted `llama-embedded` runs GGUF files, with two tiny models in the models folder.
+    async fn with_models() -> (Engine, tempfile::TempDir, tempfile::TempDir) {
+        let (e, d, w) = engine_on(16).await;
+        e.register_native_runtime("llama-embedded", Arc::new(aiw_runtimes::ScriptedBackend::new(vec![])));
+        for name in ["tiny-Q4_K_M.gguf", "mini-Q8_0.gguf"] {
+            std::fs::write(e.0.models_dir.join(name), gguf(6000)).unwrap();
+        }
+        (e, d, w)
+    }
+
+    fn profile_of(e: &Engine, agent: &str) -> String {
+        e.agent(agent).unwrap().inference_profile
+    }
+
+    #[tokio::test]
+    async fn a_model_is_pinned_with_a_profile_of_its_own_assigned_to_the_agent_and_auto_brings_the_adviser_back() {
+        let (e, data, _w) = with_models().await;
+        assert_eq!(profile_of(&e, "assistant"), "auto:agent");
+        let default_before = e.profile("default").unwrap();
+        let agents_before: Vec<(String, String)> = e.agents().unwrap().into_iter().map(|a| (a.id, a.inference_profile)).collect();
+        let profiles_before = e.profiles().unwrap().len();
+
+        let said = call(&e, "aiw_model_use", json!({"model": "tiny-q4_k_m"})).await.unwrap();
+        assert!(said.contains("ora usa «Qwen3 Test» (profilo `tiny-q4-k-m`") && said.contains("Prima usava: auto:agent"), "{said}");
+        assert!(
+            said.contains("adesso «llama.cpp (embedded)»") && said.contains("model = auto"),
+            "the engine the app would use now is named: {said}"
+        );
+        // The profile is pinned to the model, with the runtime left to the router, and it is the agent's.
+        let profile = e.profile("tiny-q4-k-m").unwrap();
+        assert_eq!((profile.model.as_str(), profile.name.as_str()), ("tiny-q4_k_m", "Qwen3 Test"));
+        let stored = e.0.store.get_doc::<aiw_core::api::InferenceProfile>("profile", "tiny-q4-k-m").unwrap().unwrap();
+        assert_eq!(stored.runtime_id, "auto");
+        assert!(stored.params.context.is_some_and(|c| (2048..=16384).contains(&c)), "{:?}", stored.params);
+        assert!(stored.description.as_deref().unwrap().contains("Qwen3 Test"));
+        assert_eq!(profile_of(&e, "assistant"), "tiny-q4-k-m");
+        // Nothing else moved: the global default profile (the fallback of every `auto:*` agent) is untouched, and so are the other agents.
+        assert_eq!(e.profile("default").unwrap(), default_before);
+        for (id, p) in &agents_before {
+            if id != "assistant" {
+                assert_eq!(&profile_of(&e, id), p, "{id}");
+            }
+        }
+        assert_eq!(e.profiles().unwrap().len(), profiles_before + 1);
+        assert!(e.audit().iter().any(|a| a.action == "model.use" && a.detail.contains("assistant") && a.detail.contains("tiny-q4-k-m")));
+
+        // The same model again reuses its profile (and says what the agent used before, to put it back).
+        let again = call(&e, "aiw_model_use", json!({"model": "Tiny-Q4_K_M"})).await.unwrap();
+        assert!(again.contains("profilo `tiny-q4-k-m`") && again.contains("Prima usava: tiny-q4-k-m"), "{again}");
+        assert_eq!(e.profiles().unwrap().len(), profiles_before + 1);
+        // Another model is another profile; the first one stays for whoever uses it.
+        call(&e, "aiw_model_use", json!({"model": "mini-q8_0"})).await.unwrap();
+        assert_eq!((profile_of(&e, "assistant"), e.profiles().unwrap().len()), ("mini-q8-0".to_string(), profiles_before + 2));
+        assert!(e.profile("tiny-q4-k-m").is_ok());
+
+        // «auto» gives the choice back to the adviser, and says so; the profiles made on the way are not thrown away.
+        let auto = call(&e, "aiw_model_use", json!({"model": "auto"})).await.unwrap();
+        assert!(auto.contains("sceglie da solo il modello consigliato") && auto.contains("Prima usava: mini-q8-0"), "{auto}");
+        assert!(auto.contains("Adesso significa «Qwen3 Test»"), "what the adviser picks now is said: {auto}");
+        assert_eq!(profile_of(&e, "assistant"), "auto:agent");
+        assert_eq!(e.profiles().unwrap().len(), profiles_before + 2);
+
+        // The Assistant is seeded at start-up only when it is missing: a pinned model survives `seed` and a restart.
+        call(&e, "aiw_model_use", json!({"model": "tiny-q4_k_m"})).await.unwrap();
+        e.seed().unwrap();
+        assert_eq!(profile_of(&e, "assistant"), "tiny-q4-k-m");
+        drop(e);
+        let restarted = Engine::new(crate::EngineOptions {
+            data_dir: Some(data.path().to_path_buf()),
+            workspace_root: Some(data.path().join("ws")),
+            mode: "embedded".into(),
+            offline: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(profile_of(&restarted, "assistant"), "tiny-q4-k-m");
+        assert_eq!(restarted.agent("assistant").unwrap().name, "Assistente");
+    }
+
+    #[tokio::test]
+    async fn another_agent_can_be_given_a_model_and_a_pinned_model_is_the_one_a_run_asks_the_engine_for() {
+        let (e, _d, _w) = with_models().await;
+        let backend = aiw_runtimes::ScriptedBackend::new(vec![aiw_runtimes::ScriptedBackend::text_turn("Ciao!")]);
+        e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+        let tool = e.tool_registry().get("aiw_model_use").unwrap();
+        assert_eq!(tool.subject(&json!({"model": "tiny-q4_k_m"})).as_deref(), Some("tiny-q4_k_m → assistant"));
+        assert_eq!(tool.subject(&json!({"model": "auto", "agent": "planner"})).as_deref(), Some("auto → planner"));
+        assert_eq!(tool.subject(&json!({})), None);
+        let before: Vec<(String, String)> = e.agents().unwrap().into_iter().map(|a| (a.id, a.inference_profile)).collect();
+        let said = call(&e, "aiw_model_use", json!({"model": "tiny-q4_k_m", "agent": "planner"})).await.unwrap();
+        assert!(said.contains("«Pianificatore» (planner) ora usa «Qwen3 Test»"), "{said}");
+        for (id, p) in &before {
+            let expect = if id == "planner" { "tiny-q4-k-m" } else { p.as_str() };
+            assert_eq!(profile_of(&e, id), expect, "{id}");
+        }
+        // The Assistant itself, pinned, runs on that model: the engine is asked for it by its id.
+        call(&e, "aiw_model_use", json!({"model": "mini-q8_0"})).await.unwrap();
+        let s = e.create_session("assistant", None).unwrap();
+        let run = e.start_run_from(&s.id, "ciao".into(), None, None, vec![], Some(OWNER)).await.unwrap();
+        crate::tests::wait_finished(&e, &run).await;
+        assert_eq!(e.messages(&s.id).unwrap().last().unwrap().content, "Ciao!");
+        assert_eq!(backend.requests.lock().unwrap()[0].model, "mini-q8_0");
+    }
+
+    #[tokio::test]
+    async fn a_model_that_was_downloaded_from_the_catalog_is_chosen_by_its_catalog_id() {
+        let (e, _d, _w) = with_models().await;
+        let (base, _fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base)).unwrap();
+        // Not installed yet: the answer says what to do first, and nothing is saved.
+        let err = call(&e, "aiw_model_use", json!({"model": "qwen3-0.6b"})).await.unwrap_err();
+        assert!(
+            matches!(err, Error::NotFound(_))
+                && err.to_string().contains("non è ancora installato")
+                && err.to_string().contains("aiw_model_download"),
+            "{err}"
+        );
+        assert_eq!(profile_of(&e, "assistant"), "auto:agent");
+        let said = call(&e, "aiw_model_download", json!({"id": "qwen3-0.6b"})).await.unwrap();
+        wait_download(&e, &download_id(&said), "done").await;
+        let said = call(&e, "aiw_model_use", json!({"model": "qwen3-0.6b"})).await.unwrap();
+        assert!(said.contains("profilo `qwen3-0-6b-q8-0`"), "{said}");
+        assert_eq!(e.profile("qwen3-0-6b-q8-0").unwrap().model, "qwen3-0.6b-q8_0");
+    }
+
+    #[tokio::test]
+    async fn choosing_a_model_that_cannot_be_chosen_says_why_in_italian_and_changes_nothing() {
+        let (e, _d, _w) = with_models().await;
+        let agents_before: Vec<(String, String)> = e.agents().unwrap().into_iter().map(|a| (a.id, a.inference_profile)).collect();
+        let profiles_before = e.profiles().unwrap().len();
+        let unchanged = |e: &Engine| {
+            let agents: Vec<(String, String)> = e.agents().unwrap().into_iter().map(|a| (a.id, a.inference_profile)).collect();
+            assert_eq!(agents, agents_before);
+            assert_eq!(e.profiles().unwrap().len(), profiles_before);
+        };
+        let fail = |args: Value| {
+            let e = e.clone();
+            async move { call(&e, "aiw_model_use", args).await.unwrap_err() }
+        };
+        let err = fail(json!({})).await;
+        assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("manca `model`") && err.to_string().contains("auto"), "{err}");
+        let err = fail(json!({"model": "non-esiste"})).await;
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().starts_with("Non riesco a scegliere il modello:"), "{err}");
+        assert!(err.to_string().contains("aiw_inspect (topic models)"), "{err}");
+        // Two models with the same name: the name is not enough.
+        let err = fail(json!({"model": "qwen3 test"})).await;
+        assert!(
+            matches!(err, Error::Invalid(_)) && err.to_string().contains("indica l'id") && err.to_string().contains("tiny-q4_k_m"),
+            "{err}"
+        );
+        // An assistant that does not exist leaves no profile behind.
+        let err = fail(json!({"model": "tiny-q4_k_m", "agent": "fantasma"})).await;
+        assert!(matches!(err, Error::NotFound(_)) && err.to_string().contains("assistente `fantasma` non trovato"), "{err}");
+        unchanged(&e);
+        // An agent that cannot be saved (an old file with a tool nobody knows) does not keep the profile the call made for it.
+        let mut broken = e.agent("planner").unwrap();
+        broken.tools.push("strumento_inventato".into());
+        e.0.store.put_doc("agent", "planner", &broken).unwrap();
+        let err = fail(json!({"model": "tiny-q4_k_m", "agent": "planner"})).await;
+        assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("strumento_inventato"), "{err}");
+        assert!(e.profile("tiny-q4-k-m").is_err(), "the profile made for the failed call is gone");
+        assert_eq!(e.profiles().unwrap().len(), profiles_before);
+        // A model no engine can run here (an ExecuTorch file: only a manifest of the app) is refused, with the engines' reasons.
+        std::fs::write(e.0.models_dir.join("edge-model.pte"), b"pte").unwrap();
+        assert!(e.models().iter().any(|m| m.id == "edge-model"), "{:?}", e.models().iter().map(|m| &m.id).collect::<Vec<_>>());
+        let err = fail(json!({"model": "edge-model"})).await;
+        assert!(
+            matches!(err, Error::Conflict(_))
+                && err.to_string().contains("Nessun motore può eseguire")
+                && err.to_string().contains("Non ho cambiato nulla"),
+            "{err}"
+        );
+        assert_eq!(profile_of(&e, "assistant"), "auto:agent");
+        assert!(e.profile("edge-model").is_err());
     }
 
     #[test]
