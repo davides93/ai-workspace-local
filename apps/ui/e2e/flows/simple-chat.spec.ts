@@ -249,6 +249,9 @@ test.describe("a secret typed in the message box", () => {
     // The protected field is a tool of the Assistente: in its session (a new one) the button is there.
     await openApp(page, "/chat");
     await page.getByRole("button", { name: "Nuova", exact: true }).click();
+    // The new session is on screen (its empty state): typing before that goes into the box of the session that was open,
+    // and the draft is reset when the view switches to the new one.
+    await expect(page.getByRole("list", { name: "Idee per iniziare" })).toBeVisible();
     const box = messageBox(page);
     await expect(box).toBeEnabled();
     const warning = page.getByRole("status").filter({ hasText: "Sembra una chiave o un token" });
