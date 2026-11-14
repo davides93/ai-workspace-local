@@ -192,6 +192,8 @@ pub struct Engine(pub(crate) Arc<Inner>);
 
 /// Longest session title accepted by [`Engine::rename_session`].
 pub const MAX_TITLE_CHARS: usize = 200;
+/// Most base64 characters of screenshots [`Engine::session_images`] returns (same budget as the UI cache).
+pub const MAX_SESSION_IMAGE_CHARS: usize = 24_000_000;
 /// Prefix of the ids of remote agents (`remote:<id>`) in teams and sub-agent lists.
 pub const REMOTE_PREFIX: &str = "remote:";
 /// Prefix of a session's agent id that points at a team (`team:<id>`).
@@ -1420,6 +1422,38 @@ impl Engine {
         }
         self.0.store.events(run_id).unwrap_or_default()
     }
+    /// The screenshots tools produced in the runs of a session, oldest first. Events come from memory
+    /// or the database (so they survive a restart); the total is capped at
+    /// [`MAX_SESSION_IMAGE_CHARS`] of base64, keeping the most recent images.
+    pub fn session_images(&self, session_id: &str) -> Result<Vec<SessionImage>> {
+        self.session_images_capped(session_id, MAX_SESSION_IMAGE_CHARS)
+    }
+    fn session_images_capped(&self, session_id: &str, max_chars: usize) -> Result<Vec<SessionImage>> {
+        self.0.store.session(session_id)?; // an unknown session is a 404, not "no images"
+        let mut out: Vec<SessionImage> = Vec::new();
+        let mut total = 0usize;
+        // Newest first, so that going over the cap drops the oldest images.
+        'runs: for run in self.0.store.session_runs(session_id)?.into_iter().rev() {
+            for ev in self.run_events(&run.id).into_iter().rev() {
+                let AgEvent::Custom { name, value } = &ev.event.event else { continue };
+                if name != aiw_agent::runner::IMAGE_EVENT {
+                    continue;
+                }
+                let field = |k: &str| value.get(k).and_then(Value::as_str);
+                let (Some(tool_call_id), Some(mime), Some(data)) = (field("toolCallId"), field("mime"), field("data")) else { continue };
+                if !mime.starts_with("image/") || data.is_empty() {
+                    continue;
+                }
+                if total + data.len() > max_chars {
+                    break 'runs;
+                }
+                total += data.len();
+                out.push(SessionImage { run_id: run.id.clone(), tool_call_id: tool_call_id.into(), mime: mime.into(), data: data.into() });
+            }
+        }
+        out.reverse();
+        Ok(out)
+    }
     /// Message of the RUN_ERROR that closed the run, when it ended in error.
     fn run_error_code(&self, run_id: &str) -> Option<String> {
         match self.run_events(run_id).last().map(|e| &e.event.event) {
@@ -2630,7 +2664,8 @@ impl Engine {
         aiw_core::api::CommandAnalysis { commands: a.commands, also: a.also, confident: a.confident }
     }
 
-    pub(crate) fn tool_registry(&self) -> Arc<ToolRegistry> {
+    /// The registry tools are looked up in (tests of other crates add fake tools to it).
+    pub fn tool_registry(&self) -> Arc<ToolRegistry> {
         self.0.tools.clone()
     }
 }

@@ -320,6 +320,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/memories/{id}/approve", post(approve_memory))
         .route("/api/memories/{id}/reject", post(reject_memory))
         .route("/api/sessions/{id}/active-run", get(active_run))
+        .route("/api/sessions/{id}/images", get(session_images))
         .route("/api/sessions/{id}/runs", post(start_run).layer(DefaultBodyLimit::max(RUN_BODY_LIMIT)))
         .route("/api/sessions/{id}/checkpoints", get(session_checkpoints))
         .route("/api/runs/{id}/cancel", post(cancel_run))
@@ -999,6 +1000,10 @@ async fn reflect_session(State(s): State<AppState>, Path(id): Path<String>, body
 async fn active_run(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     s.engine.session(&id)?; // an unknown session is a 404, not "no run"
     ok(json!({"run_id": s.engine.active_run(&id)}))
+}
+/// Screenshots tools took in the session's runs, so the chat can show them again after a reload.
+async fn session_images(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<SessionImage>> {
+    ok(s.engine.session_images(&id)?)
 }
 #[derive(Deserialize)]
 struct RunBody {

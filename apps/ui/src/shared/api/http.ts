@@ -2,7 +2,7 @@ import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SystemInfo,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SessionImage, SystemInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -209,6 +209,7 @@ export class HttpTransport implements Transport {
   sessionCheckpoints = (sessionId: string) => this.req<CheckpointInfo[]>("GET", `/sessions/${enc(sessionId)}/checkpoints`);
   rewindRun = (runId: string) => this.req<RewindResult>("POST", `/runs/${enc(runId)}/rewind`);
   cancelRun = (runId: string) => this.req<void>("POST", `/runs/${enc(runId)}/cancel`);
+  sessionImages = (sessionId: string) => this.req<SessionImage[]>("GET", `/sessions/${enc(sessionId)}/images`);
   activeRun = async (sessionId: string) => (await this.req<{ run_id: string | null }>("GET", `/sessions/${enc(sessionId)}/active-run`)).run_id;
   runEvents = async (runId: string) =>
     (await this.req<{ seq: number; event: AgEvent }[]>("GET", `/runs/${enc(runId)}/events.json`)).map((e) => e.event);

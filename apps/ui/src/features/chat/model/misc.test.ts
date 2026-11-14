@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { MODE_INFO, modeInfo, sandboxInfo } from "./labels";
-import { cachedImageChars, forgetSessionImages, imagesFor, rememberImage } from "./imageCache";
+import { cachedImageChars, forgetSessionImages, imagesFor, rememberImage, rememberSessionImages } from "./imageCache";
 import type { Item } from "./items";
 import { describeRunError, errorDetail, isStandardErrorMessage, lastRunNotice, runErrorCode } from "./runNotice";
 import { distanceFromBottom, isNearBottom } from "./scroll";
@@ -111,6 +111,54 @@ describe("image cache", () => {
     rememberImage("b", "c1", { mime: "image/png", data: `B${big}` });
     expect(imagesFor("a")("c1")).toBeUndefined();
     expect(imagesFor("b")("c1")).toHaveLength(1);
+  });
+});
+
+describe("images replayed by the backend", () => {
+  beforeEach(() => {
+    for (const s of ["a", "b"]) forgetSessionImages(s);
+  });
+  const entry = (toolCallId: string, data: string, extra: Record<string, unknown> = {}) => ({ run_id: "run1", toolCallId, mime: "image/png", data, ...extra });
+  it("remembers the well-formed entries by tool call, in order", () => {
+    rememberSessionImages("a", [entry("c1", "AAAA"), entry("c1", "BBBB"), entry("c2", "CCCC")]);
+    expect(imagesFor("a")("c1")).toEqual([
+      { mime: "image/png", data: "AAAA" },
+      { mime: "image/png", data: "BBBB" },
+    ]);
+    expect(imagesFor("a")("c2")).toEqual([{ mime: "image/png", data: "CCCC" }]);
+    expect(imagesFor("b")("c1")).toBeUndefined();
+  });
+  it("skips malformed entries and keeps the good ones", () => {
+    rememberSessionImages("a", [
+      null,
+      "testo",
+      42,
+      { run_id: "r", mime: "image/png", data: "AAAA" },
+      entry("c1", "AAAA", { mime: "text/html" }),
+      entry("c1", ""),
+      entry("c1", "non base64 !!"),
+      entry("c1", 7 as unknown as string),
+      entry("c2", "DDDD"),
+    ]);
+    expect(imagesFor("a")("c1")).toBeUndefined();
+    expect(imagesFor("a")("c2")).toEqual([{ mime: "image/png", data: "DDDD" }]);
+    expect(cachedImageChars()).toBe(4);
+  });
+  it("ignores an answer that is not a list", () => {
+    rememberSessionImages("a", { error: "boom" });
+    rememberSessionImages("a", undefined);
+    expect(cachedImageChars()).toBe(0);
+  });
+  it("does not double an image already seen live, nor one replayed twice", () => {
+    rememberImage("a", "c1", { mime: "image/png", data: "AAAA" });
+    rememberSessionImages("a", [entry("c1", "AAAA")]);
+    rememberSessionImages("a", [entry("c1", "AAAA")]);
+    expect(imagesFor("a")("c1")).toHaveLength(1);
+    expect(cachedImageChars()).toBe(4);
+  });
+  it("keeps only the payload of a data URL", () => {
+    rememberSessionImages("a", [entry("c1", "data:image/png;base64,AAAA")]);
+    expect(imagesFor("a")("c1")).toEqual([{ mime: "image/png", data: "AAAA" }]);
   });
 });
 

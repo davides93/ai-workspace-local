@@ -10,7 +10,7 @@ import { useRespondApproval } from "../approvals/api";
 import { actionText, type A2uiAction } from "./a2ui";
 import { useCancelRun, useStartRun } from "./api";
 import { historyToItems } from "./model/history";
-import { imagesFor, rememberImage } from "./model/imageCache";
+import { imagesFor, rememberImage, rememberSessionImages } from "./model/imageCache";
 import { HANDOFF, type ApprovalItem, type Item } from "./model/items";
 import { localAttachments, toUploads, type PendingFile } from "./model/pending";
 import { parseImageEvent, reduce } from "./model/reduce";
@@ -126,8 +126,11 @@ export function useConversation(sessionId: string | null, opts: { onGone?: (sess
       try {
         const msgs = await qc.fetchQuery({ queryKey: qk.sessions.messages(sessionId), queryFn: () => api.messages(sessionId), staleTime: 0 });
         // A run may still be going on (started elsewhere, or before switching session): re-attach.
-        const running = await api.activeRun(sessionId).catch(() => null);
+        // The screenshots of earlier runs come from the stored run events. An old server, a 404 or a network
+        // error only means the cards show no image: it must not stop the conversation from opening.
+        const [running, stored] = await Promise.all([api.activeRun(sessionId).catch(() => null), Promise.resolve().then(() => api.sessionImages(sessionId)).catch(() => [])]);
         if (!alive) return;
+        rememberSessionImages(sessionId, stored);
         // The history already holds the prompt of the running turn; the events rebuild the rest.
         setItems(historyToItems(msgs, { images: imagesFor(sessionId) }));
         setHistory({ status: "ready" });

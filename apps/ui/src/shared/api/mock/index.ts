@@ -8,9 +8,9 @@ import { mockRoute } from "./route";
 import { mockSpeak, mockTtsStatus } from "./voice";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, Attachment, AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
+  AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
   ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
-  SearchPage, Session, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
+  SearchPage, Session, SessionImage, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
 } from "../types";
 import {
@@ -826,6 +826,22 @@ export class MockTransport implements Transport {
   async activeRun(sessionId?: string) {
     if (sessionId !== undefined && !sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
     return null;
+  }
+  /** The screenshots the demo emitted for the session's runs, in the order they were taken. */
+  async sessionImages(sessionId: string): Promise<SessionImage[]> {
+    if (!sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
+    const out: SessionImage[] = [];
+    for (const [runId, evs] of this.runLog) {
+      if (!evs.some((e) => e.type === "RUN_STARTED" && e.threadId === sessionId)) continue;
+      for (const e of evs) {
+        if (e.type !== "CUSTOM" || e.name !== "aiw.image") continue;
+        const v = e.value as Partial<AiwImage> | undefined;
+        if (typeof v?.toolCallId === "string" && typeof v.mime === "string" && typeof v.data === "string") {
+          out.push({ run_id: runId, toolCallId: v.toolCallId, mime: v.mime, data: v.data });
+        }
+      }
+    }
+    return out;
   }
   private update: UpdateStatus = { current: "0.5.0-beta.7", channel: "beta", configured: "auto", state: "idle", received: 0, total: 0 };
   async updateStatus() {

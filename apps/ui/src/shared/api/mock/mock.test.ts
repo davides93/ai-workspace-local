@@ -772,6 +772,25 @@ describe("the scripted browser run", () => {
     }
   });
 
+  it("lists the screenshots of a session's runs, and nothing for another session or an unknown one", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new MockTransport();
+      expect(await api.sessionImages("ses_cv")).toEqual([]);
+      const { run_id } = await api.startRun("ses_cv", "Apri la pagina dei preventivi");
+      await vi.advanceTimersByTimeAsync(20_000);
+      const images = await api.sessionImages("ses_cv");
+      expect(images).toHaveLength(1);
+      expect(images[0]).toMatchObject({ run_id, mime: "image/png" });
+      expect(images[0].toolCallId).toMatch(/^call/);
+      expect(images[0].data.startsWith("data:")).toBe(false);
+      expect(await api.sessionImages("ses_pdf")).toEqual([]);
+      await expect(api.sessionImages("ses_none")).rejects.toMatchObject({ status: 404 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves the other agents' scripted run without screenshots", async () => {
     vi.useFakeTimers();
     try {
