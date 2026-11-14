@@ -73,4 +73,5 @@ export const shellEn: Record<keyof typeof shellIt, string> = {
   "shell.backend_unreachable_demo": "Backend unreachable: demo mode",
   "shell.menu": "Menu",
   "shell.aggiornamento_disponibile_titolo": "Update available",
+  "shell.cmd_download_model_prompt": "Download a model that suits this computer",
 };

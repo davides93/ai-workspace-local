@@ -71,4 +71,5 @@ export const shellIt = {
   "shell.backend_unreachable_demo": "Backend non raggiungibile: modalità demo",
   "shell.menu": "Menu",
   "shell.aggiornamento_disponibile_titolo": "Aggiornamento disponibile",
+  "shell.cmd_download_model_prompt": "Scarica un modello adatto a questo computer",
 } as const;

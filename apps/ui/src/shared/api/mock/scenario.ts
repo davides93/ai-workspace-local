@@ -1,4 +1,5 @@
-import { catalog, models, runtimes, sessionMessages, sessions } from "./fixtures";
+import type { UiMode } from "../../lib/uiMode";
+import { catalog, configLayers, models, runtimes, sessionMessages, sessions } from "./fixtures";
 
 /**
  * Named starting states of the demo, picked with `?scenario=<name>` in the address of the mockup.
@@ -22,4 +23,14 @@ export function applyMockScenario(name: MockScenario): void {
     sessions.length = 0;
     for (const id of Object.keys(sessionMessages)) delete sessionMessages[id];
   }
+}
+
+/**
+ * `?ui=developer` in the address of the mockup: the demo starts with the interface in Developer mode (the configuration
+ * says `ui.mode: developer`, so every section is there and nothing redirects). Without it the demo is the simple
+ * interface, which has the chat only. The end-to-end tests and the smoke test use it to reach every route.
+ */
+export function applyMockUiMode(mode: UiMode): void {
+  const global = configLayers.find((l) => l.name === "global");
+  if (global) global.values = { ...global.values, "ui.mode": mode };
 }

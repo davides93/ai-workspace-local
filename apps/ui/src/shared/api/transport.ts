@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import { isUiMode } from "../lib/uiMode";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
@@ -332,10 +333,13 @@ export async function createTransport(): Promise<Transport> {
   const forceMock = typeof __AIW_FORCE_MOCK__ !== "undefined" && __AIW_FORCE_MOCK__;
   if (forceMock || params.get("demo") === "1") {
     const { MockTransport } = await import("./mock");
-    const { applyMockScenario, isMockScenario } = await import("./mock/scenario");
+    const { applyMockScenario, applyMockUiMode, isMockScenario } = await import("./mock/scenario");
     // `?scenario=first-run`: a demo that starts empty (used by the end-to-end tests).
     const scenario = params.get("scenario");
     if (isMockScenario(scenario)) applyMockScenario(scenario);
+    // `?ui=developer`: the demo starts in Developer mode (every section); the default is the simple interface.
+    const ui = params.get("ui");
+    if (isUiMode(ui)) applyMockUiMode(ui);
     const demo = new MockTransport();
     // `?scope=device`: the demo as a paired device, which may not provide secrets (the end-to-end tests of the card that says so).
     if (params.get("scope") === "device") demo.secretScope = "device";
