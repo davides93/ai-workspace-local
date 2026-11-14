@@ -69,4 +69,6 @@ export const shellIt = {
   "shell.more": "Altro",
   "shell.pair_help": "Sul dispositivo che esegue AI Workspace apri {devices} e inserisci qui il codice a 6 cifre. Il codice cambia ogni 10 minuti.",
   "shell.backend_unreachable_demo": "Backend non raggiungibile: modalità demo",
+  "shell.menu": "Menu",
+  "shell.aggiornamento_disponibile_titolo": "Aggiornamento disponibile",
 } as const;

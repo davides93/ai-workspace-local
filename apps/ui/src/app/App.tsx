@@ -10,6 +10,7 @@ import { useConnection } from "../shared/query/system";
 import { EmptyState, PageSkeleton, ToastHost } from "../shared/ui";
 import { CommandPalette } from "./palette/CommandPalette";
 import { onOpenPalette } from "./palette/openPalette";
+import { onOpenMenu } from "./shell/openMenu";
 import { useCommands } from "./palette/useCommands";
 import { routeLabel } from "./navigation";
 import { routeGate, SIMPLE_HOME } from "./routeGate";
@@ -59,6 +60,15 @@ export function App() {
     [],
   );
 
+  // The chat header's «Menu» button (phones, simple mode) opens the sheet the same way.
+  useEffect(
+    () => onOpenMenu(() => {
+      setPaletteOpen(false);
+      setMoreOpen(true);
+    }),
+    [],
+  );
+
   // The sheet is about the section you were in: close it whenever the section changes.
   useEffect(() => setMoreOpen(false), [resolved?.path]);
 
@@ -71,7 +81,7 @@ export function App() {
   return (
     <div className="shell">
       <button type="button" className="skip-link" onClick={() => mainRef.current?.focus()}>{t("shell.vai_al_contenuto")}</button>
-      <Rail current={current} onOpenPalette={() => setPaletteOpen(true)} />
+      <Rail current={current} onOpenPalette={() => setPaletteOpen(true)} onOpenMenu={() => setMoreOpen(true)} />
 
       <main className="main" ref={mainRef} tabIndex={-1} id="main">
         <DemoBanner />
