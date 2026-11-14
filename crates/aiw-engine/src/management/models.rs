@@ -605,8 +605,15 @@ fn cancel(e: &Engine, id: &str) -> Result<String> {
 
 /// The agent whose model is set when the call does not say.
 const DEFAULT_AGENT: &str = "assistant";
-/// What «auto» stands for: the profile that follows the model the adviser picks for an agent.
+/// What «auto» stands for by default: the profile that follows the model the adviser picks for an agent.
 const AUTO_PROFILE: &str = "auto:agent";
+
+/// The profile «auto» gives back to an agent: the one it has in the seed (the planner is
+/// `auto:reasoning`, the others `auto:agent`), so that going back to «auto» never changes the class of
+/// task of an agent behind the owner's back. An agent the user made is not in the seed: `auto:agent`.
+fn auto_profile_of(agent_id: &str) -> String {
+    crate::defaults::agents().into_iter().find(|a| a.id == agent_id).map(|a| a.inference_profile).unwrap_or_else(|| AUTO_PROFILE.into())
+}
 
 /// Lowercase ASCII slug of a name (`qwen3-0.6b-q8_0` is `qwen3-0-6b-q8-0`); never empty and never `auto:…`.
 fn slug(name: &str) -> String {
@@ -786,16 +793,21 @@ fn use_model(e: &Engine, args: &Value) -> Result<String> {
     let before = agent.inference_profile.clone();
 
     if wanted.eq_ignore_ascii_case("auto") || wanted.eq_ignore_ascii_case(AUTO_PROFILE) {
-        agent.inference_profile = AUTO_PROFILE.into();
+        // Back to the class of task the agent has in the seed (the planner reasons), not to `auto:agent` for all.
+        let target = auto_profile_of(&agent_id);
+        agent.inference_profile = target.clone();
         let name = agent.name.clone();
         e.save_agent(agent).map_err(|err| explain("Non riesco a cambiare il modello dell'assistente", err))?;
-        e.audit_user("model.use", &format!("{agent_id}: {before} → {AUTO_PROFILE}"));
-        let now = match e.recommend().agent.installed {
+        e.audit_user("model.use", &format!("{agent_id}: {before} → {target}"));
+        // What the adviser picks for that class of task, which is not always the one of `auto:agent`.
+        let rec = e.recommend();
+        let picked = crate::adviser::parse_auto_profile(&target).and_then(|task| rec.for_task(task).installed.as_ref());
+        let now = match picked {
             Some(c) => format!("Adesso significa «{}».", text(&c.name, 100)),
             None => "Per ora nessun modello installato è adatto: se ne può scaricare uno (aiw_model_search).".into(),
         };
         return Ok(format!(
-            "«{}» ({agent_id}) ora sceglie da solo il modello consigliato per questo dispositivo ({AUTO_PROFILE}). {now} Prima usava: {before}.",
+            "«{}» ({agent_id}) ora sceglie da solo il modello consigliato per questo dispositivo ({target}). {now} Prima usava: {before}.",
             text(&name, 100)
         ));
     }
@@ -1785,6 +1797,35 @@ mod tests {
         crate::tests::wait_finished(&e, &run).await;
         assert_eq!(e.messages(&s.id).unwrap().last().unwrap().content, "Ciao!");
         assert_eq!(backend.requests.lock().unwrap()[0].model, "mini-q8_0");
+    }
+
+    #[tokio::test]
+    async fn auto_gives_an_agent_back_the_class_of_task_it_has_in_the_seed_and_a_user_agent_the_agent_class() {
+        let (e, _d, _w) = with_models().await;
+        // An agent of the user is not in the seed.
+        let mut mine = e.agent("operator").unwrap();
+        (mine.id, mine.name) = ("mio-agente".into(), "Il mio agente".into());
+        e.save_agent(mine).unwrap();
+        assert_eq!(profile_of(&e, "planner"), "auto:reasoning");
+        assert_eq!(profile_of(&e, "assistant"), "auto:agent");
+
+        for (agent, class) in [("planner", "auto:reasoning"), ("assistant", "auto:agent"), ("mio-agente", "auto:agent")] {
+            // Pinned to a model first, so that the way back is seen.
+            call(&e, "aiw_model_use", json!({"model": "tiny-q4_k_m", "agent": agent})).await.unwrap();
+            assert_eq!(profile_of(&e, agent), "tiny-q4-k-m", "{agent}");
+            let said = call(&e, "aiw_model_use", json!({"model": "auto", "agent": agent})).await.unwrap();
+            assert_eq!(profile_of(&e, agent), class, "{agent}: {said}");
+            assert!(said.contains(&format!("({class})")) && said.contains("Prima usava: tiny-q4-k-m"), "{agent}: {said}");
+            assert!(
+                e.audit().iter().any(|a| a.action == "model.use" && a.detail.contains(&format!("tiny-q4-k-m → {class}"))),
+                "{agent}: the audit says what it went back to"
+            );
+        }
+        // The other agents of the seed were not touched by any of this.
+        assert_eq!(profile_of(&e, "operator"), "auto:agent");
+        // «auto» when the agent is already there is the same answer (nothing is lost, nothing moves).
+        call(&e, "aiw_model_use", json!({"model": "AUTO", "agent": "planner"})).await.unwrap();
+        assert_eq!(profile_of(&e, "planner"), "auto:reasoning");
     }
 
     #[tokio::test]
