@@ -61,7 +61,7 @@ artefatti restano scaricabili dalla pagina dell'esecuzione).
 1. **`select`** decide che cosa costruire (`scripts/ci/select-targets.sh`, con `--self-test` per provarlo in locale).
 2. **`desktop`** costruisce le app Tauri: per ogni target un `npx tauri build`, con la firma se i segreti ci sono.
 3. **`core-tests`** esegue `cargo test --no-fail-fast` su macOS e Windows (solo se è selezionato un target di default).
-4. **`daemon-arm64`** e **`cuda`**: i lavori facoltativi, vedi sotto. Non fermano mai la release.
+4. **`daemon-arm64`**, **`cuda`** e **`vulkan`**: i lavori facoltativi, vedi sotto. Non fermano mai la release.
 5. **`publish`** (solo con un tag, o con *Run workflow* e un `tag`): scarica gli artefatti `aiw-*`, rinomina, calcola
    `SHA256SUMS.txt`, crea la release **come bozza** con tutti i file e solo dopo la pubblica. Non parte se `desktop` è fallito.
 
@@ -73,7 +73,7 @@ blocca per sempre release e tag. Per questo la release nasce come bozza con tutt
 Senza input e senza variabile il tag costruisce **solo Windows x64 e macOS universale**, come prima. Gli altri target si
 chiedono così:
 
-- a mano: *Run workflow* → campo `targets` (per esempio `linux-arm64`, oppure `cuda,windows-arm64`);
+- a mano: *Run workflow* → campo `targets` (per esempio `linux-x64,vulkan`, oppure `cuda,windows-arm64`);
 - per i tag: variabile del repository `AIW_RELEASE_TARGETS` (Settings → Secrets and variables → Actions → Variables), per
   esempio `default,arm64` o `all`. Si toglie per tornare al default. Il campo `targets` di *Run workflow*, se non è vuoto, vince.
 
@@ -81,19 +81,22 @@ chiedono così:
 | --- | --- | --- | --- |
 | `windows-x64` | `default` | app, NSIS | `AI_Workspace_Local_<v>_x64-setup.exe` |
 | `macos` | `default` | app, DMG universale | `AI_Workspace_Local_<v>_universal.dmg` |
-| `linux-arm64` | `arm64` | app, `deb` e `AppImage` (+ `rpm`, che se fallisce non ferma il lavoro) su `ubuntu-22.04-arm` | `AI_Workspace_Local_<v>_arm64.deb`, `…_aarch64.AppImage`, `…-1.aarch64.rpm` |
+| `linux-x64` | `linux` | app, `deb`, `AppImage` e `rpm` su `ubuntu-22.04` | `AI_Workspace_Local_<v>_amd64.deb`, `…_amd64.AppImage`, `AI_Workspace_Local-<ver>-<rel>.x86_64.rpm` |
+| `linux-arm64` | `linux`, `arm64` | app, `deb`, `AppImage` e `rpm` su `ubuntu-22.04-arm` | `AI_Workspace_Local_<v>_arm64.deb`, `…_aarch64.AppImage`, `AI_Workspace_Local-<ver>-<rel>.aarch64.rpm` |
 | `windows-arm64` | `arm64` | app, NSIS, su `windows-11-arm` | `AI_Workspace_Local_<v>_arm64-setup.exe` |
 | `daemon-linux-arm64` | `arm64` | daemon `aiw` (llama.cpp incorporato, CPU) | `aiw-<v>-linux-arm64` |
 | `daemon-windows-arm64` | `arm64` | daemon `aiw`, CPU | `aiw-<v>-windows-arm64.exe` |
 | `cuda-linux` | `cuda` | daemon con `llama-cuda`, CUDA 12.8 | `aiw-<v>-linux-x64-cuda12` |
 | `cuda-windows` | `cuda` | daemon con `llama-cuda`, CUDA 12.8 | `aiw-<v>-windows-x64-cuda12.exe` |
+| `vulkan-linux` | `vulkan` | daemon con `llama-vulkan`, su `ubuntu-latest` (glibc recente) | `aiw-<v>-linux-x64-vulkan` |
+| `vulkan-windows` | `vulkan` | daemon con `llama-vulkan`, SDK Vulkan di LunarG | `aiw-<v>-windows-x64-vulkan.exe` |
 
-`extras` = `arm64` + `cuda`; `all` = `default` + `extras`. `<v>` è la versione senza la `v` del tag. I nomi del daemon cominciano
+`extras` = `linux` + `arm64` + `cuda` + `vulkan`; `all` = `default` + `extras`. `<v>` è la versione senza la `v` del tag. I nomi del daemon cominciano
 per `aiw-`: l'aggiornamento dall'app li salta (vedi §6). Tutti i file entrano in `SHA256SUMS.txt`.
 
-I target nuovi (le gambe arm64 dell'app e tutti i daemon arm64 e CUDA) sono **facoltativi**: se falliscono il lavoro è rosso
+I target nuovi (le gambe Linux e arm64 dell'app e tutti i daemon arm64, CUDA e Vulkan) sono **facoltativi**: se falliscono il lavoro è rosso
 ma la release parte lo stesso, senza quei file. Una volta provati e stabili si può togliere `"optional": true` dal
-catalogo in `scripts/ci/select-targets.sh` (e `continue-on-error` dai lavori `daemon-arm64` e `cuda`).
+catalogo in `scripts/ci/select-targets.sh` (e `continue-on-error` dai lavori `daemon-arm64`, `cuda` e `vulkan`).
 
 Con *Run workflow* e un `tag`, selezionare solo alcuni target pubblica comunque una release con quei soli file: è possibile
 ma di solito non è quello che vuoi. Per provare un target nuovo lascia `tag` vuoto.
@@ -125,7 +128,13 @@ flusso eseguono già `release-check.yml` (solo `cargo check`, senza impacchettar
   più vecchie). Si possono usare anche i runner `ubuntu-24.04-arm`, con pacchetti più nuovi e glibc 2.39.
 - Niente cross-compilazione di GTK/WebKit: build nativa. `computer-use` escluso come su ogni Linux (servono header PipeWire
   più nuovi di quelli di Ubuntu 22.04).
-- Il `.rpm` ha la versione con la tilde (`0.5.0~beta.8`) perché RPM vieta il `-`.
+- Il `.rpm`: RPM vieta il `-` nella versione e il CLI Tauri 2.12 pretende una versione SemVer, quindi la tilde
+  (`0.5.0~beta.8`) viene rifiutata prima del bundler (era la causa del passo che «riusciva» senza produrre il file, #6).
+  La pre-release va nel tag `release`: `0.5.0-beta.10` diventa versione `0.5.0`, release `0.beta.10`
+  (`AI_Workspace_Local-0.5.0-0.beta.10.<arch>.rpm`), che si ordina prima della finale `0.5.0-1`. Il passo non è più
+  `continue-on-error`: controlla che il file esista e che versione e release siano quelle attese. L'app riporta comunque la
+  versione vera (viene da Cargo). Quando uscirà una 2.x del CLI con la conversione `~` (tauri-apps/tauri#16336) si potrà
+  tornare alla tilde. Provato su GitHub il 14 novembre 2026 (esecuzione 43606831203, `linux-x64` e `linux-arm64`).
 - Costi: i runner arm standard di GitHub (`ubuntu-22.04-arm`, `windows-11-arm`) sono gratuiti per i repository
   **pubblici** (`update.rs` parla di «repository pubblico»; l'indirizzo è `github.com/davides93/ai-workspace-local`). Se il
   repository diventasse privato, i minuti arm si pagano a tariffa propria: conferma la visibilità prima di attivare i gruppi
@@ -153,9 +162,18 @@ nuovo che nvcc non accetta).
 - Resta il caso «chi ha una GPU NVIDIA e non vuole CUDA»: usa il daemon normale o un runtime esterno.
 - Se un giorno si vorranno distribuire le DLL (la licenza CUDA le elenca tra i file ridistribuibili) è una decisione da
   prendere e documentare, non un effetto collaterale della build.
-- Vulkan: **oggi nessun lavoro lo costruisce**. Un lavoro `daemon-gpu` (Vulkan, Linux e Windows) esisteva nel flusso fino al
-  commit `3cb23ae`, che ha ridotto la release a DMG ed EXE; si può recuperare da lì (`git show 3cb23ae^:.github/workflows/release.yml`).
-  Il suo setup Windows (SDK Vulkan di LunarG) è la parte delicata.
+### Vulkan
+
+Il daemon `aiw` con `--features llama-vulkan`, Linux x64 (`ubuntu-latest`: glibc recente, come nell'ultima versione verificata) e
+Windows x64 (`windows-latest`). Il lavoro `vulkan` è il vecchio `daemon-gpu`, tolto con il commit `3cb23ae` (#54) e ripristinato
+come facoltativo (#7). Provato su GitHub il 14 novembre 2026 (esecuzione 43606831203, entrambe le gambe verdi, come
+nell'esecuzione 42513812773 che aveva dimostrato la correzione).
+
+- Windows: SDK Vulkan di LunarG scaricato con controllo che sia un eseguibile vero, Ninja al posto del generatore Visual Studio
+  e cartella di build corta (`C:\t`) perché i progetti CMake annidati di llama.cpp superano MAX_PATH; build da `pwsh`, perché il
+  `link.exe` di Git bash oscura quello di MSVC.
+- Non si distribuisce nulla dell'SDK: il loader Vulkan è quello del sistema (lo porta il driver della GPU).
+- Mai eseguito su una GPU vera: la build prova solo che compila e collega.
 - L'app desktop con CUDA (`--features cuda` in `apps/desktop`) non è costruita da nessun flusso.
 
 ### Non costruiti

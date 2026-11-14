@@ -112,7 +112,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | CPU (AVX2/AVX-512/NEON/dotprod/i8mm) | tutti i backend | ✅ |
 | Metal | llama.cpp embedded (automatico su macOS/iOS), llama-server, mlx-lm | ✅ **v0.4** (prima il motore embedded non veniva registrato); non eseguito su hardware reale |
 | CUDA | sidecar con `-ngl 999`, vLLM/SGLang/TRT-LLM, embedded con feature `llama-cuda` | 🟡 il lavoro facoltativo `cuda` di `release.yml` (daemon, Linux e Windows x64, CUDA 12.8) è scritto ma mai eseguito; nessun binario CUDA provato su una GPU; le release di default non lo includono |
-| Vulkan | sidecar, embedded con `llama-vulkan` | 🟡 **v0.4** il job `daemon-gpu` è stato tolto dalla release con il commit 3cb23ae (recuperabile dalla storia); oggi nessun flusso costruisce Vulkan |
+| Vulkan | sidecar, embedded con `llama-vulkan` | 🟡 il lavoro facoltativo `vulkan` di `release.yml` (daemon, Linux e Windows x64) è tornato dopo la rimozione con il commit 3cb23ae: compila e collega su GitHub (esecuzione 43606831203, 14 novembre 2026), ma nessun binario è provato su una GPU e le release di default non lo includono |
 | ROCm | solo sidecar | 🟡 **v0.4** rilevamento con `rocm-smi`/`rocminfo` |
 | MLX | solo sidecar `mlx-lm` (Python) | 🟡 MLX Swift in-process assente; **v0.4** MLX riservato ai Mac Apple Silicon, repository MLX scaricabili |
 | DirectML, QNN, OpenVINO, Core ML | tramite gli execution provider di ORT GenAI o i server che li gestiscono (Foundry, Lemonade, OVMS) | 🟡 AIW non li pilota direttamente |
@@ -164,7 +164,7 @@ sezioni a cinque e la prima esecuzione a un solo pulsante; `developer` (vista «
 | Computer-use | ✅ | ✅ | ❌ escluso in CI | ❌ | ❌ |
 | Firma e notarizzazione | 🟡 flusso pronto, attivo solo con i segreti (PFX o Azure), mai eseguito | 🟡 flusso pronto (Developer ID + notarizzazione), attivo solo con i segreti, mai eseguito | — | ❌ | ❌ (lo store firma a parte, `store.yml`) |
 
-Facoltativi, scritti ma **mai eseguiti su GitHub** (`release.yml`, target `arm64` o `all`): app Linux arm64 (deb/AppImage/rpm) e Windows arm64 (NSIS, solo CPU, senza computer-use), daemon arm64 e daemon CUDA 12; `release-check.yml` (`cargo check` arm64 su Linux e Windows) invece è passato sulle pull request il 13 novembre 2026: non prova il packaging né CUDA. Non costruiti: Android x86_64/armv7 (`store.yml` fa solo aarch64). Dalla release non escono più l'app Linux x64 né i daemon x64/macOS (commit 3cb23ae).
+Facoltativi (`release.yml`, target `linux`, `arm64`, `cuda`, `vulkan` o `all`): app Linux x64 e arm64 (deb/AppImage/rpm; build e rpm con versione `0.5.0` e release `0.beta.N` provati su GitHub il 14 novembre 2026, esecuzione 43606831203, mai installati su una distribuzione), daemon Vulkan Linux e Windows (compilano, esecuzione 43606831203), app Windows arm64 (NSIS, solo CPU, senza computer-use), daemon arm64 e daemon CUDA 12 (verificare nelle esecuzioni manuali di `release.yml` quali siano passate: questa riga non è stata ricontrollata); `release-check.yml` (`cargo check` arm64 su Linux e Windows) invece è passato sulle pull request il 13 novembre 2026: non prova il packaging né CUDA. Non costruiti: Android x86_64/armv7 (`store.yml` fa solo aarch64). Dalla release di default non escono l'app Linux x64 né i daemon x64/macOS (commit 3cb23ae): l'app Linux x64 è tornata come target facoltativo `linux-x64`.
 
 ### 2.8 Correzioni dopo la bozza
 
