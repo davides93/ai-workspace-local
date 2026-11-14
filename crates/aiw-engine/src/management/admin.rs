@@ -2508,6 +2508,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pointing_a_connector_at_another_argument_takes_its_saved_secret_away_and_the_old_value_is_nowhere() {
+        let call = json!({"id": "srv-cli", "name": "cli", "transport": "stdio", "command": PROGRAM, "args": ["--other"], "enabled": false});
+        let (e, _d, _w) =
+            engine(vec![ScriptedBackend::tool_turn("c1", "aiw_connector_save", call), ScriptedBackend::text_turn("Fatto.")]).await;
+        e.save_mcp_server(program_with_a_secret("srv-cli")).await.unwrap();
+        assert!(e.known_secrets().iter().any(|s| s.contains(FAKE_SECRET)), "control: the app knows this value");
+
+        let (card, answer, left) = confirmed_call(&e).await;
+        assert_eq!(card.tool, "aiw_connector_save");
+        assert!(card.reason.contains("i segreti salvati verranno tolti") && card.reason.contains("API_KEY"), "{}", card.reason);
+        assert!(card.reason.contains(&format!("{PROGRAM} --other")), "{}", card.reason);
+        // The old value is in none of what the run left behind (card, messages, events, audit), nor in the answer.
+        assert!(!left.contains(FAKE_SECRET), "the secret is in what the edit left behind: {left}");
+        let note = answer["note"].as_str().unwrap();
+        assert!(note.contains("destinazione diversa") && note.contains("tolti (API_KEY)"), "{note}");
+        assert!(note.contains("aiw_secret_request (target mcp_env:srv-cli:API_KEY)"), "{note}");
+        assert_eq!(answer["secrets_removed"], json!(["API_KEY"]));
+        assert!(e.audit().iter().any(|a| a.action == "connector.save" && a.detail.ends_with("segreti salvati tolti: API_KEY")));
+        // The store: the name is declared and empty, the plain variable stayed, the arguments are the new ones.
+        let saved = stored(&e, "srv-cli");
+        assert_eq!(Value::Object(saved.env.clone().unwrap()), json!({"API_KEY": "", "MODE": "a"}));
+        assert_eq!(saved.args, Some(vec!["--other".to_string()]));
+        assert!(!serde_json::to_string(&saved).unwrap().contains(FAKE_SECRET));
+        assert!(!e.known_secrets().iter().any(|s| s.contains(FAKE_SECRET)), "the app does not keep the value any more");
+    }
+
+    #[tokio::test]
     async fn an_edit_that_keeps_the_address_the_command_and_the_arguments_keeps_the_saved_secrets() {
         let (e, _d, _w) = engine(vec![]).await;
         e.save_mcp_server(remote_with_a_secret("srv-http", "http://127.0.0.1:9/mcp")).await.unwrap();
