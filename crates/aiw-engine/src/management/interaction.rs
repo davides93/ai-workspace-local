@@ -778,22 +778,16 @@ impl Engine {
             expires_at: Some(expires_at(wait)),
         };
         let (tx, rx) = oneshot::channel();
-        self.0
-            .secret_requests
-            .lock()
-            .unwrap()
-            .insert(request.id.clone(), PendingSecret { request: request.clone(), tx, identity: resolved.identity, busy: false });
+        self.0.secret_requests.lock().unwrap().insert(
+            request.id.clone(),
+            PendingSecret { request: request.clone(), tx, identity: resolved.identity, busy: false, expired: false },
+        );
         let _withdraw = WithdrawSecret(self, request.id.clone());
         self.emit(
             &ctx.run_id,
             AgEvent::Custom { name: "aiw.secret_request".into(), value: serde_json::to_value(&request).unwrap_or(Value::Null) },
         );
-        let (outcome, hint) = tokio::select! {
-            biased;
-            a = rx => a.unwrap_or((SecretOutcome::Cancelled, None)),
-            _ = ctx.cancel.cancelled() => (SecretOutcome::Cancelled, None),
-            _ = tokio::time::sleep(wait) => (SecretOutcome::Timeout, None),
-        };
+        let (outcome, hint) = self.await_secret(&request.id, ctx, wait, rx).await;
         self.0.secret_requests.lock().unwrap().remove(&request.id);
         self.emit(
             &ctx.run_id,
@@ -821,6 +815,49 @@ impl Engine {
         }
     }
 
+    /// Waits for the person to answer a request for a secret: until the answer, the cancellation of the run
+    /// or `wait`. A value that is being written when the time runs out is not cut off: the request stays
+    /// open until the write ends, and the model gets what really happened (`stored`), not a `timeout`
+    /// for a secret that is saved all the same. The write that does not store the value ends the request
+    /// with `timeout` (see [`Engine::release_secret`]).
+    async fn await_secret(
+        &self,
+        id: &str,
+        ctx: &ToolContext,
+        wait: Duration,
+        mut rx: oneshot::Receiver<(SecretOutcome, Option<&'static str>)>,
+    ) -> (SecretOutcome, Option<&'static str>) {
+        tokio::select! {
+            biased;
+            a = &mut rx => return a.unwrap_or((SecretOutcome::Cancelled, None)),
+            _ = ctx.cancel.cancelled() => return (SecretOutcome::Cancelled, None),
+            _ = tokio::time::sleep(wait) => {}
+        }
+        // The time is up. Decided under the lock that the answer takes too, so that the two cannot both win:
+        // a request that is not being written is closed here (a value that comes later finds nothing); one
+        // that is being written is marked and waited for; one that is gone was just closed by someone else,
+        // and their outcome is on its way.
+        let closed_here = {
+            let mut all = self.0.secret_requests.lock().unwrap();
+            match all.get_mut(id) {
+                Some(p) if p.busy => {
+                    p.expired = true;
+                    false
+                }
+                Some(_) => all.remove(id).is_some(),
+                None => false,
+            }
+        };
+        if closed_here {
+            return (SecretOutcome::Timeout, None);
+        }
+        tokio::select! {
+            biased;
+            a = &mut rx => a.unwrap_or((SecretOutcome::Cancelled, None)),
+            _ = ctx.cancel.cancelled() => (SecretOutcome::Cancelled, None),
+        }
+    }
+
     /// The requests for a secret that wait for the person (`GET /api/secret-requests`), the oldest first.
     /// They never hold a value.
     pub fn secret_requests(&self) -> Vec<SecretRequest> {
@@ -831,11 +868,12 @@ impl Engine {
 
     /// A value that was being written was not stored. The request is open again for another try, unless the
     /// destination `changed` (the person was shown another one: the request is closed with `declined` and a
-    /// hint for the model).
+    /// hint for the model) or its time ran out while the value was being written (closed with `timeout`).
     fn release_secret(&self, id: &str, changed: bool) {
         let closing = {
             let mut all = self.0.secret_requests.lock().unwrap();
             match all.get_mut(id) {
+                Some(p) if p.expired => all.remove(id).map(|p| (p, (SecretOutcome::Timeout, None))),
                 Some(_) if changed => all.remove(id).map(|p| (p, (SecretOutcome::Declined, Some(CHANGED_HINT)))),
                 Some(p) => {
                     p.busy = false;
@@ -1762,6 +1800,87 @@ mod tests {
         assert!(e.secret_requests().is_empty());
     }
 
+    /// What a test of a value that is still being written when the time runs out follows.
+    struct Late {
+        /// The tool that waits for the person.
+        task: tokio::task::JoinHandle<Result<ToolOutput>>,
+        run: String,
+        request: SecretRequest,
+        /// The answer of the person: it returns when the write ends.
+        write: tokio::task::JoinHandle<Result<()>>,
+        given: std::time::Instant,
+    }
+
+    /// A request for the token of the fake Hugging Face, with a wait of one second, and `value` given at once to a
+    /// service that takes `delay_ms` to check it: the value is still being checked when the time of the request runs out.
+    async fn written_past_the_time_limit(e: &Engine, value: &'static str, delay_ms: u64) -> Late {
+        e.set_config("global", "approvals.timeout_s", json!(1)).unwrap();
+        e.set_provider_auth("hf", None, Some(fake_hf_after(GOOD_TOKEN, delay_ms).await)).await.unwrap();
+        let tool = e.tool_registry().get("aiw_secret_request").unwrap();
+        let ctx = test_ctx(e, Some(OWNER));
+        let run = ctx.run_id.clone();
+        let task = tokio::spawn({
+            let args = secret_args("provider_token:hf");
+            async move { tool.call(args, &ctx).await }
+        });
+        let request = next_secret(e).await;
+        let given = std::time::Instant::now();
+        let write = tokio::spawn({
+            let (e, id) = (e.clone(), request.id.clone());
+            async move { e.respond_secret(&id, provide(value), true).await }
+        });
+        wait_until("the value to be in flight", || e.0.secret_requests.lock().unwrap().get(&request.id).filter(|p| p.busy).map(|_| ()))
+            .await;
+        assert!(given.elapsed() < Duration::from_millis(900), "the value was in flight before the time ran out");
+        Late { task, run, request, write, given }
+    }
+
+    #[tokio::test]
+    async fn a_value_still_being_written_when_the_time_runs_out_is_not_cut_off_and_the_model_hears_stored() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let Late { task, run, request: req, write, given } = written_past_the_time_limit(&e, GOOD_TOKEN, 1800).await;
+        // The limit (one second) passes while the service still checks the token: the request is not closed.
+        tokio::time::sleep(Duration::from_millis(1300)).await;
+        assert!(given.elapsed() > Duration::from_millis(1200));
+        assert!(!task.is_finished(), "the wait did not end with the time while the value was being written");
+        assert_eq!(e.secret_requests().len(), 1);
+        assert!(matches!(e.respond_secret(&req.id, provide(GOOD_TOKEN), true).await, Err(Error::Conflict(_))), "no second value meanwhile");
+
+        // The write ends: the secret is stored, and that is what the model is told (not `timeout`, which would make it ask again).
+        write.await.unwrap().unwrap();
+        assert_eq!(finished(task).await, json!({"outcome": "stored", "target": "provider_token:hf"}));
+        assert!(given.elapsed() > Duration::from_millis(1700), "it waited for the write");
+        assert!(e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured, "the token is stored");
+        assert!(e.secret_requests().is_empty());
+        assert_eq!(customs(&e, &run, "aiw.secret_resolved"), [json!({"id": req.id, "outcome": "stored"})]);
+        assert_eq!(e.audit().iter().filter(|a| a.action == "secret.set").count(), 1, "stored once");
+        assert!(e.audit().iter().all(|a| a.action != "secret.request"), "no row that says the request expired");
+    }
+
+    #[tokio::test]
+    async fn a_value_the_destination_refuses_after_the_time_ran_out_ends_the_request_with_timeout() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let Late { task, run, request: req, write, given } = written_past_the_time_limit(&e, WRONG_TOKEN, 1800).await;
+        // The limit passes while the service still checks the value: the request is not closed by it.
+        tokio::time::sleep(Duration::from_millis(1300)).await;
+        assert!(
+            !task.is_finished() && e.secret_requests().len() == 1,
+            "the wait did not end with the time while the value was being written"
+        );
+        // The write fails after the limit: the person is told why, and the request is over (no retry: the time is up).
+        let err = write.await.unwrap().unwrap_err();
+        assert!(matches!(err, Error::Unauthorized(_)) && err.status() == 401, "{err:?}");
+        assert!(!err.to_string().contains(WRONG_TOKEN) && !format!("{err:?}").contains(WRONG_TOKEN));
+        assert_eq!(finished(task).await, json!({"outcome": "timeout"}), "the tool does not wait for ever");
+        assert!(given.elapsed() > Duration::from_millis(1700), "the timeout came with the end of the write, not before");
+        assert!(e.secret_requests().is_empty());
+        assert!(matches!(e.respond_secret(&req.id, provide(GOOD_TOKEN), true).await, Err(Error::NotFound(_))), "too late");
+        assert!(!e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured);
+        assert_eq!(customs(&e, &run, "aiw.secret_resolved"), [json!({"id": req.id, "outcome": "timeout"})]);
+        assert!(e.audit().iter().any(|a| a.action == "secret.request" && a.decision.as_deref() == Some("timeout") && a.actor == "system"));
+        assert!(e.audit().iter().all(|a| a.action != "secret.set"));
+    }
+
     #[tokio::test]
     async fn a_provider_whose_endpoint_changed_after_the_request_gets_no_value_and_the_request_is_closed() {
         let (e, _d, _w) = engine(vec![]).await;
@@ -1911,6 +2030,10 @@ mod tests {
         let resolved = customs(&e, &ctx.run_id, "aiw.secret_resolved");
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0]["outcome"], "timeout");
+        // Too late: a value that comes after the time finds nothing, and nothing is written.
+        let late = customs(&e, &ctx.run_id, "aiw.secret_request").remove(0)["id"].as_str().unwrap().to_string();
+        assert!(matches!(e.respond_secret(&late, provide(SETTING_VALUE), true).await, Err(Error::NotFound(_))));
+        assert!(e.0.config.get_str("search.brave_api_key").unwrap_or_default().is_empty());
         // The run is cancelled.
         e.set_config("global", "approvals.timeout_s", json!(0)).unwrap();
         let ctx = test_ctx(&e, Some(OWNER));

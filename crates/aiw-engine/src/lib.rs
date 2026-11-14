@@ -140,6 +140,9 @@ pub(crate) struct PendingSecret {
     identity: String,
     /// A value is being written to the destination: no second answer meanwhile.
     busy: bool,
+    /// The time of the request ran out while a value was being written: the request is closed with
+    /// `timeout` as soon as that write ends without storing the value.
+    expired: bool,
 }
 
 /// Body and stored form of the policy. `rules` is required: a body without it must not be read
