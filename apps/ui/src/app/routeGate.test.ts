@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { legacyRedirect, resolveRoute } from "./router";
 import { ROUTES } from "./routes";
-import { routeGate, SIMPLE_HOME } from "./routeGate";
+import { ApiError } from "../shared/api/http";
+import { confirmedUiMode, routeGate, SIMPLE_HOME } from "./routeGate";
 
 const gate = (hash: string, mode: "simple" | "developer", configMode: "simple" | "developer" | undefined) =>
   routeGate({ routeId: resolveRoute(ROUTES, hash)?.route.id, mode, configMode });
@@ -67,5 +68,47 @@ describe("routeGate", () => {
   it("treats an empty hash like the home page: redirected in simple mode", () => {
     expect(gate("", "simple", "simple")).toBe("redirect");
     expect(gate("", "developer", "developer")).toBe("show");
+  });
+});
+
+describe("confirmedUiMode", () => {
+  it("is what the configuration says, whatever the device keeps", () => {
+    expect(confirmedUiMode({ fromConfig: "developer", status: "success", stored: "simple" })).toBe("developer");
+    expect(confirmedUiMode({ fromConfig: "simple", status: "success", stored: "developer" })).toBe("simple");
+    // A refresh that fails after an answer keeps the answer.
+    expect(confirmedUiMode({ fromConfig: "developer", status: "error", error: new Error("rete"), stored: "simple" })).toBe("developer");
+  });
+
+  it("is nothing while the configuration has not answered: the gate waits", () => {
+    expect(confirmedUiMode({ fromConfig: undefined, status: "pending", stored: "simple" })).toBeUndefined();
+  });
+
+  it("falls back to the mode kept on the device when the configuration cannot be read, so that the gate settles", () => {
+    // The request failed for good (network error, 500) or the answer has no valid `ui.mode`.
+    const failed = new Error("Failed to fetch");
+    expect(confirmedUiMode({ fromConfig: undefined, status: "error", error: failed, stored: "simple" })).toBe("simple");
+    expect(confirmedUiMode({ fromConfig: undefined, status: "error", error: failed, stored: "developer" })).toBe("developer");
+    expect(confirmedUiMode({ fromConfig: undefined, status: "success", stored: "simple" })).toBe("simple");
+    expect(confirmedUiMode({ fromConfig: undefined, status: "success", stored: "developer" })).toBe("developer");
+  });
+
+  it("does not take a 401 for an unreadable configuration: the pairing screen is up and the answer will come", () => {
+    const unauthorized = new ApiError(401, "non autorizzato");
+    expect(confirmedUiMode({ fromConfig: undefined, status: "error", error: unauthorized, stored: "simple" })).toBeUndefined();
+  });
+
+  it("never leaves the shell on the skeleton for ever: with an unreadable configuration every address settles", () => {
+    const failed = new Error("Failed to fetch");
+    for (const stored of ["simple", "developer"] as const) {
+      const configMode = confirmedUiMode({ fromConfig: undefined, status: "error", error: failed, stored });
+      for (const r of ROUTES) {
+        const path = r.path.replace(/\/:[A-Za-z]+\??/g, "") || "/";
+        const expected = r.id === "chat" || stored === "developer" ? "show" : "redirect";
+        expect(gate(`#${path}`, stored, configMode), `${stored} ${r.id}`).toBe(expected);
+      }
+      // The initial address (`#/`) and the unknown ones too.
+      expect(gate("", stored, configMode)).toBe(stored === "simple" ? "redirect" : "show");
+      expect(gate("#/questa-pagina-non-esiste", stored, configMode)).toBe(stored === "simple" ? "redirect" : "show");
+    }
   });
 });

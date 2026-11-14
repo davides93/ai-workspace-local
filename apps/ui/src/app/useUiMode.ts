@@ -2,13 +2,16 @@ import { useCallback, useEffect } from "react";
 import { useConfig, useSetConfig } from "../features/settings/api";
 import { configUiMode, uiModeLayer } from "../features/settings/model/config";
 import { setStoredUiMode, useStoredUiMode, type UiMode } from "../shared/lib/uiMode";
+import { confirmedUiMode } from "./routeGate";
 
 import { t } from "../shared/i18n";
 /**
  * The interface mode, a setter and what the configuration says. The configuration (`ui.mode`) decides;
  * the last known value is kept on the device so the shell does not flash the wrong sections while the
- * configuration loads. The third element is the mode the configuration reported, `undefined` until it
- * has answered: the shell redirects only on that (`routeGate`), never on the value kept on the device.
+ * configuration loads. The third element is the mode the configuration confirms (`confirmedUiMode`): what it
+ * reported, `undefined` until it has answered, and the value kept on the device only if it cannot be read at
+ * all. The shell redirects only on that (`routeGate`), never on the value kept on the device while the
+ * configuration is still on its way.
  */
 export function useUiMode(): [UiMode, (mode: UiMode) => void, UiMode | undefined] {
   const mode = useStoredUiMode();
@@ -34,5 +37,5 @@ export function useUiMode(): [UiMode, (mode: UiMode) => void, UiMode | undefined
     },
     [view, mode, setConfig],
   );
-  return [mode, set, fromConfig];
+  return [mode, set, confirmedUiMode({ fromConfig, status: cfg.status, error: cfg.error, stored: mode })];
 }
