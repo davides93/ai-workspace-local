@@ -3,13 +3,15 @@
 // goes unwarned. It is only a warning in the message box; nothing is blocked and nothing is stored here.
 //
 // One difference, on purpose: `sk-` must not be the tail of a word. The engine masks inside words too (harmless in a
-// trace), but in the message box "disk-usage-analyzer-tool" or "task-force-ricerca" would raise a false alarm.
+// trace), but in the message box "disk-usage-analyzer-tool" or "task-force-ricerca" would raise a false alarm. It is written
+// without a lookbehind (`(?<!…)`): WebKit has it only from Safari 16.4, and on an older macOS (the app runs on macOS 11) the
+// literal is a SyntaxError when the file is parsed, which would take the whole chat block down with it.
 //
 // Not covered, as in the engine: tokens of providers that have no fixed prefix, and `hf_…` tokens of Hugging Face.
 
-const SECRET_PATTERNS: readonly RegExp[] = [
+export const SECRET_PATTERNS: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-  /(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/,
+  /(?:^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/,
   /gh[pousr]_[A-Za-z0-9]{20,}/,
   /github_pat_[A-Za-z0-9_]{20,}/,
   /\bAKIA[0-9A-Z]{16}\b/,

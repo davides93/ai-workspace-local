@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeSecret } from "./secretPattern";
+import { looksLikeSecret, SECRET_PATTERNS } from "./secretPattern";
 
 // Obviously fake values, built from parts so that no scanner takes them for real credentials.
 const FAKE = {
@@ -23,6 +23,16 @@ describe("looksLikeSecret", () => {
     expect(looksLikeSecret(`riga uno\nriga due ${FAKE.aws}\nriga tre`)).toBe(true);
     expect(looksLikeSecret(`OPENAI_API_KEY=${FAKE.openai}`)).toBe(true);
     expect(looksLikeSecret(`("${FAKE.openai}")`)).toBe(true);
+  });
+  it("takes `sk-` at the start of the text, of a line or after any sign, but never as the tail of a word or a number", () => {
+    expect(looksLikeSecret(FAKE.openai)).toBe(true);
+    expect(looksLikeSecret(`riga uno\n${FAKE.openai}`)).toBe(true);
+    for (const before of [" ", "\t", "=", ":", "\"", "'", "(", "_", "/"]) expect(looksLikeSecret(`chiave${before}${FAKE.openai}`), JSON.stringify(before)).toBe(true);
+    for (const before of ["a", "Z", "k", "7", "0"]) expect(looksLikeSecret(`chiave ${before}${FAKE.openai}`), before).toBe(false);
+  });
+  it("uses no lookbehind: WebKit before Safari 16.4 (macOS 11 to 13) cannot even parse the literal, and the chat block would not load", () => {
+    expect(SECRET_PATTERNS.length).toBeGreaterThan(0);
+    for (const re of SECRET_PATTERNS) expect(re.source, String(re)).not.toMatch(/\(\?<[=!]/);
   });
   it("takes the scheme of Bearer without regard to case, like the engine", () => {
     expect(looksLikeSecret("bearer TESTONLYFAKETOKEN0000")).toBe(true);
