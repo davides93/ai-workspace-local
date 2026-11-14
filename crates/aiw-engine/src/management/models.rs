@@ -81,6 +81,13 @@ fn text(s: &str, max: usize) -> String {
     redact(&clip(s, max))
 }
 
+/// [`text`] for what a provider or an engine says (it can repeat a key it was given): the stored
+/// secrets are hidden first and the text is cut after, so a value that the length limit would cut
+/// in two cannot leave its first half behind.
+fn external(s: &str, max: usize, secrets: &[String]) -> String {
+    text(&scrub_str(s, secrets), max)
+}
+
 fn mb(bytes: u64) -> u64 {
     bytes / (1024 * 1024)
 }
@@ -226,13 +233,13 @@ fn fit_rank(fit: &str) -> u8 {
 }
 
 /// The engines that can run a model (ids) and, for a few that cannot yet, why.
-fn runtimes_of(compat: &[RuntimeCompat]) -> (Vec<String>, Vec<String>) {
+fn runtimes_of(compat: &[RuntimeCompat], secrets: &[String]) -> (Vec<String>, Vec<String>) {
     let usable = compat.iter().filter(|r| r.available).map(|r| r.id.clone()).collect();
     let missing = compat
         .iter()
         .filter(|r| !r.available)
         .take(3)
-        .map(|r| if r.reason.is_empty() { r.id.clone() } else { format!("{} ({})", r.id, text(&r.reason, 60)) })
+        .map(|r| if r.reason.is_empty() { r.id.clone() } else { format!("{} ({})", r.id, external(&r.reason, 60, secrets)) })
         .collect();
     (usable, missing)
 }
@@ -285,6 +292,7 @@ impl Tool for Search {
 }
 
 async fn search(e: &Engine, args: &Value, ctx: &ToolContext) -> Result<Answer> {
+    let secrets = secret_values(e);
     let provider = text_arg(args, "provider").map(|p| p.to_lowercase()).unwrap_or_else(|| "catalog".into());
     if !SEARCH_PROVIDERS.contains(&provider.as_str()) {
         return Err(Error::Invalid(format!("provider sconosciuto «{provider}»: usa uno tra {}", SEARCH_PROVIDERS.join(", "))));
@@ -293,13 +301,13 @@ async fn search(e: &Engine, args: &Value, ctx: &ToolContext) -> Result<Answer> {
         let found = cancellable(ctx, e.remote_model(&provider, &model, None))
             .await
             .map_err(|err| explain("Non riesco a leggere le varianti del modello (per cercarlo usa aiw_model_search con `query`)", err))?;
-        return Ok(Answer::Json(detail(&provider, &found)));
+        return Ok(Answer::Json(detail(&provider, &found, &secrets)));
     }
     let query = text_arg(args, "query").unwrap_or_default();
     let limit = limit_arg(args);
     let format = text_arg(args, "format").or_else(|| matches!(provider.as_str(), "hf" | "modelscope").then(|| "gguf".to_string()));
     if provider == "catalog" {
-        return search_catalog(e, query, format, limit)
+        return search_catalog(e, query, format, limit, &secrets)
             .await
             .map(Answer::Json)
             .map_err(|err| explain("Non riesco a cercare nel catalogo", err));
@@ -308,7 +316,7 @@ async fn search(e: &Engine, args: &Value, ctx: &ToolContext) -> Result<Answer> {
     let page = cancellable(ctx, e.search_models(&provider, q))
         .await
         .map_err(|err| explain(&format!("Non riesco a cercare su {provider}"), err))?;
-    let items: Vec<Value> = page.items.iter().map(remote_item).collect();
+    let items: Vec<Value> = page.items.iter().map(|m| remote_item(m, &secrets)).collect();
     let mut answer = listing(items, limit);
     answer["provider"] = json!(provider);
     answer["more"] = json!(page.next_cursor.is_some());
@@ -319,11 +327,11 @@ async fn search(e: &Engine, args: &Value, ctx: &ToolContext) -> Result<Answer> {
 }
 
 /// A model of a provider as a search result. Names and descriptions come from the provider: they are clipped and redacted.
-fn remote_item(m: &RemoteModel) -> Value {
+fn remote_item(m: &RemoteModel, secrets: &[String]) -> Value {
     json!({
-        "id": text(&m.id, 120), "name": text(&m.name, 100), "publisher": text(&m.publisher, 60),
-        "description": m.description.as_deref().map(|d| text(d, 160)), "formats": m.formats, "capabilities": m.capabilities,
-        "downloads": m.downloads, "likes": m.likes, "license": m.license.as_deref().map(|l| text(l, 60)), "gated": m.gated,
+        "id": external(&m.id, 120, secrets), "name": external(&m.name, 100, secrets), "publisher": external(&m.publisher, 60, secrets),
+        "description": m.description.as_deref().map(|d| external(d, 160, secrets)), "formats": m.formats, "capabilities": m.capabilities,
+        "downloads": m.downloads, "likes": m.likes, "license": m.license.as_deref().map(|l| external(l, 60, secrets)), "gated": m.gated,
         "params_b": m.params_b,
     })
 }
@@ -347,14 +355,14 @@ fn adviser_picks(e: &Engine) -> (String, HashMap<String, Vec<&'static str>>) {
 
 /// The recommended catalog first (what the adviser would pick for this device), then by how well a
 /// model fits, the ones not installed yet before the ones already here, the smallest first.
-async fn search_catalog(e: &Engine, query: String, format: Option<String>, limit: usize) -> Result<Value> {
+async fn search_catalog(e: &Engine, query: String, format: Option<String>, limit: usize, secrets: &[String]) -> Result<Value> {
     // The matching is the catalog provider's own; the fit and the installed state are the device's.
     let page = e.search_models("catalog", SearchQuery { q: query, format, sort: None, limit: 50, cursor: None }).await?;
     let catalog = e.catalog();
     let (tier, picks) = adviser_picks(e);
     let mut found: Vec<&CatalogModel> = page.items.iter().filter_map(|m| catalog.iter().find(|c| c.id == m.id)).collect();
     found.sort_by_key(|c| (!picks.contains_key(&c.id), fit_rank(&c.fit), c.installed, c.size_bytes));
-    let items: Vec<Value> = found.iter().map(|c| catalog_item(c, picks.get(&c.id))).collect();
+    let items: Vec<Value> = found.iter().map(|c| catalog_item(c, picks.get(&c.id), secrets)).collect();
     let mut answer = listing(items, limit);
     answer["provider"] = json!("catalog");
     answer["device_tier"] = json!(tier);
@@ -364,8 +372,8 @@ async fn search_catalog(e: &Engine, query: String, format: Option<String>, limit
     Ok(answer)
 }
 
-fn catalog_item(c: &CatalogModel, recommended_for: Option<&Vec<&'static str>>) -> Value {
-    let (usable, missing) = runtimes_of(&c.runtime_compat);
+fn catalog_item(c: &CatalogModel, recommended_for: Option<&Vec<&'static str>>, secrets: &[String]) -> Value {
+    let (usable, missing) = runtimes_of(&c.runtime_compat, secrets);
     json!({
         "id": c.id, "name": c.name, "publisher": c.publisher, "params_b": c.params_b, "size_mb": mb(c.size_bytes),
         "fit": c.fit, "fit_detail": text(&c.fit_detail, 160), "installed": c.installed, "downloadable": c.downloadable,
@@ -375,7 +383,7 @@ fn catalog_item(c: &CatalogModel, recommended_for: Option<&Vec<&'static str>>) -
 }
 
 /// The variants of a model with what the device says about each, and the arguments of `aiw_model_download` for the best one.
-fn detail(provider: &str, d: &RemoteModelDetail) -> Value {
+fn detail(provider: &str, d: &RemoteModelDetail, secrets: &[String]) -> Value {
     let m = &d.model;
     let best = d.variants.iter().find(|v| v.recommended).or_else(|| d.variants.first());
     let download_with = if provider == "catalog" {
@@ -387,17 +395,17 @@ fn detail(provider: &str, d: &RemoteModelDetail) -> Value {
         .variants
         .iter()
         .map(|v| {
-            let (usable, missing) = runtimes_of(&v.runtimes);
+            let (usable, missing) = runtimes_of(&v.runtimes, secrets);
             json!({
-                "id": text(&v.id, 80), "label": text(&v.label, 80), "format": v.format, "quant": v.quant, "size_mb": mb(v.size_bytes),
+                "id": external(&v.id, 80, secrets), "label": external(&v.label, 80, secrets), "format": v.format, "quant": v.quant, "size_mb": mb(v.size_bytes),
                 "fit": v.fit, "fit_detail": text(&v.fit_detail, 160), "recommended": v.recommended, "installed": v.installed,
                 "runtimes_available": usable, "runtimes_missing": missing,
             })
         })
         .collect();
-    let mut item = remote_item(m);
+    let mut item = remote_item(m, secrets);
     item["provider"] = json!(provider);
-    item["revision"] = json!(text(&d.revision, 60));
+    item["revision"] = json!(external(&d.revision, 60, secrets));
     item["variants"] = listing(variants, 20);
     item["download_with"] = download_with;
     item
@@ -795,8 +803,14 @@ fn use_model(e: &Engine, args: &Value) -> Result<String> {
     let model = local_model(e, &wanted).map_err(|err| explain("Non riesco a scegliere il modello", err))?;
     let route = e.route(&model.id, None, false);
     let Some(best) = route.candidates.first() else {
-        let why =
-            route.excluded.iter().take(4).map(|x| format!("{}: {}", x.runtime_name, text(&x.reason, 80))).collect::<Vec<_>>().join("; ");
+        let secrets = secret_values(e);
+        let why = route
+            .excluded
+            .iter()
+            .take(4)
+            .map(|x| format!("{}: {}", x.runtime_name, external(&x.reason, 80, &secrets)))
+            .collect::<Vec<_>>()
+            .join("; ");
         return Err(Error::Conflict(format!(
             "Nessun motore può eseguire «{}» su questo dispositivo{}. Non ho cambiato nulla: si può installare o avviare un motore adatto (aiw_inspect, topic runtimes).",
             text(&model.name, 100),
@@ -1002,11 +1016,14 @@ async fn runtime_control(e: &Engine, args: &Value) -> Result<String> {
     let info = e.runtime_action(&runtime, action, model).await.map_err(|err| {
         explain(&format!("Non riesco a {what} il motore `{runtime}` (i motori si vedono con aiw_inspect, topic runtimes)"), err)
     })?;
-    let detail = info.status_detail.as_deref().filter(|d| !d.is_empty()).map(|d| format!(": {}", text(d, 160))).unwrap_or_default();
+    let secrets = secret_values(e);
+    let detail =
+        info.status_detail.as_deref().filter(|d| !d.is_empty()).map(|d| format!(": {}", external(d, 160, &secrets))).unwrap_or_default();
     let loaded = if info.loaded_models.is_empty() {
         String::new()
     } else {
-        format!(" Modelli caricati: {}.", info.loaded_models.iter().take(5).map(|m| text(m, 80)).collect::<Vec<_>>().join(", "))
+        let names = info.loaded_models.iter().take(5).map(|m| external(m, 80, &secrets)).collect::<Vec<_>>().join(", ");
+        format!(" Modelli caricati: {names}.")
     };
     let state = format!("stato: {}{detail}", info.status);
     let active = matches!(info.status.as_str(), "running" | "starting");
@@ -1909,8 +1926,8 @@ mod tests {
 
     // ------------------------------------------------------------------ engines
 
-    /// An engine that fails with an error that repeats the key it was given.
-    struct LeakyEngine;
+    /// An engine that fails with an error that repeats the key it was given, after `0` filler characters.
+    struct LeakyEngine(usize);
 
     #[async_trait::async_trait]
     impl aiw_runtimes::ChatBackend for LeakyEngine {
@@ -1925,7 +1942,7 @@ mod tests {
             Err(Error::Unsupported("prova".into()))
         }
         fn availability(&self) -> std::result::Result<(), String> {
-            Err(format!("rifiutato dal server con la chiave {PROVIDER_TOKEN} e basta"))
+            Err(format!("{}rifiutato dal server con la chiave {PROVIDER_TOKEN} e basta", "x".repeat(self.0)))
         }
     }
 
@@ -1985,7 +2002,7 @@ mod tests {
     async fn the_state_of_an_engine_never_carries_a_key_to_the_model() {
         let (e, _d, _w) = engine_on(16).await;
         e.update_runtime_settings("remote-openai", serde_json::from_value(json!({ "api_key": PROVIDER_TOKEN })).unwrap()).unwrap();
-        e.register_native_runtime("remote-openai", Arc::new(LeakyEngine));
+        e.register_native_runtime("remote-openai", Arc::new(LeakyEngine(0)));
         e.0.runtimes.refresh_one("remote-openai").await.unwrap();
         // The engine's status really repeats the key (a remote engine is "started" by looking at it again).
         let status = e.runtimes().into_iter().find(|r| r.id == "remote-openai").unwrap();
@@ -2295,6 +2312,50 @@ mod tests {
         assert!(e.audit().iter().all(|a| !serde_json::to_string(a).unwrap().contains(PROVIDER_TOKEN)));
         assert!(!serde_json::to_string(&e.downloads()).unwrap().contains(PROVIDER_TOKEN));
         assert!(!serde_json::to_string(&e.model_providers()).unwrap().contains(PROVIDER_TOKEN));
+    }
+
+    /// Not even the beginning of a secret: a value cut in two by a length limit must not leave its first half behind.
+    fn assert_no_part_of(out: &str, secret: &str) {
+        let start: String = secret.chars().take(MIN_SECRET_LEN).collect();
+        assert!(!out.contains(&start), "the first characters of a secret are in the answer: {out}");
+    }
+
+    #[tokio::test]
+    async fn a_provider_text_that_holds_a_secret_across_the_length_limit_is_hidden_before_the_cut() {
+        let (e, _d, _w) = engine_on(16).await;
+        let (base, fake) = fake_hf().await;
+        e.0.hub.set_auth("hf", None, Some(base)).unwrap();
+        e.0.hub.set_auth("hf", Some(Some(PROVIDER_TOKEN.into())), None).unwrap();
+        e.0.store
+            .put_doc(
+                "model_provider",
+                "hf",
+                &crate::models::ProviderDoc { id: "hf".into(), token: Some(PROVIDER_TOKEN.into()), endpoint: None },
+            )
+            .unwrap();
+        // A hostile service lists a model whose id holds the token across the 120 characters an id is cut at.
+        *fake.echo.lock().unwrap() = Some(format!("{}{PROVIDER_TOKEN}", "y".repeat(100)));
+        let out = call(&e, "aiw_model_search", json!({"provider": "hf", "query": "echo"})).await.unwrap();
+        assert!(out.contains("acme/echo-yyyy"), "the model is listed: {out}");
+        assert_no_part_of(&out, PROVIDER_TOKEN);
+        assert!(out.contains(SECRET_MASK), "{out}");
+    }
+
+    #[tokio::test]
+    async fn the_key_an_engine_repeats_late_in_its_status_is_hidden_before_the_status_is_cut() {
+        let (e, _d, _w) = engine_on(16).await;
+        // The status of a remote engine repeats its key from the 140th character on, and the status is cut at 160.
+        e.update_runtime_settings("remote-openai", serde_json::from_value(json!({ "api_key": PROVIDER_TOKEN })).unwrap()).unwrap();
+        e.register_native_runtime("remote-openai", Arc::new(LeakyEngine(105)));
+        e.0.runtimes.refresh_one("remote-openai").await.unwrap();
+        let status = e.runtimes().into_iter().find(|r| r.id == "remote-openai").unwrap();
+        assert!(
+            status.status_detail.as_deref().unwrap_or_default().contains(PROVIDER_TOKEN),
+            "the engine really repeats the key: {status:?}"
+        );
+        let said = call(&e, "aiw_runtime_control", json!({"runtime": "remote-openai", "action": "start"})).await.unwrap();
+        assert!(said.contains("non risulta attivo") && said.contains(SECRET_MASK), "{said}");
+        assert_no_part_of(&said, PROVIDER_TOKEN);
     }
 
     #[tokio::test]
