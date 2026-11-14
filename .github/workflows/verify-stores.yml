@@ -1,0 +1,37 @@
+name: Verify store delivery
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: Store build number to verify
+        default: '5011'
+        required: true
+permissions:
+  contents: read
+jobs:
+  apple:
+    runs-on: ubuntu-latest
+    environment: app-store
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/ci/verify-stores.mjs apple "$BUILD"
+        env:
+          BUILD: ${{ inputs.build }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+  google:
+    runs-on: ubuntu-latest
+    environment: google-play
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/ci/verify-stores.mjs google "$BUILD"
+        env:
+          BUILD: ${{ inputs.build }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
