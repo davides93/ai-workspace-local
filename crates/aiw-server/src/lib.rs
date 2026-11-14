@@ -1854,6 +1854,8 @@ mod tests_errors;
 #[cfg(test)]
 mod tests_eval;
 #[cfg(test)]
+mod tests_harness;
+#[cfg(test)]
 mod tests_interaction;
 #[cfg(test)]
 mod tests_kb;
