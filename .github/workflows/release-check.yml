@@ -35,7 +35,7 @@ jobs:
     name: Selezione dei target (self-test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: bash scripts/ci/select-targets.sh --self-test
 
   check:
@@ -51,8 +51,8 @@ jobs:
           - { name: Windows arm64, os: windows-11-arm }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Rust e libclang (Windows arm64)
