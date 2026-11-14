@@ -25,6 +25,7 @@ import { memoryPendingFor, pendingFor } from "../learning/model/lessons";
 import { useTeams } from "../teams/api";
 import { teamAsAgent, teamIdOf } from "../teams/model/teams";
 import { useConfig } from "../settings/api";
+import { canRequestSecret } from "../ask/model";
 import { useCreateSession, useSessions } from "./api";
 import { ChatActionsContext, type ChatActions } from "./ChatActions";
 import { ChatEmpty } from "./components/ChatEmpty";
@@ -307,12 +308,13 @@ export function ChatView() {
           </div>
         )}
         {simple && !noSessions && <DownloadsStrip />}
-        {/* Simple interface only: the protected field is the Assistente's tool (`aiw_secret_request`); the session open in Developer
-            mode is usually the operator's, which has no such tool, so the button would ask for something it cannot do. */}
+        {/* Simple interface only. The protected field is a tool (`aiw_secret_request`): the button that asks for it is shown only when the
+            agent of this session has it (an old session of the Coder or the Operatore has not, and the button would ask for something
+            it cannot do); the warning is shown anyway. */}
         {simple && (
           <SecretWarning
             text={input}
-            onAskProtectedField={() => { setInput(tr("chat.segreto_richiesta_testo")); setFocusTick((n) => n + 1); }}
+            onAskProtectedField={canRequestSecret(agent) ? () => { setInput(tr("chat.segreto_richiesta_testo")); setFocusTick((n) => n + 1); } : undefined}
           />
         )}
         <Composer

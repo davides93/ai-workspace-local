@@ -3,7 +3,7 @@ import { ApiError } from "../../shared/api/http";
 import { normalizeAgent } from "../agents/model/agents";
 import type { AgentProfile, Question } from "../../shared/api/types";
 import {
-  answerSummary, bannerSession, choiceCount, choiceReply, closedText, confirmReply, digitChoice, emptyChoice, formReply, initialFormValues, isManagementTool,
+  answerSummary, bannerSession, canRequestSecret, choiceCount, choiceReply, closedText, confirmReply, digitChoice, emptyChoice, formReply, initialFormValues, isManagementTool,
   isTypingTarget, openChatSession, parseQuestion, parseQuestionArgs, parseQuestionResult, parseSecret, parseSecretResult, pickChoice, questionTitle, secretClosedText, secretFailure, typeOther, waitingElsewhere,
 } from "./model";
 
@@ -21,6 +21,22 @@ describe("management tools", () => {
     expect(isManagementTool("shell")).toBe(false);
     expect(isManagementTool("mcp__aiw_x__run")).toBe(false);
     expect(isManagementTool("my_aiw_tool")).toBe(false);
+  });
+});
+
+describe("canRequestSecret", () => {
+  it("is true when aiw_secret_request is among the tools of the agent", () => {
+    expect(canRequestSecret({ tools: ["agent", "ask_user", "aiw_secret_request", "aiw_inspect"] })).toBe(true);
+  });
+  it("is false for an agent without it, and for \"*\": a management tool needs an explicit grant", () => {
+    expect(canRequestSecret({ tools: ["read_file", "shell"] })).toBe(false);
+    expect(canRequestSecret({ tools: ["*"] })).toBe(false);
+    expect(canRequestSecret({ tools: [] })).toBe(false);
+    expect(canRequestSecret({ tools: ["aiw_secret_clear", "ask_user"] })).toBe(false);
+  });
+  it("is false while there is no agent yet", () => {
+    expect(canRequestSecret(null)).toBe(false);
+    expect(canRequestSecret(undefined)).toBe(false);
   });
 });
 

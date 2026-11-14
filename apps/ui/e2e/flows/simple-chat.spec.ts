@@ -246,8 +246,11 @@ test.describe("the assistant from the chat", () => {
 
 test.describe("a secret typed in the message box", () => {
   test("raises a warning that is announced, offers the protected field and never blocks sending", async ({ page }) => {
-    await openApp(page, "/chat/ses_pdf");
+    // The protected field is a tool of the Assistente: in its session (a new one) the button is there.
+    await openApp(page, "/chat");
+    await page.getByRole("button", { name: "Nuova", exact: true }).click();
     const box = messageBox(page);
+    await expect(box).toBeEnabled();
     const warning = page.getByRole("status").filter({ hasText: "Sembra una chiave o un token" });
     await expect(warning).toHaveCount(0);
 
@@ -273,6 +276,21 @@ test.describe("a secret typed in the message box", () => {
     await box.press("Enter");
     await expect(conversation(page).getByText(`Ecco la chiave ${FAKE_KEY}`)).toBeVisible();
   });
+
+  for (const session of [{ id: "ses_pdf", agent: "Operatore" }, { id: "ses_bug", agent: "Coder" }]) {
+    test(`in a session of the ${session.agent}, which cannot ask for the protected field: the warning stays, the button does not come`, async ({ page }) => {
+      await openApp(page, `/chat/${session.id}`);
+      await expect(page.getByRole("list", { name: "Come lavora questa sessione" }).getByText(session.agent)).toBeVisible();
+      const box = messageBox(page);
+      const warning = page.getByRole("status").filter({ hasText: "Sembra una chiave o un token" });
+      await box.fill(`Usa questa chiave ${FAKE_KEY} per il servizio`);
+      await expect(warning).toBeVisible();
+      await expect(warning).toContainText("Chiedi all'assistente di usare il campo protetto");
+      await expect(page.getByRole("button", { name: "Togli il testo e chiedi il campo protetto" })).toHaveCount(0);
+      // Not blocked either.
+      await expect(page.getByRole("button", { name: "Invia" })).toBeEnabled();
+    });
+  }
 
   test("developer mode stays as it was: no warning and no extra space, for a person who types a key there", async ({ page }) => {
     await openApp(page, "/chat/ses_pdf", { mode: "developer" });

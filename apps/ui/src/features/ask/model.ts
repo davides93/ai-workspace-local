@@ -1,5 +1,5 @@
 import { matchPath, parseHash } from "../../app/router";
-import type { McpElicitation, Question, QuestionAnswer, QuestionField, QuestionKind, QuestionOutcome, QuestionReply, SecretOutcome, SecretRequest } from "../../shared/api/types";
+import type { AgentProfile, McpElicitation, Question, QuestionAnswer, QuestionField, QuestionKind, QuestionOutcome, QuestionReply, SecretOutcome, SecretRequest } from "../../shared/api/types";
 import { errorStatus } from "../../shared/lib/errors";
 import { initialValues, toContent, type FormValues } from "../mcp/model";
 
@@ -8,6 +8,11 @@ import { t } from "../../shared/i18n";
 export const ASK_TOOL = "ask_user";
 /** The tool the agent asks for a secret with (a row of the conversation, `kind: "secret"`): it never carries the value. */
 export const SECRET_TOOL = "aiw_secret_request";
+/**
+ * Can the agent ask for a secret in the protected field? Only when `aiw_secret_request` is among its `tools` by name: a management tool
+ * needs an explicit grant, so `"*"` (the Coder, for one) does not include it.
+ */
+export const canRequestSecret = (agent: Pick<AgentProfile, "tools"> | null | undefined): boolean => !!agent?.tools.includes(SECRET_TOOL);
 
 /** `name` of the custom events of the questions and the secret requests. */
 export const QUESTION_EVENT = "aiw.question";
