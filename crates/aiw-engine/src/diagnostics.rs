@@ -99,6 +99,15 @@ impl Engine {
                 collect_secret_strings(&doc, &mut out);
             }
         }
+        // The secret settings of the engines (`api_key`, …): only the fields their manifest marks, as for the app's own settings.
+        for m in self.0.runtimes.manifests() {
+            let Ok(values) = self.0.runtimes.settings(&m.id) else { continue };
+            for k in m.settings.properties.iter().filter(|(_, f)| f.secret).map(|(k, _)| k) {
+                if let Some(s) = values.get(k).and_then(Value::as_str).filter(|s| !s.is_empty() && *s != SECRET_MASK) {
+                    out.push(s.to_string());
+                }
+            }
+        }
         for cfg in store.list_docs::<McpServerConfig>("mcp").unwrap_or_default() {
             if let Some(u) = cfg.url {
                 out.extend(url_credentials(&u));

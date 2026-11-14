@@ -784,6 +784,57 @@ mod tests {
         assert!(of(json!({"topic": "runtimes", "id": runtime})).contains("install_plan"));
     }
 
+    /// An engine that fails with an error that repeats the key it was given.
+    struct LeakyEngine;
+
+    #[async_trait::async_trait]
+    impl aiw_runtimes::ChatBackend for LeakyEngine {
+        async fn list_models(&self) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn chat(
+            &self,
+            _req: aiw_runtimes::ChatRequest,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<aiw_runtimes::DeltaStream> {
+            Err(Error::Unsupported("prova".into()))
+        }
+        fn availability(&self) -> std::result::Result<(), String> {
+            Err(format!("rifiutato dal server con la chiave {RUNTIME_SECRET} e basta"))
+        }
+    }
+
+    /// The secret settings of an engine are among the values the last check hides: an error that repeats the key
+    /// (`status_detail`, in the list and in the detail) does not reach the model, whatever words surround it.
+    #[tokio::test]
+    async fn a_runtime_secret_repeated_in_the_status_never_reaches_the_answer() {
+        let (e, _d, _w) = engine(vec![]).await;
+        e.update_runtime_settings("remote-openai", serde_json::from_value(json!({ "api_key": RUNTIME_SECRET })).unwrap()).unwrap();
+        e.register_native_runtime("remote-openai", Arc::new(LeakyEngine));
+        e.0.runtimes.refresh_one("remote-openai").await.unwrap();
+        // The leak is really there to be found: the status of the engine carries the key.
+        let status = e.runtimes().into_iter().find(|r| r.id == "remote-openai").unwrap();
+        assert_eq!(status.status, "installable");
+        assert!(status.status_detail.as_deref().unwrap_or_default().contains(RUNTIME_SECRET), "{status:?}");
+        // ... and the engine does not hand it out as a setting either: the list shows the mask.
+        assert_eq!(status.settings["api_key"], SECRET_MASK);
+
+        for args in [
+            json!({"topic": "runtimes"}),
+            json!({"topic": "runtimes", "id": "remote-openai"}),
+            json!({"topic": "runtimes", "query": "openai"}),
+            json!({"topic": "overview"}),
+        ] {
+            let text = ask(&e, args.clone()).await;
+            assert!(!text.contains(RUNTIME_SECRET), "{args} leaks the key:\n{text}");
+            if args["topic"] == "runtimes" {
+                assert!(text.contains("rifiutato dal server") && text.contains(SECRET_MASK), "{args}: {text}");
+            }
+        }
+        // The key is a secret the app knows: it is among the values the diagnostics hide too.
+        assert!(e.known_secrets().iter().any(|s| s == RUNTIME_SECRET));
+    }
+
     #[tokio::test]
     async fn overview_models_downloads_and_agents_say_what_is_there() {
         let (e, _d, _w) = engine(vec![]).await;
