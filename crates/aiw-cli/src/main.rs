@@ -728,10 +728,12 @@ async fn main() -> Result<()> {
                     std::io::stderr().flush()?;
                     let mut line = String::new();
                     std::io::stdin().read_line(&mut line)?;
-                    engine.respond_approval(
+                    // The person at the terminal of this computer is the owner.
+                    engine.respond_approval_as(
                         &a.id,
                         line.trim().eq_ignore_ascii_case("s") || line.trim().eq_ignore_ascii_case("y"),
                         false,
+                        true,
                     )?;
                 }
                 if let Some(r) = engine.workflow_runs().into_iter().find(|r| r.id == first.id) {
@@ -1621,7 +1623,7 @@ async fn run(engine: &Engine, agent: &str, prompt: String, yes: bool, worktree: 
                         std::io::stdin().read_line(&mut line)?;
                         matches!(line.trim().to_lowercase().as_str(), "s" | "si" | "sì" | "y" | "yes")
                     };
-                    engine.respond_approval(&id, allow, false)?;
+                    engine.respond_approval_as(&id, allow, false, true)?;
                 }
                 AgEvent::RunError { message, .. } => {
                     eprintln!("\nErrore: {message}");

@@ -521,6 +521,18 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for IsLocal {
     }
 }
 
+/// Does the caller have full access to this computer (the owner)? The management tools of the
+/// Assistant ask this about the person who talks to it: a token that is not `full` (a paired
+/// device's) is not the owner. A request the middleware did not stamp counts as not.
+pub(crate) struct IsOwner(pub(crate) bool);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for IsOwner {
+    type Rejection = Infallible;
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(IsOwner(parts.extensions.get::<AuthContext>().is_some_and(|c| c.full)))
+    }
+}
+
 /// Pause after a wrong code, on top of the rate limit: every guess costs the guesser time.
 const PAIR_FAIL_DELAY: Duration = Duration::from_millis(if cfg!(test) { 0 } else { 400 });
 
@@ -1024,8 +1036,11 @@ struct RunBody {
 }
 /// Room for the largest allowed attachments (25 MB) as base64 inside JSON, plus the text.
 const RUN_BODY_LIMIT: usize = aiw_core::api::MAX_ATTACHMENTS_TOTAL_BYTES / 3 * 4 + (2 << 20);
-async fn start_run(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<RunBody>) -> ApiResult<Value> {
-    ok(json!({"run_id": s.engine.start_run_attach(&id, b.input, b.kind.as_deref(), b.thinking, b.attachments).await?}))
+async fn start_run(State(s): State<AppState>, Path(id): Path<String>, IsOwner(owner): IsOwner, Json(b): Json<RunBody>) -> ApiResult<Value> {
+    // The chat of the app shows questions, and takes secrets only from the owner (the secrets
+    // endpoint needs full access). This is where a run gets the origin the management tools look for.
+    let origin = aiw_engine::RunOrigin { owner, questions: true, secrets: owner };
+    ok(json!({"run_id": s.engine.start_run_from(&id, b.input, b.kind.as_deref(), b.thinking, b.attachments, Some(origin)).await?}))
 }
 async fn get_attachment(State(s): State<AppState>, Path((id, att)): Path<(String, String)>) -> ApiResult<aiw_core::api::AttachmentData> {
     ok(s.engine.attachment_data(&id, &att)?)
@@ -1124,8 +1139,14 @@ struct ApprovalBody {
     #[serde(default)]
     remember: bool,
 }
-async fn respond_approval(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<ApprovalBody>) -> ApiResult<Value> {
-    s.engine.respond_approval(&id, b.decision == "allow", b.remember)?;
+async fn respond_approval(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    IsOwner(owner): IsOwner,
+    Json(b): Json<ApprovalBody>,
+) -> ApiResult<Value> {
+    // A confirmation of a management tool counts only from the owner: a paired device gets 403 and the request stays open.
+    s.engine.respond_approval_as(&id, b.decision == "allow", b.remember, owner)?;
     ok(json!({}))
 }
 async fn webhook(
@@ -1779,6 +1800,8 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_assistant;
 #[cfg(test)]
 mod tests_backup;
 #[cfg(test)]

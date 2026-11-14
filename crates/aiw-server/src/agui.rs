@@ -5,10 +5,11 @@
 //!
 //! First cut: the text and the files of the LAST user message start the run; the history stays the
 //! one the server keeps for the session (what the client sends before is not reconciled), and tools,
-//! context and state sent by the client are accepted and ignored.
+//! context and state sent by the client are accepted and ignored. Of `forwardedProps` only
+//! `aiw.interactive` is read: the questions and secret requests the client can show (see [`declared_interactive`]).
 
 use crate::extract::{Json, Path};
-use crate::{ApiError, AppState};
+use crate::{ApiError, AppState, IsOwner};
 use aiw_core::api::AttachmentUpload;
 use aiw_core::events::{AgEvent, SeqEvent};
 use aiw_core::Error;
@@ -29,14 +30,26 @@ use tokio::sync::broadcast::error::RecvError;
 /// map is empty and a known `threadId` starts a new session (unless it is a session id itself).
 pub(crate) type Threads = Arc<Mutex<HashMap<String, String>>>;
 
-/// Body of the request (camelCase). `tools`, `context`, `state`, `forwardedProps`, `parentRunId`
-/// and any other field are accepted and ignored in this first cut.
+/// Body of the request (camelCase). `tools`, `context`, `state`, `parentRunId` and any other field
+/// are accepted and ignored in this first cut; of `forwardedProps` only `aiw.interactive` is read.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RunAgentInput {
     thread_id: String,
     run_id: String,
     messages: Vec<InMessage>,
+    #[serde(default)]
+    forwarded_props: Value,
+}
+
+/// What the client says it can show, from `forwardedProps.aiw.interactive`: a list that may hold
+/// `"questions"` (it shows `aiw.question` and answers on the REST endpoint) and `"secrets"` (the same
+/// for `aiw.secret_request`). Anything else, or nothing, is neither: the agent then asks in plain
+/// text, and says that a secret has to be entered in the app. Returns `(questions, secrets)`.
+fn declared_interactive(props: &Value) -> (bool, bool) {
+    let list = props.get("aiw").and_then(|a| a.get("interactive")).and_then(Value::as_array);
+    let has = |name: &str| list.is_some_and(|l| l.iter().any(|v| v.as_str() == Some(name)));
+    (has("questions"), has("secrets"))
 }
 
 #[derive(Deserialize)]
@@ -246,6 +259,7 @@ impl Follow {
 pub(crate) async fn run_agent(
     State(s): State<AppState>,
     Path(agent): Path<String>,
+    IsOwner(owner): IsOwner,
     Json(input): Json<RunAgentInput>,
 ) -> Result<Response, ApiError> {
     s.engine.agent(&agent)?;
@@ -262,7 +276,11 @@ pub(crate) async fn run_agent(
     // Subscribe BEFORE the run starts: the bus keeps no history, and what the run emits in between
     // is also in the run log, which is read right after (the `seq` tells the two apart).
     let rx = s.engine.subscribe();
-    let run_id = match s.engine.start_run_attach(&session_id, text, None, None, uploads).await {
+    // The origin of the run: who the caller is, and what its client can show. A secret is entered at
+    // an endpoint that needs full access, so a caller that is not the owner cannot be asked for one.
+    let (questions, secrets) = declared_interactive(&input.forwarded_props);
+    let origin = aiw_engine::RunOrigin { owner, questions, secrets: secrets && owner };
+    let run_id = match s.engine.start_run_from(&session_id, text, None, None, uploads, Some(origin)).await {
         Ok(id) => id,
         Err(e) => {
             if created {
