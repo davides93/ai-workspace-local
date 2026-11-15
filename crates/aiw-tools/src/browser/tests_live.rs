@@ -630,7 +630,7 @@ async fn a_screenshot_for_the_model_draws_the_code_and_card_fields_as_dots_and_t
     let out = lv.run("browser_screenshot", json!({})).await;
     assert!(!out.is_error && out.images.len() == 1, "{}", out.content);
     let log = lv.fake.log.lock().unwrap().clone();
-    let position = |pred: &dyn Fn(&Req) -> bool| log.iter().position(|r| pred(r)).unwrap_or_else(|| panic!("command not sent"));
+    let position = |pred: &dyn Fn(&Req) -> bool| log.iter().position(pred).unwrap_or_else(|| panic!("command not sent"));
     let mask = position(&|r| {
         r.method == "Runtime.evaluate"
             && r.params["expression"].as_str().is_some_and(|e| e.contains("aiw-secret-mask") && e.contains("createElement"))
