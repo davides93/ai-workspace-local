@@ -1,6 +1,7 @@
 import { Button, EmptyState, Page, PageHeader, Panel, QueryState } from "../../shared/ui";
 import { useApproveProposal, useDismissProposal, useProactiveStatus, useProactiveTick, useProposals } from "./api";
 import { DoneRow, ProposalCard } from "./components/ProposalCard";
+import { TasksPanel } from "./components/TasksPanel";
 import { decided, latestBriefing, statusLine, waiting } from "./model/proposals";
 import "./inbox.css";
 
@@ -22,6 +23,7 @@ export function InboxView() {
         actions={!off && <Button size="sm" icon="refresh" disabled={tick.isPending} onClick={() => tick.mutate()}>{t("inbox.controlla_adesso")}</Button>}
       />
       {status.data && <p className="muted text-sm ib-status" role="status">{statusLine(status.data)}</p>}
+      <TasksPanel />
       <QueryState query={proposals}>
         {(list) => {
           const open = waiting(list);
