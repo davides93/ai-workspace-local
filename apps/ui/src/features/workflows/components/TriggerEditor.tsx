@@ -105,7 +105,7 @@ export function TriggerEditor({ trigger, onChange, issues, workflowId, savedSecr
 
       {trigger.kind === "file" && (
         <Field label={tr("workflows.file_o_cartella")} htmlFor="wf-file" error={issue(issues, "path")?.message} hint={tr("workflows.parte_quando_la_data_di")}>
-          <Input id="wf-file" mono value={trigger.path} onChange={(e) => onChange({ kind: "file", path: e.target.value })} placeholder="~/Download/ordini.csv" aria-invalid={!!issue(issues, "path")} spellCheck={false} />
+          <Input id="wf-file" mono value={trigger.path} onChange={(e) => onChange({ kind: "file", path: e.target.value })} placeholder={tr("workflows.esempio_file_osservato")} aria-invalid={!!issue(issues, "path")} spellCheck={false} />
         </Field>
       )}
 

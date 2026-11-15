@@ -359,4 +359,6 @@ export const workflowsEn: Record<keyof typeof workflowsIt, string> = {
   "workflows.save_before_run": "Save your changes before running",
   "workflows.confirm_delete": "Delete {name}? Its triggers stop working and this can't be undone.",
   "workflows.copy_slug": "copy {name}",
+  "workflows.esempio_cartella_osservata": "~/Downloads",
+  "workflows.esempio_file_osservato": "~/Downloads/orders.csv",
 };

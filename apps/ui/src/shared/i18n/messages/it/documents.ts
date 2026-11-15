@@ -64,4 +64,5 @@ export const documentsIt = {
   "documents.in_lavorazione": "In lavorazione",
   "documents.non_riuscito": "Non riuscito",
   "documents.n_documents": "{n, plural, one {# documento} other {# documenti}}",
+  "documents.esempio_cartella": "/home/nome/Documenti",
 } as const;

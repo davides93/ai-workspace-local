@@ -66,4 +66,5 @@ export const documentsEn: Record<keyof typeof documentsIt, string> = {
   "documents.in_lavorazione": "Processing",
   "documents.non_riuscito": "Failed",
   "documents.n_documents": "{n, plural, one {# document} other {# documents}}",
+  "documents.esempio_cartella": "/home/name/Documents",
 };

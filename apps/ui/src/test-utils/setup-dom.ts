@@ -1,4 +1,5 @@
 // Setup of the component tests (`*.test.tsx`, jsdom). The logic tests run in `node` and never load this file.
+import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 import { forceLocale } from "../shared/i18n/locale";

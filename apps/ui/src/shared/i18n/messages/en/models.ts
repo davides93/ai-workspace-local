@@ -311,4 +311,6 @@ export const modelsEn: Record<keyof typeof modelsIt, string> = {
   "models.n_likes": "{n} likes",
   "models.n_params": "{n} parameters",
   "models.updated_when": "updated {when}",
+  "models.esempio_indirizzo_modello": "https://example.org/models/qwen3-4b-Q4_K_M.gguf",
+  "models.esempio_nome_file": "model.gguf",
 };
