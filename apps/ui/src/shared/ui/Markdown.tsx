@@ -43,7 +43,9 @@ function ListItemView({ item, tight }: { item: ListItem; tight: boolean }) {
 const BlockView = memo(function BlockView({ block }: { block: Block }) {
   switch (block.t) {
     case "p":
-      return <p>{renderInline(block.c)}</p>;
+      // The role is spelled out (it is the one `<p>` has anyway): in a long conversation the replies far from the end are skipped by
+      // `content-visibility: auto` and Chromium then leaves the implicit paragraph role out of the accessibility tree; an explicit one stays.
+      return <p role="paragraph">{renderInline(block.c)}</p>;
     case "h":
       // Messages sit under the page's h1/h2: their headings start at h3.
       return createElement(`h${block.level + 2}`, { className: `md-h md-h${block.level}` }, renderInline(block.c));

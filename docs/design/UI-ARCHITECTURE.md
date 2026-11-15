@@ -394,16 +394,18 @@ sullo sfondo del blocco e della sua intestazione.
 
 **Conversazioni lunghe.** Le risposte lontane dalla fine (oltre 40 righe: `.ws-log-inner > .ws-msg:nth-last-child(n + 41) > .ws-bubble`) hanno
 `content-visibility: auto` (`chat.css`): il browser non le impagina né le dipinge finché non si avvicinano allo schermo. **Restano nel
-documento**, e per questo ricerca nella pagina, selezione, tastiera e lettori di schermo le vedono come prima; una conversazione di meno
+documento**, e per questo ricerca nella pagina, selezione, tastiera e lettori di schermo le vedono (con la perdita misurata più sotto); una conversazione di meno
 di 40 righe e la parte viva della lunga (conferme, domande, risposta in corso) non cambiano, e un browser senza la proprietà mostra tutto
 come ha sempre fatto. Non si è usato un elenco virtualizzato che toglie le righe dal documento (react-window e simili) perché rompe
 proprio quelle cinque cose: la ricerca nella pagina non trova ciò che non c'è, e una selezione non attraversa righe assenti. Misurato in
-Chromium con 3600 righe: l'impaginazione per ogni ridimensionamento passa da 79 a 13 ms (a 360 righe da 4,5 a 1,2 ms). Quello che non
-riduce: nodi in memoria e costo di React per montare la lista (le righe sono già `memo`). Il pulsante «Nuovi messaggi» non segue più
+Chromium con il CSS che c'è (confronto con `content-visibility: visible`, mediana di 3 prove da 10 ridimensionamenti, grammatiche già caricate,
+Playwright headless su un Mac): l'impaginazione per ridimensionamento passa da 6,6 a 2,7 ms con 360 righe e da 89 a 44 ms con 3600 (clonando le righe):
+un fattore 2, non di più. Quello che non riduce: nodi in memoria e costo di React per montare la lista (le righe sono già `memo`). Il pulsante «Nuovi messaggi» non segue più
 l'altezza della lista (cambia mentre si scorre la storia, quando le righe prendono l'altezza vera) ma la **coda** della conversazione
 (`tailSignature`: riga aggiunta, ultima riga che cresce, nota o proposta sotto la lista). Provato in `e2e/flows/long-chat.spec.ts`
 (apertura in fondo, `window.find`, selezione di tutto il log, scorrimento senza falso avviso, risposta mentre si legge altrove,
 Maiusc+Tab per 180 passi senza salti) e in `e2e/a11y/long-chat.spec.ts` (albero di accessibilità di Chromium con l'accessibilità
-attiva, con e senza il contenimento: stesso testo, stessi ruoli di intestazioni, elenchi, tabelle, codice e pulsanti; cambiano solo i
-nodi derivati dall'impaginazione, come i `paragraph` e i puntini degli elenchi nelle risposte non impaginate). **Non provato**: un lettore di
+attiva, con e senza il contenimento: stesso testo e stesso numero di intestazioni, paragrafi, elenchi, tabelle, codice e pulsanti). **Una perdita misurata**:
+nelle risposte non impaginate Chromium non espone i simboli degli elenchi (i puntini, disegnati dall'impaginazione: `ListMarker` da 39 a 6 nell'albero), mentre
+i `listitem` restano. Anche il ruolo `paragraph` spariva (da 240 a 28) finché il Markdown non l'ha scritto esplicitamente su ogni `<p>`: ora resta. **Non provato**: un lettore di
 schermo vero (NVDA, JAWS, VoiceOver, Orca), WebKit (WKWebView, WebKitGTK) e WebView2.
