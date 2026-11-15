@@ -14,6 +14,7 @@ pub mod defaults;
 pub mod diagnostics;
 pub mod eval;
 mod host;
+mod isolation;
 pub mod kb;
 mod learning;
 mod mail_accounts;
@@ -1012,6 +1013,8 @@ impl Engine {
         if let Some(missing) = a.knowledge.iter().find(|id| !existing.iter().any(|c| &c.id == *id)) {
             return Err(Error::Invalid(format!("documenti: la raccolta «{missing}» non esiste")));
         }
+        let mut a = a;
+        self.check_isolation(&mut a)?;
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
     }
@@ -1056,9 +1059,15 @@ impl Engine {
                 teams.join(", ")
             )));
         }
+        // The folder of the agent goes out of the way first: if it cannot be moved the agent stays, and one created later with
+        // the same id never finds the files of this one.
+        let archived = self.archive_agent_workspace(id)?;
         self.0.store.delete_doc("agent", id)?;
         self.0.store.reset_profile_rewards(id)?;
         self.audit_user("agent.delete", &format!("{} ({id})", agent.name));
+        if archived.is_some() {
+            self.audit_user("agent.workspace_archived", id);
+        }
         Ok(())
     }
     /// The profile a session runs with, and the team when its agent id is `team:<id>`. A
@@ -1112,6 +1121,7 @@ impl Engine {
                     roles: None,
                     knowledge: vec![],
                     delegate_tools: vec![],
+                    isolation: None,
                 }
             }
         };
@@ -1339,6 +1349,11 @@ impl Engine {
         };
         match isolation.unwrap_or("none") {
             "none" | "" => {}
+            "worktree" if self.agent(isolation::base_agent_id(agent_id)).is_ok_and(|a| a.has_dedicated_workspace()) => {
+                return Err(Error::Invalid(
+                    "un agente con un workspace dedicato lavora nella sua cartella: non usa un git worktree isolato".into(),
+                ));
+            }
             "worktree" => {
                 let wt = worktree::create(&self.workspace_root(), &self.0.dirs.worktrees(), &s.id)?;
                 self.0.store.put_doc("worktree", &s.id, &wt)?;
@@ -1595,8 +1610,14 @@ impl Engine {
     }
 
     fn agents_md(&self) -> String {
+        self.agents_md_in(&self.workspace_root())
+    }
+
+    /// The instructions of the person: the global ones and the ones in the folder an agent works in (an agent with a
+    /// folder of its own never gets the `AGENTS.md` of the shared workspace).
+    fn agents_md_in(&self, workspace: &Path) -> String {
         let mut out = String::new();
-        for (label, p) in [("globali", self.0.dirs.root.join("AGENTS.md")), ("del workspace", self.workspace_root().join("AGENTS.md"))] {
+        for (label, p) in [("globali", self.0.dirs.root.join("AGENTS.md")), ("del workspace", workspace.join("AGENTS.md"))] {
             if let Ok(t) = std::fs::read_to_string(&p) {
                 out.push_str(&format!("# Istruzioni {label} (AGENTS.md)\n{}\n\n", t.chars().take(20_000).collect::<String>()));
             }
@@ -1636,10 +1657,20 @@ impl Engine {
         root: Option<PathBuf>,
     ) -> RunInput {
         // Chat runs and their sub-agents use the session id as thread id: an isolated session
-        // works in its worktree.
-        let ws = root.unwrap_or_else(|| self.session_root(thread_id));
-        let isolated =
-            self.worktree_info(thread_id).map(|wt| format!(" (git worktree isolato, branch `{}`)", wt.branch)).unwrap_or_default();
+        // works in its worktree. An agent with a folder of its own works there and nowhere else, whatever the session
+        // says (a folder given explicitly, as an evaluation does, comes first).
+        let ws = match root {
+            Some(r) => r,
+            None if agent.has_dedicated_workspace() => self.dedicated_workspace(&agent.id),
+            None => self.session_root(thread_id),
+        };
+        // The run works in a folder of an agent apart (its own, or the one of the agent it is a sub-agent of).
+        let apart = ws.starts_with(self.0.dirs.agents());
+        let isolated = if apart {
+            " (workspace dedicato di questo agente: gli altri agenti non lo vedono e lui non vede il workspace condiviso)".to_string()
+        } else {
+            self.worktree_info(thread_id).map(|wt| format!(" (git worktree isolato, branch `{}`)", wt.branch)).unwrap_or_default()
+        };
         let device = self.device();
         let mut tool_ctx = ToolContext::new(run_id, ws.clone());
         tool_ctx.read_roots = vec![self.0.dirs.skills()];
@@ -1652,7 +1683,23 @@ impl Engine {
             tool_ctx.read_roots.push(ws_aiw);
         }
         tool_ctx.shell = self.shell_sandbox();
-        self.apply_folders(&mut tool_ctx);
+        // The folders of the person are for the agents of the shared workspace: an agent apart does not get them.
+        if !apart {
+            self.apply_folders(&mut tool_ctx);
+        }
+        // The shell reads what the sandbox does not hide: so an agent apart has the shared workspace hidden from its commands
+        // too (its file tools already stop at its own folder). If the shared workspace holds the folder of the agent, that
+        // folder stays reachable: it is the workspace of the run.
+        if apart {
+            let shared = std::fs::canonicalize(self.workspace_root()).unwrap_or_else(|_| self.workspace_root());
+            if shared.parent().is_some() && !shared.starts_with(&ws) {
+                tool_ctx.shell.hidden.push(shared);
+            }
+        }
+        // An agent can close its own network, never open the one the settings closed.
+        if agent.isolation.as_ref().is_some_and(|i| i.close_shell_network) {
+            tool_ctx.shell.network = false;
+        }
         // Files the person attached in this session: read-only, like skills.
         let attached = self.attachments_dir(thread_id);
         if attached.is_dir() {
@@ -1664,7 +1711,7 @@ impl Engine {
         tool_ctx.checkpoint_dir = Some(self.0.dirs.checkpoints());
         tool_ctx.allow_domains =
             self.0.config.get("network.allow_domains").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
-        let folders_line = self.folders_env_line().unwrap_or_default();
+        let folders_line = if apart { String::new() } else { self.folders_env_line().unwrap_or_default() };
         let env = format!(
             "# Ambiente\n- Data e ora: {}\n- Dispositivo: {} ({} {}, classe {})\n- Cartella di lavoro: {}{isolated}{folders_line}\n- Inferenza locale: runtime `{}`, modello `{}`",
             chrono::Local::now().format("%A %d %B %Y, %H:%M"),
@@ -1712,7 +1759,7 @@ impl Engine {
             history,
             user_input,
             user_extra: Default::default(),
-            system_extra: vec![env, self.agents_md(), self.language_line()],
+            system_extra: vec![env, if apart { self.agents_md_in(&ws) } else { self.agents_md() }, self.language_line()],
             tool_ctx,
             hooks: self.hooks(),
             compact_at: self.0.config.get_f64("context.compact_at").unwrap_or(0.8),
@@ -1751,6 +1798,12 @@ impl Engine {
 
     pub(crate) fn skills(&self) -> Vec<aiw_agent::Skill> {
         aiw_agent::skills::discover(&[self.0.dirs.skills(), self.workspace_root().join(".aiw").join("skills")])
+    }
+
+    /// The skills of a run that works in the folder of an agent apart: the global ones and those of that folder, never the
+    /// ones of the shared workspace.
+    pub(crate) fn skills_in(&self, folder: &Path) -> Vec<aiw_agent::Skill> {
+        aiw_agent::skills::discover(&[self.0.dirs.skills(), folder.join(".aiw").join("skills")])
     }
 
     /// Starts an agent run in a session; events stream on the bus and via [`Engine::run_events`].
@@ -2942,6 +2995,8 @@ mod tests_folders;
 mod tests_hardening;
 #[cfg(test)]
 mod tests_inference;
+#[cfg(test)]
+mod tests_isolation;
 #[cfg(test)]
 mod tests_kb;
 #[cfg(test)]

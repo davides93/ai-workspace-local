@@ -186,6 +186,15 @@ impl RunHost for EngineHost {
         self.engine.skills()
     }
 
+    fn skills_for(&self, input: &RunInput) -> Vec<Skill> {
+        let root = &input.tool_ctx.workspace_root;
+        if root.starts_with(self.engine.0.dirs.agents()) {
+            self.engine.skills_in(root)
+        } else {
+            self.engine.skills()
+        }
+    }
+
     async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str, run_id: &str) -> Result<String> {
         if agent_id.starts_with(crate::REMOTE_PREFIX) {
             return self.engine.delegate_remote(agent_id, task, &parent.tool_ctx.cancel, Some(&parent.run_id)).await;
@@ -193,7 +202,13 @@ impl RunHost for EngineHost {
         let agent = self.engine.agent(agent_id)?;
         let profile = self.engine.profile(&agent.inference_profile)?;
         let cancel = parent.tool_ctx.cancel.child_token();
-        let mut input = self.engine.build_input(
+        // An agent with a folder of its own is a boundary around the whole run, sub-agents and team members included: when
+        // the parent or the sub-agent has one, the sub-agent works in the folder of the parent with the folders the parent was
+        // given, never in its own. So a parent never reads what a sub-agent keeps apart, and a sub-agent never reaches what its
+        // parent cannot (issue #71). With no such agent nothing changes.
+        let confined = parent.agent.has_dedicated_workspace() || agent.has_dedicated_workspace();
+        let root = confined.then(|| parent.tool_ctx.workspace_root.clone());
+        let mut input = self.engine.build_input_at(
             run_id,
             &parent.thread_id,
             agent,
@@ -203,7 +218,14 @@ impl RunHost for EngineHost {
             cancel,
             parent.depth + 1,
             parent.session_allow.clone(),
+            root,
         );
+        if confined {
+            input.tool_ctx.write_roots = parent.tool_ctx.write_roots.clone();
+            input.tool_ctx.outside_hint = parent.tool_ctx.outside_hint.clone();
+        }
+        // The network of the shell can be closed by a sub-agent, never reopened.
+        input.tool_ctx.shell.network &= parent.tool_ctx.shell.network;
         // A sub-agent never gets more freedom than its parent.
         if mode_rank(&input.policy.mode) > mode_rank(&parent.policy.mode) {
             input.policy.mode = parent.policy.mode.clone();
@@ -274,6 +296,14 @@ impl RunHost for EngineHost {
             return Err(Error::Denied("la conversazione non può passare a un agente remoto: delegagli il lavoro".into()));
         }
         let target = self.engine.agent(agent_id)?;
+        // The conversation does not cross the boundary of an agent apart, in either direction: its history would carry what one
+        // side saw into the folder and the credentials of the other.
+        if from.agent.has_dedicated_workspace() || target.has_dedicated_workspace() {
+            return Err(Error::Denied(format!(
+                "«{}» lavora in uno spazio separato dagli altri agenti: la conversazione non passa da o verso un agente isolato. Scrivi direttamente a chi serve.",
+                if target.has_dedicated_workspace() { &target.name } else { &from.agent.name }
+            )));
+        }
         // The conversation never moves to an agent with more freedom than the one that started it.
         if mode_rank(&target.mode) > mode_rank(&from.policy.mode) {
             return Err(Error::Denied(format!(

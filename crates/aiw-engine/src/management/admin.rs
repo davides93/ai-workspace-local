@@ -1309,6 +1309,7 @@ fn blank_agent(id: String) -> AgentProfile {
         roles: None,
         knowledge: vec![],
         delegate_tools: vec![],
+        isolation: None,
     }
 }
 

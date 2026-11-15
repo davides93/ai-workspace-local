@@ -785,6 +785,40 @@ pub struct AgentProfile {
     /// `tools` + `delegate_tools` of the parent. Empty: only `tools` count, as always.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delegate_tools: Vec<String>,
+    /// How much this agent is kept apart from the others (a folder of its own, no shell network). Absent: the agent
+    /// works in the shared workspace, as every agent always did. On save an absent value keeps the stored one, so an
+    /// editor that does not know the field cannot switch the isolation off by saving; to switch it off the owner sends
+    /// the object with both flags `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<AgentIsolation>,
+}
+
+impl AgentProfile {
+    /// The agent works in a folder of its own that no other agent can read or write.
+    pub fn has_dedicated_workspace(&self) -> bool {
+        self.isolation.as_ref().is_some_and(|i| i.dedicated_workspace)
+    }
+}
+
+/// What keeps an agent apart from the others (issue #71). Everything here can only make the agent more closed than
+/// the global settings: nothing in it opens a door.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentIsolation {
+    /// The agent works in a folder of its own, inside the data folder of the app (which no agent can see). No other
+    /// agent reads or writes it, and this agent sees neither the shared workspace nor the folders the person granted.
+    /// Needs a sandbox that is not `off` (without a sandbox nothing is kept apart).
+    #[serde(default)]
+    pub dedicated_workspace: bool,
+    /// The commands of this agent never get the network, whatever `sandbox.shell_network` says.
+    #[serde(default)]
+    pub close_shell_network: bool,
+}
+
+impl AgentIsolation {
+    /// At least one flag is on.
+    pub fn is_active(&self) -> bool {
+        self.dedicated_workspace || self.close_shell_network
+    }
 }
 
 /// The four jobs a model can have inside one agent run.
