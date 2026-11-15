@@ -19,6 +19,13 @@ Senza un modello locale sul telefono:
 3. se nessun dispositivo risponde, salta il filtro e registra il motivo (`TickResult.model_skipped`, visibile in
    `GET /api/proactive/status`). Non si carica mai un modello di nascosto.
 
+## I lavori in background non sono il controllo periodico
+
+Il controllo di questo documento (`proactive_background_tick`, 25 secondi) scrive proposte e riepilogo e **non avvia né
+riprende lavori in background** (`docs/lavori-in-background.md`): quelli vanno avanti solo con l'app in esecuzione. Su
+telefono, se il sistema sospende l'app il lavoro si ferma con lei; se chiude il processo, al rientro il lavoro è in pausa
+(«interrotto dal riavvio») e la persona decide se riprenderlo. Non provato su un telefono vero.
+
 ## Android
 
 | Cosa | Come |

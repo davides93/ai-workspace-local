@@ -395,8 +395,8 @@ una definizione che arriva da un workspace o da un'importazione non è mai appro
 L'agente predefinito `assistant` («Assistente») è l'unico agente della chat in modalità semplice (`crates/aiw-engine/src/defaults.rs`: modalità `ask`,
 profilo `auto:agent`, 40 turni, `delegate_tools: ["*"]`; gli agenti predefiniti sono 7, con `operator`, `coder`, `browser`, `desktop`, `planner`, `teacher`).
 Risponde, delega agli altri agenti con il tool `agent` e gestisce l'app con strumenti `aiw_*`. Non ha strumenti che leggono web, file o posta né scrivono file: il testo non
-fidato gli arriva solo come risposta di un subagente. Ha 25 strumenti: 7 interni (`agent`, `todo`, `memory_save`, `memory_search`, `memory_update`, `memory_forget`,
-`kb_search`, che non stanno nel registro) e 18 del registro (`crates/aiw-engine/src/management/`). Quanto pesano nel contesto del modello è misurato in `docs/STATUS.md`.
+fidato gli arriva solo come risposta di un subagente. Ha 26 strumenti: 7 interni (`agent`, `todo`, `memory_save`, `memory_search`, `memory_update`, `memory_forget`,
+`kb_search`, che non stanno nel registro) e 19 del registro (`crates/aiw-engine/src/management/`). Quanto pesano nel contesto del modello è misurato in `docs/STATUS.md`.
 
 | Strumento | Rischio | Conferma | Effetto |
 |---|---|---|---|
