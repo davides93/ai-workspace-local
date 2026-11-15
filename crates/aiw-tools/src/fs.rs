@@ -706,7 +706,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[cfg(unix)]
     #[tokio::test]
     async fn granted_folders_are_used_by_the_file_tools_but_nothing_is_deleted_there() {
         let ws = tempfile::tempdir().unwrap();
@@ -737,6 +736,7 @@ mod tests {
         assert!(!out.is_error, "{}", out.content);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn read_roots_are_readable_through_links_but_never_writable() {
         use std::os::unix::fs::symlink;
