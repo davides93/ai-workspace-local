@@ -776,6 +776,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_tool_of_the_contract_is_registered_and_needs_an_explicit_grant_in_the_whole_build() {
+        // The other half of the check above, for the build that has every area: nothing of `ALL` is missing from the registry, so
+        // «every registered management tool needs a grant» really covers each of them (and `refusal` knows the same names).
+        let (e, _d, _w) = engine(vec![]).await;
+        let registry = e.tool_registry();
+        for name in ALL {
+            let tool = registry.get(name).unwrap_or_else(|| panic!("{name} is in the contract but not registered"));
+            assert!(tool.explicit_grant(), "{name}: `*` must not cover it");
+        }
+        for tool in registry.all().iter().filter(|t| is_management(t.name())) {
+            assert!(is_known(tool.name()), "{} is registered as a management tool but is not in the contract (`ALL`)", tool.name());
+        }
+    }
+
+    #[tokio::test]
     async fn an_agent_may_list_the_management_tools_even_before_they_are_registered() {
         let (e, _d, _w) = engine(vec![]).await;
         // `aiw_model_delete` is not registered by this item, `ask_user` neither: the profile is valid all the same.

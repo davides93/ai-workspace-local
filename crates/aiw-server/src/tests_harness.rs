@@ -386,3 +386,51 @@ async fn without_a_declaration_the_agent_asks_in_text_and_cannot_take_a_secret_b
     assert_eq!(theme(&e), before, "a refused change changes nothing");
     assert!(!e.model_providers().into_iter().find(|p| p.id == "hf").unwrap().auth_configured, "no secret was taken");
 }
+
+#[tokio::test]
+async fn a_run_a_paired_device_starts_is_refused_a_change_at_once_and_waits_for_nobody() {
+    let (app, e, _d, _w) = fixture(vec![]).await;
+    let backend = ScriptedBackend::new(vec![
+        ScriptedBackend::tool_turn("t1", "aiw_setting_set", json!({"key": "ui.theme", "value": "dark"})),
+        ScriptedBackend::tool_turn("t2", "aiw_inspect", json!({"topic": "overview"})),
+        ScriptedBackend::text_turn("Da qui non posso cambiarlo."),
+    ]);
+    e.register_native_runtime("llama-embedded", Arc::new(backend));
+    // No time limit on confirmations (the default): before, this run waited for an answer nobody could give.
+    e.set_config("global", "approvals.timeout_s", json!(0)).unwrap();
+    let phone = device(&e);
+    let before = theme(&e);
+    let (_, ses) = dispatch(app.clone(), "POST", "/api/sessions", Some(json!({"agent_id": "assistant"}))).await;
+    let sid = ses["id"].as_str().unwrap().to_string();
+
+    // The phone starts the run (a device is not the owner).
+    let r = req(
+        "POST",
+        &format!("/api/sessions/{sid}/runs"),
+        Some(LAN),
+        &[("host", "192.168.1.5:7777"), ("authorization", &phone)],
+        Some(json!({"input": "metti il tema scuro"})),
+    );
+    let (st, _, run) = send(&app, r).await;
+    assert_eq!(st, StatusCode::OK, "{run}");
+    let rid = run["run_id"].as_str().unwrap().to_string();
+
+    // The run ends by itself: the change is refused before any confirmation, so nobody is left to answer.
+    for _ in 0..500 {
+        if e.run_done(&rid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(e.run_done(&rid), "the run must end without anybody answering");
+    let (st, pending) = dispatch(app.clone(), "GET", "/api/approvals", None).await;
+    assert_eq!((st, pending), (200, json!([])), "no confirmation was ever opened");
+    assert!(e.approvals().is_empty());
+    assert_eq!(theme(&e), before, "nothing changed");
+
+    // The model was told why, and could still read the state in the same run.
+    let results: Vec<String> = e.messages(&sid).unwrap().into_iter().filter(|m| m.role == "tool").map(|m| m.content).collect();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(results[0].contains("accesso completo"), "{}", results[0]);
+    assert!(results[1].contains("installed_models"), "{}", results[1]);
+}
