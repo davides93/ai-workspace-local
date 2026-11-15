@@ -126,7 +126,8 @@ test.describe("questions of the agent", () => {
     await chatWith(page, "Cancella i download vecchi");
     const card = log(page).getByRole("form", { name: "Cancello i vecchi?" });
     await expect(card).toBeVisible();
-    await expect(card.getByText("Ci sono 3 download interrotti che occupano 2,1 GB. Li cancello?")).toBeVisible();
+    // `exact`: the screen-reader announcement inside the card says «L'assistente ha una domanda: …» with the same sentence.
+    await expect(card.getByText("Ci sono 3 download interrotti che occupano 2,1 GB. Li cancello?", { exact: true })).toBeVisible();
     await expect(card.getByRole("button", { name: "Cancella", exact: true })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(card.getByRole("button", { name: "Tienili", exact: true })).toBeFocused();
