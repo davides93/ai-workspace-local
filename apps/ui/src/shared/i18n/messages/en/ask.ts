@@ -26,7 +26,7 @@ export const askEn: Record<keyof typeof askIt, string> = {
   "ask.segreto_richiesto": "A private value is needed",
   "ask.segreto_testo": "The assistant asks for: {label}",
   "ask.segreto_destinazione": "It will be saved in: {destination}",
-  "ask.segreto_riservato": "It stays between you and the destination: the assistant never sees it and it does not enter the conversation.",
+  "ask.segreto_riservato": "It stays between you and the destination: the assistant never sees it and it does not enter the conversation. It is stored on this computer without encryption.",
   "ask.segreto_campo": "Value of “{label}”",
   "ask.mostra_il_valore": "Show the value",
   "ask.salva": "Save",

@@ -15,9 +15,10 @@ export type RouteGate = "show" | "wait" | "redirect";
  *
  * - The configuration answered with a mode: that one.
  * - It answered without a valid `ui.mode`, or the request failed for good (react-query reports `error` only once the retry
- *   is over): `"unreadable"`. Nothing is coming that could settle the question, so the gate stops waiting and opens the
- *   route that was asked for, as the app did before the simple interface lost its sections: the person is never thrown out
- *   on a guess, and the skeleton does not stay for ever. A later answer that says `simple` redirects as usual.
+ *   is over): `"unreadable"`. Nothing is coming that could settle the question, so the gate stops waiting and goes by the
+ *   last mode this device knows (the one the shell is already drawn with): in the simple interface every address leads to
+ *   the chat, in Developer mode the route that was asked for opens as before. The skeleton does not stay for ever. A later
+ *   answer from the configuration takes over as usual.
  * - A 401 is not "unreadable": the pairing screen is up and the configuration will be read once the device is paired, so the
  *   gate keeps waiting (`undefined`).
  * - Not answered yet: `undefined`, the gate waits.
@@ -47,17 +48,24 @@ export function configModeOf(opts: {
  * It also needs the mode the shell shows to have caught up with the configuration (it follows it one
  * render later), otherwise the redirect would fire on the stale value.
  *
+ * While the configuration cannot be read (`"unreadable"`) nothing is coming that could say which mode
+ * is the right one, so the mode the shell is drawn with decides: the shell of the simple interface has
+ * no entry for any other section (and no way back), so there every address leads to the chat; a device
+ * that shows Developer mode keeps opening the route that was asked for. (The one case this gets wrong,
+ * and it is accepted: Developer mode on a device that never stored a mode, with a configuration that
+ * fails for good: the person lands in the chat and loses the address.)
+ *
  * - `show`: the route is allowed. The chat always is; every route is in Developer mode while nothing
- *   says otherwise; and every route is while the configuration cannot be read (`"unreadable"`), because
- *   nothing says that the person is in the simple interface.
+ *   says otherwise (and also when the configuration cannot be read).
  * - `wait`: the answer is not settled yet (the configuration has not answered, or the shown mode and the
  *   configuration disagree for a moment); show the skeleton, mount nothing, redirect nothing.
- * - `redirect`: simple mode, confirmed by the configuration, on a route that is not the chat.
+ * - `redirect`: simple mode on a route that is not the chat, confirmed by the configuration or, when it
+ *   cannot be read, by the mode the device shows.
  */
 export function routeGate(opts: { routeId: string | undefined; mode: UiMode; configMode: ConfigMode }): RouteGate {
   const { routeId, mode, configMode } = opts;
   if (routeId === SIMPLE_ROUTE) return "show";
-  if (configMode === "unreadable") return "show";
+  if (configMode === "unreadable") return mode === "simple" ? "redirect" : "show";
   if (configMode === "simple" && mode === "simple") return "redirect";
   if (mode === "developer" && configMode !== "simple") return "show";
   return "wait";

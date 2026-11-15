@@ -95,20 +95,30 @@ describe("configModeOf", () => {
 });
 
 describe("routeGate with a configuration that cannot be read", () => {
-  it("opens the address that was asked for, whatever the device keeps: nobody is thrown out on a guess", () => {
-    // A Developer person on a device with no mode kept (it shows the default, `simple`) who opens `#/runtimes` while GET /api/config fails.
-    expect(gate("#/runtimes", "simple", "unreadable")).toBe("show");
-    expect(gate("#/runtimes", "developer", "unreadable")).toBe("show");
-    for (const mode of ["simple", "developer"] as const) {
-      for (const r of ROUTES) {
-        const path = r.path.replace(/\/:[A-Za-z]+\??/g, "") || "/";
-        expect(gate(`#${path}`, mode, "unreadable"), `${mode} ${r.id}`).toBe("show");
-      }
-      // The initial address (`#/`), the old hashes and the unknown ones too: the skeleton does not stay for ever.
-      expect(gate("", mode, "unreadable")).toBe("show");
-      expect(gate("#tools", mode, "unreadable")).toBe("show");
-      expect(gate("#/questa-pagina-non-esiste", mode, "unreadable")).toBe("show");
+  it("goes by the mode the device shows: simple sends every address but the chat to the chat", () => {
+    for (const r of ROUTES) {
+      const path = r.path.replace(/\/:[A-Za-z]+\??/g, "") || "/";
+      expect(gate(`#${path}`, "simple", "unreadable"), `simple ${r.id}`).toBe(r.id === "chat" ? "show" : "redirect");
     }
+    // The chat itself (with and without a session), so there is no loop.
+    expect(gate("#/chat", "simple", "unreadable")).toBe("show");
+    expect(gate("#/chat/ses_1", "simple", "unreadable")).toBe("show");
+    // The initial address (`#/`), the old hashes and the unknown ones too: neither the Overview nor "not found" shows in the simple shell.
+    expect(gate("", "simple", "unreadable")).toBe("redirect");
+    expect(gate("#tools", "simple", "unreadable")).toBe("redirect");
+    expect(gate("#/questa-pagina-non-esiste", "simple", "unreadable")).toBe("redirect");
+    // A device that kept no mode shows the default (`simple`): the first run with a slow or unreachable engine lands in the chat.
+    expect(gate("#/runtimes", "simple", "unreadable")).toBe("redirect");
+  });
+
+  it("keeps opening the address that was asked for on a device that shows Developer mode: no change for Developer", () => {
+    for (const r of ROUTES) {
+      const path = r.path.replace(/\/:[A-Za-z]+\??/g, "") || "/";
+      expect(gate(`#${path}`, "developer", "unreadable"), `developer ${r.id}`).toBe("show");
+    }
+    expect(gate("", "developer", "unreadable")).toBe("show");
+    expect(gate("#tools", "developer", "unreadable")).toBe("show");
+    expect(gate("#/questa-pagina-non-esiste", "developer", "unreadable")).toBe("show");
   });
 
   it("redirects as usual once a later answer says `simple`, and keeps waiting while the pairing screen is up", () => {

@@ -10,7 +10,8 @@ import { t } from "../shared/i18n";
  * the last known value is kept on the device so the shell does not flash the wrong sections while the
  * configuration loads. The third element is what the configuration says (`configModeOf`): the mode it
  * reported, `undefined` until it has answered, `"unreadable"` if it cannot be read at all. The shell redirects
- * only on that (`routeGate`), never on the value kept on the device.
+ * on that (`routeGate`), never on the value kept on the device alone: only when the configuration cannot be
+ * read does the value kept on the device decide (simple: the chat; Developer: the route asked for).
  */
 export function useUiMode(): [UiMode, (mode: UiMode) => void, ConfigMode] {
   const mode = useStoredUiMode();
