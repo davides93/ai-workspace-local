@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { formatNumber } from "../../../shared/lib/format";
 import { Button, Icon, Textarea } from "../../../shared/ui";
 import { appendDictated, checkInstruction } from "../model/tasks";
@@ -24,11 +24,16 @@ export function TaskInstructionBox({ busy, disabled, hint, onSend }: {
     setText((current) => appendDictated(current, heard));
     setDictated(true);
   });
+  // What is in the box now, for the answer that comes later: text typed while the request was on its way is not thrown away.
+  const latest = useRef(text);
+  latest.current = text;
   const check = checkInstruction(text);
   const count = t("inbox.task_chars", { n: formatNumber(check.count, 0), max: formatNumber(check.max, 0) });
   const send = () => {
     if (!check.ok || busy || disabled) return;
+    const sentText = text;
     onSend(text.trim(), dictated ? "voice" : "user", () => {
+      if (latest.current !== sentText) return;
       setText("");
       setDictated(false);
     });

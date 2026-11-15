@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "../../../app/router";
 import { errorMessage, errorStatus } from "../../../shared/lib/errors";
 import { formatDateTime, relTime } from "../../../shared/lib/format";
@@ -6,12 +6,12 @@ import { Button, DecisionDialog, Icon, Pill } from "../../../shared/ui";
 import type { ApprovalRequest, BackgroundTask } from "../../../shared/api/types";
 import { ApprovalCard } from "../../approvals/components/ApprovalCard";
 import type { ResumeRequest } from "../api";
-import { ADD_TIME, commands, instructionInfo, pauseSentence, progressLine, statusInfo } from "../model/tasks";
+import { ADD_TIME, commands, instructionInfo, pauseSentence, progressLine, statusInfo, stoppingSentence } from "../model/tasks";
 import { TaskInstructionBox } from "./TaskInstructionBox";
 
 import { t } from "../../../shared/i18n";
 /** Per-call callbacks of a mutation (the screen reacts to how one command ended). */
-interface Done {
+export interface Done {
   onSuccess?: () => void;
   onError?: (e: unknown) => void;
   onSettled?: () => void;
@@ -19,7 +19,7 @@ interface Done {
 
 /** What the cards can ask for: one function per command, each with the callbacks of that call. */
 export interface TaskActions {
-  pause: (id: string) => void;
+  pause: (id: string, done?: Done) => void;
   resume: (v: ResumeRequest, done?: Done) => void;
   cancel: (id: string, done?: Done) => void;
   send: (v: { id: string; text: string; source: "user" | "voice" }, done?: Done) => void;
@@ -32,7 +32,7 @@ export function TaskInstructions({ task }: { task: BackgroundTask }) {
   return (
     <ul className="tk-instr" aria-label={t("inbox.task_instructions_title")}>
       {task.instructions.map((i) => {
-        const info = instructionInfo(i);
+        const info = instructionInfo(i, task);
         return (
           <li key={i.id} className="tk-instr-item">
             <span className="tk-instr-text">{i.text}</span>
@@ -84,15 +84,25 @@ export function TaskCard({ task, busy, answering, actions }: {
   // The engine's refusal of a resume stays in front of the person until the task moves on.
   const refused = task.status === "paused" || task.status === "queued" ? refusal : undefined;
   const can = commands(task, { resumeRefused: !!refused });
-  const sentence = task.status === "running" && task.stopping ? t("inbox.task_stopping_text") : pauseSentence(task);
+  const sentence = task.status === "running" && task.stopping ? stoppingSentence(task) : pauseSentence(task);
+  const card = useRef<HTMLElement>(null);
+  // The button that was pressed goes away with the state it belonged to: the keyboard stays on the card.
+  const keepFocus = () => card.current?.focus();
+  // A refusal belongs to the pause it answered: once the task works again (the person's resume, or its own) it is gone.
+  useEffect(() => {
+    if (task.status === "running") setRefusal(undefined);
+  }, [task.status]);
   const resume = (v: Omit<ResumeRequest, "id">) =>
     actions.resume({ id: task.id, ...v }, {
-      onSuccess: () => setRefusal(undefined),
+      onSuccess: () => {
+        setRefusal(undefined);
+        keepFocus();
+      },
       onError: (e) => setRefusal(errorStatus(e) === 409 ? errorMessage(e) : undefined),
     });
   const { progress } = task;
   return (
-    <article className="tk-card" aria-labelledby={`${id}-t`} data-task={task.id} data-status={task.status}>
+    <article ref={card} tabIndex={-1} className="tk-card" aria-labelledby={`${id}-t`} data-task={task.id} data-status={task.status}>
       <header className="tk-head">
         <b id={`${id}-t`} className="tk-title">{task.title}</b>
         <Pill tone={status.tone}>{status.label}</Pill>
@@ -111,10 +121,11 @@ export function TaskCard({ task, busy, answering, actions }: {
         </div>
       )}
       <div className="tk-actions">
-        {can.pause && <Button size="sm" icon="pause" disabled={busy} onClick={() => actions.pause(task.id)}>{t("inbox.task_pause")}</Button>}
+        {can.pause && <Button size="sm" icon="pause" disabled={busy} onClick={() => actions.pause(task.id, { onSuccess: keepFocus })}>{t("inbox.task_pause")}</Button>}
         {can.resume && <Button size="sm" variant="primary" icon="play" disabled={busy} onClick={() => resume({})}>{t("inbox.task_resume")}</Button>}
         {can.resumeAnyway && <Button size="sm" icon="bolt" disabled={busy} onClick={() => resume({ force: true })}>{t("inbox.task_resume_anyway")}</Button>}
         {can.addTime && <Button size="sm" variant="primary" icon="plus" disabled={busy} onClick={() => resume({ extend: { ...ADD_TIME } })}>{t("inbox.task_add_time")}</Button>}
+        {can.addTimeAnyway && <Button size="sm" icon="bolt" disabled={busy} onClick={() => resume({ force: true, extend: { ...ADD_TIME } })}>{t("inbox.task_add_time_anyway")}</Button>}
         {can.cancel && <Button size="sm" variant="danger" icon="close" disabled={busy} onClick={() => setAsking(true)}>{t("inbox.task_cancel")}</Button>}
         <Link to={`/chat/${encodeURIComponent(task.session_id)}`} className="text-sm tk-chat">{t("inbox.apri_la_chat")}</Link>
       </div>

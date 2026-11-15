@@ -36,30 +36,47 @@ export interface TaskCommands {
   resumeAnyway: boolean;
   /** The task used its own budget: resuming needs more of it. */
   addTime: boolean;
+  /** More budget AND past the rule that also holds it back (the engine checks the rules before it adds the room). */
+  addTimeAnyway: boolean;
   cancel: boolean;
   /** Something can still be said to it. */
   instruct: boolean;
 }
 
+/** Did the task use up one of its own limits (seconds, steps, tokens of all its segments)? */
+export function budgetSpent(t: BackgroundTask): boolean {
+  const { limits, progress } = t;
+  return (
+    (limits.max_seconds !== undefined && progress.seconds >= limits.max_seconds) ||
+    (limits.max_turns !== undefined && progress.turns >= limits.max_turns) ||
+    (limits.max_tokens !== undefined && progress.tokens >= limits.max_tokens)
+  );
+}
+
 /**
  * What the person can do with a task, by its state.
  * - «Pausa» only while it works, and not twice (once asked it is finishing the step).
- * - «Riprendi» when paused or waiting for its turn; not for a spent budget (only more time brings it back). After the
+ * - «Riprendi» when paused or waiting for its turn; not for a spent budget (only more time brings it back; the budget is
+ *   read from the limits, so a task paused by the person or by a restart with nothing left is the same). After the
  *   emergency button it stays: the engine answers with what to do first.
  * - «Riprendi comunque» for the rules; also, after the engine refused a resume with a rule's sentence (`resumeRefused`:
  *   a task the person paused during quiet hours is refused too), for any pause that is not the emergency stop or a spent budget.
+ * - «Aggiungi tempo» for a spent budget, and «Aggiungi tempo comunque» when a rule holds the task back too (the pause is a
+ *   rule's, or the engine refused with a rule's sentence): `{force, extend}` together.
  */
 export function commands(t: BackgroundTask, opts: { resumeRefused?: boolean } = {}): TaskCommands {
   const open = !isFinished(t);
   const paused = t.status === "paused" || t.status === "queued";
   const reason = t.pause_reason;
-  const budget = t.status === "paused" && reason === "task_budget";
   const stoppedByButton = reason === "kill_switch";
+  const spent = paused && !stoppedByButton && (reason === "task_budget" || budgetSpent(t));
+  const ruled = reason !== undefined && RULE_PAUSES.includes(reason);
   return {
     pause: t.status === "running" && !t.stopping,
-    resume: paused && !budget,
-    resumeAnyway: t.status === "paused" && !budget && !stoppedByButton && ((reason !== undefined && RULE_PAUSES.includes(reason)) || !!opts.resumeRefused),
-    addTime: budget,
+    resume: paused && !spent,
+    resumeAnyway: t.status === "paused" && !spent && !stoppedByButton && (ruled || !!opts.resumeRefused),
+    addTime: spent,
+    addTimeAnyway: spent && (ruled || !!opts.resumeRefused),
     cancel: open,
     instruct: open,
   };
@@ -83,6 +100,15 @@ export function statusInfo(t: BackgroundTask): { label: string; tone: PillTone }
   return { label: tr(`inbox.task_status_${s}`), tone: STATUS_TONE[s] };
 }
 
+/**
+ * What a task that is finishing its step says: the person's own pause, or what the engine said when it was a rule or the
+ * budget that stopped it (it is not «pausa chiesta» when nobody asked).
+ */
+export function stoppingSentence(t: BackgroundTask): string {
+  const text = t.pause_text?.trim();
+  return t.pause_reason && t.pause_reason !== "user" && text ? text : tr("inbox.task_stopping_text");
+}
+
 /** Why it is paused, in a sentence: the engine's own, else one by reason. Nothing when it is not paused. */
 export function pauseSentence(t: BackgroundTask): string | undefined {
   if (t.status !== "paused") return undefined;
@@ -104,9 +130,11 @@ export function progressLine(p: TaskProgress): string {
 /** What needs the person comes first: a confirmation, then what is at work, what waits for its turn, what is paused. */
 const rank = (t: BackgroundTask): number => (t.waiting_approval ? 0 : t.status === "running" ? 1 : t.status === "queued" ? 2 : 3);
 
-/** Not finished: at work, waiting, paused. The newest change first within the same kind. */
+/** Not finished: at work, waiting, paused. The newest task first within the same kind. */
 export function openTasks(list: BackgroundTask[]): BackgroundTask[] {
-  return list.filter((t) => !isFinished(t)).sort((a, b) => rank(a) - rank(b) || b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id));
+  // By creation, not by change: the engine saves a running task at every step, and cards that swap places on every refresh
+  // would move the box someone is typing in.
+  return list.filter((t) => !isFinished(t)).sort((a, b) => rank(a) - rank(b) || b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id));
 }
 
 /** Finished, the latest first (`limit` of them). */
@@ -134,7 +162,9 @@ export function taskSummary(list: BackgroundTask[] | undefined): string | undefi
 
 const INSTRUCTION_TONE: Record<TaskInstructionStatus, PillTone> = { pending: "neutral", delivered: "ok", blocked: "crit" };
 
-export function instructionInfo(i: TaskInstruction): { label: string; tone: PillTone } {
+export function instructionInfo(i: TaskInstruction, task?: BackgroundTask): { label: string; tone: PillTone } {
+  // What was never read by a task that ended (cancelled, or finished before the next step) is not «in attesa» for ever.
+  if (i.status === "pending" && task && isFinished(task)) return { label: tr("inbox.task_instr_unread"), tone: "neutral" };
   return { label: tr(`inbox.task_instr_${i.status}`), tone: INSTRUCTION_TONE[i.status] };
 }
 
@@ -148,9 +178,11 @@ export interface InstructionCheck {
 }
 
 export function checkInstruction(text: string): InstructionCheck {
-  const count = [...text].length;
+  // The engine counts what it keeps: the text without the white space at both ends.
+  const body = text.trim();
+  const count = [...body].length;
   const over = count > MAX_TASK_INSTRUCTION_CHARS;
-  return { count, max: MAX_TASK_INSTRUCTION_CHARS, over, ok: text.trim().length > 0 && !over };
+  return { count, max: MAX_TASK_INSTRUCTION_CHARS, over, ok: body.length > 0 && !over };
 }
 
 /** What the dictation adds to the box: the dictated words after what is already written, with one space between. */

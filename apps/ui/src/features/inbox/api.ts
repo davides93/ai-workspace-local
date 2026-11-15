@@ -142,7 +142,8 @@ export function useSendTaskInstruction() {
   return useMutation({
     mutationFn: (v: { id: string; text: string; source: "user" | "voice" }) => api.sendTaskInstruction(v.id, v.text, v.source),
     meta: { handled: true },
-    onSuccess: (task) => toast(task.status === "running" ? t("inbox.task_toast_instruction_sent") : t("inbox.task_toast_instruction_kept")),
+    // A task that is finishing its step (paused, or stopped by a rule) does not read it before it resumes.
+    onSuccess: (task) => toast(task.status === "running" && !task.stopping ? t("inbox.task_toast_instruction_sent") : t("inbox.task_toast_instruction_kept")),
     onError: (e) => toast(failure("inbox.task_err_instruction", e), "crit"),
     onSettled: (task) => refresh(task),
   });

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { MAX_TASK_INSTRUCTION_CHARS } from "../../../shared/api/types";
 import type { ApprovalRequest, BackgroundTask, TaskPauseReason } from "../../../shared/api/types";
 import {
-  announcements, appendDictated, checkInstruction, commands, FAST_POLL_MS, finishedCount, finishedTasks, instructionInfo, openTasks, pauseSentence, pollInterval,
-  progressLine, SLOW_POLL_MS, snapshots, statusInfo, taskSummary, visualStatus,
+  announcements, appendDictated, budgetSpent, checkInstruction, commands, FAST_POLL_MS, finishedCount, finishedTasks, instructionInfo, openTasks, pauseSentence, pollInterval,
+  progressLine, SLOW_POLL_MS, snapshots, statusInfo, stoppingSentence, taskSummary, visualStatus,
 } from "./tasks";
 
 const task = (over: Partial<BackgroundTask> = {}): BackgroundTask => ({
@@ -46,6 +46,33 @@ describe("commands by state", () => {
     expect(commands(paused("task_budget"), { resumeRefused: true }).resumeAnyway).toBe(false);
   });
 
+  const spent = { limits: { max_turns: 5 }, progress: { turns: 5, tokens: 0, seconds: 0 } };
+
+  it("the budget is read from the limits: a pause of the person or of a restart with nothing left needs more time too", () => {
+    expect(budgetSpent(paused("user", spent))).toBe(true);
+    expect(budgetSpent(paused("user", { limits: { max_turns: 5 }, progress: { turns: 4, tokens: 0, seconds: 0 } }))).toBe(false);
+    expect(budgetSpent(paused("user", { limits: { max_seconds: 60 }, progress: { turns: 0, tokens: 0, seconds: 60 } }))).toBe(true);
+    expect(budgetSpent(paused("user", { limits: { max_tokens: 100 }, progress: { turns: 0, tokens: 100, seconds: 0 } }))).toBe(true);
+    expect(only(commands(paused("user", spent)))).toEqual(["addTime", "cancel", "instruct"]);
+    expect(only(commands(paused("restart", spent)))).toEqual(["addTime", "cancel", "instruct"]);
+  });
+
+  it("a spent budget that a rule also holds back offers more time AND going past the rule together (the engine checks the rule first)", () => {
+    // The person forced the task past the day's time, it used its own budget, and the day's time is still over.
+    for (const reason of ["daily_budget", "quiet_hours", "battery"] as const) {
+      const c = commands(paused(reason, spent));
+      expect([c.addTime, c.addTimeAnyway, c.resume, c.resumeAnyway], reason).toEqual([true, true, false, false]);
+    }
+    // After a refusal with a rule's sentence the same holds for a budget pause.
+    expect(commands(paused("task_budget")).addTimeAnyway).toBe(false);
+    expect(commands(paused("task_budget"), { resumeRefused: true }).addTimeAnyway).toBe(true);
+  });
+
+  it("the emergency stop is never forced and no time added gets past it", () => {
+    const c = commands(paused("kill_switch", spent), { resumeRefused: true });
+    expect([c.addTime, c.addTimeAnyway, c.resumeAnyway]).toEqual([false, false, false]);
+  });
+
   it("the emergency stop is never forced; the engine says what to do first", () => {
     expect(only(commands(paused("kill_switch")))).toEqual(["resume", "cancel", "instruct"]);
     expect(commands(paused("kill_switch"), { resumeRefused: true }).resumeAnyway).toBe(false);
@@ -63,6 +90,32 @@ describe("commands by state", () => {
 
   it("a finished task has no command and takes no instruction", () => {
     for (const status of ["succeeded", "failed", "cancelled"] as const) expect(only(commands(task({ status })))).toEqual([]);
+  });
+});
+
+describe("lists, instructions and sentences", () => {
+  it("open tasks keep their places while the engine saves a running one at every step (ordered by creation, not by change)", () => {
+    const a = task({ id: "a", created_at: "2026-11-15T08:00:00Z", updated_at: "2026-11-15T09:00:00Z" });
+    const b = task({ id: "b", created_at: "2026-11-15T08:30:00Z", updated_at: "2026-11-15T08:30:00Z" });
+    expect(openTasks([a, b]).map((t) => t.id)).toEqual(["b", "a"]);
+    expect(openTasks([{ ...a, updated_at: "2026-11-15T09:05:00Z" }, b]).map((t) => t.id)).toEqual(["b", "a"]);
+  });
+
+  it("an instruction is counted as the engine counts it, without the white space at the ends", () => {
+    expect(checkInstruction("x".repeat(MAX_TASK_INSTRUCTION_CHARS) + "\n").ok).toBe(true);
+    expect(checkInstruction("  " + "x".repeat(MAX_TASK_INSTRUCTION_CHARS + 1)).over).toBe(true);
+  });
+
+  it("an instruction that a finished task never read is «non letta», not «in attesa» for ever", () => {
+    const pending = { id: "i", text: "Poi", source: "user" as const, created_at: "2026-11-15T08:00:00Z", status: "pending" as const };
+    expect(instructionInfo(pending, task({ status: "running" })).label).toMatch(/attesa|waiting|pending/i);
+    expect(instructionInfo(pending, task({ status: "cancelled" })).label).toMatch(/non letta|not read/i);
+  });
+
+  it("a task finishing its step says why when it was not the person who asked", () => {
+    expect(stoppingSentence(task({ stopping: true, pause_reason: "user", pause_text: "Messo in pausa da te." }))).toMatch(/pausa|pause/i);
+    expect(stoppingSentence(task({ stopping: true, pause_reason: "quiet_hours", pause_text: "Orario di silenzio (22:00-07:00): riprende da solo alle 07:00." })))
+      .toBe("Orario di silenzio (22:00-07:00): riprende da solo alle 07:00.");
   });
 });
 

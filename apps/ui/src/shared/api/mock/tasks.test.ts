@@ -63,7 +63,8 @@ describe("background tasks in the demo", () => {
       const t = await api.task(RUN);
       expect(t).toMatchObject({ status: "paused", pause_reason: "user", stopping: false, auto_resume: false });
       expect(t.pause_text).toMatch(/pausa/);
-      await expect(api.pauseTask(RUN)).rejects.toMatchObject({ status: 409 });
+      // Pausing what is paused is not an error: the engine answers 200 and leaves it as it is.
+      expect(await api.pauseTask(RUN)).toMatchObject({ status: "paused", pause_reason: "user" });
     });
 
     it("a finished task cannot be paused, cancelled twice or told anything", async () => {
@@ -112,12 +113,17 @@ describe("background tasks in the demo", () => {
       await expect(api.sendTaskInstruction("nope", "ok")).rejects.toMatchObject({ status: 404 });
     });
 
-    it("an instruction that was never read is refused when the task is cancelled", async () => {
+    it("an instruction that was never read stays «pending» when the task is cancelled, as in the engine", async () => {
       const api = new MockTransport();
       await api.sendTaskInstruction(QUIET, "Poi dimmi il più conveniente");
       const t = await api.cancelTask(QUIET);
-      expect(t.instructions.at(-1)).toMatchObject({ status: "blocked" });
-      expect(t.instructions.at(-1)?.note).toMatch(/annullato/);
+      expect(t.instructions.at(-1)).toMatchObject({ status: "pending" });
+    });
+
+    it("at most ten instructions wait at once, as in the engine", async () => {
+      const api = new MockTransport();
+      for (let i = 0; i < 10; i++) await api.sendTaskInstruction(QUIET, `Istruzione ${i}`);
+      await expect(api.sendTaskInstruction(QUIET, "Una di troppo")).rejects.toMatchObject({ status: 409 });
     });
   });
 

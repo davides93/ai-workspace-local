@@ -3,7 +3,7 @@ import { isNotFound } from "../../../shared/lib/errors";
 import { ErrorState, Panel, SkeletonLines } from "../../../shared/ui";
 import { useCancelTask, usePauseTask, useRespondTaskApproval, useResumeTask, useSendTaskInstruction, useTasks } from "../api";
 import { announcements, finishedCount, finishedTasks, openTasks, snapshots, type TaskSnapshots } from "../model/tasks";
-import { TaskCard, TaskDoneRow, type TaskActions } from "./TaskCard";
+import { TaskCard, TaskDoneRow, type Done, type TaskActions } from "./TaskCard";
 
 import { t } from "../../../shared/i18n";
 /**
@@ -33,12 +33,21 @@ export function TasksPanel() {
   // An engine without background tasks (older than this page) leaves the proposals alone on the page.
   if (!list && tasks.isError && isNotFound(tasks.error)) return null;
 
-  const busyId = pause.isPending ? pause.variables : resume.isPending ? resume.variables?.id : cancel.isPending ? cancel.variables : send.isPending ? send.variables?.id : undefined;
+  // Every command is awaited by itself: the per-call callbacks of a mutation are dropped when another call of the same one
+  // starts (a second task paused while the first is still answering), and the screen must still react to how each ended.
+  const run = <T,>(call: Promise<T>, done?: Done) => {
+    call.then(() => done?.onSuccess?.(), (e) => done?.onError?.(e)).finally(() => done?.onSettled?.());
+  };
+  const busy = new Set<string>(
+    [pause.isPending && pause.variables, resume.isPending && resume.variables?.id, cancel.isPending && cancel.variables, send.isPending && send.variables?.id].filter(
+      (id): id is string => typeof id === "string",
+    ),
+  );
   const actions: TaskActions = {
-    pause: (id) => pause.mutate(id),
-    resume: (v, done) => resume.mutate(v, done),
-    cancel: (id, done) => cancel.mutate(id, done),
-    send: (v, done) => send.mutate(v, done),
+    pause: (id, done) => run(pause.mutateAsync(id), done),
+    resume: (v, done) => run(resume.mutateAsync(v), done),
+    cancel: (id, done) => run(cancel.mutateAsync(id), done),
+    send: (v, done) => run(send.mutateAsync(v), done),
     respond: approval.respond,
   };
   const open = list ? openTasks(list) : [];
@@ -59,7 +68,7 @@ export function TasksPanel() {
             <ul className="tk-list" aria-label={t("inbox.task_open_label")}>
               {open.map((task) => (
                 <li key={task.id}>
-                  <TaskCard task={task} busy={busyId === task.id} answering={approval.pending} actions={actions} />
+                  <TaskCard task={task} busy={busy.has(task.id)} answering={approval.pending} actions={actions} />
                 </li>
               ))}
             </ul>

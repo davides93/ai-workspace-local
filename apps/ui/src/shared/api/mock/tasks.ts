@@ -11,6 +11,8 @@ import { nid } from "./fixtures";
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 
+/** Instructions waiting at once, as the engine allows. */
+const MAX_PENDING_INSTRUCTIONS = 10;
 /** How long finishing the current step takes after a pause was asked. */
 export const STEP_MS = 1500;
 /** How long a resumed task takes to read what was said while it was paused. */
@@ -250,7 +252,8 @@ export class TaskStore {
     this.settle();
     const t = this.find(id);
     if (finished(t)) throw new ApiError(409, `il lavoro «${t.title}» è già finito: non c'è niente da mettere in pausa`);
-    if (t.status === "paused") throw new ApiError(409, `il lavoro «${t.title}» è già in pausa`);
+    // Pausing what is paused is not an error (the engine answers 200 and leaves it as it is).
+    if (t.status === "paused") return structuredClone(t);
     if (t.status === "queued" || t.waiting_approval) {
       // Waiting (for its turn or for a confirmation) there is no step to finish.
       this.enterPause(t, "user", "L'hai messo in pausa tu.", "In pausa, come avevi chiesto.");
@@ -306,6 +309,9 @@ export class TaskStore {
     if ([...clean].length > MAX_TASK_INSTRUCTION_CHARS) throw new ApiError(400, `l'istruzione supera i ${MAX_TASK_INSTRUCTION_CHARS} caratteri`);
     if (source !== "user" && source !== "voice") throw new ApiError(400, `origine non valida «${String(source)}»: usa user o voice`);
     if (finished(t)) throw new ApiError(409, `il lavoro «${t.title}» è già finito: non può più leggere istruzioni`);
+    if (t.instructions.filter((i) => i.status === "pending").length >= MAX_PENDING_INSTRUCTIONS) {
+      throw new ApiError(409, "ci sono già troppe istruzioni in attesa: aspetta che il lavoro le legga");
+    }
     t.instructions.push({ id: nid("tin"), text: clean, source, created_at: new Date().toISOString(), status: "pending" });
     // At work it reads it at the next step; paused, it keeps it for when it starts again.
     if (t.status === "running" && !t.stopping) this.timer(t.id).readAt = Date.now() + READ_MS;
@@ -318,7 +324,6 @@ export class TaskStore {
     const t = this.find(id);
     if (finished(t)) throw new ApiError(409, `il lavoro «${t.title}» è già finito (${STATUS_WORDS[t.status]})`);
     const at = new Date().toISOString();
-    for (const i of t.instructions.filter((x) => x.status === "pending")) Object.assign(i, { status: "blocked", note: "Il lavoro è stato annullato prima di leggerla." });
     Object.assign(t, { status: "cancelled", stopping: false, waiting_approval: undefined, pause_reason: undefined, pause_text: undefined, auto_resume: false, finished_at: at });
     this.timers.delete(t.id);
     this.script.delete(t.id);
