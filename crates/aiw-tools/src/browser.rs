@@ -54,9 +54,12 @@ pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag);
     const type = el.getAttribute('type');
-    const label = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    // What a person types to prove who they are (passwords, codes, card numbers) is never written out: not as the
+    // value, and not as the label a field without a name would otherwise get from its value.
+    const hide = (tag === 'input' || tag === 'textarea') && (type === 'password' || /(^|\s)(one-time-code|current-password|new-password|cc-[a-z-]+)(\s|$)/i.test(el.getAttribute('autocomplete') || ''));
+    const label = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (hide ? '' : el.value) || '').trim().replace(/\s+/g, ' ').slice(0, 80);
     let extra = '';
-    if (tag === 'input' || tag === 'textarea') extra = ` value="${String(el.value || '').slice(0, 40)}"`;
+    if (tag === 'input' || tag === 'textarea') extra = hide ? (el.value ? ' value="(nascosto)"' : ' value=""') : ` value="${String(el.value || '').slice(0, 40)}"`;
     if (tag === 'a') extra = ` -> ${String(el.getAttribute('href')).slice(0, 90)}`;
     if (tag === 'select') extra = ` [${[...el.options].slice(0, 8).map(o => o.text.trim()).join(' | ')}]`;
     if (type === 'checkbox' || type === 'radio') extra += el.checked ? ' (selezionato)' : '';
@@ -70,6 +73,10 @@ pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
   const pos = se.scrollHeight <= innerHeight + 4 ? 'tutta la pagina è in vista' : `vista fino al ${seen}% della pagina (usa browser_scroll per vedere altro)`;
   return `Titolo: ${document.title}\nURL: ${location.href}\nPosizione: ${pos}\n\nElementi interattivi (usa il numero come ref):\n${out.join('\n')}\n\nTesto visibile:\n${text}`;
 })()"#;
+
+/// The values of the fields where a person types who they are (passwords, one-time codes, card numbers), as a
+/// JSON array of strings. The accessibility snapshot hides them wherever it would write them (see `ax::render`).
+pub(crate) const SECRET_VALUES_JS: &str = r#"(() => JSON.stringify([...document.querySelectorAll('input,textarea')].filter(el => (el.getAttribute('type') || '').toLowerCase() === 'password' || /(^|\s)(one-time-code|current-password|new-password|cc-[a-z-]+)(\s|$)/i.test(el.getAttribute('autocomplete') || '')).map(el => String(el.value || '')).filter(v => v.length > 0).slice(0, 20)))()"#;
 
 /// Network policy of the controlled browser: the context of the tool call that is running (it
 /// changes from call to call) and the resolver used to vet names.

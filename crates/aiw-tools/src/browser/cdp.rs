@@ -562,12 +562,19 @@ impl Cdp {
     pub(crate) async fn ax_snapshot(&self) -> Result<String> {
         let tree = self.call("Accessibility.getFullAXTree", json!({})).await?;
         let nodes = tree["nodes"].as_array().cloned().unwrap_or_default();
+        // The values of the fields a person types who they are in: never written out (see `ax::render`).
+        let secrets: Vec<String> = self
+            .eval(super::SECRET_VALUES_JS)
+            .await
+            .ok()
+            .and_then(|v| v.as_str().and_then(|t| serde_json::from_str(t).ok()))
+            .unwrap_or_default();
         let head = self.eval("({t: document.title, u: location.href})").await.unwrap_or(Value::Null);
         let body = {
             let mut st = self.st.lock().unwrap();
             let tab = st.active_tab().ok_or_else(|| Error::Runtime("nessuna scheda attiva nel browser".into()))?;
             tab.fmt = SnapFmt::Ax;
-            ax::render(&nodes, &mut tab.refs)
+            ax::render(&nodes, &mut tab.refs, &secrets)
         };
         Ok(format!(
             "Titolo: {}\nURL: {}\n\nAlbero di accessibilità (usa [eN] come ref; i ref restano validi finché la pagina non cambia):\n{body}",
@@ -966,7 +973,7 @@ fn finalize_download(h: &Hub, guid: &str) {
         // Resolved again with the final name: a symlink planted in the folder must not lead out.
         let dest = ctx.resolve(&dest.to_string_lossy(), true).map_err(|e| e.to_string())?;
         if std::fs::rename(&src, &dest).is_err() {
-            std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+            crate::atomic::copy_atomic(&src, &dest).map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(&src);
         }
         ctx.record_created(&dest);

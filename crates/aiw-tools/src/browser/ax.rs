@@ -178,7 +178,10 @@ fn options_of<'a>(root: &'a Value, by_id: &HashMap<&str, &'a Value>) -> Vec<Stri
 
 /// The filtered tree as text. References of the controls are taken from (and recorded in) `refs`.
 /// Ends with a «troncato» line when the page is larger than the caps.
-pub(crate) fn render(nodes: &[Value], refs: &mut Refs) -> String {
+///
+/// `secrets` are the values of the fields where a person types who they are (passwords, one-time codes, card
+/// numbers): wherever one of them would be written as the value of a control it is replaced by «(nascosto)».
+pub(crate) fn render(nodes: &[Value], refs: &mut Refs, secrets: &[String]) -> String {
     let by_id: HashMap<&str, &Value> = nodes.iter().filter_map(|n| n["nodeId"].as_str().map(|i| (i, n))).collect();
     let mut out = Out { text: String::new(), lines: 0, truncated: false, pending: String::new(), pending_parent: String::new() };
     let mut stack: Vec<Item> =
@@ -217,7 +220,11 @@ pub(crate) fn render(nodes: &[Value], refs: &mut Refs) -> String {
                     let mut line = format!("[{r}] {role} \"{shown}\"");
                     let value = node_value(node);
                     if !value.is_empty() && !matches!(role, "button" | "link" | "tab" | "menuitem") {
-                        line.push_str(&format!(" value=\"{}\"", clip(&value, 60)));
+                        if secrets.iter().any(|x| x == &value) {
+                            line.push_str(" value=\"(nascosto)\"");
+                        } else {
+                            line.push_str(&format!(" value=\"{}\"", clip(&value, 60)));
+                        }
                     }
                     if let Some(c) = prop(node, "checked") {
                         match c.as_str() {
@@ -318,7 +325,7 @@ mod tests {
     #[test]
     fn keeps_controls_headings_landmarks_and_text_with_state() {
         let mut refs = Refs::default();
-        let t = render(&page(), &mut refs);
+        let t = render(&page(), &mut refs, &[]);
         assert!(t.contains("heading[2] \"Iscrizione\""), "{t}");
         assert!(t.contains("text \"Compila il modulo.\""), "{t}");
         assert!(t.contains("-- form \"Dati\""), "{t}");
@@ -338,17 +345,32 @@ mod tests {
     #[test]
     fn references_are_stable_across_snapshots_and_resolve_to_the_node() {
         let mut refs = Refs::default();
-        render(&page(), &mut refs);
+        render(&page(), &mut refs, &[]);
         assert_eq!(refs.backend("e2"), Some(6));
         // A new control appears before the others: the old ones keep their reference.
         let mut nodes = page();
         nodes[0]["childIds"] = json!(["11", "2", "3", "4", "8", "10"]);
         nodes.push(node("11", Some("1"), "button", "Nuovo", 99, &[], json!([])));
-        let t = render(&nodes, &mut refs);
+        let t = render(&nodes, &mut refs, &[]);
         assert!(t.contains("[e6] button \"Nuovo\""), "{t}");
         assert!(t.contains("[e2] checkbox \"Accetto\""), "{t}");
         assert_eq!(refs.backend("e6"), Some(99));
         assert_eq!(refs.backend("e99"), None);
+    }
+
+    #[test]
+    fn the_value_of_a_secret_field_is_never_written() {
+        let nodes = vec![
+            node("1", None, "RootWebArea", "P", 1, &["2", "3"], json!([])),
+            node("2", Some("1"), "textbox", "Password", 7, &[], json!([])),
+            node("3", Some("1"), "textbox", "Nome", 8, &[], json!([])),
+        ];
+        let mut nodes = nodes;
+        nodes[1]["value"] = json!({"value": "PASSWORD-DI-PROVA"});
+        nodes[2]["value"] = json!({"value": "Mario"});
+        let t = render(&nodes, &mut Refs::default(), &["PASSWORD-DI-PROVA".to_string()]);
+        assert!(!t.contains("PASSWORD-DI-PROVA"), "{t}");
+        assert!(t.contains("[e1] textbox \"Password\" value=\"(nascosto)\"") && t.contains("value=\"Mario\""), "{t}");
     }
 
     #[test]
@@ -360,7 +382,7 @@ mod tests {
             nodes.push(node(id, Some("1"), "button", &format!("Pulsante numero {i}"), 100 + i as i64, &[], json!([])));
         }
         let mut refs = Refs::default();
-        let t = render(&nodes, &mut refs);
+        let t = render(&nodes, &mut refs, &[]);
         assert!(t.contains("troncato"), "{}", &t[t.len().saturating_sub(200)..]);
         assert!(t.lines().count() <= MAX_LINES + 2);
         assert!(t.contains("Pulsante numero 0") && !t.contains("Pulsante numero 599"));
@@ -375,7 +397,7 @@ mod tests {
             node("4", Some("2"), "button", "Vai", 4, &[], json!([])),
         ];
         nodes[1]["ignored"] = json!(true);
-        let t = render(&nodes, &mut Refs::default());
+        let t = render(&nodes, &mut Refs::default(), &[]);
         assert_eq!(t.trim(), "[e1] button \"Vai\"");
     }
 }
