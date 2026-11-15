@@ -16,7 +16,10 @@ const RESTART = "Sistemare il test del parser GGUF";
 test("a task at work: pause, tell it something, resume, allow one confirmation and deny the next, cancel", async ({ page }) => {
   await openInbox(page);
   const run = card(page, RUN);
+  // The hidden live region (read by screen readers) says nothing about the page itself, only about what changes.
+  const said = page.getByRole("status", { name: "Aggiornamenti sui lavori" });
   await expect(run.getByText("In corso", { exact: true })).toBeVisible();
+  await expect(said).toHaveText("");
   await expect(run.getByText("3 passi · 4 min · ultimo strumento list_dir")).toBeVisible();
   await expect(run.getByText("Ho trovato 4 file che sembrano fatture")).toBeVisible();
   const given = run.getByRole("list", { name: "Istruzioni date" });
@@ -26,9 +29,11 @@ test("a task at work: pause, tell it something, resume, allow one confirmation a
   await run.getByRole("button", { name: "Pausa", exact: true }).click();
   await expect(run.getByText("Si sta fermando", { exact: true })).toBeVisible();
   await expect(run.getByText("Pausa chiesta: si ferma quando finisce il passo che sta facendo.")).toBeVisible();
+  await expect(said).toContainText(`«${RUN}» si ferma dopo questo passo.`);
   await expect(run.getByRole("button", { name: "Pausa", exact: true })).toBeHidden();
   await expect(run.getByText("In pausa", { exact: true })).toBeVisible();
   await expect(run.getByText("L'hai messo in pausa tu", { exact: false })).toBeVisible();
+  await expect(said).toContainText(`«${RUN}» è in pausa.`);
 
   // 2. Something said while it is paused is kept, waiting for the next step.
   const say = run.getByRole("textbox", { name: "Istruzione" });
@@ -44,6 +49,7 @@ test("a task at work: pause, tell it something, resume, allow one confirmation a
   await expect(mine.getByText("Letta", { exact: true })).toBeVisible();
   const ask = run.getByRole("group", { name: "Conferma in attesa" });
   await expect(run.getByText("Aspetta una conferma", { exact: true })).toBeVisible();
+  await expect(said).toContainText(`«${RUN}» aspetta la tua conferma per shell.`);
   await expect(ask.getByRole("article", { name: "shell" })).toBeVisible();
   await expect(ask.getByText("Il comando sposta 2 file dalla cartella Scaricati a Documenti/Fatture/Rossi.")).toBeVisible();
   // Nothing here lasts for the whole session: each request is decided on its own.
@@ -71,6 +77,7 @@ test("a task at work: pause, tell it something, resume, allow one confirmation a
   await expect(run).toBeHidden();
   const finished = panel(page).getByRole("listitem").filter({ hasText: RUN });
   await expect(finished.getByText("Annullato", { exact: true })).toBeVisible();
+  await expect(said).toContainText(`«${RUN}» è stato annullato.`);
 
   // A finished task takes no more instructions.
   await finished.getByText("Dettagli", { exact: true }).click();
