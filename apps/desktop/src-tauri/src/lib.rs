@@ -37,6 +37,26 @@ async fn aiw_browser_show(state: tauri::State<'_, Shell>) -> Result<bool, String
     state.engine.browser().show_webview().await.map_err(|e| e.to_string())
 }
 
+/// The folders of the computer the person handed to the agents: opens the macOS panel and adds what is chosen
+/// (Mac App Store build). Only this command and `aiw_folders_remove` change the list: no route of the API, setting,
+/// tool or model reaches them, so the agents cannot widen their own access. Every call is the person's click.
+#[tauri::command]
+async fn aiw_folders_add(state: tauri::State<'_, Shell>, message: String, prompt: String) -> Result<Value, String> {
+    let engine = state.engine.clone();
+    let added = tauri::async_runtime::spawn_blocking(move || engine.add_folders(&message, &prompt))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(added).map_err(|e| e.to_string())
+}
+
+/// Takes a folder off the list and gives up its permission.
+#[tauri::command]
+fn aiw_folders_remove(state: tauri::State<'_, Shell>, id: String) -> Result<Value, String> {
+    let info = state.engine.remove_folder(&id).map_err(|e| e.to_string())?;
+    serde_json::to_value(info).map_err(|e| e.to_string())
+}
+
 /// Where the agents work on a phone and in the sandboxed Mac App Store build: inside the app's own container.
 #[cfg(mobile)]
 pub(crate) fn mobile_workspace(app: &tauri::AppHandle<tauri::Wry>, data_dir: &std::path::Path) -> std::path::PathBuf {
@@ -85,6 +105,10 @@ pub fn run() {
                 ..Default::default()
             }))
             .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+            // Mac App Store build: the folders the person handed to the agents (security-scoped bookmarks) are reopened
+            // before anything can start a run, the channels included: a Telegram message at launch finds them.
+            #[cfg(all(target_os = "macos", feature = "mas"))]
+            engine.set_folder_bridge(Arc::new(tauri_plugin_aiw_native::macos_folders::MacFolders::new()));
             // Telegram, Slack and email channels that the person turned on (on a phone they stay off unless the app is
             // in the foreground: see `Engine::set_channels_foreground`).
             // (inside the runtime: the connectors are tasks)
@@ -156,7 +180,14 @@ pub fn run() {
             app.manage(Shell { engine, router });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![aiw_request, aiw_run_events, aiw_browser_show, background::aiw_background])
+        .invoke_handler(tauri::generate_handler![
+            aiw_request,
+            aiw_run_events,
+            aiw_browser_show,
+            aiw_folders_add,
+            aiw_folders_remove,
+            background::aiw_background
+        ])
         .build(tauri::generate_context!())
         .expect("error while building AI Workspace Local");
 

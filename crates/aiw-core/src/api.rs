@@ -199,6 +199,10 @@ pub struct SystemInfo {
     /// Mac App Store build (App Sandbox): see `EngineOptions::sandboxed`.
     #[serde(default)]
     pub sandboxed: bool,
+    /// The person can hand more folders of the computer to the agents (a folder chosen in the macOS
+    /// panel, with a permission that lasts): see `aiw_core::folders`. Only in the sandboxed shell.
+    #[serde(default)]
+    pub folder_access: bool,
     /// Sandbox that contains shell commands on this machine (`bwrap`, `sandbox-exec`,
     /// `windows-low-integrity`), or none.
     #[serde(default, skip_serializing_if = "Option::is_none")]

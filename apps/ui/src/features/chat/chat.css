@@ -125,6 +125,7 @@
 .ws-tool-args { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--fg-faint); }
 .ws-tool-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--fg-muted); }
 .ws-tool-preview.is-crit { color: var(--crit); }
+.ws-tool-hint { margin: 0; padding: var(--space-2) 10px; border-top: 1px solid var(--line); background: var(--warn-soft); font-size: var(--fs-xs); color: var(--fg); }
 .ws-tool-state { flex: none; display: flex; align-items: center; gap: var(--space-2); padding-top: 3px; }
 .ws-tool-time { font-size: var(--fs-xs); color: var(--fg-faint); }
 .ws-ok { color: var(--ok); }
