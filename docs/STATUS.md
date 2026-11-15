@@ -76,7 +76,7 @@ accorciare le descrizioni o unire strumenti, non togliere le conferme.
   modelli e installazioni di motori già avviati (non sono run; nel codice di `kill` non si annullano). Pausa e ripresa esplicite dei download non esistono: annullare conserva il `.part`.
 - **Terminale**: `aiw run` non dà un'origine al run, quindi un'Assistente avviato dal terminale non usa gli strumenti di gestione (decisione del 15 novembre 2026: resta così, perché
   `--yes` approverebbe da solo installazioni e cancellazioni e da terminale non ci sono domande né segreti). Il rifiuto è immediato, senza chiedere conferma, e l'aiuto di `aiw run`
-  rimanda a `aiw models`, `aiw runtimes`, `aiw profile`.
+  dice che da terminale restano `aiw models`, `aiw runtimes` e `aiw profile` (per modelli e motori); per connettori, segreti e impostazioni non c'è un comando equivalente: si usa l'app.
 - **`delegate_tools` dell'Assistente** (decisione del 15 novembre 2026): resta `["*"]`. I vincoli non dipendono da quel valore: un subagente non riceve mai uno strumento di gestione,
   non supera modalità e sandbox del padre e `*` non copre gli strumenti a concessione esplicita (un test fissa che ogni strumento di gestione registrato la richiede). Uno strumento
   nuovo e delicato registrato senza concessione esplicita diventerebbe delegabile.
