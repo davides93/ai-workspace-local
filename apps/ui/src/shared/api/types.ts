@@ -40,6 +40,8 @@ export interface SystemInfo {
   workspace_root: string;
   /** Mac App Store build (App Sandbox): no external programs, the agents work in the app's own folder. */
   sandboxed?: boolean;
+  /** The person can hand more folders of the computer to the agents (Mac App Store build): see `FoldersInfo`. */
+  folder_access?: boolean;
   /** Sandbox that contains shell commands here: `bwrap`, `sandbox-exec`, `windows-low-integrity`; absent when there is none. */
   shell_sandbox?: string;
   /** MCP stdio servers can be isolated on this machine (not on Windows). */
@@ -48,6 +50,34 @@ export interface SystemInfo {
   pairing_code?: string;
   device: DeviceProfile;
   peers: PeerDevice[];
+}
+
+/** A folder of the computer the person lets the agents use besides the workspace (Mac App Store build). */
+export interface FolderGrant {
+  id: string;
+  /** Last component of the path. */
+  name: string;
+  /** Where it is now; empty when it cannot be opened. */
+  path: string;
+  /** False when the permission could not be reopened (folder gone or renamed): the agents do not see it. */
+  available: boolean;
+  /** Why it is not available. */
+  problem?: string;
+  added: string;
+}
+
+export interface FoldersInfo {
+  /** This build lets the person grant folders. */
+  supported: boolean;
+  folders: FolderGrant[];
+}
+
+/** Result of adding folders from the macOS panel. */
+export interface FoldersAdded extends FoldersInfo {
+  /** Folders added now. */
+  added: number;
+  /** Folders refused, each with the reason in a sentence. */
+  refused: string[];
 }
 
 export interface DiscoveredDevice {

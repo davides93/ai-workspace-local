@@ -296,4 +296,6 @@ export const chatEn: Record<keyof typeof chatIt, string> = {
   "chat.permesso_del_microfono_negato_abilitalo": "Microphone permission denied: enable it in the system or browser settings.",
   "chat.nessun_microfono_disponibile_su_questo": "No microphone available on this device.",
   "chat.il_microfono_e_occupato_da": "The microphone is in use by another application.",
+  "chat.cartella_fuori_workspace": "That folder is outside the workspace. If you want the agent to work there, allow it yourself:",
+  "chat.cartella_fuori_workspace_link": "Settings → Allowed folders",
 };

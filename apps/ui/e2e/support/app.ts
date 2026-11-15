@@ -11,7 +11,7 @@ export interface OpenOptions {
   /** `developer` shows every section; the default is the simple interface of a new installation. */
   mode?: "simple" | "developer";
   /** Starting state of the demo data (`?scenario=`, see src/shared/api/mock/scenario.ts). */
-  scenario?: "first-run";
+  scenario?: "first-run" | "mas";
 }
 
 /** Opens the mockup on `route` (a hash route such as `/chat`) with the given preferences stored on the device. */
