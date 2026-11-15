@@ -20,8 +20,7 @@
 //! audit row (`secret.set`) holds the `target` only, and an error of the destination is cleaned of
 //! the value before it is returned.
 
-use super::{args_safe, clip, url_safe};
-use super::{require_origin, require_owner};
+use super::{args_safe, clip, require_origin, require_owner, url_safe};
 use crate::{Engine, Inner, PendingQuestion, PendingSecret};
 use aiw_core::api::*;
 use aiw_core::events::AgEvent;
