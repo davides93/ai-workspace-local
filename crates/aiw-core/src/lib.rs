@@ -11,6 +11,7 @@ pub mod api;
 pub mod config;
 pub mod error;
 pub mod events;
+pub mod folders;
 pub mod ids;
 pub mod paths;
 pub mod schema;

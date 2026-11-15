@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
-import type { BackgroundStatus, ConfigView } from "../../shared/api/types";
+import type { BackgroundStatus, ConfigView, FoldersAdded, FoldersInfo } from "../../shared/api/types";
+import { errorMessage } from "../../shared/lib/errors";
 import { LAYER_LABEL, type WritableLayer } from "./model/config";
 
 import { t } from "../../shared/i18n";
@@ -54,6 +55,50 @@ export function useBackgroundActions() {
         void qc.invalidateQueries({ queryKey: qk.config() });
         toast(t("settings.controllo_avviato"));
       },
+    }),
+  };
+}
+
+/** The folders of the computer handed to the agents besides the workspace (the Mac App Store build; empty elsewhere). */
+export function useFolders(enabled: boolean) {
+  const api = useApi();
+  return useQuery({ queryKey: qk.folders(), queryFn: () => api.folders(), enabled });
+}
+
+/**
+ * Add and take off folders. Only the native app can: the macOS panel and the permission that lasts belong to the shell,
+ * and the API has no route that changes the list (so a model cannot widen its own access).
+ */
+export function useFolderActions() {
+  const api = useApi();
+  const qc = useQueryClient();
+  const set = (info: FoldersInfo) => {
+    qc.setQueryData(qk.folders(), { supported: info.supported, folders: info.folders } satisfies FoldersInfo);
+    // The agents' tools were handed the folders: nothing else of the snapshot changes, but the hint of the chat follows it.
+    void qc.invalidateQueries({ queryKey: qk.system() });
+  };
+  return {
+    add: useMutation({
+      mutationFn: (): Promise<FoldersAdded> => {
+        if (!api.addFolders) throw new Error(t("settings.cartelle_solo_app"));
+        return api.addFolders(t("settings.cartelle_pannello_messaggio"), t("settings.cartelle_pannello_pulsante"));
+      },
+      onSuccess: (r) => {
+        set(r);
+        if (r.added > 0) toast(t("settings.cartelle_aggiunte", { n: r.added }));
+      },
+      onError: (e) => toast(errorMessage(e), "crit"),
+    }),
+    remove: useMutation({
+      mutationFn: (v: { id: string; name: string }) => {
+        if (!api.removeFolder) throw new Error(t("settings.cartelle_solo_app"));
+        return api.removeFolder(v.id);
+      },
+      onSuccess: (info, v) => {
+        set(info);
+        toast(t("settings.cartella_tolta", { name: v.name }));
+      },
+      onError: (e) => toast(errorMessage(e), "crit"),
     }),
   };
 }

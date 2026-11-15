@@ -2,7 +2,7 @@ import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, FoldersInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -90,6 +90,7 @@ export class HttpTransport implements Transport {
   }
 
   system = () => this.req<SystemInfo>("GET", "/system");
+  folders = () => this.req<FoldersInfo>("GET", "/folders");
   kill = () => this.req<void>("POST", "/kill");
 
   runtimes = () => this.req<RuntimeInfo[]>("GET", "/runtimes");

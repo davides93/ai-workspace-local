@@ -8,6 +8,8 @@ links = "tauri-plugin-aiw-native"
 
 [features]
 macos-browser = []
+# The folders the person hands to the agents (open panel + security-scoped bookmarks), Mac App Store build.
+macos-folders = []
 
 [dependencies]
 aiw-core = { path = "../../../../crates/aiw-core" }

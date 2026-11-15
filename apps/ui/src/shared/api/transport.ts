@@ -5,7 +5,7 @@ import type {
   CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
-  ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
+  ModelProviderInfo, ModelSearchParams, FoldersAdded, FoldersInfo, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
 
@@ -37,8 +37,17 @@ export interface Transport {
    * Resolves to false when this device has none.
    */
   openBrowser?(): Promise<boolean>;
+  /**
+   * Opens the macOS panel and adds the folders the person picks (Mac App Store build). Only the native
+   * app has it, and only a click of the person reaches it: the agents cannot widen their own access.
+   */
+  addFolders?(message: string, prompt: string): Promise<FoldersAdded>;
+  /** Takes a folder off the list and gives up its permission (native app only). */
+  removeFolder?(id: string): Promise<FoldersInfo>;
 
   system(): Promise<SystemInfo>;
+  /** The folders of the computer handed to the agents besides the workspace (read-only: GET /api/folders). */
+  folders(): Promise<FoldersInfo>;
   kill(): Promise<void>;
 
   runtimes(): Promise<RuntimeInfo[]>;
