@@ -250,6 +250,12 @@ impl RunHost for EngineHost {
         self.engine.kb_tool(&input.agent.knowledge, name, args).await
     }
 
+    fn refuse_tool(&self, run_id: &str, tool: &str) -> Option<String> {
+        // The same refusal `Engine::execute_tool` gives a workflow or an MCP client: a management tool
+        // outside the chat of the owner is refused before a confirmation nobody could answer.
+        crate::management::refusal(&self.engine, run_id, tool)
+    }
+
     fn handoff_target(&self, from: &RunInput, agent_id: &str) -> Result<String> {
         if agent_id.starts_with(crate::REMOTE_PREFIX) {
             return Err(Error::Denied("la conversazione non può passare a un agente remoto: delegagli il lavoro".into()));
