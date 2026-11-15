@@ -547,6 +547,16 @@ impl Engine {
                 "l'abbinamento con un codice c'è solo per Telegram: negli altri canali scrivi l'identificativo nella lista".into(),
             ));
         }
+        // The code is read by the connector, so a channel that is not running (off, or unavailable on a
+        // phone in the background) would show a code that nobody can ever answer: say so instead.
+        let status = self.channel_status_of(&ch);
+        if matches!(status.state.as_str(), "off" | "unavailable") {
+            return Err(Error::Conflict(if ch.enabled {
+                status.detail
+            } else {
+                "Accendi prima il canale: il codice funziona solo mentre il canale è acceso e in ascolto.".into()
+            }));
+        }
         let code = crate::random_digits(6);
         let expires = Instant::now() + PAIR_TTL;
         self.0.channels.pair.lock().unwrap().insert(id.into(), Pair { code: code.clone(), expires });

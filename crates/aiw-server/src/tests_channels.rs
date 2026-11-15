@@ -35,9 +35,17 @@ async fn a_channel_is_created_off_with_masked_secrets_and_can_be_changed_and_rem
 
 #[tokio::test]
 async fn a_pairing_code_is_given_only_for_telegram() {
-    let (app, _e, _d, _w) = super::tests::app().await;
+    let (app, e, _d, _w) = super::tests::app().await;
+    // Nothing here may reach the real Telegram: the connector that starts below finds nobody on port 1.
+    e.set_channel_endpoints_for_tests(Some("http://127.0.0.1:1".into()), None, 0, 20, 100);
     let (_, c) = dispatch(app.clone(), "POST", "/api/channels", Some(telegram_body())).await;
     let id = c["id"].as_str().unwrap().to_string();
+    // The channel is created off, and nobody reads the messages of a channel that is off: no code (409, with what to do).
+    let (st, p) = dispatch(app.clone(), "POST", &format!("/api/channels/{id}/pair"), None).await;
+    assert_eq!(st, 409, "{p}");
+    assert!(p["error"].as_str().unwrap().contains("Accendi prima il canale"), "{p}");
+    let (st, on) = dispatch(app.clone(), "PATCH", &format!("/api/channels/{id}"), Some(json!({"enabled": true}))).await;
+    assert_eq!(st, 200, "{on}");
     let (st, p) = dispatch(app.clone(), "POST", &format!("/api/channels/{id}/pair"), None).await;
     assert_eq!(st, 200, "{p}");
     assert!(p["code"].as_str().unwrap().len() >= 6 && p["command"].as_str().unwrap().starts_with("/start "), "{p}");
