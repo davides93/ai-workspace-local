@@ -206,6 +206,52 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "voice.tts.server_model",
 ];
 
+/// Machine-level settings the management tools of the Assistant may change, and only through the
+/// strong tool (`aiw_setting_set_protected`, always confirmed by the owner): where the app keeps
+/// its files and models, whether other devices on the network can reach it, and how it updates.
+/// Every one is also in [`WORKSPACE_FORBIDDEN`]: they are machine choices, not repository ones.
+const MANAGEMENT_PROTECTED: &[&str] =
+    &["workspace.root", "models.dir", "server.lan", "update.channel", "update.auto_check", "update.auto_download"];
+
+/// The protections of the app itself, which the management tools never change (on top of the keys
+/// of [`WORKSPACE_TIGHTEN_ONLY`], which are the approval mode, the sandbox and the shell network):
+/// the sandbox notice and hidden paths, what commands inherit, the domains the agents may reach, the
+/// time to answer a confirmation, the listener (port and TLS) and where telemetry goes. An agent
+/// does not change its own protections: the person does, from the Developer view.
+const MANAGEMENT_NEVER: &[&str] = &[
+    "sandbox.shell_network_notice",
+    "sandbox.deny_read",
+    "sandbox.env_allow",
+    "network.allow_domains",
+    "approvals.timeout_s",
+    "server.port",
+    "server.tls",
+    "server.tls.cert_file",
+    "server.tls.key_file",
+    "telemetry.otlp",
+];
+
+/// The keys the management tools of the Assistant change only with `aiw_setting_set_protected`.
+pub fn management_protected_keys() -> &'static [&'static str] {
+    MANAGEMENT_PROTECTED
+}
+
+/// The keys the management tools of the Assistant never change: the security keys a repository may
+/// only tighten ([`WORKSPACE_TIGHTEN_ONLY`]) and the other protections of the app.
+pub fn management_forbidden_keys() -> Vec<&'static str> {
+    WORKSPACE_TIGHTEN_ONLY.iter().map(|(key, _)| *key).chain(MANAGEMENT_NEVER.iter().copied()).collect()
+}
+
+/// Is `key` one the management tools change only with `aiw_setting_set_protected`?
+pub fn is_management_protected_key(key: &str) -> bool {
+    MANAGEMENT_PROTECTED.contains(&key)
+}
+
+/// Is `key` one the management tools never change?
+pub fn is_management_forbidden_key(key: &str) -> bool {
+    MANAGEMENT_NEVER.contains(&key) || WORKSPACE_TIGHTEN_ONLY.iter().any(|(k, _)| *k == key)
+}
+
 /// The address of the SearXNG instance: empty (not set) or an http(s) URL.
 fn check_searxng_url(v: &Value) -> Result<()> {
     let Some(text) = v.as_str().map(str::trim).filter(|t| !t.is_empty()) else { return Ok(()) };
@@ -674,6 +720,57 @@ mod tests {
         let c = LayeredConfig::load(app_schema(), cfg, dir.path().join("dev.json"), None);
         assert_eq!(c.get_str("sandbox.shell_network").as_deref(), Some("off"));
         assert!(!c.get_bool("sandbox.shell_network_notice"));
+    }
+
+    #[test]
+    fn the_keys_the_management_tools_protect_or_never_touch_are_the_ones_of_the_plan() {
+        let protected = management_protected_keys();
+        let forbidden = management_forbidden_keys();
+        // The exact lists: a key that leaves one of them (or joins it) is a decision to take on purpose.
+        assert_eq!(
+            protected,
+            ["workspace.root", "models.dir", "server.lan", "update.channel", "update.auto_check", "update.auto_download"]
+        );
+        let mut sorted = forbidden.clone();
+        sorted.sort_unstable();
+        let mut expected = vec![
+            "policy.mode",
+            "sandbox.mode",
+            "sandbox.shell_network",
+            "sandbox.shell_network_notice",
+            "sandbox.deny_read",
+            "sandbox.env_allow",
+            "network.allow_domains",
+            "approvals.timeout_s",
+            "server.port",
+            "server.tls",
+            "server.tls.cert_file",
+            "server.tls.key_file",
+            "telemetry.otlp",
+        ];
+        expected.sort_unstable();
+        assert_eq!(sorted, expected);
+        // The two lists never overlap, and every key is one the app really has.
+        let schema = app_schema();
+        for key in protected.iter().chain(forbidden.iter()) {
+            assert!(schema.properties.contains_key(*key), "{key} is not a key of the schema");
+            assert_eq!(is_management_protected_key(key), protected.contains(key), "{key}");
+            assert_eq!(is_management_forbidden_key(key), forbidden.contains(key), "{key}");
+            assert!(!(is_management_protected_key(key) && is_management_forbidden_key(key)), "{key} is in both lists");
+            assert!(!schema.properties[*key].secret, "{key}: a secret is decided by the schema, not by these lists");
+        }
+        // They are derived from the lists of the repository layer, not a second source of truth: the
+        // protected keys and the extra protections are machine keys a repository cannot set either, and
+        // the keys it may only tighten are all forbidden to the tools.
+        for key in protected.iter().chain(MANAGEMENT_NEVER.iter()) {
+            assert!(WORKSPACE_FORBIDDEN.contains(key), "{key} is not forbidden to a repository");
+        }
+        for (key, _) in WORKSPACE_TIGHTEN_ONLY {
+            assert!(forbidden.contains(key) && is_management_forbidden_key(key), "{key}");
+        }
+        // Keys that only look alike are not caught.
+        assert!(!is_management_protected_key("workspace.root.extra") && !is_management_forbidden_key("policy.mode.x"));
+        assert!(!is_management_forbidden_key("ui.theme") && !is_management_protected_key("ui.theme"));
     }
 
     #[test]

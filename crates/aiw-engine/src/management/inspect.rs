@@ -12,13 +12,14 @@
 //!   redactor of the diagnostics;
 //! * the finished answer is cleaned of the exact values of every secret the app stores.
 
-use super::require_origin;
+use super::admin::status_text;
+use super::{args_safe, clip, require_origin, text, url_safe};
 use crate::{Engine, Inner};
 use aiw_core::api::{AgentProfile, McpServerInfo, RuntimeInfo, SECRET_MASK};
 use aiw_core::{Error, Result};
 use aiw_tools::{Risk, Tool, ToolContext, ToolOutput};
 use serde_json::{json, Map, Value};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, Weak};
 
 /// What the tool can look at.
 pub(crate) const TOPICS: [&str; 10] =
@@ -150,57 +151,6 @@ fn scrub(v: &mut Value, secrets: &[String]) {
 }
 
 // ------------------------------------------------------------------ helpers
-
-pub(super) fn clip(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(max).collect::<String>())
-    }
-}
-
-/// Free text from elsewhere (an error, a memory, an argument): `token=…`, `password: …`,
-/// `Bearer …` and credentials in URLs are hidden by the redactor of the diagnostics.
-fn redact(s: &str) -> String {
-    static PATTERNS: OnceLock<Vec<(regex::Regex, &'static str)>> = OnceLock::new();
-    crate::diagnostics::scrub_line(PATTERNS.get_or_init(crate::diagnostics::line_patterns), s)
-}
-
-fn text(s: &str, max: usize) -> String {
-    redact(&clip(s, max))
-}
-
-/// An address without what could be a secret: no user or password, no query, no fragment, and a
-/// path segment that looks like a token (long) cut.
-pub(super) fn url_safe(raw: &str) -> String {
-    let Ok(mut u) = reqwest::Url::parse(raw.trim()) else { return "(indirizzo non leggibile)".into() };
-    let _ = u.set_username("");
-    let _ = u.set_password(None);
-    u.set_query(None);
-    u.set_fragment(None);
-    let path: Vec<String> =
-        u.path().split('/').map(|s| if s.chars().count() > 20 { "omesso".to_string() } else { s.to_string() }).collect();
-    u.set_path(&path.join("/"));
-    u.to_string()
-}
-
-/// The arguments of a command line, without what follows a flag that names a secret (`--token abc`)
-/// and with `--key=abc` hidden by the redactor.
-pub(super) fn args_safe(args: &[String]) -> Vec<String> {
-    let mut hide_next = false;
-    args.iter()
-        .map(|a| {
-            let masked = std::mem::replace(&mut hide_next, false);
-            if masked {
-                return SECRET_MASK.to_string();
-            }
-            if a.starts_with('-') && !a.contains('=') && crate::secrets::is_secret_name(a) {
-                hide_next = true;
-            }
-            text(a, 200)
-        })
-        .collect()
-}
 
 fn hit(query: &Option<String>, fields: &[&str]) -> bool {
     query.as_ref().is_none_or(|q| {
@@ -486,7 +436,7 @@ fn connector(s: &McpServerInfo, detail: bool) -> Value {
     let shown = if detail { MAX_ITEMS } else { 10 };
     json!({
         "id": c.id, "name": c.name, "transport": c.transport, "enabled": c.enabled, "status": s.status,
-        "error": s.error.as_deref().map(|x| text(x, 200)), "approval_required": s.approval_required, "signed_in": s.signed_in,
+        "error": s.error.as_deref().map(|x| status_text(x, c)), "approval_required": s.approval_required, "signed_in": s.signed_in,
         "tools_total": s.tools.len(), "tools": s.tools.iter().take(shown).collect::<Vec<_>>(),
         "url": c.url.as_deref().map(url_safe), "command": c.command.as_deref().map(|x| text(x, 200)),
         "args": c.args.as_deref().map(args_safe), "env": entry_names(&c.env), "headers": entry_names(&c.headers),
@@ -614,11 +564,15 @@ mod tests {
     const URL_PATH: &str = "FAKE_URL_PATH_SEGMENT_9a0b1c2d3e4f";
     const ARG_SECRET: &str = "FAKE_ARG_KEY_5a6b7c";
     const ARG_NEXT: &str = "FAKE_ARG_FOLLOWING_VALUE_8d9e0f";
+    // Values given in the same argument to names that the redactor of free text does not know.
+    const ARG_ACCESS_KEY: &str = "FAKE_ARG_ACCESS_KEY_2f3a4b";
+    const ARG_AUTH: &str = "FAKE_ARG_AUTH_VALUE_5c6d7e";
+    const ARG_VARIABLE: &str = "FAKE_ARG_VARIABLE_VALUE_8f9a0b";
     const BRAVE_KEY: &str = "FAKE_BRAVE_KEY_1b2c3d";
     const RUNTIME_SECRET: &str = "FAKE_RUNTIME_SECRET_4e5f6a";
     const MEMORY_SECRET: &str = "FAKE_MEMORY_SECRET_7b8c9d";
     const AUDIT_SECRET: &str = "FAKE_AUDIT_SECRET_0a1b2c";
-    const FAKES: [&str; 14] = [
+    const FAKES: [&str; 17] = [
         PROVIDER_TOKEN,
         HEADER_SECRET,
         CUSTOM_HEADER,
@@ -629,6 +583,9 @@ mod tests {
         URL_PATH,
         ARG_SECRET,
         ARG_NEXT,
+        ARG_ACCESS_KEY,
+        ARG_AUTH,
+        ARG_VARIABLE,
         BRAVE_KEY,
         RUNTIME_SECRET,
         MEMORY_SECRET,
@@ -658,7 +615,16 @@ mod tests {
             name: "Locale di prova".into(),
             transport: "stdio".into(),
             command: Some("npx".into()),
-            args: Some(vec![format!("--api-key={ARG_SECRET}"), "--token".into(), ARG_NEXT.into(), "server.js".into()]),
+            args: Some(vec![
+                format!("--api-key={ARG_SECRET}"),
+                "--token".into(),
+                ARG_NEXT.into(),
+                format!("--access-key={ARG_ACCESS_KEY}"),
+                format!("--auth={ARG_AUTH}"),
+                "-e".into(),
+                format!("MY_PRIVATE_KEY={ARG_VARIABLE}"),
+                "server.js".into(),
+            ]),
             url: None,
             env: serde_json::from_value(json!({"GITHUB_TOKEN": ENV_SECRET, "MODE": ENV_PLAIN})).ok(),
             headers: None,
@@ -705,6 +671,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_error_of_a_connector_that_waits_for_confirmation_does_not_quote_the_secrets_of_its_command_line() {
+        let (e, _d, _w) = engine(vec![]).await;
+        // The engine says «Questo server esegue il comando `…`» with the command line as stored, and the redactor of free text
+        // knows neither `--access-key=` nor a value that follows `--token` after a space.
+        const SPACED: &str = "FAKE_ARG_SPACED_VALUE_1c2d3e";
+        let cfg = McpServerConfig {
+            command: Some("/definitely/not/a/program".into()),
+            args: Some(vec![format!("--access-key={ARG_ACCESS_KEY}"), "--token".into(), SPACED.into(), format!("--auth={ARG_AUTH}")]),
+            env: None,
+            enabled: true,
+            ..stdio_server()
+        };
+        let id = e.save_mcp_server(cfg).await.unwrap().config.id;
+        let detail = ask(&e, json!({"topic": "connectors", "id": id})).await;
+        let list = ask(&e, json!({"topic": "connectors"})).await;
+        for (said, one) in [(&detail, false), (&list, true)] {
+            // Control: the engine does say it, and the line is there in its safe form.
+            let value: Value = serde_json::from_str(said).unwrap();
+            let error = if one { &value["connectors"]["items"][0]["error"] } else { &value["error"] };
+            let error = error.as_str().unwrap_or_else(|| panic!("a connector that waits for confirmation says so: {said}"));
+            assert!(error.contains("Questo server esegue il comando"), "{error}");
+            assert!(error.contains("--access-key=••••••") && error.contains("--token ••••••"), "{error}");
+            for fake in [ARG_ACCESS_KEY, ARG_AUTH, SPACED] {
+                assert!(!said.contains(fake), "{fake} is in the answer: {said}");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn every_topic_answers_and_none_of_them_ever_holds_a_secret_value() {
         let (e, connectors, runtime, _d, _w) = with_secrets().await;
         let first_catalog_model = e.catalog().first().unwrap().id.clone();
@@ -744,6 +739,10 @@ mod tests {
         // The address lost its credentials, query and token-like path segment; the flag that hides a value hid it.
         assert!(!connectors_text.contains("utente:") && !connectors_text.contains("?token"), "{connectors_text}");
         assert!(connectors_text.contains("--api-key=") && connectors_text.contains(SECRET_MASK), "{connectors_text}");
+        // The name of a flag or variable stays, whatever the redactor knows of it, so the model can tell what is set.
+        for shown in ["--access-key=••••••", "--auth=••••••", "MY_PRIVATE_KEY=••••••"] {
+            assert!(connectors_text.contains(shown), "{shown} missing from {connectors_text}");
+        }
         let secrets_text = of(json!({"topic": "secrets"}));
         let secrets: Value = serde_json::from_str(&secrets_text).unwrap();
         let set_of = |target: &str| -> Option<bool> {
@@ -935,6 +934,31 @@ mod tests {
         assert_eq!(url_safe("non è un indirizzo"), "(indirizzo non leggibile)");
         let hidden = args_safe(&["--api-key=abc12345".into(), "--password".into(), "hunter22".into(), "--verbose".into(), "plain".into()]);
         assert_eq!(hidden, ["--api-key=••••••", "--password", SECRET_MASK, "--verbose", "plain"]);
+        // `--key=value` and its kin: the names that the redactor of free text does not know are hidden by name.
+        let inline = args_safe(
+            &[
+                "--key=k1k1k1",
+                "--access-key=k2k2k2",
+                "--private-key=k3k3k3",
+                "--auth=k4k4k4",
+                "--credentials=k5k5k5",
+                "-e",
+                "SOME_KEY=k6k6k6",
+            ]
+            .map(String::from),
+        );
+        assert_eq!(
+            inline,
+            [
+                "--key=••••••",
+                "--access-key=••••••",
+                "--private-key=••••••",
+                "--auth=••••••",
+                "--credentials=••••••",
+                "-e",
+                "SOME_KEY=••••••"
+            ]
+        );
         assert!(hit(&None, &["x"]) && hit(&Some("BET".into()), &["alfa beta"]) && !hit(&Some("zeta".into()), &["alfa beta"]));
         let cut = listing((0..31).map(|i| json!(i)).collect());
         assert!(cut["total"] == 31 && cut["shown"] == 30 && cut["items"].as_array().unwrap().len() == 30);
