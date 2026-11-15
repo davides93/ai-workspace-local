@@ -51,19 +51,27 @@ eventi di ogni run restano su `GET /api/runs/{id}/events`). La sessione del lavo
 
 * **Mai più libero di `ask`**: i passi di un lavoro girano con la politica dell'agente ma con la modalità limitata a `ask`
   (un agente `auto-edit` o `yolo` non scrive né esegue nulla senza conferma). Le conferme aspettano come tutte le altre
-  (`approvals.timeout_s` le fa scadere come rifiuto). Il run non ha un'origine, quindi gli strumenti `aiw_*` rifiutano.
+  (`approvals.timeout_s` le fa scadere come rifiuto). **«Consenti per la sessione» non vale per un lavoro**: i suoi passi
+  partono con un insieme vuoto di strumenti consentiti e quello che si consente nella chat della stessa sessione non si porta
+  dietro (e consentire per la sessione una conferma di un lavoro non ricorda nulla). Le regole `allow` che la persona ha scritto
+  in Sicurezza valgono come per ogni run. Il run non ha un'origine, quindi gli strumenti `aiw_*` rifiutano. Un agente che chiede
+  un `handoff` fa **fallire** il lavoro con un messaggio chiaro (il passaggio non è seguito: il nuovo agente lavorerebbe fuori
+  dalle regole e dai limiti del lavoro); prima, approvare una proposta seguiva il passaggio.
 * **Regole del proattivo**, valutate a ogni turno e prima di ogni ripresa automatica: orario di silenzio
   (`proactive.quiet_hours`), batteria (`proactive.only_on_power`, dove il sistema lo dice), tempo del giorno
   (`proactive.daily_budget_minutes`, **condiviso con il battito**: il tempo dei lavori conta e `GET /api/proactive/status`
-  lo somma). Il lavoro si ferma al turno successivo, dice perché e **riparte da solo** quando la regola finisce (il
+  lo somma; si somma a ogni turno e **non conta l'attesa di una conferma**, che non è lavoro; con il tempo predefinito di 15
+  minuti un lavoro lungo si ferma e riprende il giorno dopo; con 0 minuti un lavoro resta in pausa e dice di aumentare il
+  tempo, non aspetta un «domani» che non arriva). Il lavoro si ferma al turno successivo, dice perché e **riparte da solo** quando la regola finisce (il
   controllo è nel giro di 20 secondi del motore). «Riprendi comunque» (`force`) supera silenzio, batteria e tempo del giorno
   per quel lavoro fino alla prossima pausa. Non supera il pulsante di emergenza né i limiti del lavoro.
 * **Pulsante di emergenza**: ferma subito ogni lavoro (in pausa `kill_switch`, niente riparte da solo), anche con «comunque».
   Ripartono solo dopo che la persona sceglie di nuovo il livello del proattivo.
 * **Budget del lavoro** (`limits`: secondi, passi del modello, token, sommati su **tutti** i passi; di default 30 minuti e 150
   passi se né il lavoro né l'agente né `agents.budget.*` ne dicono altri): ogni passo parte con quello che resta, quindi
-  pausa e ripresa non lo aggirano. Esaurito, il lavoro resta in pausa `task_budget` e `resume` risponde 409 finché la
-  persona non aggiunge spazio (`extend`).
+  pausa e ripresa non lo aggirano. I secondi sono controllati a ogni turno **senza l'attesa delle conferme** (l'orologio del
+  run è spento per i passi di un lavoro). Esaurito, il lavoro resta in pausa `task_budget` e `resume` risponde 409 finché la
+  persona non aggiunge spazio (`extend`, che alza solo i limiti che il lavoro ha: non ne crea di nuovi).
 * Un lavoro approvato in orario di silenzio viene preso in carico ma aspetta (la proposta resta «approvata»).
 
 ## Riavvio e durata
@@ -74,7 +82,12 @@ passo finito** (il run li scrive a ogni turno, non solo alla fine). Non sopravvi
 All'avvio un lavoro che risultava `running` torna `paused` con motivo `restart` e **non parte nulla da solo**: il passo
 tagliato può aver lasciato un effetto (un file scritto, un comando lanciato) e decide la persona. La ripresa avvia un passo
 nuovo, quindi quel passo può essere rifatto (almeno una volta, come i workflow). Le istruzioni consegnate a un passo che il
-riavvio ha tagliato, e che la sessione non ha, tornano in attesa; quelle già nella sessione non si consegnano due volte.
+riavvio ha tagliato, e che la sessione non ha, tornano in attesa; quelle già nella sessione non si consegnano due volte (si
+cerca solo nei messaggi dell'utente: un'istruzione corta come «ok» non risulta consegnata perché uno strumento ha detto «ok»).
+
+Il record di un lavoro (istruzione intera, note) vive nel database: **si cancella con la sua sessione** (il lavoro in corso
+viene prima fermato); non esiste una rotta per cancellarlo da solo, e i lavori finiti oltre i 100 più recenti vengono
+dimenticati. Mentre un passo gira il battito aspetta (come quando usi la chat).
 
 Su telefono il sistema sospende o chiude l'app: un lavoro non gira mentre l'app è sospesa e, se il processo viene chiuso, al
 rientro è in pausa `restart`. Il controllo che il sistema fa partire in background (`docs/mobile/BACKGROUND.md`) **non** avvia né
@@ -85,8 +98,15 @@ riprende lavori: lavora solo il proattivo, con il suo tetto di 25 secondi.
 In semplice non c'è la pagina Proposte: tutto passa dalla chat. `aiw_inspect` ha il topic `tasks` (lavori, proposte aperte con
 l'istruzione, riepilogo del mattino, stato del proattivo). `aiw_task` (un solo strumento, `action`: `start`,
 `approve_proposal`, `dismiss_proposal`, `pause`, `resume`, `instruct`, `cancel`) è uno strumento di gestione come gli altri:
-conferma **sempre** chiesta, vale solo dal proprietario, rifiutato fuori da una chat; la scheda di conferma mostra
-l'istruzione che partirebbe (non solo un identificativo). **Costo**: circa 1 000 caratteri in più nel contesto fisso
+conferma **sempre** chiesta, vale solo dal proprietario, rifiutato fuori da una chat. La scheda di conferma mostra l'istruzione
+come argomento (il testo che la persona ha scritto non entra nella riga che finisce nell'audit: lì c'è solo la lunghezza);
+per approvare una proposta la riga contiene titolo e istruzione della proposta, perché è quella che la persona decide.
+
+**Il confine dell'Assistente resta com'è**: l'Assistente non ha strumenti che leggono posta, file o web, e `aiw_inspect tasks`
+non gliene dà uno. Il testo del riepilogo del mattino (mittenti e oggetti della posta, agenda) **non** è nella risposta (solo
+se ce n'è uno non visto); ci sono titolo e istruzione delle proposte e quello che un lavoro ha detto o prodotto (lo stesso
+tipo di testo che un sottoagente restituisce), ripulito, accorciato e marcato come materiale da leggere. Per sapere cosa c'è
+in agenda o in posta l'Assistente delega all'operatore, come prima. **Costo**: circa 1 000 caratteri in più nel contesto fisso
 dell'Assistente (da circa 7 300 a circa 7 600 token stimati su una finestra da 8 192): su modelli con finestra piccola il margine
 si riduce.
 

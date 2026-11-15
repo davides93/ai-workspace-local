@@ -47,6 +47,8 @@ const SPEND_ID: &str = "task_spend";
 /// Defaults of the limits of a task that nobody gave any (the whole task, not one segment).
 pub const DEFAULT_MAX_SECONDS: u64 = 1800;
 pub const DEFAULT_MAX_TURNS: u32 = 150;
+/// The time limit given to the run of a segment, so that its own clock never ends it (see [`remaining`]).
+const RUN_CLOCK_OFF_S: u64 = 315_360_000;
 const MAX_NOTES: usize = 40;
 const MAX_INSTRUCTIONS: usize = 40;
 const MAX_PENDING: usize = 10;
@@ -59,6 +61,8 @@ const KEEP_FINISHED: usize = 100;
 pub(crate) struct TaskRuntime {
     /// Every read-modify-write of a task document happens under this lock (never held across an `.await`).
     lock: Mutex<()>,
+    /// The read-modify-write of the day's time (two tasks end a turn at the same time).
+    spend: Mutex<()>,
 }
 
 /// The day's time spent by tasks (a document of its own: the heartbeat rewrites its state as a whole).
@@ -180,10 +184,20 @@ fn exhausted(t: &BackgroundTask) -> Option<String> {
 /// without that waiting (see [`Engine::task_checkpoint`]).
 fn remaining(t: &BackgroundTask) -> BudgetLimits {
     BudgetLimits {
-        max_seconds: None,
+        // Ten years: the clock of the run is off (a missing limit would fall back to `agents.budget.max_seconds`).
+        max_seconds: Some(RUN_CLOCK_OFF_S),
         max_turns: t.limits.max_turns.map(|m| m.saturating_sub(t.progress.turns).max(1)),
         max_tokens: t.limits.max_tokens.map(|m| m.saturating_sub(t.progress.tokens).max(1)),
     }
+}
+
+/// Does this stored message carry the instruction? Only a user message counts: the one the run wrote when it handed the
+/// instruction over (`aiw.instruction`, which ends with it) or the first message of a segment, which lists it after a dash.
+/// A short instruction («ok») is not found in a tool result or in the agent's own words.
+fn instruction_in(m: &ChatMessage, text: &str) -> bool {
+    m.role == "user"
+        && ((m.name.as_deref() == Some(aiw_agent::INSTRUCTION_NAME) && m.content.trim_end().ends_with(text))
+            || m.content.contains(&format!("\n- {text}")))
 }
 
 fn instruction_lines(list: &[&TaskInstruction]) -> String {
@@ -259,6 +273,7 @@ impl Engine {
     }
 
     pub(crate) fn spend_add(&self, now: DateTime<Local>, seconds: f64) {
+        let _guard = self.0.tasks.spend.lock().unwrap();
         let today = now.format("%Y-%m-%d").to_string();
         let mut s: Spend = self.0.store.get_doc(SPEND_KIND, SPEND_ID).ok().flatten().unwrap_or_default();
         if s.day != today {
@@ -308,6 +323,17 @@ impl Engine {
             });
         }
         let budget_min = self.cfg_u64("proactive.daily_budget_minutes", 15);
+        if budget_min == 0 {
+            // No time at all is not a day that ends: waiting for tomorrow would never end it.
+            return Some(Gate {
+                reason: "daily_budget",
+                text:
+                    "Il tempo al giorno dell'assistente proattivo è 0 minuti: aumentalo nelle impostazioni, o scegli «Riprendi comunque»."
+                        .into(),
+                auto: false,
+                hard: false,
+            });
+        }
         if self.proactive_spent_s(now) + self.tasks_seconds_today(now) >= (budget_min * 60) as f64 {
             return Some(Gate {
                 reason: "daily_budget",
@@ -540,11 +566,14 @@ impl Engine {
                 Ok(false)
             }
             "running" => {
-                if !t.stopping {
-                    t.stopping = true;
-                    t.pause_reason = Some("user".into());
-                    t.pause_text = Some("Messo in pausa da te.".into());
-                    t.auto_resume = false;
+                // A pause the person asks for is theirs even when a rule was already stopping the task: it no longer goes
+                // on by itself when the rule ends.
+                let first = !t.stopping;
+                t.stopping = true;
+                t.pause_reason = Some("user".into());
+                t.pause_text = Some("Messo in pausa da te.".into());
+                t.auto_resume = false;
+                if first {
                     note(
                         t,
                         if waiting {
@@ -582,15 +611,16 @@ impl Engine {
             }
         }
         if let Some(ext) = &req.extend {
+            // Only the limits the task has are raised: a task without a token limit does not get one.
             self.task_mut(id, |t| {
-                if let Some(s) = ext.max_seconds {
-                    t.limits.max_seconds = Some(t.limits.max_seconds.unwrap_or(t.progress.seconds).saturating_add(s));
+                if let (Some(cur), Some(add)) = (t.limits.max_seconds, ext.max_seconds) {
+                    t.limits.max_seconds = Some(cur.saturating_add(add));
                 }
-                if let Some(n) = ext.max_turns {
-                    t.limits.max_turns = Some(t.limits.max_turns.unwrap_or(t.progress.turns).saturating_add(n));
+                if let (Some(cur), Some(add)) = (t.limits.max_turns, ext.max_turns) {
+                    t.limits.max_turns = Some(cur.saturating_add(add));
                 }
-                if let Some(n) = ext.max_tokens {
-                    t.limits.max_tokens = Some(t.limits.max_tokens.unwrap_or(t.progress.tokens).saturating_add(n));
+                if let (Some(cur), Some(add)) = (t.limits.max_tokens, ext.max_tokens) {
+                    t.limits.max_tokens = Some(cur.saturating_add(add));
                 }
                 note(t, "Budget del lavoro aumentato.");
                 Ok(())
@@ -855,6 +885,16 @@ impl Engine {
                         false,
                     );
                 }
+                SegmentEnd::Done(RunEnd::Handoff) => {
+                    // A task does not follow a handoff (the next agent would work outside its rules and its limits).
+                    let text = "L'agente ha chiesto di passare la conversazione a un altro assistente: i lavori in background non seguono i passaggi. Riformula il compito.";
+                    t.status = "failed".into();
+                    t.error = Some(text.into());
+                    t.finished_at = Some(now_rfc3339());
+                    t.forced = false;
+                    t.stopping = false;
+                    note(t, "Non riuscito: l'agente ha chiesto un passaggio ad un altro assistente.");
+                }
                 SegmentEnd::Done(end) => {
                     let more = pending(t).len();
                     let goes_on = matches!(end, RunEnd::TurnLimit) || (matches!(end, RunEnd::Finished) && more > 0);
@@ -864,14 +904,13 @@ impl Engine {
                         t.finished_at = Some(now_rfc3339());
                         t.forced = false;
                         t.stopping = false;
-                        note(
-                            t,
-                            if matches!(end, RunEnd::Handoff) {
-                                "Finito (l'agente ha passato la conversazione a un altro)."
-                            } else {
-                                "Finito."
-                            },
-                        );
+                        note(t, "Finito.");
+                    } else if t.stopping {
+                        // The pause (or the rule) came while the last turn was going: the next segment does not start.
+                        let reason = t.pause_reason.clone().unwrap_or_else(|| "user".into());
+                        let text = t.pause_text.clone().unwrap_or_else(|| "Messo in pausa.".into());
+                        let auto = t.auto_resume;
+                        hold(t, &reason, text, auto);
                     } else if let Some(g) = self.task_gate(t, now) {
                         hold(t, g.reason, g.text, g.auto);
                     } else if let Some(what) = exhausted(t) {
@@ -923,6 +962,24 @@ impl Engine {
         self.tasks_forget_old(&list);
     }
 
+    /// Is this the session of a background task? («Consenti per la sessione» is never remembered for one.)
+    pub(crate) fn session_is_task(&self, session_id: &str) -> bool {
+        self.0.store.list_docs::<BackgroundTask>(KIND).unwrap_or_default().iter().any(|t| t.session_id == session_id)
+    }
+
+    /// The session of a task is deleted: the task goes with it (a running one is stopped first), so that no instruction text
+    /// outlives the conversation it belongs to.
+    pub(crate) fn tasks_forget_session(&self, session_id: &str) {
+        let list: Vec<BackgroundTask> = self.0.store.list_docs(KIND).unwrap_or_default();
+        for t in list.into_iter().filter(|t| t.session_id == session_id) {
+            let _guard = self.0.tasks.lock.lock().unwrap();
+            if let Some(run) = t.current_run_id.as_deref().filter(|_| t.status == "running") {
+                let _ = self.cancel_run(run);
+            }
+            let _ = self.0.store.delete_doc(KIND, &t.id);
+        }
+    }
+
     fn tasks_forget_old(&self, list: &[BackgroundTask]) {
         let mut done: Vec<&BackgroundTask> = list.iter().filter(|t| is_terminal(&t.status)).collect();
         if done.len() <= KEEP_FINISHED {
@@ -954,11 +1011,11 @@ impl Engine {
     pub(crate) fn tasks_recover(&self) {
         let list: Vec<BackgroundTask> = self.0.store.list_docs(KIND).unwrap_or_default();
         for t in list.into_iter().filter(|t| matches!(t.status.as_str(), "running" | "queued")) {
-            let history: Vec<String> = self.0.store.messages(&t.session_id).unwrap_or_default().into_iter().map(|m| m.content).collect();
+            let history: Vec<ChatMessage> = self.0.store.messages(&t.session_id).unwrap_or_default();
             let _ = self.task_mut(&t.id, |t| {
                 let segment = t.segments;
                 for i in t.instructions.iter_mut().filter(|i| i.status == "delivered" && i.delivered_in == Some(segment)) {
-                    if !history.iter().any(|m| m.contains(i.text.trim())) {
+                    if !history.iter().any(|m| instruction_in(m, i.text.trim())) {
                         i.status = "pending".into();
                         i.delivered_at = None;
                         i.delivered_in = None;

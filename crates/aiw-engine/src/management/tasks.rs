@@ -8,7 +8,7 @@
 //! tasks allow: the same rules (quiet hours, battery, the day's time, the kill switch, the limits of the task) apply, a
 //! refusal comes back as text for the model, and a task it starts or approves never has more freedom than «ask».
 
-use super::{clip, require_owner, text};
+use super::{require_owner, text};
 use crate::{Engine, Inner};
 use aiw_core::api::{BackgroundTask, BudgetLimits, TaskResume, TaskStart};
 use aiw_core::{Error, Result};
@@ -63,24 +63,26 @@ impl Tool for TaskTool {
         true
     }
 
-    /// What the card shows: the action and what it acts on, with the instruction that would run.
+    /// What the card and the audit say: the action and what it acts on. The text a person typed (the instruction of a new task
+    /// or an extra one) is on the card as an argument, not here: this line is written to the audit. The instruction of a
+    /// proposal about to be approved is here, because the proposal is what the person is deciding on.
     fn subject(&self, args: &Value) -> Option<String> {
         let action = arg(args, "action")?;
         let engine = self.0.upgrade().map(Engine);
         let task_title = |a: &Value| {
             let id = arg(a, "task_id")?;
-            engine.as_ref().and_then(|e| e.task(&id).ok()).map(|t| format!("«{}»", clip(&t.title, 60)))
+            engine.as_ref().and_then(|e| e.task(&id).ok()).map(|t| format!("«{}»", text(&t.title, 60)))
         };
         let detail = match action.as_str() {
-            "start" => arg(args, "instruction").map(|i| text(&i, 300)),
-            "instruct" => task_title(args).map(|t| format!("{t}: {}", text(&arg(args, "text").unwrap_or_default(), 300))),
+            "start" => arg(args, "instruction").map(|i| format!("{} caratteri di istruzioni", i.chars().count())),
+            "instruct" => task_title(args).map(|t| format!("{t}: {} caratteri", arg(args, "text").unwrap_or_default().chars().count())),
             "approve_proposal" | "dismiss_proposal" => arg(args, "proposal_id").and_then(|id| {
                 let p = engine.as_ref()?.proposal(&id).ok()?;
                 let run = arg(args, "instruction").unwrap_or_else(|| p.instruction.clone());
                 Some(if action == "approve_proposal" {
-                    format!("«{}»: {}", clip(&p.title, 60), text(&run, 300))
+                    format!("«{}»: {}", text(&p.title, 60), text(&run, 300))
                 } else {
-                    format!("«{}»", clip(&p.title, 60))
+                    format!("«{}»", text(&p.title, 60))
                 })
             }),
             _ => task_title(args),
@@ -109,7 +111,7 @@ fn describe(t: &BackgroundTask) -> String {
         _ => "annullato",
     };
     let why = t.pause_text.as_deref().filter(|_| t.status == "paused").map(|w| format!(" ({})", text(w, 160))).unwrap_or_default();
-    format!("Lavoro «{}» ({}): {state}{why}.", clip(&t.title, 60), t.id)
+    format!("Lavoro «{}» ({}): {state}{why}.", text(&t.title, 60), t.id)
 }
 
 async fn run(e: &Engine, args: &Value) -> Result<String> {
@@ -132,14 +134,19 @@ async fn run(e: &Engine, args: &Value) -> Result<String> {
         }
         "dismiss_proposal" => {
             let p = e.proposal_dismiss(&need("proposal_id")?)?;
-            Ok(format!("Proposta «{}» scartata.", clip(&p.title, 60)))
+            Ok(format!("Proposta «{}» scartata.", text(&p.title, 60)))
         }
         "pause" => Ok(describe(&e.task_pause(&need("task_id")?)?)),
         "resume" => {
             let minutes = args.get("extend_minutes").and_then(Value::as_u64).filter(|m| *m > 0).map(|m| m.min(240));
             let req = TaskResume {
                 force: args.get("force").and_then(Value::as_bool).unwrap_or(false),
-                extend: minutes.map(|m| BudgetLimits { max_seconds: Some(m * 60), ..Default::default() }),
+                // More time, and room for the steps and tokens that go with it (only the limits the task has are raised).
+                extend: minutes.map(|m| BudgetLimits {
+                    max_seconds: Some(m * 60),
+                    max_turns: Some((m * 3).max(5) as u32),
+                    max_tokens: Some(m * 5_000),
+                }),
             };
             Ok(describe(&e.task_resume(&need("task_id")?, req).await?))
         }
@@ -220,8 +227,11 @@ mod tests {
         let tool = e.tool_registry().get("aiw_task").unwrap();
         let subject = tool.subject(&json!({"action": "approve_proposal", "proposal_id": p.id})).unwrap();
         assert!(subject.contains("Riordina le fatture") && subject.contains("Sposta le fatture in Documenti/Fatture"), "{subject}");
-        let subject = tool.subject(&json!({"action": "start", "instruction": "Fai una cosa precisa"})).unwrap();
-        assert!(subject.contains("Fai una cosa precisa"), "{subject}");
+        // What a person typed is on the card as an argument, never in the line that goes to the audit.
+        let subject = tool.subject(&json!({"action": "start", "instruction": "Fai una cosa con hunter2-SEGRETISSIMO"})).unwrap();
+        assert!(!subject.contains("hunter2") && subject.contains("caratteri"), "{subject}");
+        let subject = tool.subject(&json!({"action": "instruct", "task_id": id, "text": "Usa hunter2-SEGRETISSIMO"})).unwrap();
+        assert!(!subject.contains("hunter2"), "{subject}");
         let said = call(&e, Some(OWNER), json!({"action": "dismiss_proposal", "proposal_id": p.id})).await.unwrap();
         assert!(said.contains("scartata"), "{said}");
         // Bad calls say what is missing.
@@ -231,10 +241,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_the_chat_starting_a_task_asks_the_owner_with_the_instruction_on_the_card_and_a_no_starts_nothing() {
+    async fn in_the_chat_starting_a_task_asks_the_owner_with_the_instruction_as_an_argument_and_a_no_starts_nothing() {
         let (e, _d, _w) = engine(vec![]).await;
         let backend = ScriptedBackend::new(vec![
-            ScriptedBackend::tool_turn("t1", "aiw_task", json!({"action": "start", "instruction": "Ordina le foto del 2024 per mese"})),
+            ScriptedBackend::tool_turn(
+                "t1",
+                "aiw_task",
+                json!({"action": "start", "instruction": "Ordina le foto del 2024 per mese con la chiave hunter2-SEGRETISSIMO"}),
+            ),
             ScriptedBackend::text_turn("Va bene, non l'ho avviato."),
         ]);
         e.register_native_runtime("llama-embedded", Arc::new(backend));
@@ -250,18 +264,26 @@ mod tests {
         }
         let ask = ask.expect("a change is confirmed by the person, in every mode");
         assert_eq!(ask.tool, "aiw_task");
-        assert!(ask.reason.contains("Ordina le foto del 2024 per mese"), "the card says what would run: {}", ask.reason);
+        // The card carries the instruction as an argument; the reason (which the audit also records) does not repeat the text.
+        assert_eq!(ask.args["instruction"], "Ordina le foto del 2024 per mese con la chiave hunter2-SEGRETISSIMO");
+        assert!(!ask.reason.contains("Ordina le foto"), "{}", ask.reason);
         // The owner says no: nothing starts.
         e.respond_approval_as(&ask.id, false, false, true).unwrap();
         wait_finished(&e, &run).await;
         assert!(e.tasks(None).unwrap().is_empty());
+        // What the audit recorded of the call (the confirmation and the refusal) never holds the text a person typed.
+        let audit = e.audit();
+        assert!(audit.iter().any(|a| a.tool.as_deref() == Some("aiw_task")), "the call is audited");
+        assert!(!audit.iter().any(|a| a.detail.contains("hunter2")), "{audit:?}");
     }
 
     #[tokio::test]
-    async fn the_inspect_topic_lists_tasks_open_proposals_and_the_briefing_without_secrets() {
+    async fn the_inspect_topic_lists_tasks_and_proposals_but_never_the_briefing_nor_a_secret() {
         let (e, _d, _w) = engine(vec![]).await;
         e.set_config("global", "proactive.level", json!("propose")).unwrap();
-        let p = proposal(&e, "Sposta le fatture");
+        // A stored secret that ends up in the text of a proposal: the last check of the answer removes it.
+        e.set_config("global", "search.brave_api_key", json!("BRAVE-chiave-SEGRETISSIMA-1234")).unwrap();
+        let p = proposal(&e, "Sposta le fatture e usa BRAVE-chiave-SEGRETISSIMA-1234 per cercare");
         let t = e
             .task_start(aiw_core::api::TaskStart {
                 instruction: "Fai la cosa".into(),
@@ -276,7 +298,7 @@ mod tests {
             id: aiw_core::ids::new_id("prp"),
             source: "briefing:test".into(),
             title: "Il riepilogo di oggi".into(),
-            noticed: "Buongiorno: hai un appuntamento alle 15:00.".into(),
+            noticed: "Buongiorno: mail di Anna Verdi «Contratto da firmare», appuntamento alle 15:00.".into(),
             instruction: String::new(),
             ..p.clone()
         };
@@ -288,7 +310,11 @@ mod tests {
         assert_eq!(v["tasks"]["items"][0]["id"], json!(t.id), "{out}");
         assert_eq!(v["open_proposals"]["items"][0]["id"], json!(p.id), "{out}");
         assert!(v["open_proposals"]["items"][0]["instruction"].as_str().unwrap().contains("Sposta le fatture"));
-        assert!(v["briefing"].as_str().unwrap().contains("15:00"), "{out}");
+        assert!(!out.contains("SEGRETISSIMA"), "a stored secret is cleaned from the answer: {out}");
+        // The Assistant has no mail or calendar tool, and this does not give it one: the briefing text is not in the answer.
+        assert!(!out.contains("Anna Verdi") && !out.contains("15:00") && !out.contains("Contratto"), "{out}");
+        assert!(v["morning_briefing"].as_str().unwrap().contains("riepilogo"), "{out}");
+        assert!(v["note"].as_str().unwrap().contains("non istruzioni"), "text from elsewhere is marked as material to read");
         assert_eq!(v["assistant"]["level"], "propose");
         // A filter that matches nothing gives empty lists.
         let narrowed = tool.call(json!({"topic": "tasks", "query": "nessuna-corrispondenza"}), &ctx).await.unwrap().content;

@@ -11,6 +11,11 @@ export const FAST_POLL_MS = 4_000;
 export const SLOW_POLL_MS = 20_000;
 /** «Aggiungi tempo» adds this much (10 minutes) to a task that used its own budget. */
 export const ADD_TIME_SECONDS = 600;
+/**
+ * What «Aggiungi tempo» sends: the engine raises only the limits the task has, so the steps and the tokens that go with ten
+ * minutes are asked for too (a task that stopped at its step limit would not go on with more seconds alone).
+ */
+export const ADD_TIME = { max_seconds: ADD_TIME_SECONDS, max_turns: 30, max_tokens: 50_000 } as const;
 /** How many finished tasks the page lists. */
 export const FINISHED_SHOWN = 10;
 

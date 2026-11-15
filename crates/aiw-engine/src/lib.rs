@@ -1354,6 +1354,7 @@ impl Engine {
             }
             self.0.store.delete_doc("worktree", id)?;
         }
+        self.tasks_forget_session(id);
         self.0.store.delete_session(id)?;
         self.remove_attachments(id);
         Ok(())
@@ -1923,8 +1924,10 @@ impl Engine {
         session.last_status = Some("running".into());
         self.0.store.upsert_session(&session)?;
         let mode = self.thinking_for(&profile, thinking);
-        let mut run_input =
-            self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
+        // «Consenti per la sessione» never covers a background task: nobody is watching, so each action is confirmed on its
+        // own, and what was allowed in the chat of the same session does not carry over either.
+        let allow = if task.is_some() { Default::default() } else { self.session_allow(session_id) };
+        let mut run_input = self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, allow);
         run_input.thinking = mode;
         let task_ctx = task.as_ref().map(|seed| seed.context(run_input.budget.clone()));
         if !attached.is_empty() {
@@ -2195,7 +2198,7 @@ impl Engine {
             (approvals.remove(id).expect("the request was found above"), remember && !management)
         };
         if allow && remember {
-            if let Some(s) = &p.session_id {
+            if let Some(s) = p.session_id.as_ref().filter(|s| !self.session_is_task(s)) {
                 self.session_allow(s).lock().unwrap().insert(p.req.tool.clone());
             }
         }

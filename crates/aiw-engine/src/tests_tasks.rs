@@ -442,11 +442,11 @@ async fn the_limits_of_a_task_hold_across_pauses_and_a_resume_cannot_get_around_
     assert!(err.contains("budget"), "{err}");
     e.tasks_pass_at(Local::now());
     assert_eq!(requests(&r), 2);
-    e.task_resume(&t.id, TaskResume { force: false, extend: Some(BudgetLimits { max_turns: Some(2), ..Default::default() }) })
-        .await
-        .unwrap();
+    // Only the limits the task has are raised: asking for tokens does not give it a token limit.
+    let more = BudgetLimits { max_turns: Some(2), max_tokens: Some(5000), ..Default::default() };
+    e.task_resume(&t.id, TaskResume { force: false, extend: Some(more) }).await.unwrap();
     let done = wait_status(e, &t.id, "succeeded").await;
-    assert_eq!((done.progress.turns, done.limits.max_turns), (4, Some(4)));
+    assert_eq!((done.progress.turns, done.limits.max_turns, done.limits.max_tokens), (4, Some(4), None));
     assert_eq!(requests(&r), 4);
 }
 
@@ -786,4 +786,154 @@ async fn the_audit_names_the_task_and_never_the_text_of_an_instruction() {
         let entry = audit.iter().find(|a| a.action == action).unwrap_or_else(|| panic!("{action} is audited"));
         assert!(entry.detail.starts_with(&t.id), "{action}: {}", entry.detail);
     }
+}
+
+// ------------------------------------------------------------------------------------ what the review found
+
+/// Asks for a pause (and leaves an instruction) while the model writes the last answer of the segment.
+struct LatePause {
+    engine: Engine,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl ChatBackend for LatePause {
+    async fn list_models(&self) -> Result<Vec<String>> {
+        Ok(vec!["scripted".into()])
+    }
+    async fn chat(&self, _req: ChatRequest, _cancel: tokio_util::sync::CancellationToken) -> Result<DeltaStream> {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if n == 0 {
+            let id = self.engine.tasks(None).unwrap()[0].id.clone();
+            self.engine.task_instruct(&id, "una cosa in più", None).unwrap();
+            self.engine.task_pause(&id).unwrap();
+        }
+        let turn = text(if n == 0 { "Ho finito." } else { "Fatto anche questo." });
+        Ok(futures::stream::iter(turn.into_iter().map(Ok)).boxed())
+    }
+}
+
+#[tokio::test]
+async fn a_pause_that_comes_while_the_last_answer_is_written_is_not_lost_to_the_next_segment() {
+    let (e, _d, _w) = engine(vec![]).await;
+    let backend = Arc::new(LatePause { engine: e.clone(), calls: AtomicUsize::new(0) });
+    e.register_native_runtime("llama-embedded", backend.clone());
+    let t = e.task_start(start("Fai una cosa")).await.unwrap();
+    // The answer ends the step and an instruction is waiting (a new step would normally read it), but the person asked to pause.
+    let paused = wait_status(&e, &t.id, "paused").await;
+    assert_eq!((paused.segments, paused.pause_reason.as_deref(), paused.auto_resume), (1, Some("user"), false), "{paused:?}");
+    assert_eq!(paused.instructions[0].status, "pending", "it waits for the resume");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1, "no second segment started");
+    e.task_resume(&t.id, TaskResume::default()).await.unwrap();
+    let done = wait_status(&e, &t.id, "succeeded").await;
+    assert_eq!((done.segments, done.instructions[0].status.as_str()), (2, "delivered"));
+}
+
+#[tokio::test]
+async fn a_pause_the_person_asks_for_wins_over_a_rule_that_was_already_stopping_the_task() {
+    let r = rig(vec![hold("c1"), text("Fatto.")]).await;
+    let e = &r.e;
+    let t = e.task_start(start("Lavora")).await.unwrap();
+    r.entered.notified().await;
+    set(e, "proactive.quiet_hours", json!(quiet_now()));
+    // Whatever stops it, the person asked it to stay stopped: the end of the quiet hours does not undo that.
+    e.task_pause(&t.id).unwrap();
+    r.release.notify_one();
+    let paused = wait_status(e, &t.id, "paused").await;
+    assert_eq!((paused.pause_reason.as_deref(), paused.auto_resume), (Some("user"), false));
+    set(e, "proactive.quiet_hours", json!(""));
+    e.tasks_pass_at(Local::now());
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(e.task(&t.id).unwrap().status, "paused");
+}
+
+#[tokio::test]
+async fn a_task_does_not_follow_a_handoff_and_says_so_instead_of_finishing() {
+    let r = rig(vec![ScriptedBackend::tool_turn("h1", "handoff", json!({"agent": "planner", "summary": "continua tu"}))]).await;
+    let e = &r.e;
+    let t = e.task_start(start("Fai una cosa")).await.unwrap();
+    let failed = wait_status(e, &t.id, "failed").await;
+    assert!(failed.error.as_deref().unwrap().contains("passare la conversazione"), "{failed:?}");
+    assert_eq!(e.session(&failed.session_id).unwrap().agent_id, "coder", "the session stays with the agent of the task");
+}
+
+#[tokio::test]
+async fn allowing_for_the_session_never_covers_a_task() {
+    let r = rig(vec![
+        ScriptedBackend::tool_turn("w1", "write_file", json!({"path": "uno.md", "content": "1\n"})),
+        ScriptedBackend::tool_turn("w2", "write_file", json!({"path": "due.md", "content": "2\n"})),
+        text("Fatto."),
+    ])
+    .await;
+    let e = &r.e;
+    let t = e.task_start(start("Scrivi due note")).await.unwrap();
+    wait_for("the first confirmation", || !e.approvals().is_empty()).await;
+    // «Consenti per la sessione» on the first one…
+    let ask = e.approvals().remove(0);
+    e.respond_approval(&ask.id, true, true).unwrap();
+    // …does not cover the second: it is asked on its own.
+    wait_for("the second confirmation", || e.approvals().iter().any(|a| a.args["path"] == "due.md")).await;
+    assert!(r.ws.path().join("uno.md").exists() && !r.ws.path().join("due.md").exists());
+    let second = e.approvals().remove(0);
+    e.respond_approval(&second.id, false, false).unwrap();
+    wait_status(e, &t.id, "succeeded").await;
+    assert!(!r.ws.path().join("due.md").exists());
+    let remembered = e.0.session_allow.lock().unwrap().get(&t.session_id).is_some_and(|s| s.lock().unwrap().contains("write_file"));
+    assert!(!remembered, "nothing is remembered for the session of a task");
+}
+
+#[tokio::test]
+async fn with_no_time_at_all_per_day_a_task_does_not_wait_for_a_tomorrow_that_never_comes() {
+    let r = rig(vec![text("Fatto.")]).await;
+    let e = &r.e;
+    set(e, "proactive.daily_budget_minutes", json!(0));
+    let t = e.task_start(start("Riordina")).await.unwrap();
+    assert_eq!((t.status.as_str(), t.pause_reason.as_deref(), t.auto_resume), ("paused", Some("daily_budget"), false));
+    assert!(t.pause_text.as_deref().unwrap().contains("0 minuti"), "{t:?}");
+    e.tasks_pass_at(Local::now() + D::days(1));
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(e.task(&t.id).unwrap().status, "paused");
+    e.task_resume(&t.id, TaskResume { force: true, extend: None }).await.unwrap();
+    wait_status(e, &t.id, "succeeded").await;
+}
+
+#[tokio::test]
+async fn deleting_the_session_of_a_task_stops_it_and_forgets_it() {
+    let r = rig(vec![hold("c1"), text("non arriva")]).await;
+    let e = &r.e;
+    let t = e.task_start(start("Lavora con la chiave hunter2-SEGRETISSIMO")).await.unwrap();
+    r.entered.notified().await;
+    let run = e.task(&t.id).unwrap().run_ids[0].clone();
+    e.delete_session(&t.session_id).unwrap();
+    assert!(matches!(e.task(&t.id), Err(Error::NotFound(_))), "the record with the text of the instruction goes with the conversation");
+    super::tests::wait_finished(e, &run).await;
+    assert_eq!(requests(&r), 1, "the run was stopped");
+}
+
+#[tokio::test]
+async fn a_short_instruction_is_not_taken_for_delivered_because_a_tool_said_the_same_word() {
+    let data = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let (first, _) = engine_at(data.path(), ws.path(), vec![]).await;
+    let t = crash_state(&first, true);
+    let mut doc = first.task(&t.id).unwrap();
+    doc.instructions[0].text = "ok".into();
+    first.0.store.put_doc("bg_task", &doc.id, &doc).unwrap();
+    // The session holds a tool result that says «ok» and an answer of the agent that says it too: neither is the instruction.
+    let msg = |role: &str, content: &str| aiw_core::api::ChatMessage {
+        id: new_id("msg"),
+        role: role.into(),
+        content: content.into(),
+        reasoning: None,
+        tool_calls: None,
+        tool_call_id: (role == "tool").then(|| "c1".to_string()),
+        name: None,
+        attachments: None,
+        created_at: now_rfc3339(),
+    };
+    first.0.store.append_messages(&t.session_id, &[msg("tool", "ok"), msg("assistant", "va bene, ok")]).unwrap();
+    drop(first);
+    let (e, _) = engine_at(data.path(), ws.path(), vec![]).await;
+    assert_eq!(e.task(&t.id).unwrap().instructions[0].status, "pending");
 }

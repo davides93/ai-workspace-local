@@ -6,7 +6,7 @@ import { Button, DecisionDialog, Icon, Pill } from "../../../shared/ui";
 import type { ApprovalRequest, BackgroundTask } from "../../../shared/api/types";
 import { ApprovalCard } from "../../approvals/components/ApprovalCard";
 import type { ResumeRequest } from "../api";
-import { ADD_TIME_SECONDS, commands, instructionInfo, pauseSentence, progressLine, statusInfo } from "../model/tasks";
+import { ADD_TIME, commands, instructionInfo, pauseSentence, progressLine, statusInfo } from "../model/tasks";
 import { TaskInstructionBox } from "./TaskInstructionBox";
 
 import { t } from "../../../shared/i18n";
@@ -114,7 +114,7 @@ export function TaskCard({ task, busy, answering, actions }: {
         {can.pause && <Button size="sm" icon="pause" disabled={busy} onClick={() => actions.pause(task.id)}>{t("inbox.task_pause")}</Button>}
         {can.resume && <Button size="sm" variant="primary" icon="play" disabled={busy} onClick={() => resume({})}>{t("inbox.task_resume")}</Button>}
         {can.resumeAnyway && <Button size="sm" icon="bolt" disabled={busy} onClick={() => resume({ force: true })}>{t("inbox.task_resume_anyway")}</Button>}
-        {can.addTime && <Button size="sm" variant="primary" icon="plus" disabled={busy} onClick={() => resume({ extend: { max_seconds: ADD_TIME_SECONDS } })}>{t("inbox.task_add_time")}</Button>}
+        {can.addTime && <Button size="sm" variant="primary" icon="plus" disabled={busy} onClick={() => resume({ extend: { ...ADD_TIME } })}>{t("inbox.task_add_time")}</Button>}
         {can.cancel && <Button size="sm" variant="danger" icon="close" disabled={busy} onClick={() => setAsking(true)}>{t("inbox.task_cancel")}</Button>}
         <Link to={`/chat/${encodeURIComponent(task.session_id)}`} className="text-sm tk-chat">{t("inbox.apri_la_chat")}</Link>
       </div>

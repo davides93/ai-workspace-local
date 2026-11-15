@@ -26,7 +26,6 @@ type RuleReason = (typeof RULE_REASONS)[number];
 const isRule = (r: TaskPauseReason | undefined): r is RuleReason => !!r && (RULE_REASONS as readonly string[]).includes(r);
 
 /** What each limit counts, to add the extension to what the task has used when it had no limit of that kind. */
-const USED = { max_tokens: "tokens", max_turns: "turns", max_seconds: "seconds" } as const;
 
 /** `?scenario=first-run`: a new installation has no task. */
 export const taskScenario = { empty: false };
@@ -282,7 +281,9 @@ export class TaskStore {
     if (rule && !body.force) throw new ApiError(409, RULE_REFUSAL[rule]);
     for (const key of ["max_tokens", "max_turns", "max_seconds"] as const) {
       const add = extend[key];
-      if (add !== undefined) t.limits[key] = (t.limits[key] ?? t.progress[USED[key]]) + add;
+      // Only the limits the task has are raised (a task without a token limit does not get one), as the engine does.
+      const current = t.limits[key];
+      if (add !== undefined && current !== undefined) t.limits[key] = current + add;
     }
     const runId = nid("run");
     const forced = !!body.force && !!rule;
