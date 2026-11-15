@@ -779,7 +779,7 @@ impl Engine {
                 a.roles = None;
                 a.candidate_profiles = vec![];
                 a.system_prompt = format!(
-                    "{}\n\n{note} In questa conversazione puoi solo leggere e cercare: non puoi modificare né eseguire nulla.",
+                    "{}\n\n{note} In questa conversazione puoi solo leggere e cercare: non puoi modificare né eseguire nulla. Leggi, cerca ed elenca subito quando te lo chiedono, senza chiedere prima «vuoi che…?».",
                     a.system_prompt.trim()
                 );
             }
@@ -793,8 +793,10 @@ impl Engine {
                 if crate::sandbox_rank(&a.sandbox) > crate::sandbox_rank("workspace-write") {
                     a.sandbox = "workspace-write".into();
                 }
-                a.system_prompt =
-                    format!("{}\n\n{note} Ogni modifica o comando chiede il permesso a chi ti scrive.", a.system_prompt.trim());
+                a.system_prompt = format!(
+                    "{}\n\n{note} Ogni modifica o comando chiede il permesso a chi ti scrive: lo chiede l'app da sola (con i pulsanti Sì e No), non chiederlo tu a parole. Per leggere, cercare ed elencare non serve nessun permesso: fallo subito, senza chiedere prima «vuoi che…?».",
+                    a.system_prompt.trim()
+                );
             }
         }
         Ok(a)

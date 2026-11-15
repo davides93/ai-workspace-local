@@ -253,6 +253,17 @@ async fn pairing_adds_the_sender_with_a_single_use_code_that_expires_and_is_rate
 }
 
 #[tokio::test]
+async fn the_channel_prompt_tells_the_model_not_to_ask_in_words_for_what_needs_no_permission() {
+    use crate::channels::RunKind;
+    let (e, _d, _w) = engine(vec![]).await;
+    for a in [e.channel_agent(RunKind::ReadOnly, "operator").unwrap(), e.channel_agent(RunKind::Ask, "operator").unwrap()] {
+        assert!(a.system_prompt.contains("senza chiedere prima «vuoi che…?»"), "{}", a.system_prompt);
+    }
+    // The permission is asked by the app (Sì/No buttons), not by the model in words.
+    assert!(e.channel_agent(RunKind::Ask, "operator").unwrap().system_prompt.contains("lo chiede l'app da sola"));
+}
+
+#[tokio::test]
 async fn a_pairing_code_is_given_only_while_the_channel_is_on() {
     let (e, _d, _w) = engine(vec![]).await;
     let (base, _tg) = fake_telegram().await;
