@@ -197,3 +197,18 @@ export function resetDrafts(): void {
   store.length = 0;
   outbox.length = 0;
 }
+
+/**
+ * The demo has no assistant that revises a draft by itself, and the end-to-end tests need «it changed while the owner was deciding»:
+ * `__aiwDemo.reviseDraft(subject, body)` does what the assistant's `email_draft` call with `draft_id` does. Demo data only.
+ */
+export function installDemoHooks(): void {
+  const g = globalThis as { __aiwDemo?: Record<string, unknown> };
+  g.__aiwDemo = {
+    ...g.__aiwDemo,
+    reviseDraft: (subject: string, body: string) => {
+      const d = store.find((x) => x.subject === subject && x.status === "draft");
+      if (d) updateDraft(d.id, { body });
+    },
+  };
+}

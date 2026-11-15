@@ -635,3 +635,21 @@ async fn a_message_with_a_long_subject_and_many_recipients_goes_out_as_plain_asc
     assert!(data.split("\r\n").all(|l| l.len() <= 78), "{:?}", data.split("\r\n").find(|l| l.len() > 78));
     assert_eq!(r.mails()[0].1.len(), 12);
 }
+
+#[tokio::test]
+async fn with_the_sandbox_off_the_workspace_boundary_is_gone_but_never_the_app_data() {
+    let r = rig(vec![]).await;
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("fuori.txt"), "fuori dal workspace").unwrap();
+    let with = |path: String| EmailDraftCreate { attachments: vec![path], ..draft("anna@cliente.it", "Allegato", "Testo") };
+    let far = outside.path().join("fuori.txt").display().to_string();
+    // Sandboxed (the default): outside the workspace is refused.
+    assert!(matches!(r.e.email_draft_create(with(far.clone())).unwrap_err(), Error::Denied(_)));
+    // The owner switched the containment off: like the file tools, any readable file ...
+    r.e.set_config("global", "sandbox.mode", json!("off")).unwrap();
+    assert_eq!(r.e.email_draft_create(with(far)).unwrap().attachments[0].name, "fuori.txt");
+    // ... except the data of the app (and the credential folders), which a file that leaves by email must never be.
+    let db = r.e.0.dirs.root.join("aiw.db").display().to_string();
+    let e = r.e.email_draft_create(with(db)).unwrap_err();
+    assert!(matches!(e, Error::Denied(_)) && e.to_string().contains("nascosto"), "{e}");
+}

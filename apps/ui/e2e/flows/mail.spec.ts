@@ -89,6 +89,28 @@ test.describe("linked conversations and email drafts", () => {
     await expect(draft(page, /Preventivo per il cantiere/)).toContainText("Inviata");
   });
 
+  test("a draft that changes under the open confirmation closes it: the old approval does not cover the new text", async ({ page }) => {
+    const d = draft(page, /Preventivo per il cantiere/);
+    await d.getByRole("button", { name: "Approva e invia" }).click();
+    const dialog = page.getByRole("dialog", { name: "Invio questa email?" });
+    await expect(dialog).toBeVisible();
+    // The assistant revises the draft while the owner is deciding (the list is asked again every few seconds).
+    await page.evaluate(() => (globalThis as unknown as { __aiwDemo: { reviseDraft(s: string, b: string): void } }).__aiwDemo.reviseDraft("Preventivo per il cantiere", "Testo cambiato dall'assistente"));
+    await expect(dialog).toBeHidden({ timeout: 15_000 });
+    const after = draft(page, /Preventivo per il cantiere/);
+    await expect(after.getByRole("alert")).toContainText("La bozza è cambiata mentre decidevi");
+    await expect(after).toContainText("Testo cambiato dall'assistente");
+    await expect(after).toContainText("Revisione 2");
+    await expect(after).toContainText("In attesa di revisione");
+    // Nothing went; approving again sends the content that is on the card now.
+    await after.getByRole("button", { name: "Approva e invia" }).click();
+    await page.getByRole("dialog", { name: "Invio questa email?" }).getByRole("button", { name: "Sì, invia questo contenuto" }).click();
+    await expect(draft(page, /Preventivo per il cantiere/)).toHaveCount(0);
+    await page.getByRole("switch", { name: /Mostra anche le bozze chiuse/ }).click();
+    await expect(draft(page, /Preventivo per il cantiere/)).toContainText("Testo cambiato dall'assistente");
+    await expect(draft(page, /Preventivo per il cantiere/)).toContainText("Inviata");
+  });
+
   test("refusing sends nothing and keeps the reason; cancelling withdraws the draft", async ({ page }) => {
     const luca = draft(page, /Conferma riunione/);
     await luca.getByRole("button", { name: "Rifiuta" }).click();

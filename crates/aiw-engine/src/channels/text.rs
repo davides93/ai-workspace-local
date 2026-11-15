@@ -115,7 +115,20 @@ pub fn reply_text(body: &str) -> String {
             });
         let original = l.starts_with("-----") && (l.contains("original message") || l.contains("messaggio originale"));
         if attribution || header_block || original {
-            return lines[..i].join("\n").trim().to_string();
+            let above = lines[..i].join("\n").trim().to_string();
+            // A reply typed under the quote (bottom posting, which Gmail and Apple Mail offer): the quoted lines are already gone,
+            // so what follows the line that introduces them is what the person wrote. Only for that line: after a header block or
+            // a forwarded original the text below is the original itself.
+            if above.is_empty() && attribution {
+                let skip =
+                    if l.trim_end().ends_with("ha scritto:") || l.trim_end().ends_with("wrote:") || l.trim_end().ends_with("a écrit :") {
+                        1
+                    } else {
+                        2
+                    };
+                return lines.get(i + skip..).map(|r| r.join("\n").trim().to_string()).unwrap_or_default();
+            }
+            return above;
         }
     }
     body.trim().to_string()
@@ -149,8 +162,12 @@ mod tests {
         // A real message that merely starts with such a word, or says more than the word, is not an answer.
         assert_eq!(parse_answer(&reply_text("Sì, ma prima dimmi che cosa cambia\n\nIl giorno gio alle 10 Mario ha scritto:\n")), None);
         assert_eq!(reply_text("On the other hand, no.\nDa domani sono via"), "On the other hand, no.\nDa domani sono via");
-        // Typed under the quote: nothing above it, so not seen as an answer.
+        // Typed under the quote (the quoted lines are already gone): the word alone is an answer, more than the word is not,
+        // and under a header block or a forwarded original nothing is read (what follows is the original).
+        assert_eq!(parse_answer(&reply_text("Il giorno gio alle 10 Mario ha scritto:\n\nsì")), Some(true));
+        assert_eq!(parse_answer(&reply_text("Il giorno dom alle ore 10:00 Assistente <a@b.example> ha\nscritto:\n\nno")), Some(false));
         assert_eq!(parse_answer(&reply_text("Il giorno gio alle 10 Mario ha scritto:\nciao\n\nsì")), None);
+        assert_eq!(parse_answer(&reply_text("Da: A <a@b.example>\nInviato: ieri\nA: M\nOggetto: x\n\nsì")), None);
     }
 
     #[test]

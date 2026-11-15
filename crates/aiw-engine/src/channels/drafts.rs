@@ -13,7 +13,8 @@
 //!   changed after the review, or whose sender changed, is refused (409) and has to be looked at again.
 //! * **Attachments are copied when they are attached**, through the same path rules as the file tools (workspace
 //!   boundary, hidden data folder and credentials), and their hash is part of the approval: the file cannot change
-//!   afterwards, and a path outside the workspace cannot be attached at all.
+//!   afterwards. With the sandbox switched off (the owner's choice) the workspace boundary is gone, as it is for the file
+//!   tools, but the app's data and the credential folders still cannot be attached.
 //! * **One send per draft.** `draft → sending → sent` is a compare-and-swap under a lock; a second request for a draft
 //!   that is already sent returns it as it is (nothing is sent again), one that arrives while it is being sent is
 //!   refused. The `Message-ID` is derived from the id of the draft, so even a repeated attempt carries the same one. A
@@ -264,6 +265,7 @@ impl Engine {
     fn draft_attach(&self, ctx: &ToolContext, paths: &[String], files: &mut Vec<StoredFile>) -> Result<()> {
         for raw in paths {
             let path = ctx.resolve(raw, false)?;
+            Self::draft_refuse_hidden(ctx, raw, &path)?;
             let meta = std::fs::metadata(&path).map_err(|e| Error::Invalid(format!("non riesco a leggere «{raw}»: {e}")))?;
             if !meta.is_file() {
                 return Err(Error::Invalid(format!("«{raw}» non è un file")));
@@ -296,6 +298,25 @@ impl Engine {
                 size: data.len() as u64,
                 data: base64::engine::general_purpose::STANDARD.encode(&data),
             });
+        }
+        Ok(())
+    }
+
+    /// The data of the app and the credential folders are never attached, **also with the sandbox off**: in that mode
+    /// `ToolContext::resolve` checks nothing, but a file that leaves by email is not a file the agent reads for itself.
+    fn draft_refuse_hidden(ctx: &ToolContext, raw: &str, path: &std::path::Path) -> Result<()> {
+        let canon = std::fs::canonicalize(path).map_err(|e| Error::Invalid(format!("non riesco a leggere «{raw}»: {e}")))?;
+        let root = std::fs::canonicalize(&ctx.workspace_root).unwrap_or_else(|_| ctx.workspace_root.clone());
+        for h in &ctx.shell.hidden {
+            let hc = std::fs::canonicalize(h).unwrap_or_else(|_| h.clone());
+            let inside = canon.starts_with(h) || canon.starts_with(&hc);
+            // A workspace that itself lives in a hidden folder (an isolated session) is not hidden from its own files.
+            let own_workspace = (root.starts_with(h) || root.starts_with(&hc)) && canon.starts_with(&root);
+            if inside && !own_workspace {
+                return Err(Error::Denied(format!(
+                    "{raw} è nascosto agli agenti: contiene i dati dell'app o delle credenziali (si cambia in Sicurezza → Sandbox)"
+                )));
+            }
         }
         Ok(())
     }

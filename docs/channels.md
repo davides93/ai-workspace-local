@@ -104,7 +104,7 @@ Regole, tutte verificate dai test:
 - **Solo le conversazioni dirette.** Un messaggio in un gruppo, o la menzione del bot in un canale Slack, resta nella conversazione
   del suo canale: la risposta andrebbe a tutti quelli che la leggono e porterebbe con sé la cronologia privata. Su Telegram si collega
   la persona, mai un gruppo.
-- **Posta: solo se il canale controlla il mittente** (DKIM/SPF). Con il controllo spento un `From` falsificato potrebbe leggere la
+- **Posta: solo se il canale controlla il mittente** (DKIM/SPF). Il controllo prova il dominio, non la casella: non collegare indirizzi di domini che usi con altre persone. Con il controllo spento un `From` falsificato potrebbe leggere la
   cronologia degli altri canali: l'account non si collega, e se lo spegni dopo smette di partecipare (la scheda dice perché).
 - **Mai più libertà del canale più restrittivo.** Se un canale è in «Solo lettura» lo è tutta la conversazione, ricalcolato a ogni messaggio.
   Tutti i canali di un contesto usano lo stesso assistente: il campo «Assistente che risponde» di un canale collegato ad altri non si cambia finché resta collegato.
@@ -131,7 +131,7 @@ la trovi in **Canali → Bozze email**, con mittente, destinatari (anche le copi
 1. **Come nasce.** Chiedi all'assistente «rispondi a questa mail» (o approvi una proposta dell'assistente proattivo che lo dice):
    usa lo strumento `email_draft` e lascia la bozza in revisione. Lo strumento **non può inviare** e non è offerto ai lavori di sola
    lettura (l'assistente proattivo, i canali in «Solo lettura»): la proposta proattiva resta un suggerimento, e diventa una bozza solo quando
-   la approvi. Puoi anche scrivere una bozza a mano. Serve un canale di tipo Email acceso: è lui a conoscere il server di invio.
+   la approvi. Puoi anche scrivere una bozza a mano. Serve un canale di tipo Email (con i server di posta scritti: è lui a conoscere quello di invio) per preparare una bozza, e acceso per inviarla.
 2. **La revisione.** Guarda con attenzione chi la riceve e il testo: **una bozza può avere qualunque destinatario**, e se nasce da una mail,
    una pagina o un file di altri potrebbe contenere ciò che quel testo ha suggerito. La tua revisione è l'unica barriera.
 3. **L'approvazione.** «Approva e invia» chiede di nuovo, con i destinatari, e approva *esattamente quel contenuto*: se la bozza cambia dopo
@@ -141,9 +141,10 @@ la trovi in **Canali → Bozze email**, con mittente, destinatari (anche le copi
    risulta «Non partita» (non è partito nulla) e si può ripetere; se la connessione cade *dopo* la consegna, o la risposta non arriva, è «Esito incerto»:
    controlla Posta inviata, e solo se vuoi puoi inviarla comunque (potrebbe arrivare due volte, con lo stesso `Message-ID`).
 5. **Rifiuto e annullamento.** «Rifiuta» (con un motivo se vuoi) e «Annulla la bozza» non inviano niente. Una bozza chiusa si toglie dall'elenco.
-6. **Allegati.** Sono file del workspace (stesse regole degli strumenti di file: niente fuori dal workspace, niente cartella dei dati o credenziali),
+6. **Allegati.** Sono file del workspace o delle cartelle consentite (stesse regole degli strumenti di file: niente fuori da lì, niente cartella dei dati o credenziali; con il
+   contenimento spento per scelta tua il confine del workspace non c'è, come per gli strumenti di file, ma i dati dell'app e le credenziali restano esclusi),
    copiati nel momento in cui li aggiungi: se il file cambia dopo, la bozza resta com'era. Al massimo 5, 5 MB l'uno, 10 MB in tutto.
-7. **Interruttore d'emergenza e canale spento** fermano l'invio. Il registro riporta chi l'ha scritta, chi l'ha approvata e a chi è andata
+7. **Interruttore d'emergenza e canale spento** fermano i nuovi invii (non uno già partito). Il registro riporta chi l'ha scritta, chi l'ha approvata e a chi è andata
    (destinatari, oggetto, nomi degli allegati), mai il testo del messaggio.
 
 Limiti: al massimo 20 destinatari e 20 invii all'ora; 50 bozze in attesa. Le bozze (e i loro allegati) sono salvate nel database come le chat,
