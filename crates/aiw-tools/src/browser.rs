@@ -8,10 +8,13 @@
 
 mod ax;
 mod cdp;
+mod control;
 #[cfg(test)]
 mod fake;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_live;
 
 use crate::web::{html_to_text, proxy_applies, system_resolve, vet_url_with};
 use crate::{arg_str, Risk, Tool, ToolContext, ToolOutput};
@@ -19,10 +22,11 @@ use aiw_core::{Error, Result};
 use async_trait::async_trait;
 pub(crate) use cdp::RefArg;
 use cdp::{Cdp, SnapFmt, MAX_DOWNLOADS_PER_RUN, MAX_DOWNLOAD_BYTES, MAX_TABS};
+pub use control::{without_query, Control, ControlState, Gate, Handover, Limits, Mode, OpGuard};
 use serde_json::{json, Value};
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -75,6 +79,8 @@ pub(crate) struct Policy {
     pub(crate) resolve: ResolveFn,
     /// Requests refused since the last navigation started: `(url, reason)`.
     pub(crate) blocked: Arc<Mutex<Vec<(String, String)>>>,
+    /// The person drives the browser (live view): what they start is not the run's doing (downloads).
+    pub(crate) human: Arc<AtomicBool>,
 }
 
 pub(crate) type ResolveFn = Arc<dyn Fn(String, u16) -> futures::future::BoxFuture<'static, std::io::Result<Vec<IpAddr>>> + Send + Sync>;
@@ -123,7 +129,7 @@ fn handle_paused(params: Value, session: Option<String>, policy: Policy, tx: mps
         let (method, params) = match verdict {
             Ok(Ok(())) => ("Fetch.continueRequest", json!({"requestId": request_id})),
             Ok(Err(why)) => {
-                tracing::warn!(%url, %why, "browser: request blocked by network policy");
+                tracing::warn!(url = %without_query(&url), %why, "browser: request blocked by network policy");
                 let mut b = policy.blocked.lock().unwrap();
                 if b.len() < 50 {
                     b.push((url.clone(), why));
@@ -131,7 +137,7 @@ fn handle_paused(params: Value, session: Option<String>, policy: Policy, tx: mps
                 ("Fetch.failRequest", json!({"requestId": request_id, "errorReason": "BlockedByClient"}))
             }
             Err(_) => {
-                tracing::warn!(%url, "browser: verdict timed out, request failed");
+                tracing::warn!(url = %without_query(&url), "browser: verdict timed out, request failed");
                 ("Fetch.failRequest", json!({"requestId": request_id, "errorReason": "BlockedByClient"}))
             }
         };
@@ -156,7 +162,7 @@ fn fetch_patterns() -> Value {
 
 struct Session {
     child: Option<tokio::process::Child>,
-    cdp: Cdp,
+    cdp: Arc<Cdp>,
 }
 
 /// Owns the controlled browser (one per engine). Lazily started on first use.
@@ -164,6 +170,11 @@ pub struct BrowserManager {
     profile_dir: PathBuf,
     headless: bool,
     session: tokio::sync::Mutex<Option<Session>>,
+    /// The connection of the running browser, for the live view: reachable without the lock of `session`,
+    /// which an action of the agent holds for as long as it runs. Never starts a browser.
+    live: Mutex<Option<Arc<Cdp>>>,
+    /// Who drives the browser (the agent, nobody, the person); see `control.rs`.
+    control: Arc<Control>,
     pub(crate) policy: Policy,
     /// In-app WebView (iOS, Android): when set, the tools drive it instead of Chrome.
     webview: Mutex<Option<Arc<crate::webview::WebViewHost>>>,
@@ -203,11 +214,15 @@ impl BrowserManager {
             ctx: Arc::new(Mutex::new(ToolContext::new("browser", std::env::temp_dir()))),
             resolve: Arc::new(|h, p| Box::pin(system_resolve(h, p))),
             blocked: Default::default(),
+            human: Default::default(),
         };
+        let control = Control::new(policy.human.clone());
         Self {
             profile_dir,
             headless,
             session: tokio::sync::Mutex::new(None),
+            live: Mutex::new(None),
+            control,
             policy,
             webview: Mutex::new(None),
             extra_args: vec![],
@@ -233,6 +248,11 @@ impl BrowserManager {
         self.webview.lock().unwrap().clone()
     }
 
+    /// Who drives the browser (the agent, nobody, the person): see `control.rs`.
+    pub fn control(&self) -> Arc<Control> {
+        self.control.clone()
+    }
+
     pub fn available(&self) -> std::result::Result<(), String> {
         if self.webview().is_some() {
             return Ok(());
@@ -254,7 +274,7 @@ impl BrowserManager {
         if let Some(ws) = &self.endpoint {
             let cdp = Cdp::connect(ws, self.policy.clone(), tmp).await?;
             cdp.init().await?;
-            return Ok(Session { child: None, cdp });
+            return Ok(Session { child: None, cdp: Arc::new(cdp) });
         }
         let bin = find_chrome().ok_or_else(|| Error::Unsupported("nessun browser Chrome/Edge/Chromium trovato".into()))?;
         std::fs::create_dir_all(&self.profile_dir)?;
@@ -312,7 +332,7 @@ impl BrowserManager {
             .ok_or_else(|| Error::Runtime("il browser non ha indicato l'indirizzo di debug".into()))?;
         let cdp = Cdp::connect(ws, self.policy.clone(), tmp).await?;
         cdp.init().await?;
-        Ok(Session { child: Some(child), cdp })
+        Ok(Session { child: Some(child), cdp: Arc::new(cdp) })
     }
 
     async fn with<T>(&self, ctx: &ToolContext, f: impl for<'a> FnOnce(&'a Cdp) -> futures::future::BoxFuture<'a, Result<T>>) -> Result<T> {
@@ -321,16 +341,20 @@ impl BrowserManager {
         // the call that is running.
         *self.policy.ctx.lock().unwrap() = ctx.clone();
         if guard.is_none() {
-            *guard = Some(self.launch().await?);
+            let session = self.launch().await?;
+            *self.live.lock().unwrap() = Some(session.cdp.clone());
+            *guard = Some(session);
         }
-        let cdp = &guard.as_ref().unwrap().cdp;
+        let cdp = guard.as_ref().unwrap().cdp.clone();
+        cdp.set_redact(self.control.redacting());
         let r = match cdp.ensure_tab().await {
-            Ok(()) => f(cdp).await,
+            Ok(()) => f(&cdp).await,
             Err(e) => Err(e),
         };
         if let Err(Error::Runtime(m)) = &r {
             if m.contains("chiusa") || m.contains("chiuso") {
                 *guard = None; // relaunch next time
+                *self.live.lock().unwrap() = None;
             }
         }
         r
@@ -360,6 +384,9 @@ impl BrowserManager {
             w.close().await;
             return true;
         }
+        // The person's turn ends with the browser: whoever waits for it is woken (kill switch).
+        self.control.reset();
+        *self.live.lock().unwrap() = None;
         let mut guard = self.session.lock().await;
         if let Some(mut s) = guard.take() {
             let _ = s.cdp.call_root("Browser.close", json!({})).await;
@@ -796,7 +823,7 @@ fn tabs_list(cdp: &Cdp) -> String {
     let mut out = format!("Schede aperte ({} su {MAX_TABS} al massimo):", tabs.len());
     for t in tabs {
         let title = if t.title.is_empty() { "(senza titolo)" } else { t.title.as_str() };
-        out.push_str(&format!("\n[{}] «{}» {}{}", t.index, title, t.url, if t.active { " (attiva)" } else { "" }));
+        out.push_str(&format!("\n[{}] «{}» {}{}", t.index, title, cdp.shown_url(&t.url), if t.active { " (attiva)" } else { "" }));
         if t.by_site {
             out.push_str(" (aperta dal sito)");
         }
@@ -808,7 +835,7 @@ fn tabs_list(cdp: &Cdp) -> String {
 async fn default_snapshot(cdp: &Cdp) -> Result<String> {
     let body = match cdp.fmt() {
         SnapFmt::Ax => cdp.ax_snapshot().await?,
-        SnapFmt::Elements => cdp.eval(SNAPSHOT_JS).await?.as_str().unwrap_or_default().to_string(),
+        SnapFmt::Elements => cdp.scrub(cdp.eval(SNAPSHOT_JS).await?.as_str().unwrap_or_default()),
     };
     Ok(format!("{}{body}", cdp.tab_header()))
 }
@@ -956,7 +983,7 @@ async fn run_op(cdp: &Cdp, op: Op, env: OpEnv) -> Result<ToolOutput> {
                 Format::Ax => format!("{}{}", cdp.tab_header(), cdp.ax_snapshot().await?),
                 Format::Text => {
                     let raw = cdp.eval(TEXT_JS).await?;
-                    format!("{}{}", cdp.tab_header(), text_snapshot(raw.as_str().unwrap_or_default(), text_offset(&args)))
+                    format!("{}{}", cdp.tab_header(), cdp.scrub(&text_snapshot(raw.as_str().unwrap_or_default(), text_offset(&args))))
                 }
             };
             Ok(ToolOutput::text(with_notes(cdp, text, vec![])))
@@ -1172,6 +1199,40 @@ pub(crate) fn select_error(r: &RefArg, option: &str, res: &str) -> Option<String
     }
 }
 
+/// What the agent is told when it asks for the browser while the person has it.
+fn still_theirs(mode: Mode, waited: Duration) -> String {
+    let who = match mode {
+        Mode::Paused => "L'utente ha messo in pausa il browser",
+        _ => "L'utente sta usando il browser (accesso, verifica o altro)",
+    };
+    format!(
+        "{who}: ho aspettato {} secondi senza che lo restituisse. Non riprovare di continuo: di' all'utente che aspetti, e riprova quando ti scrive che puoi riprendere.",
+        waited.as_secs()
+    )
+}
+
+/// What the agent is told when it acts on an element after the person drove the browser.
+const STALE_REFS: &str = "L'utente ha usato il browser dopo l'ultimo snapshot: la pagina può essere cambiata e i numeri degli elementi non valgono più. Rifai browser_snapshot e poi riprova.";
+
+/// The actions that name an element of the last snapshot.
+fn needs_fresh_refs(op: Op, args: &Value) -> bool {
+    let has_ref = args.get("ref").is_some_and(|v| !v.is_null());
+    match op {
+        Op::Click | Op::Type | Op::Select | Op::Hover | Op::Upload => true,
+        Op::Scroll | Op::Press | Op::Wait => has_ref,
+        _ => false,
+    }
+}
+
+/// The actions whose result is a snapshot of the page that numbers its elements again.
+fn renews_refs(op: Op, text_format: bool) -> bool {
+    match op {
+        Op::Snapshot => !text_format,
+        Op::Navigate | Op::TabNew | Op::TabSelect | Op::Back | Op::Scroll | Op::Press | Op::Wait => true,
+        _ => false,
+    }
+}
+
 #[async_trait]
 impl Tool for BrowserTool {
     fn name(&self) -> &str {
@@ -1288,6 +1349,17 @@ impl Tool for BrowserTool {
             }
             return crate::webview::call(&self.mgr, host, self.op, args, ctx).await;
         }
+        // Who drives the browser: while the person paused the agent or drives it (live view, login), the
+        // call waits here, before it touches the browser or its lock. See `control.rs`.
+        let _turn = match self.mgr.control.enter(&ctx.cancel).await {
+            Ok(g) => g,
+            Err(Gate::Cancelled) => return Ok(ToolOutput::error("Annullato: il run è stato fermato.")),
+            Err(Gate::Waited(mode)) => return Ok(ToolOutput::error(still_theirs(mode, self.mgr.control.limits().op_wait))),
+        };
+        if self.mgr.control.is_stale() && needs_fresh_refs(self.op, &args) {
+            return Ok(ToolOutput::error(STALE_REFS));
+        }
+        let text_format = self.op == Op::Snapshot && args.get("format").and_then(|v| v.as_str()) == Some("text");
         // The address is vetted before the browser is involved (and before it is launched).
         let resolve = self.mgr.policy.resolve.clone();
         let url = match (self.op, args.get("url").and_then(|v| v.as_str()).filter(|u| !u.is_empty())) {
@@ -1297,10 +1369,19 @@ impl Tool for BrowserTool {
         };
         let env = OpEnv { args, ctx: ctx.clone(), url, resolve, blocked: self.mgr.policy.blocked.clone() };
         let op = self.op;
+        if op == Op::Navigate || (op == Op::TabNew && env.url.is_some()) {
+            // The agent chose this address itself: it sees addresses as they are again.
+            self.mgr.control.stop_redacting();
+        }
         // A stopped run ends the call, wherever it is waiting.
-        tokio::select! {
+        let out = tokio::select! {
             r = self.mgr.with(ctx, move |cdp| Box::pin(run_op(cdp, op, env))) => r,
             _ = ctx.cancel.cancelled() => Ok(ToolOutput::error("Annullato: il run è stato fermato.")),
+        }?;
+        // These end with a snapshot that numbers the elements again: the agent can trust its references.
+        if !out.is_error && renews_refs(op, text_format) {
+            self.mgr.control.clear_stale();
         }
+        Ok(out)
     }
 }

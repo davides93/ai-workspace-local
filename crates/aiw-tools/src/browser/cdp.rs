@@ -85,6 +85,9 @@ pub(crate) struct State {
     pub notes: Vec<Note>,
     /// `session:requestId` of the requests still running.
     pub inflight: HashSet<String>,
+    /// The person drove the browser and gave it back: addresses lose their query and fragment (they may
+    /// carry a code or a token) until the agent navigates by itself. See `control.rs`.
+    pub redact: bool,
 }
 
 impl State {
@@ -244,6 +247,28 @@ impl Cdp {
             return Err(Error::Runtime(format!("CDP {method}: {e}")));
         }
         Ok(v["result"].clone())
+    }
+
+    pub(crate) fn set_redact(&self, on: bool) {
+        self.st.lock().unwrap().redact = on;
+    }
+
+    /// An address as the model may see it (see `State::redact`).
+    pub(crate) fn shown_url(&self, url: &str) -> String {
+        if self.st.lock().unwrap().redact {
+            super::without_query(url)
+        } else {
+            url.to_string()
+        }
+    }
+
+    /// A snapshot as the model may read it: the address lines without query and fragment when they are hidden.
+    pub(crate) fn scrub(&self, text: &str) -> String {
+        if self.st.lock().unwrap().redact {
+            super::control::scrub_url_lines(text)
+        } else {
+            text.to_string()
+        }
     }
 
     /// A command for the browser itself (targets, downloads).
@@ -428,6 +453,7 @@ impl Cdp {
     pub(crate) fn take_notes(&self) -> Vec<String> {
         let mut st = self.st.lock().unwrap();
         let notes = std::mem::take(&mut st.notes);
+        let redact = st.redact;
         notes
             .into_iter()
             .filter_map(|n| match n {
@@ -440,7 +466,7 @@ impl Cdp {
                         "Il sito ha aperto una nuova scheda [{}] «{}» ({}){}.",
                         i + 1,
                         clip(&t.title, 60),
-                        clip(&t.url, 90),
+                        clip(&if redact { super::without_query(&t.url) } else { t.url.clone() }, 90),
                         if active { ": ora è quella attiva, torna alla precedente con browser_tab_select" } else { "" }
                     ))
                 }
@@ -546,7 +572,7 @@ impl Cdp {
         Ok(format!(
             "Titolo: {}\nURL: {}\n\nAlbero di accessibilità (usa [eN] come ref; i ref restano validi finché la pagina non cambia):\n{body}",
             head["t"].as_str().unwrap_or_default(),
-            head["u"].as_str().unwrap_or_default()
+            self.shown_url(head["u"].as_str().unwrap_or_default())
         ))
     }
 

@@ -75,7 +75,7 @@ impl WebViewHost {
     }
 
     /// Shows the browser panel (starting the proxy first if nothing used the browser yet).
-    pub async fn show(&self, policy: &Policy) -> Result<()> {
+    pub(crate) async fn show(&self, policy: &Policy) -> Result<()> {
         self.ensure(policy).await?;
         self.blocking(|b| b.show()).await
     }
@@ -656,6 +656,7 @@ mod tests {
             ctx: Arc::new(Mutex::new(ctx())),
             resolve: Arc::new(move |_, _| Box::pin(async move { Ok(vec![ip]) })),
             blocked: Default::default(),
+            human: Default::default(),
         };
         // Private answer (rebinding): refused and recorded.
         let blocked = policy(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
