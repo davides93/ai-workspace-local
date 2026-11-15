@@ -3,6 +3,7 @@ import { ErrorState, Icon, SkeletonLines } from "../../../shared/ui";
 import type { A2uiAction } from "../a2ui";
 import type { ApprovalRequest } from "../../../shared/api/types";
 import { itemKey, type Item } from "../model/items";
+import { tailSignature } from "../model/scroll";
 import type { RunNoticeInfo } from "../model/runNotice";
 import type { FeedbackController } from "../useFeedback";
 import { ItemView } from "./ItemView";
@@ -46,7 +47,7 @@ export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const { unseen, scrollToBottom } = useStickToBottom(scrollRef, contentRef, sessionKey);
+  const { unseen, scrollToBottom } = useStickToBottom(scrollRef, contentRef, sessionKey, tailSignature(items, { notice: !!notice, footer: !!footer }));
   useImperativeHandle(ref, () => ({ scrollToBottom }), [scrollToBottom]);
 
   return (

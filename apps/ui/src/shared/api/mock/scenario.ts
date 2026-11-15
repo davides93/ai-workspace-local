@@ -1,5 +1,6 @@
 import type { UiMode } from "../../lib/uiMode";
 import { catalog, configLayers, folderGrants, models, nid, now, runtimes, sessionMessages, sessions, system } from "./fixtures";
+import { LONG_CHAT_ID, longChatMessages } from "./long-chat";
 
 /**
  * Named starting states of the demo, picked with `?scenario=<name>` in the address of the mockup.
@@ -8,10 +9,12 @@ import { catalog, configLayers, folderGrants, models, nid, now, runtimes, sessio
  *
  * - `first-run`: a runtime that is up, no model on disk, no conversation: what the first start of
  *   the simple interface looks like before "Prepara tutto".
+ * - `long-chat`: the default demo plus one very long conversation (`ses_long`, about four hundred rows with code in every language of the
+ *   highlighter, tool cards, a table and a list): what a person who uses the app for months has. It is the first session of the list.
  * - `mas`: the sandboxed Mac App Store build: the agents work in the app's own folder and the person grants more
  *   folders of the Mac (Download is already granted), so Settings shows «Cartelle consentite».
  */
-export const MOCK_SCENARIOS = ["first-run", "mas"] as const;
+export const MOCK_SCENARIOS = ["first-run", "mas", "long-chat"] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 export const isMockScenario = (v: unknown): v is MockScenario => (MOCK_SCENARIOS as readonly unknown[]).includes(v);
@@ -24,6 +27,10 @@ export function applyMockScenario(name: MockScenario): void {
     for (const r of runtimes) r.loaded_models = [];
     sessions.length = 0;
     for (const id of Object.keys(sessionMessages)) delete sessionMessages[id];
+  }
+  if (name === "long-chat") {
+    sessions.unshift({ id: LONG_CHAT_ID, title: "Domande di programmazione (lunga)", agent_id: "coder", created_at: now(), updated_at: now(), last_status: "succeeded" });
+    sessionMessages[LONG_CHAT_ID] = longChatMessages();
   }
   if (name === "mas") {
     system.sandboxed = true;

@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { agents, catalog, models, runtimes, sessions } from "./fixtures";
 import { MockTransport } from "./index";
+import { grammarFor } from "../../ui/highlight/languages";
+import { LONG_CHAT_FIRST, LONG_CHAT_ID, LONG_CHAT_LAST, LONG_CHAT_NEEDLE, LONG_CHAT_TURNS, longChatMessages } from "./long-chat";
 import { applyMockScenario, applyMockUiMode, isMockScenario } from "./scenario";
 
 describe("mock scenarios", () => {
   it("knows its names", () => {
     expect(isMockScenario("first-run")).toBe(true);
     expect(isMockScenario("mas")).toBe(true);
+    expect(isMockScenario("long-chat")).toBe(true);
     expect(isMockScenario("nope")).toBe(false);
     expect(isMockScenario(null)).toBe(false);
   });
@@ -46,6 +49,27 @@ describe("mock scenarios", () => {
     const left = await api.removeFolder(added.folders[0]!.id);
     expect(left.folders.map((f) => f.name)).toEqual(["Documenti", "Progetti"]);
     await expect(api.removeFolder("fld_nope")).rejects.toThrow(/non trovata/);
+  });
+
+  it("long-chat: one very long conversation, built the same way every time, with known words in it", async () => {
+    applyMockScenario("long-chat");
+    const api = new MockTransport();
+    expect((await api.sessions())[0].id).toBe(LONG_CHAT_ID);
+    const msgs = await api.messages(LONG_CHAT_ID);
+    // question, tool call, tool result, answer: four messages per turn.
+    expect(msgs).toHaveLength(LONG_CHAT_TURNS * 4);
+    const text = msgs.map((m) => m.content).join("\n");
+    expect(text).toContain(LONG_CHAT_FIRST);
+    expect(text).toContain(LONG_CHAT_LAST);
+    expect(text.split(LONG_CHAT_NEEDLE)).toHaveLength(2);
+    // Every fenced block is closed, and the languages are the ones the highlighter knows.
+    const fences = [...text.matchAll(/```(\w*)\n[\s\S]*?\n```/g)].map((m) => m[1]);
+    expect(fences).toHaveLength(LONG_CHAT_TURNS);
+    expect(new Set(fences)).toEqual(new Set(["ts", "python", "rust", "bash", "json", "sql", "css", "diff", "yaml", "go"]));
+    expect(fences.every((l) => grammarFor(l) !== undefined)).toBe(true);
+    // Nothing is random: two builds give the same text.
+    const fixed = () => "2026-11-15T00:00:00.000Z";
+    expect(longChatMessages(5, fixed)).toEqual(longChatMessages(5, fixed));
   });
 });
 
