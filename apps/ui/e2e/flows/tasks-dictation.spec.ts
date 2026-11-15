@@ -75,6 +75,30 @@ test("a silence leaves the box as it was and says so", async ({ page }) => {
   await expect(page.getByText("Non ho sentito nulla", { exact: false })).toBeVisible();
   await expect(say).toHaveValue("Resta qui.");
   await expect(card.getByRole("button", { name: "Detta l'istruzione" })).toBeEnabled();
+  await expect(card.getByRole("list", { name: "Istruzioni date" }).getByText("Resta qui.")).toHaveCount(0);
+});
+
+test("a microphone that is refused adds nothing: no instruction is sent and the box is as it was", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+      value: async () => {
+        throw new DOMException("Permission denied", "NotAllowedError");
+      },
+      configurable: true,
+    });
+  });
+  await openApp(page, "/inbox", { mode: "developer" });
+  const card = run(page);
+  const say = card.getByRole("textbox", { name: "Istruzione" });
+  const given = card.getByRole("list", { name: "Istruzioni date" });
+  const before = await given.getByRole("listitem").count();
+  await say.fill("Resta com'è.");
+  await card.getByRole("button", { name: "Detta l'istruzione" }).click();
+  // Nothing recorded, so nothing transcribed and nothing sent: the button is free again and the list has the same lines.
+  await expect(card.getByRole("button", { name: "Detta l'istruzione" })).toBeEnabled();
+  await expect(say).toHaveValue("Resta com'è.");
+  await expect(given.getByRole("listitem")).toHaveCount(before);
+  await expect(given.getByText("a voce")).toHaveCount(0);
 });
 
 test("a text typed by hand goes without the voice mark", async ({ page }) => {

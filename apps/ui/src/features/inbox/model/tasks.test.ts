@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_TASK_INSTRUCTION_CHARS } from "../../../shared/api/types";
 import type { ApprovalRequest, BackgroundTask, TaskPauseReason } from "../../../shared/api/types";
 import {
-  announcements, appendDictated, budgetSpent, checkInstruction, commands, FAST_POLL_MS, finishedCount, finishedTasks, instructionInfo, openTasks, pauseSentence, pollInterval,
+  announcements, appendDictated, budgetSpent, checkInstruction, commands, FAST_POLL_MS, finishedCount, finishedTasks, instructionInfo, openTasks, pauseSentence, pollInterval, refetchEvery,
   progressLine, SLOW_POLL_MS, snapshots, statusInfo, stoppingSentence, taskSummary, visualStatus,
 } from "./tasks";
 
@@ -90,6 +90,16 @@ describe("commands by state", () => {
 
   it("a finished task has no command and takes no instruction", () => {
     for (const status of ["succeeded", "failed", "cancelled"] as const) expect(only(commands(task({ status })))).toEqual([]);
+  });
+});
+
+describe("polling", () => {
+  it("asks quickly while something is at work, slowly otherwise, and never again after a 404", () => {
+    expect(refetchEvery([task()], false)).toBe(FAST_POLL_MS);
+    expect(refetchEvery([task({ status: "paused" })], false)).toBe(SLOW_POLL_MS);
+    expect(refetchEvery(undefined, false)).toBe(SLOW_POLL_MS);
+    expect(refetchEvery([task()], true)).toBe(false);
+    expect(refetchEvery(undefined, true)).toBe(false);
   });
 });
 

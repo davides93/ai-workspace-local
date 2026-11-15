@@ -5,7 +5,7 @@ import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { ApprovalRequest, BackgroundTask, BudgetLimits, ProposalQuery } from "../../shared/api/types";
 import { useRespondApproval } from "../approvals/api";
-import { pollInterval } from "./model/tasks";
+import { refetchEvery } from "./model/tasks";
 
 import { t, type MessageKey } from "../../shared/i18n";
 const POLL_MS = 20_000;
@@ -84,7 +84,7 @@ export function useTasks() {
   const api = useApi();
   return useQuery({
     queryKey: qk.tasks.list(), queryFn: () => api.tasks(), placeholderData: (prev) => prev,
-    refetchInterval: (q) => (isNotFound(q.state.error) ? false : pollInterval(q.state.data)),
+    refetchInterval: (q) => refetchEvery(q.state.data, isNotFound(q.state.error)),
   });
 }
 

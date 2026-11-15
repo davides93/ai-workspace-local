@@ -26,6 +26,9 @@ export const isWorking = (t: BackgroundTask): boolean => t.status === "running" 
 
 export const pollInterval = (list: BackgroundTask[] | undefined): number => (list?.some(isWorking) ? FAST_POLL_MS : SLOW_POLL_MS);
 
+/** When to ask again: never after the engine said 404 (it has no tasks: an older one), else at the pace of what is going on. */
+export const refetchEvery = (list: BackgroundTask[] | undefined, notFound: boolean): number | false => (notFound ? false : pollInterval(list));
+
 /** Pauses of the rules of the proactive assistant: they end by themselves, and the person may go past them. */
 const RULE_PAUSES: readonly TaskPauseReason[] = ["quiet_hours", "battery", "daily_budget"];
 

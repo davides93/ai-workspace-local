@@ -72,6 +72,13 @@ test("a task at work: pause, tell it something, resume, allow one confirmation a
   await dialog.getByRole("button", { name: "Lascia stare" }).click();
   await expect(dialog).toBeHidden();
   await expect(run).toBeVisible();
+  // Esc leaves it too, and the keyboard goes back to the button that opened it.
+  await run.getByRole("button", { name: "Annulla", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(run).toBeVisible();
+  await expect(run.getByRole("button", { name: "Annulla", exact: true })).toBeFocused();
   await run.getByRole("button", { name: "Annulla", exact: true }).click();
   await dialog.getByRole("button", { name: "Annulla il lavoro" }).click();
   await expect(run).toBeHidden();
