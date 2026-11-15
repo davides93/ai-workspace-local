@@ -288,6 +288,7 @@ impl FakeSmtp {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn smtp_session(
     tcp: tokio::net::TcpStream,
     security: Security,
