@@ -13,6 +13,15 @@ export const KIND_DESTINATION: Record<LessonKind, string> = {
 export const approvedMessage = (l: Pick<Lesson, "kind" | "title">): string =>
   l.kind === "skill" ? tr("learning.lezione_approvata_e_una_nuova", { title: l.title }) : tr("learning.lezione_approvata_e_in_agents", { title: l.title });
 
+/**
+ * The toast after the agent proposed a lesson on a conversation. The Panoramica is not there in the simple interface: the lesson waits
+ * in the conversation itself, as the note «Rivedi la lezione» (a skill) or the card «Vuoi che lo ricordi?» (a memory).
+ */
+export const reflectedMessage = (l: Pick<Lesson, "kind">, simple: boolean): string =>
+  simple
+    ? tr("learning.ho_proposto_una_lezione_nella", { action: l.kind === "skill" ? tr("chat.rivedi_la_lezione") : tr("learning.vuoi_che_lo_ricordi") })
+    : tr("learning.ho_proposto_una_lezione_la");
+
 export type LessonEditCheck = { ok: true; title: string; content: string } | { ok: false; error: string };
 
 /** The same checks as the engine, so the form says what is wrong before the request. */

@@ -1,0 +1,72 @@
+/* Questions and requests for a secret of the agent: a card in the conversation, a line once closed, and the banner for what waits elsewhere. Tokens only. */
+.ask {
+  position: relative; display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; width: 100%;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
+}
+.ask::before { content: ""; position: absolute; inset: -1px auto -1px -1px; width: 4px; border-radius: var(--r-md) 0 0 var(--r-md); background: var(--info); }
+.ask-open { background: color-mix(in srgb, var(--accent-soft) 26%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.ask-open::before { background: var(--accent); }
+.ask-secret.ask-open::before { background: var(--warn); }
+.ask-eyebrow { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-ink); }
+.ask-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.ask-head > svg { color: var(--fg-muted); flex: none; }
+.ask-title { font-size: var(--fs-md); font-weight: 650; overflow-wrap: anywhere; }
+.ask-message { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask-reason { margin: 0; font-size: var(--fs-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
+.ask-dest { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.ask-hint { margin: 0; font-size: var(--fs-xs); color: var(--fg-muted); }
+.ask-hint-private { display: flex; align-items: flex-start; gap: var(--space-2); font-size: var(--fs-xs); color: var(--fg-muted); }
+.ask-hint-private > svg { flex: none; margin-top: 1px; }
+.ask-error { margin: 0; font-size: var(--fs-sm); color: var(--crit); overflow-wrap: anywhere; }
+.ask-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+
+/* Options: native radios or checkboxes in a group; the whole row is the target. */
+.ask-options { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; border: 0; min-width: 0; }
+.ask-opt, .ask-opt-pick {
+  display: flex; align-items: flex-start; gap: var(--space-3); min-width: 0; min-height: 40px; padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); cursor: pointer;
+}
+.ask-opt:hover { background: var(--surface-2); }
+.ask-opt.is-on { border-color: var(--accent); background: var(--accent-soft); }
+.ask-opt:focus-within { box-shadow: var(--focus-ring); }
+.ask-opt input[type="radio"], .ask-opt input[type="checkbox"], .ask-check input { flex: none; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
+.ask-opt-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.ask-opt-desc { font-size: var(--fs-xs); color: var(--fg-muted); }
+.ask-opt kbd, .ask-opt-pick kbd { flex: none; margin-left: auto; align-self: center; }
+/* «Altro»: the radio with its name, then the field to write in. */
+.ask-opt-other { flex-direction: column; align-items: stretch; gap: var(--space-2); cursor: default; }
+.ask-opt-pick { border: 0; padding: 0; min-height: 0; background: transparent; }
+.ask-opt-other .input { width: 100%; }
+.ask-check { display: flex; align-items: center; gap: var(--space-2); min-height: 32px; cursor: pointer; }
+.ask-form { display: flex; flex-direction: column; gap: var(--space-3); margin: 0; min-width: 0; }
+
+/* A closed question or request: one quiet line with what was asked and how it ended. */
+.ask-closed { flex-direction: row; align-items: flex-start; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4); background: var(--surface-2); }
+.ask-closed > svg { flex: none; margin-top: 2px; color: var(--fg-muted); }
+.ask-closed.is-ok > svg { color: var(--ok); }
+.ask-closed-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: var(--fs-sm); }
+.ask-closed-q { color: var(--fg-muted); overflow-wrap: anywhere; }
+.ask-closed-a { font-weight: 600; overflow-wrap: anywhere; }
+
+/* The protected field for a secret. */
+.ask-secret-row { display: flex; gap: var(--space-2); align-items: stretch; min-width: 0; }
+.ask-secret-row .input { flex: 1; min-width: 0; }
+.ask-secret-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ask-secret-field > label { font-size: var(--fs-sm); font-weight: 600; }
+
+/* The banner for what waits in a conversation that is not open. */
+.ask-banner { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin: var(--space-2) var(--space-4) 0; padding: var(--space-2) var(--space-3); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: var(--r-md); background: color-mix(in srgb, var(--accent-soft) 26%, var(--surface)); font-size: var(--fs-sm); }
+.ask-banner > svg { flex: none; color: var(--accent-ink); }
+.ask-banner-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ask-banner-link { display: inline-flex; align-items: center; gap: 2px; font-weight: 600; }
+
+/* Touch and phone: every target is at least 44 px (the shared rule gives 40). */
+@media (max-width: 700px), (pointer: coarse) {
+  .ask-opt, .ask-opt-pick { min-height: 44px; }
+  .ask-opt-pick { min-height: 44px; align-items: center; }
+  .ask-check { min-height: 44px; }
+  .ask .btn, .ask .input, .ask .icon-btn, .ask-banner-link { min-height: 44px; }
+  .ask-banner-link { align-items: center; }
+  .ask-hint { display: none; }
+}

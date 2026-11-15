@@ -10,8 +10,8 @@ const ctx = { profileIds: profiles.map((p) => p.id), otherNames: [] as string[] 
 const valid = (over: Partial<AgentProfile> = {}): AgentProfile => ({ ...blankAgent("balanced"), name: "Revisore", ...over });
 
 describe("built-in agents", () => {
-  it("are the six seeded by the engine", () => {
-    expect(BUILTIN_AGENT_IDS).toEqual(["operator", "coder", "browser", "desktop", "planner", "teacher"]);
+  it("are the seven seeded by the engine (the Assistente included)", () => {
+    expect(BUILTIN_AGENT_IDS).toEqual(["operator", "coder", "browser", "desktop", "planner", "teacher", "assistant"]);
     expect(isBuiltinAgent("coder")).toBe(true);
     expect(isBuiltinAgent("revisore")).toBe(false);
   });

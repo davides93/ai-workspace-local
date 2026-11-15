@@ -1,5 +1,6 @@
 import { expect, openApp, test } from "../support/app";
 import { expectNoBlockingViolations, expectNoPlaceholderLeaks } from "../support/scan";
+import { FAKE_KEY, messageBox, startDownloadThenGoSimple } from "../support/simple";
 
 // Screens that only exist after an interaction (overlays, a running chat, the first run) and the
 // English interface, scanned with axe-core in both themes at phone and desktop width.
@@ -13,15 +14,15 @@ for (const size of SIZES) {
     test.describe(`${size.name} · ${theme}`, () => {
       test.use({ viewport: size.viewport, colorScheme: theme });
 
-      test("first run of the simple interface", async ({ page }, info) => {
-        await openApp(page, "/", { theme, scenario: "first-run" });
+      test("first run of the simple interface (the panel is in the chat)", async ({ page }, info) => {
+        await openApp(page, "/chat", { theme, scenario: "first-run" });
         await expect(page.getByRole("button", { name: "Prepara tutto" })).toBeVisible();
         await expectNoBlockingViolations(page, info);
         await expectNoPlaceholderLeaks(page);
       });
 
       test("settings of the Mac App Store build: allowed folders", async ({ page }, info) => {
-        await openApp(page, "/settings", { theme, scenario: "mas" });
+        await openApp(page, "/settings", { theme, scenario: "mas", mode: "developer" });
         await expect(page.getByTestId("folders-panel")).toBeVisible();
         await expectNoBlockingViolations(page, info);
         await expectNoPlaceholderLeaks(page);
@@ -39,14 +40,47 @@ for (const size of SIZES) {
       });
 
       test("first run while the model downloads", async ({ page }, info) => {
-        await openApp(page, "/", { theme, scenario: "first-run" });
+        await openApp(page, "/chat", { theme, scenario: "first-run" });
         await page.getByRole("button", { name: "Prepara tutto" }).click();
         await expect(page.getByRole("meter", { name: /^Avanzamento di / })).toBeVisible();
         await expectNoBlockingViolations(page, info);
       });
 
+      test("simple chat: a failed session with its notes, and the lesson panel", async ({ page }, info) => {
+        await openApp(page, "/chat/ses_bug", { theme });
+        await expect(page.getByRole("log", { name: "Conversazione" }).getByRole("button", { name: /^Chiedi all'assistente/ })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+        await page.getByRole("button", { name: /^Rivedi la lezione/ }).click();
+        await expect(page.getByRole("dialog", { name: "Lezioni da rivedere" })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+      });
+
+      test("simple chat: the warning about a secret in the message box", async ({ page }, info) => {
+        await openApp(page, "/chat/ses_pdf", { theme });
+        await messageBox(page).fill(`Usa questa chiave ${FAKE_KEY}`);
+        await expect(page.getByRole("status").filter({ hasText: "Sembra una chiave o un token" })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+      });
+
+      test("simple chat: the strip of the downloads that go on", async ({ page }, info) => {
+        await openApp(page, "/models/catalog", { theme, mode: "developer" });
+        await startDownloadThenGoSimple(page);
+        await expect(page.getByRole("region", { name: "Download in corso" })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+      });
+
+      test("simple chat: the menu", async ({ page }, info) => {
+        await openApp(page, "/chat", { theme });
+        await page.getByRole("button", { name: "Menu", exact: true }).click();
+        await expect(page.getByRole("dialog", { name: "Menu" })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+      });
+
       test("command palette", async ({ page }, info) => {
-        await openApp(page, "/", { theme });
+        await openApp(page, "/chat", { theme });
         await page.keyboard.press("Control+k");
         await expect(page.getByRole("dialog", { name: "Cerca e comandi" })).toBeVisible();
         await expectNoBlockingViolations(page, info);
@@ -77,7 +111,7 @@ for (const size of SIZES) {
       });
 
       test("documents with a search result", async ({ page }, info) => {
-        await openApp(page, "/documents", { theme });
+        await openApp(page, "/documents", { theme, mode: "developer" });
         const search = page.getByRole("region", { name: "Cerca nei documenti" });
         await search.getByRole("searchbox", { name: "Cosa cerchi?" }).fill("canone");
         await search.getByRole("button", { name: "Cerca", exact: true }).click();
@@ -91,12 +125,22 @@ for (const size of SIZES) {
       test.use({ viewport: size.viewport, colorScheme: theme, locale: "en-US" });
       for (const route of ["/", "/chat/ses_pdf", "/models", "/settings", "/documents", "/devices"]) {
         test(route, async ({ page }, info) => {
-          await openApp(page, route, { theme });
+          await openApp(page, route, { theme, mode: "developer" });
           await expect(page.locator("html")).toHaveAttribute("lang", "en");
           await expectNoBlockingViolations(page, info);
           await expectNoPlaceholderLeaks(page);
         });
       }
+      test("the chat of the simple interface, and its menu", async ({ page }, info) => {
+        await openApp(page, "/chat/ses_pdf", { theme });
+        await expect(page.locator("html")).toHaveAttribute("lang", "en");
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+        await page.getByRole("button", { name: "Menu", exact: true }).click();
+        await expect(page.getByRole("dialog", { name: "Menu" })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+      });
     });
   }
 }
