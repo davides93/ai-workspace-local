@@ -333,6 +333,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/runs/{id}/events.json", get(run_events_json))
         .route("/api/approvals", get(approvals))
         .route("/api/approvals/{id}", post(respond_approval))
+        .route("/api/questions", get(questions))
+        .route("/api/questions/{id}", post(respond_question))
+        .route("/api/secret-requests", get(secret_requests))
+        .route("/api/secret-requests/{id}", post(respond_secret_request))
         .route("/api/proposals", get(proposals))
         .route("/api/proposals/{id}", get(proposal))
         .route("/api/proposals/{id}/approve", post(approve_proposal))
@@ -1149,6 +1153,45 @@ async fn respond_approval(
     s.engine.respond_approval_as(&id, b.decision == "allow", b.remember, owner)?;
     ok(json!({}))
 }
+/// The questions of the agent (`ask_user`) that wait for the person.
+async fn questions(State(s): State<AppState>) -> ApiResult<Vec<Question>> {
+    ok(s.engine.questions())
+}
+/// `POST /api/questions/{id}`: an answer (`{"action":"answer", "selected": …}`) or `{"action":"decline"}`.
+/// An answer that does not fit the question is a 400 and the question stays open; a closed one is a 404.
+async fn respond_question(State(s): State<AppState>, Path(id): Path<String>, Json(b): Json<QuestionReply>) -> ApiResult<Value> {
+    s.engine.respond_question(&id, b)?;
+    ok(json!({}))
+}
+/// The requests for a secret that wait for the person: never a value.
+async fn secret_requests(State(s): State<AppState>) -> ApiResult<Vec<SecretRequest>> {
+    ok(s.engine.secret_requests())
+}
+/// The body of `POST /api/secret-requests/{id}`, read by hand: a body that does not fit is refused with a
+/// fixed sentence, never with the parser's message, which could quote what was typed.
+fn secret_answer(b: &Value) -> Result<SecretAnswer, Error> {
+    let action = b.get("action").and_then(Value::as_str).ok_or_else(|| Error::Invalid("manca `action`: usa provide o decline".into()))?;
+    let value = match b.get("value") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(v)) => Some(v.clone()),
+        Some(_) => return Err(Error::Invalid("`value` deve essere un testo".into())),
+    };
+    Ok(SecretAnswer { action: action.into(), value })
+}
+/// `POST /api/secret-requests/{id}`: `{"action":"provide","value":"…"}` stores the secret where the request said
+/// (`{"stored": true}`), `{"action":"decline"}` closes it. This route needs full access (see `scopes.rs`). A value the
+/// destination refuses is a 401 or 400 without the value in the message, and the request stays open.
+async fn respond_secret_request(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    IsOwner(owner): IsOwner,
+    Json(b): Json<Value>,
+) -> ApiResult<Value> {
+    let answer = secret_answer(&b)?;
+    let provided = answer.action == "provide";
+    s.engine.respond_secret(&id, answer, owner).await?;
+    ok(if provided { json!({"stored": true}) } else { json!({}) })
+}
 async fn webhook(
     State(s): State<AppState>,
     Path(id): Path<String>,
@@ -1810,6 +1853,8 @@ mod tests_channels;
 mod tests_errors;
 #[cfg(test)]
 mod tests_eval;
+#[cfg(test)]
+mod tests_interaction;
 #[cfg(test)]
 mod tests_kb;
 #[cfg(test)]
