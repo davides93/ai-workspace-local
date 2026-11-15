@@ -79,6 +79,14 @@ pub struct ToolContext {
     pub workspace_root: PathBuf,
     /// Extra folders readable by tools (skills, attachments…).
     pub read_roots: Vec<PathBuf>,
+    /// Folders the person handed to the agents with a permission of their own (Mac App Store build: a
+    /// folder chosen in the macOS open panel, kept as a security-scoped bookmark): readable and writable
+    /// like the workspace, never more. Only the engine fills it, from what the person granted; no tool,
+    /// agent, model or setting can add to it. Not meant for skills or attachments: those are `read_roots`.
+    pub write_roots: Vec<PathBuf>,
+    /// Said after a refusal «fuori dal workspace» when this build lets the person grant more folders:
+    /// where to do it (the model passes it on, also to a chat in Telegram).
+    pub outside_hint: Option<String>,
     pub sandbox: SandboxMode,
     /// Network, hidden locations and environment of sandboxed commands.
     pub shell: ShellSandbox,
@@ -106,6 +114,8 @@ impl ToolContext {
             run_id: run_id.into(),
             workspace_root,
             read_roots: vec![],
+            write_roots: vec![],
+            outside_hint: None,
             sandbox: SandboxMode::WorkspaceWrite,
             shell: ShellSandbox::default(),
             cancel: CancellationToken::new(),
@@ -133,21 +143,32 @@ impl ToolContext {
         }
         let expanded = aiw_core::paths::expand_home(p.trim());
         let abs = if expanded.is_absolute() { expanded } else { self.workspace_root.join(expanded) };
-        let norm = aiw_core::paths::normalize(&abs);
+        let mut norm = aiw_core::paths::normalize(&abs);
         if self.sandbox == SandboxMode::Off {
             return Ok(norm);
         }
         let root = aiw_core::paths::normalize(&self.workspace_root);
-        let inside = norm.starts_with(&root);
+        let granted = self.granted_roots();
+        let mut inside = norm.starts_with(&root) || self.write_roots.iter().any(|r| norm.starts_with(aiw_core::paths::normalize(r)));
+        if !inside && !granted.is_empty() {
+            // `~` of a sandboxed app is the home of its container, whose `Downloads` is a link to the real
+            // one: a path written that way is judged by where it really lands.
+            if let Some(canon) = canonical_lenient(&norm) {
+                if granted.iter().any(|r| canon.starts_with(r)) {
+                    norm = canon;
+                    inside = true;
+                }
+            }
+        }
         if write {
             if self.sandbox == SandboxMode::ReadOnly {
                 return Err(Error::Denied("sandbox in sola lettura: le scritture non sono consentite".into()));
             }
             if !inside {
-                return Err(Error::Denied(format!("{} è fuori dal workspace ({})", norm.display(), root.display())));
+                return Err(self.outside(&norm, &root));
             }
         } else if !inside && !self.read_roots.iter().any(|r| norm.starts_with(aiw_core::paths::normalize(r))) {
-            return Err(Error::Denied(format!("{} è fuori dal workspace ({})", norm.display(), root.display())));
+            return Err(self.outside(&norm, &root));
         }
         // The check above is lexical. A symlink inside the workspace can still point outside of it
         // (a cloned repository may ship one, a sandboxed command can create one), so also require
@@ -156,13 +177,13 @@ impl ToolContext {
             .ok_or_else(|| Error::Denied(format!("{} passa da un collegamento simbolico che non si può risolvere", norm.display())))?;
         let canon_root = std::fs::canonicalize(&self.workspace_root).unwrap_or_else(|_| root.clone());
         let readable = !write && self.read_roots.iter().filter_map(|r| trusted_read_root(r)).any(|r| canon.starts_with(r));
-        if self.is_hidden(&canon, &canon_root) {
+        if self.hidden(&canon, &canon_root, write) {
             return Err(Error::Denied(format!(
                 "{} è nascosto agli agenti: contiene i dati dell'app o delle credenziali (si cambia in Sicurezza → Sandbox)",
                 norm.display()
             )));
         }
-        if !canon.starts_with(&canon_root) && !readable {
+        if !canon.starts_with(&canon_root) && !readable && !granted.iter().any(|r| canon.starts_with(r)) {
             return Err(Error::Denied(format!(
                 "{} punta fuori dal workspace tramite un collegamento simbolico ({})",
                 norm.display(),
@@ -172,11 +193,36 @@ impl ToolContext {
         Ok(norm)
     }
 
+    /// The granted folders, in a form fit to compare with a canonical path: a root that is a link is
+    /// ignored (see [`trusted_read_root`]).
+    fn granted_roots(&self) -> Vec<PathBuf> {
+        self.write_roots.iter().filter_map(|r| trusted_read_root(r)).collect()
+    }
+
+    /// The refusal of a path outside every folder the agent may use, with where to grant more when
+    /// this build allows it.
+    fn outside(&self, norm: &Path, root: &Path) -> Error {
+        let hint = self.outside_hint.as_deref().map(|h| format!(". {h}")).unwrap_or_default();
+        Error::Denied(format!("{} è fuori dal workspace ({}){hint}", norm.display(), root.display()))
+    }
+
+    /// True when `p` is inside the workspace itself (not in a granted folder): what a rewind can undo.
+    pub fn in_workspace(&self, p: &Path) -> bool {
+        aiw_core::paths::normalize(p).starts_with(aiw_core::paths::normalize(&self.workspace_root))
+    }
+
     /// True when `canon` (a canonical path) is in a location hidden from the agent: the data folder of
     /// the app or an entry of `sandbox.deny_read`. Two exceptions: the workspace itself when it lives
     /// inside a hidden folder (an isolated session in `~/.aiw/worktrees`), and the read roots that are
     /// strictly inside one (skills, the attachments of the session).
     pub fn is_hidden(&self, canon: &Path, canon_root: &Path) -> bool {
+        self.hidden(canon, canon_root, false)
+    }
+
+    /// [`ToolContext::is_hidden`] for a read (`write` false) or a write. The exception of the read roots
+    /// is only for reading: they are never writable, so a granted folder that holds one (the skills,
+    /// inside the data folder) must not turn it into a place the agent can write.
+    fn hidden(&self, canon: &Path, canon_root: &Path, write: bool) -> bool {
         if self.sandbox == SandboxMode::Off || self.shell.hidden.is_empty() {
             return false;
         }
@@ -190,7 +236,7 @@ impl ToolContext {
                 if canon_root.starts_with(h) && canon.starts_with(canon_root) {
                     continue;
                 }
-                if roots.iter().any(|r| r.starts_with(h) && r != h && canon.starts_with(r)) {
+                if !write && roots.iter().any(|r| r.starts_with(h) && r != h && canon.starts_with(r)) {
                     continue;
                 }
                 return true;
@@ -490,6 +536,114 @@ mod tests {
         ctx2.read_roots = vec![ws2.path().join(".aiw"), skills.path().to_path_buf()];
         assert!(ctx2.resolve(".aiw/skills/SKILL.md", false).is_ok());
         assert!(ctx2.resolve(&skills.path().join("a.md").display().to_string(), false).is_ok());
+    }
+
+    /// A folder the person granted lives next to the workspace (the Downloads of the real home).
+    fn with_granted() -> (tempfile::TempDir, tempfile::TempDir, ToolContext) {
+        let ws = tempfile::tempdir().unwrap();
+        let granted = tempfile::tempdir().unwrap();
+        let mut ctx = ToolContext::new("r", ws.path().to_path_buf());
+        ctx.write_roots = vec![std::fs::canonicalize(granted.path()).unwrap()];
+        (ws, granted, ctx)
+    }
+
+    #[test]
+    fn a_granted_folder_is_readable_and_writable_like_the_workspace() {
+        let (_ws, granted, ctx) = with_granted();
+        let g = std::fs::canonicalize(granted.path()).unwrap();
+        assert!(ctx.resolve(&g.join("a.txt").display().to_string(), true).is_ok());
+        assert!(ctx.resolve(&g.join("sub/dir/a.txt").display().to_string(), false).is_ok());
+        // Without the grant the same path is outside.
+        let ws = tempfile::tempdir().unwrap();
+        let bare = ToolContext::new("r", ws.path().to_path_buf());
+        assert!(bare.resolve(&g.join("a.txt").display().to_string(), false).is_err());
+        assert!(bare.resolve(&g.join("a.txt").display().to_string(), true).is_err());
+    }
+
+    #[test]
+    fn a_granted_folder_does_not_open_what_is_around_it() {
+        let (_ws, granted, ctx) = with_granted();
+        let g = std::fs::canonicalize(granted.path()).unwrap();
+        // `..` out of the folder, its parent, a sibling with the same prefix.
+        assert!(ctx.resolve(&g.join("../x.txt").display().to_string(), true).is_err());
+        assert!(ctx.resolve(&g.parent().unwrap().display().to_string(), false).is_err());
+        let sibling = format!("{}-altro/x.txt", g.display());
+        assert!(ctx.resolve(&sibling, false).is_err());
+        assert!(ctx.resolve("/etc/passwd", false).is_err());
+    }
+
+    #[test]
+    fn a_read_only_sandbox_keeps_granted_folders_read_only() {
+        let (_ws, granted, mut ctx) = with_granted();
+        let g = std::fs::canonicalize(granted.path()).unwrap();
+        ctx.sandbox = SandboxMode::ReadOnly;
+        assert!(ctx.resolve(&g.join("a.txt").display().to_string(), true).is_err());
+        assert!(ctx.resolve(&g.join("a.txt").display().to_string(), false).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_a_granted_folder_cannot_leave_it() {
+        let (_ws, granted, ctx) = with_granted();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "x").unwrap();
+        let g = std::fs::canonicalize(granted.path()).unwrap();
+        std::os::unix::fs::symlink(outside.path(), g.join("link")).unwrap();
+        assert!(ctx.resolve(&g.join("link/secret.txt").display().to_string(), false).is_err());
+        assert!(ctx.resolve(&g.join("link/new.txt").display().to_string(), true).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_through_the_home_of_the_container_lands_in_the_granted_folder() {
+        // The home of a sandboxed app is its container; `Downloads` there is a link to the real folder.
+        let (_ws, granted, mut ctx) = with_granted();
+        let g = std::fs::canonicalize(granted.path()).unwrap();
+        std::fs::write(g.join("a.txt"), "x").unwrap();
+        let container_home = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(&g, container_home.path().join("Downloads")).unwrap();
+        let via_link = container_home.path().join("Downloads/a.txt").display().to_string();
+        // Not granted: refused, and the refusal names where to grant more only when asked to.
+        let bare = ToolContext::new("r", _ws.path().to_path_buf());
+        assert!(bare.resolve(&via_link, false).is_err());
+        let resolved = ctx.resolve(&via_link, false).unwrap();
+        assert_eq!(resolved, g.join("a.txt"), "the real path is what the tools see");
+        assert!(ctx.resolve(&container_home.path().join("Downloads/n.txt").display().to_string(), true).is_ok());
+        ctx.sandbox = SandboxMode::ReadOnly;
+        assert!(ctx.resolve(&container_home.path().join("Downloads/n.txt").display().to_string(), true).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_data_folder_stays_hidden_inside_a_granted_parent() {
+        // The person grants a folder that holds the data folder of the app: the data folder is still hidden.
+        let parent = tempfile::tempdir().unwrap();
+        let g = std::fs::canonicalize(parent.path()).unwrap();
+        let data = g.join("data");
+        std::fs::create_dir_all(data.join("skills")).unwrap();
+        std::fs::write(data.join("token"), "t").unwrap();
+        std::fs::write(g.join("ok.txt"), "x").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let mut ctx = ToolContext::new("r", ws.path().to_path_buf());
+        ctx.write_roots = vec![g.clone()];
+        ctx.shell.hidden = vec![data.clone()];
+        // A read root inside the hidden folder (the skills) has its own exception, the granted parent has none.
+        ctx.read_roots = vec![data.join("skills")];
+        assert!(ctx.resolve(&g.join("ok.txt").display().to_string(), false).is_ok());
+        assert!(ctx.resolve(&data.join("token").display().to_string(), false).is_err());
+        assert!(ctx.resolve(&data.join("token").display().to_string(), true).is_err());
+        assert!(ctx.resolve(&data.join("skills/new.md").display().to_string(), true).is_err());
+    }
+
+    #[test]
+    fn the_refusal_tells_where_to_grant_more_only_when_this_build_allows_it() {
+        let ws = tempfile::tempdir().unwrap();
+        let mut ctx = ToolContext::new("r", ws.path().to_path_buf());
+        let plain = ctx.resolve("/etc/passwd", false).unwrap_err().to_string();
+        assert!(plain.contains("fuori dal workspace") && !plain.contains("Impostazioni"), "{plain}");
+        ctx.outside_hint = Some("Impostazioni → Cartelle consentite".into());
+        let hinted = ctx.resolve("/etc/passwd", false).unwrap_err().to_string();
+        assert!(hinted.contains("fuori dal workspace") && hinted.contains("Impostazioni → Cartelle consentite"), "{hinted}");
     }
 
     #[test]

@@ -527,7 +527,7 @@ impl Tool for DeleteFile {
         "delete_file"
     }
     fn description(&self) -> &str {
-        "Elimina un file del workspace (non le cartelle). L'originale viene salvato nel checkpoint, quindi il ripristino del run lo rimette a posto."
+        "Elimina un file del workspace (non le cartelle; non nelle altre cartelle consentite dall'utente). L'originale viene salvato nel checkpoint, quindi il ripristino del run lo rimette a posto."
     }
     fn parameters(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})
@@ -541,6 +541,14 @@ impl Tool for DeleteFile {
     }
     async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let path = ctx.resolve(arg_str(&args, "path")?, true)?;
+        // The rewind of a run only brings back the workspace: what is outside of it (a folder the person
+        // granted) is kept in the checkpoint but listed, never put back. A deletion there would be final.
+        if !ctx.in_workspace(&path) {
+            return Ok(ToolOutput::error(format!(
+                "{} non eliminato: è fuori dal workspace, in una cartella che l'utente ha consentito, e lì il ripristino non può rimettere i file. Eliminare si può solo nel workspace; spostare (move_file) sì.",
+                path.display()
+            )));
+        }
         if let Err(msg) = regular_file(ctx, &path) {
             return Ok(ToolOutput::error(msg));
         }
@@ -698,6 +706,36 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn granted_folders_are_used_by_the_file_tools_but_nothing_is_deleted_there() {
+        let ws = tempfile::tempdir().unwrap();
+        let granted = tempfile::tempdir().unwrap();
+        let g = std::fs::canonicalize(granted.path()).unwrap();
+        std::fs::write(g.join("fattura.pdf.txt"), "dati\n").unwrap();
+        let mut ctx = ToolContext::new("run_g", ws.path().to_path_buf());
+        ctx.write_roots = vec![g.clone()];
+        ctx.checkpoint_dir = Some(ws.path().join(".ckpt"));
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        let out = t("list_dir").call(json!({"path": g.display().to_string()}), &ctx).await.unwrap();
+        assert!(out.content.contains("fattura.pdf.txt"), "{}", out.content);
+        let out = t("write_file").call(json!({"path": g.join("nota.md").display().to_string(), "content": "ciao\n"}), &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(std::fs::read_to_string(g.join("nota.md")).unwrap(), "ciao\n");
+        let out = t("move_file")
+            .call(json!({"from": g.join("nota.md").display().to_string(), "to": g.join("archivio/nota.md").display().to_string()}), &ctx)
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        // The rewind of a run does not put back what is outside the workspace: no deletion there.
+        let out = t("delete_file").call(json!({"path": g.join("fattura.pdf.txt").display().to_string()}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("non eliminato"), "{}", out.content);
+        assert!(g.join("fattura.pdf.txt").exists());
+        // In the workspace a deletion still works.
+        std::fs::write(ws.path().join("tmp.txt"), "x").unwrap();
+        let out = t("delete_file").call(json!({"path": "tmp.txt"}), &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.content);
+    }
+
     #[tokio::test]
     async fn read_roots_are_readable_through_links_but_never_writable() {
         use std::os::unix::fs::symlink;
