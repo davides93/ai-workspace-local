@@ -86,6 +86,9 @@ pub struct EngineOptions {
     /// Mac App Store build (App Sandbox): no external programs are installed or launched, and the
     /// agents' folder is the one the shell passes (the `workspace.root` setting is ignored).
     pub sandboxed: bool,
+    /// A one-shot command next to the running app (the CLI): this process neither recovers nor resumes background tasks, which
+    /// the app that owns them does (see `bgtasks`).
+    pub no_tasks: bool,
 }
 
 /// One event on the global bus (Tauri forwards these as `aiw://run-event`).
@@ -378,7 +381,7 @@ impl Engine {
             workflow_runs: Default::default(),
             scheduler: Default::default(),
             proactive: Default::default(),
-            tasks: Default::default(),
+            tasks: bgtasks::TaskRuntime::new(!opts.no_tasks),
             channels: Default::default(),
             folders: Default::default(),
             token,

@@ -59,6 +59,9 @@ const KEEP_FINISHED: usize = 100;
 /// Runtime state of the background tasks that is not a document.
 #[derive(Default)]
 pub(crate) struct TaskRuntime {
+    /// This process drives background tasks (recovers them at start, resumes them by itself). A one-shot command of the CLI
+    /// next to the running app does not: it would pause the app's live tasks, or start a second segment of one.
+    pub(crate) driven: bool,
     /// Every read-modify-write of a task document happens under this lock (never held across an `.await`).
     lock: Mutex<()>,
     /// The read-modify-write of the day's time (two tasks end a turn at the same time).
@@ -97,6 +100,12 @@ pub(crate) struct Seed {
     pub base_seconds: u64,
     /// What is left of the task's limits: the budget of the run.
     pub remaining: BudgetLimits,
+}
+
+impl TaskRuntime {
+    pub(crate) fn new(driven: bool) -> Self {
+        Self { driven, ..Default::default() }
+    }
 }
 
 impl Seed {
@@ -503,7 +512,7 @@ impl Engine {
             t.auto_resume = false;
             t.stopping = false;
             t.segment_started_at = Some(stamp);
-            t.segment_wait_s = 0;
+            t.segment_wait_ms = 0;
             t.segment_billed_s = 0;
             let seed = Seed {
                 task_id: t.id.clone(),
@@ -717,7 +726,7 @@ impl Engine {
         }
         let used_turns = ctx.budget.used_turns();
         let used_tokens = ctx.budget.used_tokens();
-        let wall = ctx.started.elapsed().as_secs();
+        let wall_ms = ctx.started.elapsed().as_millis() as u64;
         let last_tool = new.iter().rev().find_map(|m| m.tool_calls.as_ref().and_then(|c| c.last()).map(|c| c.name.clone()));
         let last_text = new.iter().rev().find(|m| m.role == "assistant" && !m.content.trim().is_empty()).map(|m| short(&m.content, 200));
         let later_turn = new.len() > 1;
@@ -728,7 +737,7 @@ impl Engine {
             t.progress.turns = ctx.base_turns + used_turns;
             t.progress.tokens = ctx.base_tokens + used_tokens;
             // Time spent waiting for the person is not time spent working.
-            t.progress.seconds = ctx.base_seconds + wall.saturating_sub(t.segment_wait_s);
+            t.progress.seconds = ctx.base_seconds + wall_ms.saturating_sub(t.segment_wait_ms) / 1000;
             let working = t.progress.seconds - ctx.base_seconds;
             if working > t.segment_billed_s {
                 self.spend_add(now, (working - t.segment_billed_s) as f64);
@@ -815,7 +824,7 @@ impl Engine {
     pub(crate) fn task_waited(&self, ctx: &RunCtx, d: std::time::Duration) {
         let _ = self.task_mut(&ctx.task_id, |t| {
             if t.segments == ctx.segment && t.status == "running" {
-                t.segment_wait_s += d.as_secs();
+                t.segment_wait_ms += d.as_millis() as u64;
             }
             Ok(())
         });
@@ -828,8 +837,8 @@ impl Engine {
         let used_turns = ctx.budget.used_turns();
         let used_tokens = ctx.budget.used_tokens();
         // Only the time the task worked counts (not the minutes it waited for a confirmation).
-        let (waited, billed) = self.task_load(&ctx.task_id).map(|t| (t.segment_wait_s, t.segment_billed_s)).unwrap_or((0, 0));
-        let elapsed = wall.saturating_sub(std::time::Duration::from_secs(waited));
+        let (waited_ms, billed) = self.task_load(&ctx.task_id).map(|t| (t.segment_wait_ms, t.segment_billed_s)).unwrap_or((0, 0));
+        let elapsed = wall.saturating_sub(std::time::Duration::from_millis(waited_ms));
         self.spend_add(now, (elapsed.as_secs_f64() - billed as f64).max(0.0));
         let mut next: Option<u32> = None;
         let res = self.task_mut(&ctx.task_id, |t| {
@@ -845,7 +854,7 @@ impl Engine {
             }
             t.current_run_id = None;
             t.segment_started_at = None;
-            t.segment_wait_s = 0;
+            t.segment_wait_ms = 0;
             t.segment_billed_s = 0;
             if t.status != "running" {
                 // Paused, killed or cancelled from outside while the run was ending: that already decided.
@@ -944,6 +953,9 @@ impl Engine {
     }
 
     pub(crate) fn tasks_pass_at(&self, now: DateTime<Local>) {
+        if !self.0.tasks.driven {
+            return;
+        }
         let list: Vec<BackgroundTask> = self.0.store.list_docs(KIND).unwrap_or_default();
         for t in list.iter().filter(|t| t.status == "paused" && t.auto_resume) {
             if self.task_gate(t, now).is_some() || exhausted(t).is_some() {
@@ -960,6 +972,17 @@ impl Engine {
             });
         }
         self.tasks_forget_old(&list);
+    }
+
+    /// Changes a task document for a test (the state a crash or a rule would leave).
+    #[cfg(test)]
+    pub(crate) fn task_mut_for_tests(&self, id: &str, f: impl FnOnce(&mut BackgroundTask)) -> BackgroundTask {
+        self.task_mut(id, |t| {
+            f(t);
+            Ok(())
+        })
+        .unwrap()
+        .0
     }
 
     /// Is this the session of a background task? («Consenti per la sessione» is never remembered for one.)
@@ -1009,6 +1032,9 @@ impl Engine {
     /// At start: whatever says it is going on was cut short by a crash, a kill or a restart. It is paused, and nothing
     /// starts by itself; the instructions that reached a segment that is lost go back to waiting.
     pub(crate) fn tasks_recover(&self) {
+        if !self.0.tasks.driven {
+            return;
+        }
         let list: Vec<BackgroundTask> = self.0.store.list_docs(KIND).unwrap_or_default();
         for t in list.into_iter().filter(|t| matches!(t.status.as_str(), "running" | "queued")) {
             let history: Vec<ChatMessage> = self.0.store.messages(&t.session_id).unwrap_or_default();

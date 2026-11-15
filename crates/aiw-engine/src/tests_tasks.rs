@@ -937,3 +937,51 @@ async fn a_short_instruction_is_not_taken_for_delivered_because_a_tool_said_the_
     let (e, _) = engine_at(data.path(), ws.path(), vec![]).await;
     assert_eq!(e.task(&t.id).unwrap().instructions[0].status, "pending");
 }
+
+#[tokio::test]
+async fn a_one_shot_process_next_to_the_app_leaves_its_running_tasks_alone() {
+    let data = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let (app, _) = engine_at(data.path(), ws.path(), vec![]).await;
+    let live = crash_state(&app, true);
+    // A command of the CLI opens the same data while the app is working: it must not pause what the app is running.
+    let cli = Engine::new(EngineOptions {
+        data_dir: Some(data.path().to_path_buf()),
+        workspace_root: Some(ws.path().to_path_buf()),
+        mode: "embedded".into(),
+        offline: true,
+        no_tasks: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(app.task(&live.id).unwrap().status, "running", "not turned into «interrotto dal riavvio»");
+    // Nor does it resume what is paused by a rule.
+    let held = app.task_mut_for_tests(&live.id, |t| {
+        t.status = "paused".into();
+        t.auto_resume = true;
+        t.pause_reason = Some("quiet_hours".into());
+    });
+    assert_eq!(held.status, "paused");
+    cli.tasks_pass_at(Local::now());
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(cli.task(&live.id).unwrap().status, "paused");
+    assert!(cli.0.runs.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_agents_time_setting_does_not_end_a_task_that_only_waited_for_a_confirmation() {
+    // `agents.budget.max_seconds` is the clock of every run; a task's steps run with that clock off, so the minutes a person
+    // takes to answer a confirmation do not end the step.
+    let r =
+        rig(vec![ScriptedBackend::tool_turn("w1", "write_file", json!({"path": "nota.md", "content": "# Nota\n"})), text("Fatto.")]).await;
+    let e = &r.e;
+    set(e, "agents.budget.max_seconds", json!(1));
+    let t = e.task_start(start("Crea una nota")).await.unwrap();
+    wait_for("a confirmation is asked", || !e.approvals().is_empty()).await;
+    tokio::time::sleep(std::time::Duration::from_millis(1800)).await;
+    let ask = e.approvals().remove(0);
+    e.respond_approval(&ask.id, true, false).unwrap();
+    let done = wait_status(e, &t.id, "succeeded").await;
+    assert!(r.ws.path().join("nota.md").exists(), "{done:?}");
+}

@@ -2685,10 +2685,10 @@ pub struct BackgroundTask {
     /// When the running segment started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segment_started_at: Option<String>,
-    /// Seconds the running segment spent waiting for the person's confirmations (internal: waiting is not working, so it
+    /// Milliseconds the running segment spent waiting for the person's confirmations (internal: waiting is not working, so it
     /// counts neither against the limits of the task nor against the day's time).
     #[serde(default)]
-    pub segment_wait_s: u64,
+    pub segment_wait_ms: u64,
     /// Seconds of the running segment already added to the day's time (internal: added at every turn, so that the day's
     /// time never counts a wait nor a step that has not ended).
     #[serde(default)]

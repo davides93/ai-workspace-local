@@ -116,7 +116,7 @@ async fn connect_sources(e: &Engine, calendar: &str) -> Sources {
     )
     .unwrap();
     std::fs::write(
-        md.join("cur/3:2,S"),
+        md.join(if cfg!(windows) { "cur/3;2,S" } else { "cur/3:2,S" }),
         message(
             "Shop <shop@example.org>",
             "Offerta del giorno",

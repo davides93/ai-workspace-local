@@ -559,6 +559,8 @@ async fn main() -> Result<()> {
         data_dir: cli.data.clone(),
         workspace_root: cli.workspace.clone(),
         mode: if serve_mode { "daemon".into() } else { "embedded".into() },
+        // A command that is not the server runs next to the app that may be open on the same data: the app owns the tasks.
+        no_tasks: !serve_mode,
         ..Default::default()
     })
     .await
