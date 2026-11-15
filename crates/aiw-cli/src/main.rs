@@ -544,10 +544,11 @@ fn ui_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let filter = aiw_core::QUIET_LOG_TARGETS.iter().fold(
-        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,aiw=info".into()),
-        |f, d| f.add_directive(d.parse().expect("a valid log directive")),
-    );
+    let filter = aiw_core::QUIET_LOG_TARGETS
+        .iter()
+        .fold(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,aiw=info".into()), |f, d| {
+            f.add_directive(d.parse().expect("a valid log directive"))
+        });
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
     let cli = Cli::parse();
     // Backup commands never start the engine: restoring must not have the database open, and inspecting needs no data.

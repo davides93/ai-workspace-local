@@ -122,7 +122,7 @@ async fn bodies_that_do_not_fit_are_refused_with_a_fixed_sentence_that_never_quo
         format!(r#"{{"type":"tastiera","text":"{typed}"}}"#), // an unknown kind
         format!(r#"{{"type":"key","key":"{typed}"}}"#),       // a key that does not exist
         format!(r#"{{"type":"text","text":"{typed}","extra":{typed:?}}}"#),
-        format!("{typed}"),
+        typed.to_string(),
     ];
     for body in bodies {
         use tower::ServiceExt;
@@ -170,7 +170,8 @@ async fn nothing_the_person_types_or_sees_reaches_the_logs_and_the_addresses_in_
     use tracing_subscriber::util::SubscriberInitExt;
     let logs = Captured::default();
     // The most the app can log: everything at `trace`, with the rules that hold whatever `RUST_LOG` says.
-    let filter = aiw_core::QUIET_LOG_TARGETS.iter().fold(tracing_subscriber::EnvFilter::new("trace"), |f, d| f.add_directive(d.parse().unwrap()));
+    let filter =
+        aiw_core::QUIET_LOG_TARGETS.iter().fold(tracing_subscriber::EnvFilter::new("trace"), |f, d| f.add_directive(d.parse().unwrap()));
     let _guard = tracing_subscriber::fmt().with_env_filter(filter).with_writer(logs.clone()).with_ansi(false).finish().set_default();
     let (app, e, fake, _a, _b) = running().await;
     let (typed, code) = ("PASSWORD-DI-PROVA", "CODICE-DI-PROVA");
@@ -186,7 +187,11 @@ async fn nothing_the_person_types_or_sees_reaches_the_logs_and_the_addresses_in_
     let (st, _) = dispatch(app.clone(), "GET", "/api/browser/frame", None).await;
     assert_eq!(st, 200);
     // A page that asks for an address the policy refuses, with a code in its query: it is logged (that is useful), without the query.
-    fake.push(aiw_tools::browser::fake::event(Some("S2"), "Fetch.requestPaused", json!({"requestId": "r1", "request": {"url": format!("http://127.0.0.1:9/cb?code={code}#t={code}")}})));
+    fake.push(aiw_tools::browser::fake::event(
+        Some("S2"),
+        "Fetch.requestPaused",
+        json!({"requestId": "r1", "request": {"url": format!("http://127.0.0.1:9/cb?code={code}#t={code}")}}),
+    ));
     fake.wait_for(|r| r.method == "Fetch.failRequest").await;
     let (st, _) = dispatch(app.clone(), "POST", "/api/browser/control", Some(json!({"action": "give_back"}))).await;
     assert_eq!(st, 200);
