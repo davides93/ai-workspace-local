@@ -7,7 +7,7 @@ stream SSE del run nella risposta, senza conoscere l'API REST di AIW. Come punta
 su AIW (token, CORS, rete, OpenBot, OpenDots) è nella pagina **Integrazioni** dell'app, che usa questi stessi esempi.
 
 > Stato onesto. **Provato con client veri**: `tests/agui-client` avvia il vero `aiw serve`, un provider OpenAI finto e
-> `HttpAgent` di `@ag-ui/client` **1.0.4** e **1.0.2**, 24 scenari; `tests/agui-copilotkit` mette davanti allo stesso server il
+> `HttpAgent` di `@ag-ui/client` **1.0.4** e **1.0.2**, 29 scenari; `tests/agui-copilotkit` mette davanti allo stesso server il
 > **runtime di CopilotKit** 1.88.0 (lato server, senza account) e ne fa passare un messaggio con ragionamento e una conferma con
 > `resume` (vedi «Provarlo con un client vero»). **Non provato**: i componenti React di CopilotKit (la parte nel browser), OpenBot
 > e OpenDots (richiedono un account CopilotKit e CopilotKit Intelligence, licenza a parte), un modello vero, un telefono,
@@ -445,11 +445,14 @@ La suite (`tests/agui-client/test/interop.test.mjs`, 16-40 secondi, nessun accou
 cartella temporanea, lo punta a un provider OpenAI finto (`lib/fake-provider.mjs`) con le risposte scritte a mano e usa
 `HttpAgent` di `@ag-ui/client`. Fanno fallire il test gli avvisi del client sui campi che toglie perché non li conosce e sulle patch dello
 stato che non riesce ad applicare.
-Scenari, per `@ag-ui/client` 1.0.4 e 1.0.2: testo con ragionamento, stato e contesto; strumento e piano; sottoagente; allegati
-(documento e immagine); conferma come `CUSTOM` con risposta REST; conferma come interruzione con `resume`. Solo per la 1.0.4:
-rifiuto e annullamento, regole del `resume` (richieste scritte a mano), catena di conferme, domanda come interruzione,
-messaggio già eseguito rimandato, client senza cronologia, annullamento con `abortRun()` e pausa che non annulla, segreti fuori
-da stream, messaggi salvati, richieste al modello e log, strumenti del client ignorati, riavvio. I test Rust restano:
+Scenari, per `@ag-ui/client` 1.0.4 e 1.0.2 (7 ciascuno): testo con ragionamento, stato e contesto; strumento e piano;
+sottoagente; allegati (documento e immagine); conferma come `CUSTOM` con risposta REST; conferma come interruzione con `resume`;
+pausa dentro un sottoagente (chiuso come sospeso e riaperto). Solo per la 1.0.4 (15): rifiuto e annullamento, regole del `resume`
+(richieste scritte a mano), catena di conferme senza ripetere `forwardedProps`, la stessa risposta rimandata dopo la seconda pausa,
+risposta a un'interruzione già chiusa nell'app (`interrupt_closed`), due domande nella stessa pausa (una risposta che non va non ne
+consuma nessuna), domanda come interruzione, conferma di uno strumento di gestione, `resume` per un thread ignoto, messaggio già
+eseguito rimandato, client senza cronologia, annullamento con `abortRun()` e pausa che non annulla, segreti fuori da stream, messaggi
+salvati, richieste al modello e log, strumenti del client e `parentRunId` ignorati, riavvio. I test Rust restano:
 `cargo test -p aiw-server agui`, `cargo test -p aiw-server tests_harness`, `cargo test -p aiw-engine agui_threads`.
 
 Il **runtime di CopilotKit** (`tests/agui-copilotkit`, a parte perché il suo `npm ci` pesa circa 300 MB) si prova così:

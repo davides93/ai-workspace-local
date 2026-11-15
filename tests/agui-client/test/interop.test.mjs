@@ -358,6 +358,12 @@ describe("human-in-the-loop interoperabile (@ag-ui/client 1.0.4)", () => {
     });
     assert.equal(r.events[1]?.code, "interrupt_closed", r.raw);
     assert.ok(!fs.existsSync(written(file)), "la risposta tardiva ha eseguito lo strumento");
+    // Rimandata, è ancora «chiusa» (non un conflitto, non una pausa sconosciuta).
+    const again = await rawRun(srv, "operator", {
+      threadId: agent.threadId, runId: uid("run"), messages: structuredClone(agent.messages), forwardedProps: INTERRUPTS,
+      resume: [{ interruptId: it.id, status: "resolved", payload: { approved: true } }],
+    });
+    assert.equal(again.events[1]?.code, "interrupt_closed", again.raw);
   });
 
   it("una catena: la stessa risposta rimandata dopo la seconda pausa rifà lo stream fino alla seconda pausa", async () => {

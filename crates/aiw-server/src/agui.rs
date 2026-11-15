@@ -61,6 +61,9 @@ const SETTLE: Duration = Duration::from_millis(150);
 const MAX_ID_LEN: usize = 256;
 const MAX_STATE_BYTES: usize = 1 << 20;
 
+/// What `Pause.applied` holds for a pause whose interrupts were closed elsewhere before anybody answered here.
+const CLOSED: &str = "\u{0}closed";
+
 /// The pause a thread waits on, and the ones before it that were answered.
 struct Slot {
     current: Pause,
@@ -971,8 +974,12 @@ async fn resume_run(
         }
         if !closed.is_empty() {
             // Closed meanwhile, in the app or because the wait ran out: the run went on without this answer, which is not applied
-            // in silence. The pause is over; sending the message again brings the stream of the run.
-            s.agui.pauses.lock().unwrap().remove(&input.thread_id);
+            // in silence. The pause is over (the answered ones before it stay); sending the message again brings the stream of the run.
+            if let Some(sl) = s.agui.pauses.lock().unwrap().get_mut(&input.thread_id) {
+                if sl.current.run_id == current.run_id && sl.current.next_seq == current.next_seq && sl.current.applied.is_none() {
+                    sl.current.applied = Some(CLOSED.into());
+                }
+            }
             let msg = format!(
                 "le interruzioni {} sono già chiuse (nell'app o per scadenza): il run è andato avanti senza questa risposta; rimanda il messaggio per riprenderne lo stream",
                 closed.join(", ")
@@ -1014,6 +1021,12 @@ async fn resume_run(
         // A pause that was answered: the same answer again is safe, another one is a conflict.
         match &pause.applied {
             Some(done) if *done == print => {}
+            Some(done) if done == CLOSED => {
+                return refuse(
+                    "interrupt_closed",
+                    "queste interruzioni sono già chiuse (nell'app o per scadenza): rimanda il messaggio per riprendere lo stream del run",
+                );
+            }
             _ => return refuse("resume_conflict", "queste interruzioni hanno già ricevuto una risposta diversa"),
         }
     }
