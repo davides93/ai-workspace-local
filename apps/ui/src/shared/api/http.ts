@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, BackgroundTask, Proposal, ProposalQuery, TaskCreate, TaskQuery, TaskResume, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, FoldersInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -336,6 +336,13 @@ export class HttpTransport implements Transport {
   proactiveStatus = () => this.req<ProactiveStatus>("GET", "/proactive/status");
   proactiveTick = () => this.req<TickResult>("POST", "/proactive/tick", {});
   proactiveBackgroundTick = (req: BackgroundRequest = {}) => this.req<BackgroundSummary>("POST", "/proactive/background-tick", req);
+  tasks = (query?: TaskQuery) => this.req<BackgroundTask[]>("GET", `/tasks${queryString({ status: query?.status })}`);
+  createTask = (body: TaskCreate) => this.req<BackgroundTask>("POST", "/tasks", body);
+  task = (id: string) => this.req<BackgroundTask>("GET", `/tasks/${enc(id)}`);
+  pauseTask = (id: string) => this.req<BackgroundTask>("POST", `/tasks/${enc(id)}/pause`, {});
+  resumeTask = (id: string, body: TaskResume = {}) => this.req<BackgroundTask>("POST", `/tasks/${enc(id)}/resume`, body);
+  sendTaskInstruction = (id: string, text: string, source: "user" | "voice" = "user") => this.req<BackgroundTask>("POST", `/tasks/${enc(id)}/instructions`, { text, source });
+  cancelTask = (id: string) => this.req<BackgroundTask>("POST", `/tasks/${enc(id)}/cancel`, {});
   deleteAllMemories = () => this.req<{ deleted: number }>("DELETE", "/memories?confirm=true");
   evalSuites = () => this.req<EvalSuite[]>("GET", "/evals");
   saveEvalSuite = (s: EvalSuite) => this.req<EvalSuite>("PUT", `/evals/${enc(s.id)}`, s);
