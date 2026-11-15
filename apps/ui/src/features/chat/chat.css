@@ -4,6 +4,11 @@
 .ws { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; background: var(--bg); }
 .ws-sessions { width: 264px; flex: none; border-right: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
 .ws-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* The panel of the live view of the browser takes the place of the run panel (the rest of its look is in features/browser, loaded with it). */
+.ws-browser { width: 400px; flex: none; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
+.ws-browser-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4); }
+.ws-browser-btn { flex: none; }
+.ws-browser-btn.is-on { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent); }
 .ws-inspector { width: var(--inspector-w); flex: none; border-left: 1px solid var(--line); background: var(--surface); overflow-y: auto; padding: var(--space-4); }
 
 /* ---------- Sessions ---------- */
@@ -280,6 +285,10 @@ button.ws-note-link { border: 0; background: none; padding: 0; font: inherit; fo
   .ws-log { padding-inline: max(12px, env(safe-area-inset-left, 0px)) max(12px, env(safe-area-inset-right, 0px)); padding-block: var(--space-4); }
   .ws-composer { padding-inline: max(12px, env(safe-area-inset-left, 0px)) max(12px, env(safe-area-inset-right, 0px)); }
   .ws-title { font-size: var(--fs-md); }
+  /* The «Browser» button keeps its name for a screen reader but loses its word: the header is tight. */
+  .ws-browser-label { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .ws-browser-body { padding: var(--space-3); }
+  .ws-head .ws-browser-btn { min-height: 40px; }
   .ws-tool-time, .ws-tool-server { display: none; }
   .ws-bubble-user { max-width: 94%; }
   .ws-user-atts { max-width: 94%; }

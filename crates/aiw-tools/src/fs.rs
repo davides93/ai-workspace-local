@@ -1,4 +1,4 @@
-use crate::{arg_str, truncate_middle, Risk, Tool, ToolContext, ToolOutput};
+use crate::{arg_str, atomic, truncate_middle, Risk, Tool, ToolContext, ToolOutput};
 use aiw_core::{Error, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -130,9 +130,9 @@ impl Tool for WriteFile {
                 current.push('\n');
             }
             current.push_str(content);
-            tokio::fs::write(&p, &current).await?;
+            atomic::write_atomic_async(&p, current.into_bytes()).await?;
         } else {
-            tokio::fs::write(&p, content).await?;
+            atomic::write_atomic_async(&p, content.as_bytes().to_vec()).await?;
         }
         ctx.mark_seen(&p);
         if !existed {
@@ -192,7 +192,7 @@ impl Tool for EditFile {
                 text.push('\n');
             }
             text.push_str(new);
-            tokio::fs::write(&p, &text).await?;
+            atomic::write_atomic_async(&p, text.into_bytes()).await?;
             ctx.mark_seen(&p);
             if !existed {
                 ctx.record_created(&p);
@@ -218,7 +218,7 @@ impl Tool for EditFile {
         }
         ctx.checkpoint(&p);
         let updated = if all { text.replace(old, new) } else { text.replacen(old, new, 1) };
-        tokio::fs::write(&p, &updated).await?;
+        atomic::write_atomic_async(&p, updated.into_bytes()).await?;
         ctx.mark_seen(&p);
         let line = text.find(old).map(|i| text[..i].lines().count() + 1).unwrap_or(1);
         Ok(ToolOutput::text(format!(
@@ -513,7 +513,7 @@ impl Tool for CopyFile {
         if let Some(parent) = to.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::copy(&from, &to).await.map_err(|e| Error::Invalid(format!("copia non riuscita: {e}")))?;
+        atomic::copy_atomic_async(&from, &to).await.map_err(|e| Error::Invalid(format!("copia non riuscita: {e}")))?;
         // The destination did not exist: a rewind deletes the copy.
         ctx.record_created(&to);
         Ok(ToolOutput::text(format!("{} -> {}", rel(ctx, &from), rel(ctx, &to))))
@@ -969,5 +969,68 @@ mod tests {
             assert_eq!(find(n).risk(), Risk::Write, "{n}");
         }
         assert!(all.iter().filter(|t| t.explicit_grant()).all(|t| t.name() == "delete_file"));
+    }
+
+    /// Names in `dir` that are leftovers of an atomic write.
+    fn temp_leftovers(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".aiw-tmp-"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn write_edit_and_copy_replace_files_in_one_piece() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new("run_t", dir.path().to_path_buf());
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        let read = |p: &str| std::fs::read_to_string(dir.path().join(p)).unwrap();
+
+        let out = t("write_file").call(json!({"path":"note/a.md","content":"uno\ndue\ntre\n"}), &ctx).await.unwrap();
+        assert_eq!(out.content, "Creato note/a.md (3 righe, 12 byte)");
+        let out = t("write_file").call(json!({"path":"note/a.md","content":"nuovo"}), &ctx).await.unwrap();
+        assert_eq!(out.content, "Sovrascritto note/a.md (1 righe, 5 byte)");
+        assert_eq!(read("note/a.md"), "nuovo", "the overwrite leaves no tail of the old content");
+        let out = t("write_file").call(json!({"path":"note/a.md","content":"in coda","append":true}), &ctx).await.unwrap();
+        assert!(out.content.starts_with("Aggiunto in fondo a note/a.md"), "{}", out.content);
+        assert_eq!(read("note/a.md"), "nuovo\nin coda");
+        let out = t("edit_file").call(json!({"path":"note/a.md","old_string":"nuovo","new_string":"vecchio"}), &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(read("note/a.md"), "vecchio\nin coda");
+        let out = t("edit_file").call(json!({"path":"note/b.md","old_string":"","new_string":"creato"}), &ctx).await.unwrap();
+        assert_eq!(out.content, "Creato note/b.md (1 righe aggiunte)");
+        assert_eq!(read("note/b.md"), "creato");
+        let out = t("copy_file").call(json!({"from":"note/a.md","to":"copie/a.md"}), &ctx).await.unwrap();
+        assert_eq!(out.content, "note/a.md -> copie/a.md");
+        assert_eq!(read("copie/a.md"), "vecchio\nin coda");
+
+        // A copy that cannot be made is reported as before and leaves nothing behind.
+        let out = t("copy_file").call(json!({"from":"note/a.md","to":"copie/a.md"}), &ctx).await.unwrap();
+        assert!(out.is_error && out.content.contains("esiste già"), "{}", out.content);
+        for d in ["note", "copie", "."] {
+            assert!(temp_leftovers(&dir.path().join(d)).is_empty(), "{d}: {:?}", temp_leftovers(&dir.path().join(d)));
+        }
+    }
+
+    /// An atomic write replaces the file: the permission bits of the old one must carry over.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_and_edit_keep_the_mode_of_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new("run_t", dir.path().to_path_buf());
+        let t = |n: &str| tools().into_iter().find(|t| t.name() == n).unwrap();
+        let script = dir.path().join("run.sh");
+        std::fs::write(&script, "#!/bin/sh\necho uno\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mode = || std::fs::metadata(&script).unwrap().permissions().mode() & 0o7777;
+
+        t("edit_file").call(json!({"path":"run.sh","old_string":"uno","new_string":"due"}), &ctx).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&script).unwrap(), "#!/bin/sh\necho due\n");
+        assert_eq!(mode(), 0o755);
+        t("write_file").call(json!({"path":"run.sh","content":"#!/bin/sh\n","append":true}), &ctx).await.unwrap();
+        assert_eq!(mode(), 0o755);
     }
 }

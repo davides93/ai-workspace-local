@@ -1,4 +1,5 @@
 import { ApiError } from "../http";
+import type { BrowserDemo } from "./browser";
 import type { AgEvent, ChatMessage, Question, QuestionAnswer, QuestionOutcome, QuestionReply, SecretOutcome, SecretReply, SecretRequest } from "../types";
 
 // The script of the Assistente in the demo: it asks the person (`ask_user`) and asks for a secret (`aiw_secret_request`) like
@@ -6,7 +7,7 @@ import type { AgEvent, ChatMessage, Question, QuestionAnswer, QuestionOutcome, Q
 // the answer, then goes on. The value of a secret is never kept: it is checked, used to mark the provider as set up, and
 // dropped; it is not in a message, an event, an audit row or any state of the demo.
 
-export type AssistantScript = "download" | "multiple" | "confirm" | "form" | "secret";
+export type AssistantScript = "download" | "multiple" | "confirm" | "form" | "secret" | "login";
 
 /** The phrases that start each script (any session, whatever the agent), compared without case and accents. */
 const PHRASES: [AssistantScript, string][] = [
@@ -15,6 +16,7 @@ const PHRASES: [AssistantScript, string][] = [
   ["confirm", "cancella i download vecchi"],
   ["form", "crea un assistente per le email"],
   ["secret", "aggiungi il token di hugging face"],
+  ["login", "accedi al sito dei fornitori"],
 ];
 
 const plain = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
@@ -42,7 +44,7 @@ const gone = (what: string) => new ApiError(404, `${what} non trovata (forse gi�
  * the question stays open.
  */
 export function checkAnswer(q: Question, r: Extract<QuestionReply, { action: "answer" }>): QuestionAnswer {
-  if (q.kind === "confirm") {
+  if (q.kind === "confirm" || q.kind === "handover") {
     if (typeof r.confirmed !== "boolean") throw bad("la conferma richiede «sì» o «no»");
     return { selected: null, other: null, confirmed: r.confirmed, values: null };
   }
@@ -153,6 +155,9 @@ export interface AssistantDriver {
   say(text: string): Promise<void>;
   /** A tool call that needs no confirmation or asks for one; `id` is the id of the call. Resolves to whether it ran. */
   tool(name: string, args: unknown, result: string, id: string, approval?: { reason: string; risk: "low" | "medium" | "high" }): Promise<boolean>;
+  /** The controlled browser of the demo, and a way to act on it as the agent (it waits while the person has it, and the person's input waits for it). */
+  browser: BrowserDemo;
+  browserAct<T>(fn: () => Promise<T>): Promise<T>;
   /** Ends the run like the others: the last message, stored with the rest. */
   finish(stored: ChatMessage[], final: string): void;
   now(): string;
@@ -190,6 +195,36 @@ async function askUser(d: AssistantDriver, record: RecordCall, args: { [k: strin
   d.emit({ type: "TOOL_CALL_RESULT", messageId: d.nid("m"), toolCallId: callId, content });
   record(callId, "ask_user", args, content);
   return r;
+}
+
+/**
+ * `browser_handover`: the browser goes to the person, a question of kind `handover` waits, and the browser goes back to the agent whatever ended the wait.
+ * The result for the model never says what the person typed. `null` when the run was cancelled.
+ */
+async function handover(d: AssistantDriver, record: RecordCall, reason: string): Promise<QuestionResult | null> {
+  const callId = d.nid("call");
+  const args = { reason };
+  const q: Question = {
+    id: d.nid("ask"), run_id: d.runId, kind: "handover", title: "Serve il tuo intervento nel browser", message: reason, options: [], multiple: false, allow_other: false, fields: [],
+    confirm_label: "Ho finito: restituisci il controllo", deny_label: "Non posso ora", expires_at: null,
+  };
+  d.emit({ type: "TOOL_CALL_START", toolCallId: callId, toolCallName: "browser_handover" });
+  d.emit({ type: "TOOL_CALL_ARGS", toolCallId: callId, delta: JSON.stringify(args) });
+  d.emit({ type: "TOOL_CALL_END", toolCallId: callId });
+  d.browser.beginHandover({ question_id: q.id, run_id: d.runId, reason });
+  const waiting = d.ask.waitQuestion(q);
+  d.emit({ type: "CUSTOM", name: "aiw.question", value: q });
+  const r = await waiting;
+  d.browser.endHandover();
+  d.emit({ type: "CUSTOM", name: "aiw.question_resolved", value: { id: q.id, outcome: r.outcome, answer: r.answer } });
+  if (r.outcome === "cancelled") return null;
+  const returned = r.outcome === "answered" && r.answer?.confirmed === true;
+  const content = JSON.stringify(returned
+    ? { outcome: "returned", hint: "L'utente ha restituito il controllo. Rifai browser_snapshot per vedere dov'è arrivata la pagina: non conosci ciò che ha scritto e non devi chiederlo." }
+    : r.outcome === "timeout" ? { outcome: "timeout" } : { outcome: "declined", hint: "L'utente non può intervenire ora. Spiega cosa serve e aspetta un suo messaggio." });
+  d.emit({ type: "TOOL_CALL_RESULT", messageId: d.nid("m"), toolCallId: callId, content });
+  record(callId, "browser_handover", args, content);
+  return returned ? r : { outcome: r.outcome === "answered" ? "declined" : r.outcome, answer: null };
 }
 
 const labelsOf = (q: { options: { id: string; label: string }[] }, ids: string[] | null) => (ids ?? []).map((id) => q.options.find((o) => o.id === id)?.label ?? id);
@@ -277,6 +312,23 @@ export async function runAssistantScript(d: AssistantDriver, script: AssistantSc
     if (r.outcome !== "answered") return end("Va bene, non creo nulla.");
     const v = r.answer?.values ?? {};
     return end(`Preparo «${String(v.nome ?? "Posta")}» in ${String(v.lingua ?? "italiano")}${v.da_solo ? ", con risposta automatica" : ", con le bozze da approvare"}.`);
+  }
+
+  if (script === "login") {
+    await say("Apro la pagina di accesso dei fornitori.");
+    const navId = d.nid("call");
+    const nav = { url: "https://fornitori.example.com/accesso" };
+    const opened = "Pagina aperta: «Accedi · Fornitori» (200 OK, 1 modulo con email e password).";
+    await d.browserAct(async () => {
+      d.browser.open("login");
+      await d.tool("browser_navigate", nav, opened, navId);
+    });
+    record(navId, "browser_navigate", nav, opened);
+    await say("Per entrare serve il tuo accesso: lo scrivi tu nella pagina, io non vedo né la password né il codice.");
+    const r = await handover(d, record, "Accedi a fornitori.example.com con la tua email e la tua password.");
+    if (!r) return;
+    if (r.outcome !== "answered") return end("Va bene: senza l'accesso non posso leggere i preventivi riservati.");
+    return end("Grazie: adesso sono dentro. Rileggo la pagina e continuo da qui.");
   }
 
   // script === "secret"

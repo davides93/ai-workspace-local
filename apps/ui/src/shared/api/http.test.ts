@@ -81,6 +81,27 @@ describe("HttpTransport", () => {
     expect(JSON.parse(calls[5].body!)).toEqual({ action: "decline" });
   });
 
+  it("calls the paths of the live view of the browser with the bodies of the contract", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url, body: init.body as string | undefined });
+      return new Response("{}", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.browserState();
+    await t.browserFrame();
+    await t.browserControl("take");
+    await t.browserInput({ type: "click", x: 0.25, y: 0.5, button: "left", count: 1 });
+    await t.browserInput({ type: "text", text: "123456" });
+    await t.browserDialog({ action: "accept", text: "ok" });
+    expect(calls.map((c) => `${c.method} ${c.url.replace("http://h/api", "")}`)).toEqual([
+      "GET /browser", "GET /browser/frame", "POST /browser/control", "POST /browser/input", "POST /browser/input", "POST /browser/dialog",
+    ]);
+    expect(JSON.parse(calls[2].body!)).toEqual({ action: "take" });
+    expect(JSON.parse(calls[3].body!)).toEqual({ type: "click", x: 0.25, y: 0.5, button: "left", count: 1 });
+    expect(JSON.parse(calls[5].body!)).toEqual({ action: "accept", text: "ok" });
+  });
+
   it("calls the paths of the contract", async () => {
     const calls: { method: string; url: string; body?: string }[] = [];
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {

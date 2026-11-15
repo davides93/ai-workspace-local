@@ -1,6 +1,6 @@
 import type { AgEvent, AiwImage, ApprovalRequest } from "../../../shared/api/types";
 import { applyA2ui, type A2uiMessage } from "../a2ui";
-import { ASK_TOOL, asQuestionOutcome, asSecretOutcome, parseQuestion, parseQuestionResult, parseSecret, parseSecretResult, QUESTION_EVENT, QUESTION_RESOLVED_EVENT, SECRET_EVENT, SECRET_RESOLVED_EVENT, SECRET_TOOL, toAnswer } from "../../ask/model";
+import { asQuestionOutcome, asSecretOutcome, parseQuestion, parseQuestionResult, parseSecret, parseSecretResult, QUESTION_EVENT, QUESTION_RESOLVED_EVENT, SECRET_EVENT, SECRET_RESOLVED_EVENT, SECRET_TOOL, toAnswer, toolOfQuestion } from "../../ask/model";
 import { ATTACHMENTS_EVENT, CHECK, checkText, FORMAT_CHECK, formatCheckText, HANDOFF, modelLabel, readsExternalContent, rolesNoteText, SELF_CHECK, selfCheckText, type Item, type ToolImage } from "./items";
 import { resultStatus } from "./tools";
 
@@ -239,7 +239,7 @@ function reduceCustom(items: Item[], name: string, value: unknown): Item[] {
       const q = parseQuestion(value);
       // The same question again (the events of a run replayed on re-attach): the row is already there.
       if (!q || items.some((x) => x.kind === "question" && x.id === q.id)) return items;
-      return openAsk(items, ASK_TOOL, (callId) => ({ kind: "question", id: q.id, ...(callId ? { callId } : {}), q }));
+      return openAsk(items, toolOfQuestion(q), (callId) => ({ kind: "question", id: q.id, ...(callId ? { callId } : {}), q }));
     }
     case QUESTION_RESOLVED_EVENT: {
       const v = (value ?? {}) as { id?: string; outcome?: string; answer?: unknown };

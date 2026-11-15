@@ -65,9 +65,12 @@ pub(crate) fn mobile_workspace(app: &tauri::AppHandle<tauri::Wry>, data_dir: &st
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .try_init();
+    let filter = aiw_core::QUIET_LOG_TARGETS
+        .iter()
+        .fold(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()), |f, d| {
+            f.add_directive(d.parse().expect("a valid log directive"))
+        });
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
     let builder = tauri::Builder::default();
     // Registered first, as the plugin requires: a second launch focuses the window that is already
     // there (possibly hidden in the tray). macOS opens one instance per app by itself.

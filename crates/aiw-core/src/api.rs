@@ -2127,7 +2127,8 @@ pub struct QuestionField {
 pub struct Question {
     pub id: String,
     pub run_id: String,
-    /// choice | confirm | form
+    /// choice | confirm | form | handover (the agent asks the person to do a step in the browser: log in, a
+    /// verification code; the card shows the live view and ends with «done»)
     pub kind: String,
     #[serde(default)]
     pub title: Option<String>,

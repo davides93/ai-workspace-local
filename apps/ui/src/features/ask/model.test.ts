@@ -4,7 +4,7 @@ import { normalizeAgent } from "../agents/model/agents";
 import type { AgentProfile, Question } from "../../shared/api/types";
 import {
   answerSummary, bannerSession, canRequestSecret, choiceCount, choiceReply, closedText, confirmReply, digitChoice, emptyChoice, formReply, initialFormValues, isManagementTool,
-  isTypingTarget, openChatSession, parseQuestion, parseQuestionArgs, parseQuestionResult, parseSecret, parseSecretResult, pickChoice, questionTitle, secretClosedText, secretFailure, typeOther, waitingElsewhere,
+  isTypingTarget, openChatSession, parseQuestion, toolOfQuestion, parseQuestionArgs, parseQuestionResult, parseSecret, parseSecretResult, pickChoice, questionTitle, secretClosedText, secretFailure, typeOther, waitingElsewhere,
 } from "./model";
 
 const base: Question = {
@@ -268,5 +268,43 @@ describe("agent profile", () => {
       delegate_tools: ["read_file", "browser_navigate"],
     };
     expect(normalizeAgent(assistant).delegate_tools).toEqual(["read_file", "browser_navigate"]);
+  });
+});
+
+describe("request for help in the browser (kind handover)", () => {
+  const handover: Question = {
+    ...base, id: "ask_h", kind: "handover", title: "Serve il tuo intervento nel browser", message: "Accedi a example.com", options: [],
+    confirm_label: "Ho finito: restituisci il controllo", deny_label: "Non posso ora",
+  };
+
+  it("is a kind the engine sends: it is parsed (a question of a kind that is not known is dropped), with its labels", () => {
+    expect(parseQuestion({ ...handover })).toMatchObject({ id: "ask_h", kind: "handover", message: "Accedi a example.com", confirm_label: "Ho finito: restituisci il controllo", deny_label: "Non posso ora" });
+    expect(parseQuestion({ ...handover, kind: "poll" })).toBeNull();
+  });
+
+  it("stands for the browser_handover tool, not for ask_user", () => {
+    expect(toolOfQuestion(handover)).toBe("browser_handover");
+    expect(toolOfQuestion(base)).toBe("ask_user");
+  });
+
+  it("the answer is a confirmation, in the words of the button", () => {
+    expect(confirmReply(true)).toMatchObject({ action: "answer", confirmed: true });
+    expect(answerSummary(handover, { selected: null, other: null, confirmed: true, values: null })).toBe("Ho finito: restituisci il controllo");
+  });
+
+  it("the closed row says what happened, not «Hai risposto: …»", () => {
+    const yes = { selected: null, other: null, confirmed: true, values: null };
+    expect(closedText(handover, "answered", yes)).toBe("Hai restituito il browser all'agente.");
+    expect(closedText(handover, "answered", { ...yes, confirmed: false })).toBe("Non hai completato il passaggio nel browser.");
+    expect(closedText(handover, "declined", null)).toBe("Hai detto che non potevi intervenire ora.");
+    expect(closedText(handover, "timeout", null)).toBe(closedText(base, "timeout", null));
+    expect(closedText(handover, "cancelled", null)).toBe(closedText(base, "cancelled", null));
+  });
+
+  it("the result of browser_handover closes the row: «returned» is a confirmation, «declined» and «timeout» are themselves", () => {
+    expect(parseQuestionResult('{"outcome":"returned","hint":"x"}')).toEqual({ outcome: "answered", answer: { selected: null, other: null, confirmed: true, values: null } });
+    expect(parseQuestionResult('{"outcome":"declined","hint":"x"}')).toEqual({ outcome: "declined", answer: null });
+    expect(parseQuestionResult('{"outcome":"timeout"}')).toEqual({ outcome: "timeout", answer: null });
+    expect(parseQuestionResult('{"outcome":"not_open"}')).toBeNull();
   });
 });

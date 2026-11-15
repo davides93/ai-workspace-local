@@ -256,7 +256,7 @@ sequenceDiagram
 - **Eventi**: AG-UI 1.0 (`RUN_STARTED`, `TEXT_MESSAGE_*`, `REASONING_*`, `TOOL_CALL_*`,
   `STATE_SNAPSHOT`, `SUBAGENT_*`, `RUN_FINISHED`/`RUN_ERROR`) più `CUSTOM` con nome
   `aiw.approval_request`, `aiw.approval_resolved`, `aiw.todo`, `aiw.usage` e, per le domande e i segreti
-  dell'agente (§5.2 bis), `aiw.question`, `aiw.question_resolved`, `aiw.secret_request`, `aiw.secret_resolved`.
+  dell'agente (§5.2 bis), `aiw.question`, `aiw.question_resolved`, `aiw.secret_request`, `aiw.secret_resolved` e, per la vista live del browser (`docs/browser-live.md`), `aiw.browser`.
   Ogni evento viene salvato (P17), così i run sono riproducibili.
 - **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo; le chiamate `agent`
   consecutive formano un gruppo a sé, eseguito in parallelo fino a `agents.max_parallel_subagents` (default 3).

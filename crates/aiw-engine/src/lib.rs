@@ -6,6 +6,8 @@ pub mod adviser;
 pub mod attachments;
 pub mod background;
 pub mod backup;
+mod browser_live;
+pub use browser_live::{Frame as BrowserFrame, HumanInput as BrowserInput, LiveState as BrowserState};
 pub mod channels;
 mod dataset;
 pub mod defaults;
@@ -202,6 +204,8 @@ pub(crate) struct Inner {
     pub elicitations: Mutex<HashMap<String, (McpElicitation, oneshot::Sender<aiw_tools::mcp::Elicited>)>>,
     /// Questions of `ask_user` waiting for the person, by id.
     pub questions: Mutex<HashMap<String, PendingQuestion>>,
+    /// The running sub-agents: sub-run id → the run that delegated to it (see [`Engine::root_run`]).
+    pub run_parents: Mutex<HashMap<String, String>>,
     /// Requests for a secret of `aiw_secret_request` waiting for the person, by id.
     pub secret_requests: Mutex<HashMap<String, PendingSecret>>,
     /// OAuth sign-ins in progress, by `state` (see `mcp_oauth`).
@@ -374,6 +378,7 @@ impl Engine {
             mcp: Default::default(),
             elicitations: Default::default(),
             questions: Default::default(),
+            run_parents: Default::default(),
             secret_requests: Default::default(),
             oauth_pending: Default::default(),
             store,
@@ -410,9 +415,11 @@ impl Engine {
         engine.register_peer_pins();
         engine.sync_connectors();
         engine.sync_search();
+        engine.sync_browser();
         training_tool::register(&engine);
         engine.register_channel_tool();
         management::register(&engine);
+        browser_live::register(&engine);
         engine.seed()?;
         engine.resume_workflows();
         if !opts.offline {
@@ -447,6 +454,12 @@ impl Engine {
         for a in defaults::agents().into_iter().filter(|a| defaults::LATE_AGENTS.contains(&a.id.as_str())) {
             if s.get_doc::<AgentProfile>("agent", &a.id)?.is_none() {
                 s.put_doc("agent", &a.id, &a)?;
+            }
+        }
+        // The Navigatore stored before the live view gets its two new tools if nobody had edited its list.
+        if let Some(mut b) = s.get_doc::<AgentProfile>("agent", "browser")? {
+            if defaults::upgrade_browser_agent(&mut b) {
+                s.put_doc("agent", &b.id, &b)?;
             }
         }
         if s.get_doc::<InferenceProfile>("profile", "default")?.is_none() {
@@ -2081,6 +2094,19 @@ impl Engine {
 
     /// Who started a run that is still going, when the server started it for a person. `None` for
     /// every other run (and for one that has finished): see [`RunOrigin`].
+    /// The run a person started that this run belongs to: itself, or, for a sub-agent, the run that delegated to it (and so on up).
+    pub fn root_run(&self, run_id: &str) -> String {
+        let parents = self.0.run_parents.lock().unwrap();
+        let mut id = run_id;
+        for _ in 0..16 {
+            match parents.get(id) {
+                Some(p) => id = p,
+                None => break,
+            }
+        }
+        id.to_string()
+    }
+
     pub fn run_origin(&self, run_id: &str) -> Option<RunOrigin> {
         self.0.runs.lock().unwrap().get(run_id).filter(|h| !h.done).and_then(|h| h.origin)
     }
@@ -2512,6 +2538,9 @@ impl Engine {
         }
         if key.starts_with("search.") {
             self.sync_search();
+        }
+        if key.starts_with("browser.") {
+            self.sync_browser();
         }
         if key == "workspace.root" {
             if let Some(p) = self.0.config.get_str("workspace.root") {

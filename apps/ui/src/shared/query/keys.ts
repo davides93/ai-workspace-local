@@ -52,6 +52,8 @@ export const qk = {
   /** Questions of the agent and requests for a secret (`features/ask`). */
   questions: () => ["questions"] as const,
   secretRequests: () => ["secret-requests"] as const,
+  /** The state of the controlled browser (`features/browser`): who drives it and the page in front. Never a frame: those live in the component. */
+  browser: () => ["browser"] as const,
   runEvents: (runId: string) => ["runs", "events", runId] as const,
 
   lessons: {

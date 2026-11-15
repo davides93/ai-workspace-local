@@ -128,6 +128,7 @@ pub fn app_schema() -> SettingsSchema {
             "search.provider": {"type": "string", "title": "Motore della ricerca web", "description": "Con «Automatico» usa SearXNG se hai indicato un indirizzo, altrimenti Brave se hai inserito una chiave, altrimenti DuckDuckGo. Il testo cercato viene inviato al motore scelto. «Spenta» toglie lo strumento di ricerca agli agenti", "enum": ["auto", "off", "searxng", "brave", "duckduckgo"], "default": "auto"},
             "search.searxng_url": {"type": "string", "title": "Indirizzo di SearXNG", "description": "Istanza di SearXNG, anche su questo computer o sulla rete di casa (per esempio http://localhost:8080). Deve consentire il formato json", "default": "", "placeholder": "http://localhost:8080"},
             "search.brave_api_key": {"type": "string", "title": "Chiave di Brave Search", "description": "Chiave dell'API di Brave Search; resta su questo dispositivo e non viene mai mostrata per intero", "default": "", "secret": true},
+            "browser.attach_url": {"type": "string", "title": "Collega un Chrome già aperto", "description": "Indirizzo di debug di un Chrome che hai avviato tu con --remote-debugging-port e --user-data-dir (per esempio http://127.0.0.1:9222). Solo su questo computer. L'agente apre schede sue dentro quel Chrome, senza vedere le tue, ma agisce con gli accessi (cookie) di quel profilo; i download restano a Chrome. Lasciato vuoto, usa il suo browser separato. Vale dal prossimo avvio del browser", "default": "", "placeholder": "http://127.0.0.1:9222"},
             "voice.language": {"type": "string", "title": "Lingua della voce", "description": "Codice ISO 639-1 (it, en…) o auto per riconoscerla", "default": "auto"},
             "voice.stt_runtime": {"type": "string", "title": "Motore di trascrizione", "description": "auto: whisper.cpp, poi un server locale che trascrive, poi un dispositivo accoppiato", "enum": ["auto", "whisper-server", "localai", "nexa", "aiw-peer", "remote-openai"], "default": "auto"},
             "voice.stt_model": {"type": "string", "title": "Modello Whisper", "description": "Vuoto = il più grande installato che sta in memoria", "default": ""},
@@ -204,6 +205,8 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "search.provider",
     "search.searxng_url",
     "search.brave_api_key",
+    // Which Chrome the agent drives (and so whose logged-in sessions it acts with) is the person's choice, not a repository's.
+    "browser.attach_url",
     // The server that gets the text to read aloud is the person's choice, not a repository's.
     "voice.tts.engine",
     "voice.tts.server_url",
@@ -234,6 +237,8 @@ const MANAGEMENT_NEVER: &[&str] = &[
     "server.tls.key_file",
     "security.secrets_at_rest",
     "telemetry.otlp",
+    // Whose logged-in browser the agent drives: an agent does not widen its own reach.
+    "browser.attach_url",
 ];
 
 /// The keys the management tools of the Assistant change only with `aiw_setting_set_protected`.
@@ -255,6 +260,44 @@ pub fn is_management_protected_key(key: &str) -> bool {
 /// Is `key` one the management tools never change?
 pub fn is_management_forbidden_key(key: &str) -> bool {
     MANAGEMENT_NEVER.contains(&key) || WORKSPACE_TIGHTEN_ONLY.iter().any(|(k, _)| *k == key)
+}
+
+/// Is this the DevTools endpoint of a browser on this computer: `http://` or `ws://`, a loopback host (`127.x.y.z`, `[::1]`,
+/// `localhost`), an explicit port, no user name, no password. The one place that decides it: the setting is checked with it
+/// when it is saved and the browser checks it again when it connects (and checks the address Chrome answers with).
+pub fn is_loopback_endpoint(text: &str) -> bool {
+    let lower = text.trim().to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("http://").or_else(|| lower.strip_prefix("ws://")) else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') || authority.contains(char::is_whitespace) {
+        return false;
+    }
+    let (host, port) = if let Some(inner) = authority.strip_prefix('[') {
+        let Some((host, after)) = inner.split_once(']') else { return false };
+        (host, after.strip_prefix(':'))
+    } else {
+        match authority.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (authority, None),
+        }
+    };
+    let port_ok = port.is_some_and(|p| p.parse::<u16>().is_ok_and(|n| n > 0));
+    let host_ok = host == "localhost"
+        || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
+        || host.parse::<std::net::Ipv6Addr>().is_ok_and(|ip| ip.is_loopback());
+    host_ok && port_ok
+}
+
+/// `browser.attach_url`: empty (not set) or the DevTools endpoint of a browser on this computer.
+fn check_attach_url(v: &Value) -> Result<()> {
+    let Some(text) = v.as_str().map(str::trim).filter(|t| !t.is_empty()) else { return Ok(()) };
+    if is_loopback_endpoint(text) {
+        Ok(())
+    } else {
+        Err(Error::Invalid(
+            "`browser.attach_url` deve essere l'indirizzo di debug di un Chrome su questo computer, con la porta (per esempio http://127.0.0.1:9222)".into(),
+        ))
+    }
 }
 
 /// The address of the SearXNG instance: empty (not set) or an http(s) URL.
@@ -646,6 +689,9 @@ impl LayeredConfig {
         if key == "voice.tts.server_url" {
             check_server_url(&value, key)?;
         }
+        if key == "browser.attach_url" {
+            check_attach_url(&value)?;
+        }
         let (lock, path) = match layer {
             Layer::Global => (&self.global, Some(self.global_path.clone())),
             Layer::Device => (&self.device, Some(self.device_path.clone())),
@@ -887,6 +933,36 @@ mod tests {
     }
 
     #[test]
+    fn only_a_browser_on_this_computer_can_be_attached() {
+        for ok in [
+            "http://127.0.0.1:9222",
+            "http://localhost:9333/json/version",
+            "http://[::1]:9222",
+            "ws://127.0.0.1:9222/devtools/browser/abc",
+            " HTTP://127.0.0.1:9222 ",
+        ] {
+            assert!(is_loopback_endpoint(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "http://192.168.1.5:9222",
+            "http://example.com:9222",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:99999",
+            "http://user:pw@127.0.0.1:9222",
+            "http://127.0.0.1:9222@evil.example:80",
+            "http://evil.example:9222/127.0.0.1:9222",
+            "http://localhost.evil.example:9222",
+            "https://127.0.0.1:9222",
+            "file:///tmp/x",
+            "127.0.0.1:9222",
+        ] {
+            assert!(!is_loopback_endpoint(bad), "{bad}");
+        }
+    }
+
+    #[test]
     fn the_keys_the_management_tools_protect_or_never_touch_are_the_ones_of_the_plan() {
         let protected = management_protected_keys();
         let forbidden = management_forbidden_keys();
@@ -912,6 +988,7 @@ mod tests {
             "server.tls.key_file",
             "security.secrets_at_rest",
             "telemetry.otlp",
+            "browser.attach_url",
         ];
         expected.sort_unstable();
         assert_eq!(sorted, expected);

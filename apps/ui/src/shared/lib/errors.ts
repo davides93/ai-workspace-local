@@ -26,6 +26,11 @@ export function isNotFound(e: unknown): boolean {
   return errorStatus(e) === 404;
 }
 
+/** 403: this device may not do it (a paired device and the owner's routes, for one). */
+export function isForbidden(e: unknown): boolean {
+  return errorStatus(e) === 403;
+}
+
 /** Waits for `p` and treats a 404 as success: deleting what is already gone has done what was asked. */
 export async function ignoreNotFound(p: Promise<unknown>): Promise<void> {
   try {

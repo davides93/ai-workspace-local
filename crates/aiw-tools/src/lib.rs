@@ -1,6 +1,7 @@
 //! Tool layer (architecture §6). Every tool declares a JSON-schema for its arguments, a risk
 //! class used by the policy engine, and the "subject" (path/command/url) that policy rules match.
 
+pub(crate) mod atomic;
 pub mod browser;
 pub mod checkpoint;
 pub mod computer;
