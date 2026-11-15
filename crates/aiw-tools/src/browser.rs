@@ -8,10 +8,15 @@
 
 mod ax;
 mod cdp;
-#[cfg(test)]
-mod fake;
+mod control;
+/// A fake CDP endpoint for the tests of this crate and of the ones above it (`testing` feature).
+#[cfg(any(test, feature = "testing"))]
+pub mod fake;
+mod live;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_live;
 
 use crate::web::{html_to_text, proxy_applies, system_resolve, vet_url_with};
 use crate::{arg_str, Risk, Tool, ToolContext, ToolOutput};
@@ -19,10 +24,12 @@ use aiw_core::{Error, Result};
 use async_trait::async_trait;
 pub(crate) use cdp::RefArg;
 use cdp::{Cdp, SnapFmt, MAX_DOWNLOADS_PER_RUN, MAX_DOWNLOAD_BYTES, MAX_TABS};
+pub use control::{without_query, Control, ControlState, Gate, Handover, Limits, Mode, OpGuard};
+pub use live::{DialogInfo, Frame, HumanInput, LiveState, PageInfo};
 use serde_json::{json, Value};
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -50,9 +57,12 @@ pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag);
     const type = el.getAttribute('type');
-    const label = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    // What a person types to prove who they are (passwords, codes, card numbers) is never written out: not as the
+    // value, and not as the label a field without a name would otherwise get from its value.
+    const hide = (tag === 'input' || tag === 'textarea') && (el.type === 'password' || /(^|\s)(one-time-code|current-password|new-password|cc-[a-z-]+)(\s|$)/i.test(el.getAttribute('autocomplete') || ''));
+    const label = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (hide ? '' : el.value) || '').trim().replace(/\s+/g, ' ').slice(0, 80);
     let extra = '';
-    if (tag === 'input' || tag === 'textarea') extra = ` value="${String(el.value || '').slice(0, 40)}"`;
+    if (tag === 'input' || tag === 'textarea') extra = hide ? (el.value ? ' value="(nascosto)"' : ' value=""') : ` value="${String(el.value || '').slice(0, 40)}"`;
     if (tag === 'a') extra = ` -> ${String(el.getAttribute('href')).slice(0, 90)}`;
     if (tag === 'select') extra = ` [${[...el.options].slice(0, 8).map(o => o.text.trim()).join(' | ')}]`;
     if (type === 'checkbox' || type === 'radio') extra += el.checked ? ' (selezionato)' : '';
@@ -67,6 +77,17 @@ pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
   return `Titolo: ${document.title}\nURL: ${location.href}\nPosizione: ${pos}\n\nElementi interattivi (usa il numero come ref):\n${out.join('\n')}\n\nTesto visibile:\n${text}`;
 })()"#;
 
+/// The values of the fields where a person types who they are (passwords, one-time codes, card numbers), as a
+/// array of strings (by value: not through `JSON.stringify`, which a page may change). The accessibility snapshot hides them wherever it would write them (see `ax::render`).
+pub(crate) const SECRET_VALUES_JS: &str = r#"(() => Array.from(document.querySelectorAll('input,textarea')).filter(el => el.type === 'password' || /(^|\s)(one-time-code|current-password|new-password|cc-[a-z-]+)(\s|$)/i.test(el.getAttribute('autocomplete') || '')).map(el => String(el.value || '')).filter(v => v.length > 0).slice(0, 20))()"#;
+
+/// Draws the fields where a person types who they are (see `SECRET_VALUES_JS`) as dots, for a screenshot that goes to the model.
+pub(crate) const MASK_SECRETS_JS: &str = r#"(() => { const s = document.createElement('style'); s.id = 'aiw-secret-mask'; s.textContent = "input[type=password], input[autocomplete~='one-time-code'], input[autocomplete~='current-password'], input[autocomplete~='new-password'], input[autocomplete^='cc-'], textarea[autocomplete^='cc-'] { -webkit-text-security: disc !important; }"; (document.head || document.documentElement).appendChild(s); return 'ok'; })()"#;
+
+/// Takes the mask of [`MASK_SECRETS_JS`] off.
+pub(crate) const UNMASK_SECRETS_JS: &str =
+    r#"(() => { const s = document.getElementById('aiw-secret-mask'); if (s) s.remove(); return 'ok'; })()"#;
+
 /// Network policy of the controlled browser: the context of the tool call that is running (it
 /// changes from call to call) and the resolver used to vet names.
 #[derive(Clone)]
@@ -75,6 +96,8 @@ pub(crate) struct Policy {
     pub(crate) resolve: ResolveFn,
     /// Requests refused since the last navigation started: `(url, reason)`.
     pub(crate) blocked: Arc<Mutex<Vec<(String, String)>>>,
+    /// The person drives the browser (live view): what they start is not the run's doing (downloads).
+    pub(crate) human: Arc<AtomicBool>,
 }
 
 pub(crate) type ResolveFn = Arc<dyn Fn(String, u16) -> futures::future::BoxFuture<'static, std::io::Result<Vec<IpAddr>>> + Send + Sync>;
@@ -123,7 +146,7 @@ fn handle_paused(params: Value, session: Option<String>, policy: Policy, tx: mps
         let (method, params) = match verdict {
             Ok(Ok(())) => ("Fetch.continueRequest", json!({"requestId": request_id})),
             Ok(Err(why)) => {
-                tracing::warn!(%url, %why, "browser: request blocked by network policy");
+                tracing::warn!(url = %without_query(&url), %why, "browser: request blocked by network policy");
                 let mut b = policy.blocked.lock().unwrap();
                 if b.len() < 50 {
                     b.push((url.clone(), why));
@@ -131,7 +154,7 @@ fn handle_paused(params: Value, session: Option<String>, policy: Policy, tx: mps
                 ("Fetch.failRequest", json!({"requestId": request_id, "errorReason": "BlockedByClient"}))
             }
             Err(_) => {
-                tracing::warn!(%url, "browser: verdict timed out, request failed");
+                tracing::warn!(url = %without_query(&url), "browser: verdict timed out, request failed");
                 ("Fetch.failRequest", json!({"requestId": request_id, "errorReason": "BlockedByClient"}))
             }
         };
@@ -156,7 +179,9 @@ fn fetch_patterns() -> Value {
 
 struct Session {
     child: Option<tokio::process::Child>,
-    cdp: Cdp,
+    cdp: Arc<Cdp>,
+    /// Somebody's own Chrome (see `BrowserManager::attach`): closing leaves it open.
+    attached: bool,
 }
 
 /// Owns the controlled browser (one per engine). Lazily started on first use.
@@ -164,14 +189,61 @@ pub struct BrowserManager {
     profile_dir: PathBuf,
     headless: bool,
     session: tokio::sync::Mutex<Option<Session>>,
+    /// The connection of the running browser, for the live view: reachable without the lock of `session`,
+    /// which an action of the agent holds for as long as it runs. Never starts a browser.
+    live: Mutex<Option<Arc<Cdp>>>,
+    /// Who drives the browser (the agent, nobody, the person); see `control.rs`.
+    control: Arc<Control>,
+    /// The run whose action used the browser last: the live events are attached to it.
+    last_run: Mutex<Option<String>>,
+    /// How long a `confirm` or `prompt` waits for an answer (`None`: the default, see `cdp::DIALOG_HOLD`).
+    dialog_hold: Mutex<Option<Duration>>,
     pub(crate) policy: Policy,
     /// In-app WebView (iOS, Android): when set, the tools drive it instead of Chrome.
     webview: Mutex<Option<Arc<crate::webview::WebViewHost>>>,
     /// Extra Chrome command-line flags (tests only).
     extra_args: Vec<String>,
-    /// A browser that is already running (tests: a fake CDP endpoint) instead of launching Chrome.
+    /// A Chrome the person started and wants the agent to use (`browser.attach_url`) instead of launching one of ours:
+    /// the DevTools address, always on this computer. Read when the browser starts.
+    attach: Mutex<Option<String>>,
+    /// A browser that is already running as if we had launched it (tests: a fake CDP endpoint).
     #[cfg(test)]
     endpoint: Option<String>,
+}
+
+/// The WebSocket address of the Chrome the person chose, checked at every step: the address they gave must be on this
+/// computer, and so must the one Chrome answers with (a name or a redirect could lead anywhere else).
+async fn attach_endpoint(endpoint: &str) -> Result<String> {
+    let not_here =
+        || Error::Denied("il Chrome da collegare deve stare su questo computer (127.0.0.1, [::1] o localhost, con la porta)".into());
+    if !aiw_core::config::is_loopback_endpoint(endpoint) {
+        return Err(not_here());
+    }
+    if endpoint.trim().to_ascii_lowercase().starts_with("ws://") {
+        return Ok(endpoint.trim().to_string());
+    }
+    let base = reqwest::Url::parse(endpoint.trim()).map_err(|_| not_here())?;
+    let host = base.host_str().ok_or_else(not_here)?;
+    let host = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+    let url = format!("http://{host}:{}/json/version", base.port().ok_or_else(not_here)?);
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(Error::other)?;
+    let reached = |e: String| {
+        Error::Runtime(format!(
+            "non riesco a collegarmi al Chrome indicato ({e}): va avviato da te con --remote-debugging-port e --user-data-dir (da Chrome 136 la porta di debug è ignorata con il profilo predefinito)"
+        ))
+    };
+    let version: Value =
+        client.get(&url).send().await.map_err(|e| reached(e.to_string()))?.json().await.map_err(|e| reached(e.to_string()))?;
+    let ws = version["webSocketDebuggerUrl"].as_str().ok_or_else(|| reached("nessun indirizzo di debug nella risposta".into()))?;
+    if !aiw_core::config::is_loopback_endpoint(ws) {
+        return Err(not_here());
+    }
+    Ok(ws.to_string())
 }
 
 pub fn find_chrome() -> Option<PathBuf> {
@@ -203,14 +275,21 @@ impl BrowserManager {
             ctx: Arc::new(Mutex::new(ToolContext::new("browser", std::env::temp_dir()))),
             resolve: Arc::new(|h, p| Box::pin(system_resolve(h, p))),
             blocked: Default::default(),
+            human: Default::default(),
         };
+        let control = Control::new(policy.human.clone());
         Self {
             profile_dir,
             headless,
             session: tokio::sync::Mutex::new(None),
+            live: Mutex::new(None),
+            control,
+            last_run: Mutex::new(None),
+            dialog_hold: Mutex::new(None),
             policy,
             webview: Mutex::new(None),
             extra_args: vec![],
+            attach: Mutex::new(None),
             #[cfg(test)]
             endpoint: None,
         }
@@ -233,8 +312,37 @@ impl BrowserManager {
         self.webview.lock().unwrap().clone()
     }
 
+    /// The Chrome the person wants the agent to use (`browser.attach_url`), if any.
+    pub fn attach(&self) -> Option<String> {
+        self.attach.lock().unwrap().clone()
+    }
+
+    /// Chooses the Chrome the agent uses: `Some(address)` of a Chrome on this computer started by the person with
+    /// `--remote-debugging-port` and `--user-data-dir`, `None` for the browser of our own. It is read when the browser
+    /// starts: a browser that is already running keeps its own until the kill switch closes it. Returns whether it changed.
+    pub fn set_attach(&self, endpoint: Option<String>) -> bool {
+        let endpoint = endpoint.map(|e| e.trim().to_string()).filter(|e| !e.is_empty());
+        let mut g = self.attach.lock().unwrap();
+        let changed = *g != endpoint;
+        *g = endpoint;
+        changed
+    }
+
+    /// How long a `confirm` or `prompt` of a site waits for an answer before it is dismissed (tests shorten it).
+    pub fn set_dialog_hold(&self, hold: Duration) {
+        *self.dialog_hold.lock().unwrap() = Some(hold);
+    }
+
+    /// Who drives the browser (the agent, nobody, the person): see `control.rs`.
+    pub fn control(&self) -> Arc<Control> {
+        self.control.clone()
+    }
+
     pub fn available(&self) -> std::result::Result<(), String> {
         if self.webview().is_some() {
+            return Ok(());
+        }
+        if self.attach().is_some() {
             return Ok(());
         }
         #[cfg(test)]
@@ -250,11 +358,17 @@ impl BrowserManager {
     async fn launch(&self) -> Result<Session> {
         let tmp = self.profile_dir.join("downloads-tmp");
         let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(endpoint) = self.attach() {
+            let ws = attach_endpoint(&endpoint).await?;
+            let cdp = Cdp::connect(&ws, self.policy.clone(), tmp, true).await?;
+            cdp.init().await?;
+            return Ok(Session { child: None, cdp: Arc::new(cdp), attached: true });
+        }
         #[cfg(test)]
         if let Some(ws) = &self.endpoint {
-            let cdp = Cdp::connect(ws, self.policy.clone(), tmp).await?;
+            let cdp = Cdp::connect(ws, self.policy.clone(), tmp, false).await?;
             cdp.init().await?;
-            return Ok(Session { child: None, cdp });
+            return Ok(Session { child: None, cdp: Arc::new(cdp), attached: false });
         }
         let bin = find_chrome().ok_or_else(|| Error::Unsupported("nessun browser Chrome/Edge/Chromium trovato".into()))?;
         std::fs::create_dir_all(&self.profile_dir)?;
@@ -310,27 +424,39 @@ impl BrowserManager {
         let ws = version["webSocketDebuggerUrl"]
             .as_str()
             .ok_or_else(|| Error::Runtime("il browser non ha indicato l'indirizzo di debug".into()))?;
-        let cdp = Cdp::connect(ws, self.policy.clone(), tmp).await?;
+        let cdp = Cdp::connect(ws, self.policy.clone(), tmp, false).await?;
         cdp.init().await?;
-        Ok(Session { child: Some(child), cdp })
+        Ok(Session { child: Some(child), cdp: Arc::new(cdp), attached: false })
     }
 
     async fn with<T>(&self, ctx: &ToolContext, f: impl for<'a> FnOnce(&'a Cdp) -> futures::future::BoxFuture<'a, Result<T>>) -> Result<T> {
         let mut guard = self.session.lock().await;
+        // The call passed the gate, then waited for the lock (another action was running): the person may have paused or taken
+        // the browser meanwhile, and the agent still does not act then. (Before the policy below is changed to this call's.)
+        if self.control.mode() != Mode::Agent {
+            return Err(Error::Conflict(TOOK_OVER.into()));
+        }
         // The calls are serialised by the lock above, so the policy in force is always that of
         // the call that is running.
         *self.policy.ctx.lock().unwrap() = ctx.clone();
         if guard.is_none() {
-            *guard = Some(self.launch().await?);
+            let session = self.launch().await?;
+            *self.live.lock().unwrap() = Some(session.cdp.clone());
+            *guard = Some(session);
         }
-        let cdp = &guard.as_ref().unwrap().cdp;
+        let cdp = guard.as_ref().unwrap().cdp.clone();
+        cdp.sync_redaction(self.control.handbacks());
+        if let Some(hold) = *self.dialog_hold.lock().unwrap() {
+            cdp.set_dialog_hold(hold);
+        }
         let r = match cdp.ensure_tab().await {
-            Ok(()) => f(cdp).await,
+            Ok(()) => f(&cdp).await,
             Err(e) => Err(e),
         };
         if let Err(Error::Runtime(m)) = &r {
             if m.contains("chiusa") || m.contains("chiuso") {
                 *guard = None; // relaunch next time
+                *self.live.lock().unwrap() = None;
             }
         }
         r
@@ -347,7 +473,7 @@ impl BrowserManager {
 
     /// Test constructor: talks to an already running (fake) browser endpoint.
     #[cfg(test)]
-    fn for_endpoint(profile_dir: PathBuf, ws_url: String, resolve: ResolveFn) -> Self {
+    pub(crate) fn for_endpoint(profile_dir: PathBuf, ws_url: String, resolve: ResolveFn) -> Self {
         let mut m = Self::new(profile_dir);
         m.policy.resolve = resolve;
         m.endpoint = Some(ws_url);
@@ -360,10 +486,18 @@ impl BrowserManager {
             w.close().await;
             return true;
         }
+        // The person's turn ends with the browser: whoever waits for it is woken (kill switch).
+        self.control.reset();
+        *self.live.lock().unwrap() = None;
         let mut guard = self.session.lock().await;
         if let Some(mut s) = guard.take() {
-            let _ = s.cdp.call_root("Browser.close", json!({})).await;
-            s.cdp.forget_downloads_tmp();
+            if s.attached {
+                // Somebody's own Chrome: our tabs go, the browser stays (never `Browser.close`, never a kill).
+                s.cdp.close_own_tabs().await;
+            } else {
+                let _ = s.cdp.call_root("Browser.close", json!({})).await;
+                s.cdp.forget_downloads_tmp();
+            }
             if let Some(mut c) = s.child.take() {
                 let _ = c.kill().await;
             }
@@ -377,7 +511,7 @@ pub fn tools(mgr: Arc<BrowserManager>) -> Vec<Arc<dyn Tool>> {
     use Op::*;
     [
         Navigate, Snapshot, Click, Type, Scroll, Back, Press, Wait, Screenshot, Tabs, TabNew, TabSelect, TabClose, Select, Hover, Upload,
-        Downloads, Eval, Console,
+        Downloads, Eval, Console, Dialog,
     ]
     .into_iter()
     .map(|op| Arc::new(BrowserTool { mgr: mgr.clone(), op }) as Arc<dyn Tool>)
@@ -405,13 +539,14 @@ pub(crate) enum Op {
     Downloads,
     Eval,
     Console,
+    Dialog,
 }
 
 impl Op {
     /// Whether the in-app WebView of a phone can do it (it has one page, no console feed, no
     /// downloads and cannot be handed a file).
     pub(crate) fn on_webview(self) -> bool {
-        !matches!(self, Op::Tabs | Op::TabNew | Op::TabSelect | Op::TabClose | Op::Upload | Op::Downloads | Op::Console)
+        !matches!(self, Op::Tabs | Op::TabNew | Op::TabSelect | Op::TabClose | Op::Upload | Op::Downloads | Op::Console | Op::Dialog)
     }
 }
 
@@ -796,7 +931,7 @@ fn tabs_list(cdp: &Cdp) -> String {
     let mut out = format!("Schede aperte ({} su {MAX_TABS} al massimo):", tabs.len());
     for t in tabs {
         let title = if t.title.is_empty() { "(senza titolo)" } else { t.title.as_str() };
-        out.push_str(&format!("\n[{}] «{}» {}{}", t.index, title, t.url, if t.active { " (attiva)" } else { "" }));
+        out.push_str(&format!("\n[{}] «{}» {}{}", t.index, title, cdp.shown_url(&t.url), if t.active { " (attiva)" } else { "" }));
         if t.by_site {
             out.push_str(" (aperta dal sito)");
         }
@@ -808,7 +943,7 @@ fn tabs_list(cdp: &Cdp) -> String {
 async fn default_snapshot(cdp: &Cdp) -> Result<String> {
     let body = match cdp.fmt() {
         SnapFmt::Ax => cdp.ax_snapshot().await?,
-        SnapFmt::Elements => cdp.eval(SNAPSHOT_JS).await?.as_str().unwrap_or_default().to_string(),
+        SnapFmt::Elements => cdp.scrub(cdp.eval(SNAPSHOT_JS).await?.as_str().unwrap_or_default()),
     };
     Ok(format!("{}{body}", cdp.tab_header()))
 }
@@ -817,6 +952,10 @@ async fn default_snapshot(cdp: &Cdp) -> Result<String> {
 async fn tail(cdp: &Cdp, head: &str, settle_ms: u64, downloads_before: usize) -> Result<ToolOutput> {
     if settle_ms > 0 {
         tokio::time::sleep(Duration::from_millis(settle_ms)).await;
+    }
+    if cdp.pending_dialog().is_some() {
+        // The page is blocked by a window of the site: a snapshot would only hang.
+        return Ok(dialog_output(cdp, head));
     }
     let dl =
         if cdp.downloads_len() > downloads_before { cdp.downloads_since(downloads_before, Duration::from_secs(20)).await } else { vec![] };
@@ -838,6 +977,10 @@ async fn do_navigate(
     let dl0 = cdp.downloads_len();
     blocked.lock().unwrap().clear();
     let r = cdp.call("Page.navigate", json!({"url": url})).await?;
+    if r.get("errorText").is_none() {
+        // The agent took this tab to an address of its own: it sees that tab's address as it is again.
+        cdp.stop_redacting_active();
+    }
     if let Some(e) = r.get("errorText").and_then(|e| e.as_str()) {
         // The request policy refused the page itself or one of its redirects.
         let refused = blocked.lock().unwrap().last().cloned();
@@ -943,7 +1086,33 @@ struct OpEnv {
     blocked: Arc<Mutex<Vec<(String, String)>>>,
 }
 
+/// What the model reads when the page is blocked by a window of the site (`confirm`, `prompt`).
+fn dialog_output(cdp: &Cdp, head: &str) -> ToolOutput {
+    let Some(d) = cdp.pending_dialog() else { return ToolOutput::text(head.to_string()) };
+    let what = if d.kind == "prompt" { "una richiesta (prompt)" } else { "una conferma (confirm)" };
+    let default =
+        if d.kind == "prompt" && !d.default_text.is_empty() { format!(" Testo iniziale: «{}».", d.default_text) } else { String::new() };
+    let head = if head.is_empty() { String::new() } else { format!("{head}\n") };
+    ToolOutput::text(with_notes(
+        cdp,
+        format!(
+            "{head}Il sito ha aperto {what}: «{}».{default} La pagina resta ferma finché qualcuno risponde: usa browser_dialog con action=accept (OK) o dismiss (Annulla) (se non lo hai, di' all'utente di rispondere dalla vista live del browser); l'utente può rispondere anche da lì. Se nessuno risponde, dopo un paio di minuti viene annullata da sola.",
+            d.message
+        ),
+        vec![],
+    ))
+}
+
+/// Runs one action. A call that was interrupted because the page got blocked by a window of the site is not a failure:
+/// the model is told which window and how to answer it.
 async fn run_op(cdp: &Cdp, op: Op, env: OpEnv) -> Result<ToolOutput> {
+    match run_op_inner(cdp, op, env).await {
+        Err(Error::Conflict(m)) if m == cdp::DIALOG_PENDING => Ok(dialog_output(cdp, "")),
+        other => other,
+    }
+}
+
+async fn run_op_inner(cdp: &Cdp, op: Op, env: OpEnv) -> Result<ToolOutput> {
     let OpEnv { args, ctx, url, resolve, blocked } = env;
     match op {
         Op::Navigate => do_navigate(cdp, &url.unwrap_or_default(), &ctx, &resolve, &blocked).await,
@@ -956,7 +1125,7 @@ async fn run_op(cdp: &Cdp, op: Op, env: OpEnv) -> Result<ToolOutput> {
                 Format::Ax => format!("{}{}", cdp.tab_header(), cdp.ax_snapshot().await?),
                 Format::Text => {
                     let raw = cdp.eval(TEXT_JS).await?;
-                    format!("{}{}", cdp.tab_header(), text_snapshot(raw.as_str().unwrap_or_default(), text_offset(&args)))
+                    format!("{}{}", cdp.tab_header(), cdp.scrub(&text_snapshot(raw.as_str().unwrap_or_default(), text_offset(&args))))
                 }
             };
             Ok(ToolOutput::text(with_notes(cdp, text, vec![])))
@@ -995,7 +1164,12 @@ async fn run_op(cdp: &Cdp, op: Op, env: OpEnv) -> Result<ToolOutput> {
         }
         Op::Wait => do_wait(cdp, &WaitSpec::parse(&args)?).await,
         Op::Screenshot => {
-            let r = cdp.call("Page.captureScreenshot", json!({"format": "png"})).await?;
+            // The digits of a one-time code or a card number are not in the picture the model gets: those fields are drawn as
+            // dots for the moment of the capture (password fields already are).
+            let _ = cdp.eval(MASK_SECRETS_JS).await;
+            let shot = cdp.call("Page.captureScreenshot", json!({"format": "png"})).await;
+            let _ = cdp.eval(UNMASK_SECRETS_JS).await;
+            let r = shot?;
             let data = r["data"].as_str().unwrap_or_default();
             Ok(ToolOutput {
                 content: with_notes(cdp, "Screenshot della pagina allegato.".into(), vec![]),
@@ -1140,6 +1314,21 @@ async fn run_op(cdp: &Cdp, op: Op, env: OpEnv) -> Result<ToolOutput> {
             };
             Ok(ToolOutput::text(with_notes(cdp, out, vec![])))
         }
+        Op::Dialog => {
+            let accept = match args.get("action").and_then(|v| v.as_str()) {
+                Some("accept") => true,
+                Some("dismiss") => false,
+                _ => return Err(Error::Invalid("`action` deve essere accept o dismiss".into())),
+            };
+            let text = args.get("text").and_then(|v| v.as_str()).map(String::from);
+            let Some(d) = cdp.pending_dialog() else {
+                return Ok(ToolOutput::error("Nessuna finestra del sito aspetta una risposta (forse è già stata chiusa)."));
+            };
+            let dl0 = cdp.downloads_len();
+            cdp.answer_dialog(accept, text).await?;
+            let head = format!("Finestra del sito ({}) {}.", d.kind, if accept { "confermata con OK" } else { "annullata" });
+            tail(cdp, &head, 600, dl0).await
+        }
         Op::Console => {
             let clear = args.get("clear").and_then(|v| v.as_bool()).unwrap_or(false);
             let lines = cdp.console(clear);
@@ -1172,6 +1361,49 @@ pub(crate) fn select_error(r: &RefArg, option: &str, res: &str) -> Option<String
     }
 }
 
+/// The error of an action that waited for the browser and found the person had taken it (see `BrowserManager::with`).
+const TOOK_OVER: &str = "l'utente ha preso il browser mentre l'azione aspettava";
+
+/// What the agent is told when it asks for the browser while the person has it.
+fn still_theirs(mode: Mode, waited: Duration) -> String {
+    let who = match mode {
+        Mode::Paused => "L'utente ha messo in pausa il browser",
+        _ => "L'utente sta usando il browser (accesso, verifica o altro)",
+    };
+    format!(
+        "{who}: ho aspettato {} secondi senza che lo restituisse. Non riprovare di continuo: di' all'utente che aspetti, e riprova quando ti scrive che puoi riprendere.",
+        waited.as_secs()
+    )
+}
+
+/// What the agent is told when it acts on an element after the person drove the browser.
+const STALE_REFS: &str = "L'utente ha usato il browser dopo l'ultimo snapshot: la pagina può essere cambiata e i numeri degli elementi non valgono più. Rifai browser_snapshot e poi riprova.";
+
+/// The actions that name an element of the last snapshot.
+fn needs_fresh_refs(op: Op, args: &Value) -> bool {
+    let has_ref = args.get("ref").is_some_and(|v| !v.is_null());
+    match op {
+        // (A key goes to whatever has the focus: after the person drove, that is theirs, not what the agent last looked at.)
+        Op::Click | Op::Type | Op::Select | Op::Hover | Op::Upload | Op::Press | Op::Dialog => true,
+        Op::Scroll | Op::Wait => has_ref,
+        _ => false,
+    }
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
+/// The actions whose result is a snapshot of the page that numbers its elements again.
+fn renews_refs(op: Op, text_format: bool) -> bool {
+    match op {
+        Op::Snapshot => !text_format,
+        Op::Navigate | Op::TabNew | Op::TabSelect | Op::Back | Op::Scroll | Op::Wait => true,
+        _ => false,
+    }
+}
+
 #[async_trait]
 impl Tool for BrowserTool {
     fn name(&self) -> &str {
@@ -1195,6 +1427,7 @@ impl Tool for BrowserTool {
             Op::Downloads => "browser_downloads",
             Op::Eval => "browser_eval",
             Op::Console => "browser_console",
+            Op::Dialog => "browser_dialog",
         }
     }
     fn description(&self) -> &str {
@@ -1218,6 +1451,7 @@ impl Tool for BrowserTool {
             Op::Downloads => "Elenca i download della sessione (nome, stato, percorso nel workspace). I download vanno in `downloads/<run>/`, solo con il permesso di scrittura; al massimo 10 per run, 200 MB ciascuno.",
             Op::Eval => "Esegue codice JavaScript nella pagina aperta (`expression`) e restituisce il risultato come JSON (troncato se lungo). Attenzione: è codice eseguito nella pagina, con i suoi cookie e la sua sessione; serve un permesso esplicito.",
             Op::Console => "Errori e avvisi recenti della console della scheda attiva (anche richieste bloccate o fallite); `clear=true` li svuota.",
+            Op::Dialog => "Risponde alla finestra di conferma (confirm) o di richiesta (prompt) che il sito ha aperto e che tiene ferma la pagina: `action` accept (OK) o dismiss (Annulla); per un prompt `text` è la risposta. Se nessuno risponde la finestra viene annullata da sola dopo un paio di minuti.",
         }
     }
     fn parameters(&self) -> Value {
@@ -1256,6 +1490,9 @@ impl Tool for BrowserTool {
                 json!({"type":"object","properties":{"expression":{"type":"string","description":"espressione JavaScript"}},"required":["expression"]})
             }
             Op::Console => json!({"type":"object","properties":{"clear":{"type":"boolean"}}}),
+            Op::Dialog => {
+                json!({"type":"object","properties":{"action":{"type":"string","enum":["accept","dismiss"]},"text":{"type":"string","description":"solo per un prompt: il testo da inserire"}},"required":["action"]})
+            }
         }
     }
     fn risk(&self) -> Risk {
@@ -1263,7 +1500,7 @@ impl Tool for BrowserTool {
             Op::Navigate | Op::TabNew => Risk::Network,
             Op::Snapshot | Op::Screenshot | Op::Scroll | Op::Wait | Op::Tabs | Op::TabSelect | Op::Downloads | Op::Console => Risk::Read,
             // Upload hands a local file to a site: a person confirms it like any other action on a page.
-            Op::Click | Op::Type | Op::Back | Op::Press | Op::Select | Op::Hover | Op::Upload | Op::TabClose => Risk::Computer,
+            Op::Click | Op::Type | Op::Back | Op::Press | Op::Select | Op::Hover | Op::Upload | Op::TabClose | Op::Dialog => Risk::Computer,
             Op::Eval => Risk::Exec,
         }
     }
@@ -1272,7 +1509,7 @@ impl Tool for BrowserTool {
         self.op == Op::Eval
     }
     fn subject(&self, args: &Value) -> Option<String> {
-        let keys: &[&str] = if self.op == Op::Eval { &["expression"] } else { &["path", "url"] };
+        let keys: &[&str] = if self.op == Op::Eval { &["expression"] } else { &["path", "url", "action"] };
         keys.iter().find_map(|k| args.get(*k).and_then(|v| v.as_str()).map(String::from))
     }
     fn available(&self) -> std::result::Result<(), String> {
@@ -1288,6 +1525,18 @@ impl Tool for BrowserTool {
             }
             return crate::webview::call(&self.mgr, host, self.op, args, ctx).await;
         }
+        // Who drives the browser: while the person paused the agent or drives it (live view, login), the
+        // call waits here, before it touches the browser or its lock. See `control.rs`.
+        let _turn = match self.mgr.control.enter(&ctx.cancel).await {
+            Ok(g) => g,
+            Err(Gate::Cancelled) => return Ok(ToolOutput::error("Annullato: il run è stato fermato.")),
+            Err(Gate::Waited(mode)) => return Ok(ToolOutput::error(still_theirs(mode, self.mgr.control.limits().op_wait))),
+        };
+        if self.mgr.control.is_stale() && needs_fresh_refs(self.op, &args) {
+            return Ok(ToolOutput::error(STALE_REFS));
+        }
+        *self.mgr.last_run.lock().unwrap() = Some(ctx.run_id.clone());
+        let text_format = self.op == Op::Snapshot && args.get("format").and_then(|v| v.as_str()) == Some("text");
         // The address is vetted before the browser is involved (and before it is launched).
         let resolve = self.mgr.policy.resolve.clone();
         let url = match (self.op, args.get("url").and_then(|v| v.as_str()).filter(|u| !u.is_empty())) {
@@ -1298,9 +1547,25 @@ impl Tool for BrowserTool {
         let env = OpEnv { args, ctx: ctx.clone(), url, resolve, blocked: self.mgr.policy.blocked.clone() };
         let op = self.op;
         // A stopped run ends the call, wherever it is waiting.
-        tokio::select! {
+        let out = tokio::select! {
             r = self.mgr.with(ctx, move |cdp| Box::pin(run_op(cdp, op, env))) => r,
             _ = ctx.cancel.cancelled() => Ok(ToolOutput::error("Annullato: il run è stato fermato.")),
+        };
+        let out = match out {
+            Err(Error::Conflict(m)) if m == TOOK_OVER => {
+                return Ok(ToolOutput::error(format!(
+                    "{}: l'azione non è stata eseguita. Riprova quando te lo restituisce.",
+                    capitalise(TOOK_OVER)
+                )))
+            }
+            other => other?,
+        };
+        // These end with a snapshot that numbers the elements again: the agent can trust its references. (Not a result that only
+        // says a window of the site blocks the page.)
+        let blocked = self.mgr.live_cdp().is_some_and(|c| c.pending_dialog().is_some());
+        if !out.is_error && !blocked && renews_refs(op, text_format) {
+            self.mgr.control.clear_stale();
         }
+        Ok(out)
     }
 }

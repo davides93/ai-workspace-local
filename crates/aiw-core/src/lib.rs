@@ -5,6 +5,7 @@
 //! * [`schema`] — settings schemas used to generate configuration forms (ADR 0003).
 //! * [`config`] — layered configuration: defaults → global → device → workspace.
 //! * [`paths`] — data directories per platform.
+//! * [`sealed`] — secrets at rest: the shape of a sealed value and the hook that seals and opens it.
 #![recursion_limit = "256"]
 
 pub mod api;
@@ -15,9 +16,15 @@ pub mod folders;
 pub mod ids;
 pub mod paths;
 pub mod schema;
+pub mod sealed;
 pub mod tlspin;
 
 pub use error::{Error, Result};
+
+/// Log directives that apply whatever `RUST_LOG` says (add them to the filter after reading it). The WebSocket library logs
+/// the frames it sends at `trace`, and the frames to the controlled browser carry what the person types in the live view
+/// (a password, a one-time code): they are never logged.
+pub const QUIET_LOG_TARGETS: &[&str] = &["tungstenite=warn", "tokio_tungstenite=warn"];
 
 /// Crate version reported by `/api/system`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

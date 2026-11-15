@@ -30,6 +30,24 @@ const CONSOLE_CAP: usize = 100;
 /// Notes (dialogs, new tabs) waiting to be shown in the next result.
 const NOTES_CAP: usize = 20;
 
+/// How long a `confirm` or `prompt` of the site waits for somebody to answer it (the agent with `browser_dialog`, the
+/// person in the live view) before it is dismissed, the safe answer, so a page never stays blocked for good.
+pub(crate) const DIALOG_HOLD: Duration = Duration::from_secs(120);
+/// The error of a call that was interrupted because the page is blocked by a window of the site.
+pub(crate) const DIALOG_PENDING: &str = "finestra del sito in attesa di risposta";
+
+/// A window of the site that waits for an answer: `confirm` and `prompt` (the other kinds have no choice and are
+/// answered at once).
+#[derive(Clone, Debug)]
+pub(crate) struct PendingDialog {
+    pub session: String,
+    pub kind: String,
+    pub message: String,
+    pub default_text: String,
+    /// Tells this dialog from the next one that opens in its place (the fallback timer is bound to it).
+    pub id: u64,
+}
+
 /// How the post-action snapshot is written: the elements list or the accessibility tree.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum SnapFmt {
@@ -85,6 +103,21 @@ pub(crate) struct State {
     pub notes: Vec<Note>,
     /// `session:requestId` of the requests still running.
     pub inflight: HashSet<String>,
+    /// The tabs whose address is hidden from the model (query and fragment: they may carry a code or a token): the ones that were
+    /// open when the person gave the browser back, until the agent navigates that tab itself. See `control.rs`.
+    pub redact_tabs: HashSet<String>,
+    /// The count of handbacks these tabs were last taken at.
+    pub redact_seen: u64,
+    /// The `confirm` and `prompt` that wait for an answer (see [`DIALOG_HOLD`]), by session: a tab has at most one open, and two
+    /// tabs do not take each other's place.
+    pub dialogs: HashMap<String, PendingDialog>,
+    pub dialog_hold: Option<Duration>,
+    pub dialogs_opened: u64,
+    /// Attached to somebody's own Chrome: the targets this connection created (or that its pages opened). Everything else
+    /// in that browser is not ours to look at.
+    pub own: HashSet<String>,
+    /// A tab of ours was just asked for: the next page that attaches without an opener is it.
+    pub expecting_own: bool,
 }
 
 impl State {
@@ -99,6 +132,15 @@ impl State {
     pub(crate) fn active_tab(&mut self) -> Option<&mut Tab> {
         let id = self.active.clone()?;
         self.tabs.iter_mut().find(|t| t.target_id == id)
+    }
+
+    /// The window to show and answer first: the one of the tab in front, else the oldest.
+    fn current_dialog(&mut self) -> Option<PendingDialog> {
+        let active = self.active_tab().and_then(|t| t.session.clone());
+        if let Some(d) = active.and_then(|s| self.dialogs.get(&s)) {
+            return Some(d.clone());
+        }
+        self.dialogs.values().min_by_key(|d| d.id).cloned()
     }
 }
 
@@ -117,6 +159,10 @@ struct Hub {
     policy: Policy,
     tx: mpsc::UnboundedSender<Message>,
     next: Arc<AtomicU64>,
+    /// Woken when a window of the site opens or closes: the calls blocked by it end (see `call_on`).
+    dialog_notify: Arc<tokio::sync::Notify>,
+    /// The browser is somebody's own Chrome (see `State::own`), not one we launched.
+    own_only: bool,
     /// Where the browser writes downloads: they are moved into the workspace only once complete
     /// and checked, so the browser itself never writes into the workspace.
     tmp: PathBuf,
@@ -127,10 +173,13 @@ pub(crate) struct Cdp {
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
     next: Arc<AtomicU64>,
     pub(crate) st: Arc<Mutex<State>>,
+    dialog_notify: Arc<tokio::sync::Notify>,
+    /// Connected to somebody's own Chrome: only the tabs this connection opens are ours.
+    own_only: bool,
     tmp: PathBuf,
 }
 
-fn clip(t: &str, max: usize) -> String {
+pub(crate) fn clip(t: &str, max: usize) -> String {
     if t.chars().count() <= max {
         return t.to_string();
     }
@@ -191,7 +240,7 @@ fn human_size(b: u64) -> String {
 }
 
 impl Cdp {
-    pub(crate) async fn connect(ws_url: &str, policy: Policy, tmp: PathBuf) -> Result<Self> {
+    pub(crate) async fn connect(ws_url: &str, policy: Policy, tmp: PathBuf, own_only: bool) -> Result<Self> {
         let (ws, _) = tokio_tungstenite::connect_async(ws_url).await.map_err(|e| Error::Runtime(format!("CDP: {e}")))?;
         let (mut sink, mut stream) = ws.split();
         let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
@@ -205,7 +254,16 @@ impl Cdp {
         });
         let st: Arc<Mutex<State>> = Default::default();
         let next = Arc::new(AtomicU64::new(1));
-        let hub = Hub { st: st.clone(), policy, tx: tx.clone(), next: next.clone(), tmp: tmp.clone() };
+        let dialog_notify = Arc::new(tokio::sync::Notify::new());
+        let hub = Hub {
+            st: st.clone(),
+            policy,
+            tx: tx.clone(),
+            next: next.clone(),
+            dialog_notify: dialog_notify.clone(),
+            own_only,
+            tmp: tmp.clone(),
+        };
         let p2 = pending.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = stream.next().await {
@@ -224,10 +282,16 @@ impl Cdp {
             // The browser went away: whoever waits for an answer is told.
             p2.lock().unwrap().clear();
         });
-        Ok(Self { tx, pending, next, st, tmp })
+        Ok(Self { tx, pending, next, st, dialog_notify, own_only, tmp })
     }
 
     pub(crate) async fn call_on(&self, session: Option<&str>, method: &str, params: Value) -> Result<Value> {
+        // A page blocked by a window of the site answers nothing (a click that opens a `confirm` does not return
+        // until it is answered): a call to that page ends at once with `DIALOG_PENDING`, so the caller can say so.
+        let interruptible = session.is_some() && method != "Page.handleJavaScriptDialog";
+        if interruptible && self.dialog_blocks(session) {
+            return Err(Error::Conflict(DIALOG_PENDING.into()));
+        }
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (s, r) = oneshot::channel();
         self.pending.lock().unwrap().insert(id, s);
@@ -236,14 +300,125 @@ impl Cdp {
             m["sessionId"] = json!(sid);
         }
         self.tx.send(Message::Text(m.to_string().into())).map_err(|_| Error::Runtime("connessione al browser chiusa".into()))?;
-        let v = tokio::time::timeout(Duration::from_secs(30), r)
-            .await
-            .map_err(|_| Error::Runtime(format!("CDP {method}: tempo scaduto")))?
-            .map_err(|_| Error::Runtime("browser chiuso".into()))?;
+        let reply = tokio::time::timeout(Duration::from_secs(30), r);
+        let v = if interruptible {
+            tokio::select! {
+                r = reply => r,
+                _ = self.wait_dialog(session) => {
+                    self.pending.lock().unwrap().remove(&id);
+                    return Err(Error::Conflict(DIALOG_PENDING.into()));
+                }
+            }
+        } else {
+            reply.await
+        }
+        .map_err(|_| Error::Runtime(format!("CDP {method}: tempo scaduto")))?
+        .map_err(|_| Error::Runtime("browser chiuso".into()))?;
         if let Some(e) = v.get("error") {
             return Err(Error::Runtime(format!("CDP {method}: {e}")));
         }
         Ok(v["result"].clone())
+    }
+
+    /// A window of the site is waiting for an answer on this session.
+    fn dialog_blocks(&self, session: Option<&str>) -> bool {
+        let st = self.st.lock().unwrap();
+        session.is_some_and(|s| st.dialogs.contains_key(s))
+    }
+
+    /// Ends when a window of the site is waiting on this session.
+    async fn wait_dialog(&self, session: Option<&str>) {
+        loop {
+            let notified = self.dialog_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.dialog_blocks(session) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// The window of the site that waits for an answer, if any.
+    pub(crate) fn pending_dialog(&self) -> Option<super::live::DialogInfo> {
+        self.st.lock().unwrap().current_dialog().map(|d| super::live::DialogInfo {
+            kind: d.kind,
+            message: d.message,
+            default_text: d.default_text,
+        })
+    }
+
+    /// Answers the window that waits: accepts or dismisses it (`text` is what a `prompt` gets).
+    pub(crate) async fn answer_dialog(&self, accept: bool, text: Option<String>) -> Result<()> {
+        let d = self
+            .st
+            .lock()
+            .unwrap()
+            .current_dialog()
+            .ok_or_else(|| Error::Conflict("nessuna finestra del sito aspetta una risposta (forse è già stata chiusa)".into()))?;
+        let mut params = json!({"accept": accept});
+        if let (true, Some(t)) = (accept && d.kind == "prompt", text) {
+            params["promptText"] = json!(t);
+        }
+        self.call_on(Some(&d.session), "Page.handleJavaScriptDialog", params).await?;
+        let mut st = self.st.lock().unwrap();
+        if st.dialogs.get(&d.session).is_some_and(|x| x.id == d.id) {
+            st.dialogs.remove(&d.session);
+        }
+        drop(st);
+        self.dialog_notify.notify_waiters();
+        Ok(())
+    }
+
+    /// Title and address of the tab in front.
+    pub(crate) fn active_page(&self) -> Option<(String, String)> {
+        let mut st = self.st.lock().unwrap();
+        st.active_tab().map(|t| (t.title.clone(), t.url.clone()))
+    }
+
+    pub(crate) fn set_dialog_hold(&self, hold: Duration) {
+        self.st.lock().unwrap().dialog_hold = Some(hold);
+    }
+
+    /// The browser came back from the person (`handbacks` is the count so far): the pages open now get their addresses hidden.
+    pub(crate) fn sync_redaction(&self, handbacks: u64) {
+        let mut st = self.st.lock().unwrap();
+        if st.redact_seen != handbacks {
+            st.redact_seen = handbacks;
+            let open: Vec<String> = st.tabs.iter().map(|t| t.target_id.clone()).collect();
+            st.redact_tabs.extend(open);
+        }
+    }
+
+    /// The agent navigated the tab in front by itself: its address is its own again.
+    pub(crate) fn stop_redacting_active(&self) {
+        let mut st = self.st.lock().unwrap();
+        if let Some(id) = st.active.clone() {
+            st.redact_tabs.remove(&id);
+        }
+    }
+
+    fn active_redacted(&self) -> bool {
+        let st = self.st.lock().unwrap();
+        st.active.as_ref().is_some_and(|id| st.redact_tabs.contains(id))
+    }
+
+    /// The address of the tab in front as the model may see it (see `State::redact_tabs`).
+    pub(crate) fn shown_url(&self, url: &str) -> String {
+        if self.active_redacted() {
+            super::without_query(url)
+        } else {
+            url.to_string()
+        }
+    }
+
+    /// A snapshot as the model may read it: the address lines without query and fragment when the tab's are hidden.
+    pub(crate) fn scrub(&self, text: &str) -> String {
+        if self.active_redacted() {
+            super::control::scrub_url_lines(text)
+        } else {
+            text.to_string()
+        }
     }
 
     /// A command for the browser itself (targets, downloads).
@@ -276,6 +451,9 @@ impl Cdp {
 
     /// Browser-level setup, once per connection.
     pub(crate) async fn init(&self) -> Result<()> {
+        if self.own_only {
+            return self.init_attached().await;
+        }
         std::fs::create_dir_all(&self.tmp)?;
         self.call_root("Target.setDiscoverTargets", json!({"discover": true})).await?;
         // New pages (popups included) attach paused: the network policy is in place before they run.
@@ -301,6 +479,30 @@ impl Cdp {
             self.new_tab().await?;
         }
         Ok(())
+    }
+
+    /// Setup against somebody's own Chrome: nothing that is theirs is touched. The pages that exist are not attached (the
+    /// ones that attach by themselves are let go again, see `on_attached`), the download behaviour is left alone (so a
+    /// download stays Chrome's, and `browser_downloads` has nothing), and the agent works in a tab of its own.
+    async fn init_attached(&self) -> Result<()> {
+        self.call_root("Target.setDiscoverTargets", json!({"discover": true})).await?;
+        // The popups of our own pages attach paused like in our own browser; whatever else attaches is let go.
+        self.call_root("Target.setAutoAttach", json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true})).await?;
+        self.new_tab().await?;
+        Ok(())
+    }
+
+    /// Lets go of somebody's own Chrome: closes the tabs this connection opened and nothing else, stops the auto-attach (which
+    /// would keep pausing and releasing the person's new tabs), and closes the connection (Chrome itself stays open).
+    pub(crate) async fn close_own_tabs(&self) {
+        let ids: Vec<String> = self.st.lock().unwrap().tabs.iter().map(|t| t.target_id.clone()).collect();
+        for id in ids {
+            let _ = self.call_root("Target.closeTarget", json!({"targetId": id})).await;
+        }
+        let _ =
+            self.call_root("Target.setAutoAttach", json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true})).await;
+        let _ = self.call_root("Target.setDiscoverTargets", json!({"discover": false})).await;
+        let _ = self.tx.send(Message::Close(None));
     }
 
     async fn wait_for_any_tab(&self) -> bool {
@@ -346,7 +548,14 @@ impl Cdp {
 
     /// Opens a blank tab and makes it the active one. The caller checks `MAX_TABS` first.
     pub(crate) async fn new_tab(&self) -> Result<String> {
-        let r = self.call_root("Target.createTarget", json!({"url": "about:blank"})).await?;
+        if self.own_only {
+            self.st.lock().unwrap().expecting_own = true;
+        }
+        let r = self.call_root("Target.createTarget", json!({"url": "about:blank"})).await;
+        if r.is_err() {
+            self.st.lock().unwrap().expecting_own = false;
+        }
+        let r = r?;
         let id = r["targetId"].as_str().ok_or_else(|| Error::Runtime("CDP: nessun identificativo per la nuova scheda".into()))?.to_string();
         self.wait_attached(&id).await?;
         self.select_target(&id).await;
@@ -378,7 +587,7 @@ impl Cdp {
             .map(|(i, t)| TabInfo {
                 index: i + 1,
                 title: t.title.clone(),
-                url: t.url.clone(),
+                url: if st.redact_tabs.contains(&t.target_id) { super::without_query(&t.url) } else { t.url.clone() },
                 active: st.active.as_deref() == Some(&t.target_id),
                 by_site: t.by_site,
             })
@@ -428,6 +637,7 @@ impl Cdp {
     pub(crate) fn take_notes(&self) -> Vec<String> {
         let mut st = self.st.lock().unwrap();
         let notes = std::mem::take(&mut st.notes);
+        let hidden = st.redact_tabs.clone();
         notes
             .into_iter()
             .filter_map(|n| match n {
@@ -440,7 +650,7 @@ impl Cdp {
                         "Il sito ha aperto una nuova scheda [{}] «{}» ({}){}.",
                         i + 1,
                         clip(&t.title, 60),
-                        clip(&t.url, 90),
+                        clip(&if hidden.contains(&id) { super::without_query(&t.url) } else { t.url.clone() }, 90),
                         if active { ": ora è quella attiva, torna alla precedente con browser_tab_select" } else { "" }
                     ))
                 }
@@ -536,17 +746,21 @@ impl Cdp {
     pub(crate) async fn ax_snapshot(&self) -> Result<String> {
         let tree = self.call("Accessibility.getFullAXTree", json!({})).await?;
         let nodes = tree["nodes"].as_array().cloned().unwrap_or_default();
+        // The values of the fields a person types who they are in: never written out (see `ax::render`). When the page cannot
+        // say which they are (a library that changes how arrays are read, a script that fails), no value is written at all.
+        let secrets: Option<Vec<String>> =
+            self.eval(super::SECRET_VALUES_JS).await.ok().and_then(|v| serde_json::from_value::<Vec<String>>(v).ok());
         let head = self.eval("({t: document.title, u: location.href})").await.unwrap_or(Value::Null);
         let body = {
             let mut st = self.st.lock().unwrap();
             let tab = st.active_tab().ok_or_else(|| Error::Runtime("nessuna scheda attiva nel browser".into()))?;
             tab.fmt = SnapFmt::Ax;
-            ax::render(&nodes, &mut tab.refs)
+            ax::render(&nodes, &mut tab.refs, secrets.as_deref())
         };
         Ok(format!(
             "Titolo: {}\nURL: {}\n\nAlbero di accessibilità (usa [eN] come ref; i ref restano validi finché la pagina non cambia):\n{body}",
             head["t"].as_str().unwrap_or_default(),
-            head["u"].as_str().unwrap_or_default()
+            self.shown_url(head["u"].as_str().unwrap_or_default())
         ))
     }
 
@@ -677,15 +891,62 @@ fn on_event(h: &Hub, v: &Value) {
             }
         }
         "Page.javascriptDialogOpening" => {
-            // A dialog stops the page until somebody answers: answer at once. `alert` has only one
-            // way out; `beforeunload` is accepted (the page is being left on purpose); a `confirm`
-            // or `prompt` is dismissed (the safe answer), and the text is told to the model.
+            // A dialog stops the page until somebody answers. `alert` has only one way out and `beforeunload` is
+            // accepted (the page is being left on purpose): both are answered at once. A `confirm` or `prompt` is a
+            // real question (a click may be asking «delete it?»): it waits for the agent (`browser_dialog`) or the
+            // person (live view), and is dismissed, the safe answer, if nobody answers in time.
             let ty = p["type"].as_str().unwrap_or("alert");
-            let accept = matches!(ty, "alert" | "beforeunload");
-            send(h, session, "Page.handleJavaScriptDialog", json!({"accept": accept}));
             let msg = clip(p["message"].as_str().unwrap_or_default(), 200);
-            let how = if accept { "chiusa con OK" } else { "annullata" };
-            h.st.lock().unwrap().note(Note::Text(format!("Finestra del sito ({ty}): «{msg}»: {how} automaticamente.")));
+            if matches!(ty, "alert" | "beforeunload") {
+                send(h, session, "Page.handleJavaScriptDialog", json!({"accept": true}));
+                h.st.lock().unwrap().note(Note::Text(format!("Finestra del sito ({ty}): «{msg}»: chiusa con OK automaticamente.")));
+            } else if let Some(sid) = session {
+                let (id, hold) = {
+                    let mut st = h.st.lock().unwrap();
+                    st.dialogs_opened += 1;
+                    let id = st.dialogs_opened;
+                    st.dialogs.insert(
+                        sid.to_string(),
+                        PendingDialog {
+                            session: sid.to_string(),
+                            kind: ty.to_string(),
+                            message: msg.clone(),
+                            default_text: clip(p["defaultPrompt"].as_str().unwrap_or_default(), 200),
+                            id,
+                        },
+                    );
+                    (id, st.dialog_hold.unwrap_or(DIALOG_HOLD))
+                };
+                h.dialog_notify.notify_waiters();
+                let h = h.clone();
+                let sid = sid.to_string();
+                let ty = ty.to_string();
+                tokio::spawn(async move {
+                    tokio::time::sleep(hold).await;
+                    let still = {
+                        let mut st = h.st.lock().unwrap();
+                        let same = st.dialogs.get(&sid).is_some_and(|d| d.id == id);
+                        if same {
+                            st.dialogs.remove(&sid);
+                            st.note(Note::Text(format!(
+                                "Finestra del sito ({ty}): «{msg}»: annullata automaticamente, nessuno ha risposto."
+                            )));
+                        }
+                        same
+                    };
+                    if still {
+                        send(&h, Some(&sid), "Page.handleJavaScriptDialog", json!({"accept": false}));
+                        h.dialog_notify.notify_waiters();
+                    }
+                });
+            }
+        }
+        "Page.javascriptDialogClosed" => {
+            // Answered by somebody else (the browser's own window, the page itself): nothing waits any more.
+            if let Some(sid) = session {
+                h.st.lock().unwrap().dialogs.remove(sid);
+            }
+            h.dialog_notify.notify_waiters();
         }
         "Runtime.consoleAPICalled" => {
             let ty = p["type"].as_str().unwrap_or_default();
@@ -718,7 +979,12 @@ fn on_event(h: &Hub, v: &Value) {
                 Some("warning") => "avviso",
                 _ => return,
             };
-            let url = e["url"].as_str().filter(|u| !u.is_empty()).map(|u| format!(" ({})", clip(u, 80))).unwrap_or_default();
+            // (An address of the console without its query: a login page can log the one it was sent to.)
+            let url = e["url"]
+                .as_str()
+                .filter(|u| !u.is_empty())
+                .map(|u| format!(" ({})", clip(&super::without_query(u), 80)))
+                .unwrap_or_default();
             console_push(h, session, format!("{level}: {}{url}", e["text"].as_str().unwrap_or_default()));
         }
         "Page.frameNavigated" => {
@@ -789,6 +1055,7 @@ fn remove_tabs(h: &Hub, pred: impl Fn(&Tab) -> bool) {
     st.tabs.retain(|t| !pred(t));
     for (id, session) in gone {
         if let Some(s) = session {
+            st.dialogs.remove(&s);
             let prefix = format!("{s}:");
             st.inflight.retain(|k| !k.starts_with(&prefix));
         }
@@ -804,6 +1071,30 @@ fn on_attached(h: &Hub, parent: Option<&str>, p: &Value) {
     let ty = info["type"].as_str().unwrap_or_default();
     let target_id = info["targetId"].as_str().unwrap_or_default().to_string();
     let is_tab = ty == "page" && parent.is_none();
+    if h.own_only && parent.is_none() {
+        // Somebody's own Chrome: only the tabs this connection opened (or that its pages opened) are ours. Anything else that
+        // attaches by itself (their tabs, workers, extensions) is let go at once, without a single command of ours.
+        let mine = is_tab && {
+            let mut st = h.st.lock().unwrap();
+            let opener = info["openerId"].as_str().unwrap_or_default();
+            let known = st.own.contains(&target_id) || (!opener.is_empty() && st.own.contains(opener));
+            // Our own tab is created blank: a tab the person opens at that very moment (`chrome://newtab/`, a link) is not it.
+            let blank = matches!(info["url"].as_str().unwrap_or_default(), "" | "about:blank");
+            let fresh = !known && opener.is_empty() && st.expecting_own && blank;
+            if fresh {
+                st.expecting_own = false;
+            }
+            if known || fresh {
+                st.own.insert(target_id.clone());
+            }
+            known || fresh
+        };
+        if !mine {
+            send(h, Some(sid), "Runtime.runIfWaitingForDebugger", json!({}));
+            send(h, None, "Target.detachFromTarget", json!({"sessionId": sid}));
+            return;
+        }
+    }
     if is_tab {
         let mut st = h.st.lock().unwrap();
         if st.tabs.iter().any(|t| t.target_id == target_id && t.session.is_some()) {
@@ -882,7 +1173,11 @@ fn download_begins(h: &Hub, p: &Value) {
         bytes: 0,
         ctx: ctx.clone(),
     });
-    if ctx.sandbox == crate::SandboxMode::ReadOnly {
+    if h.policy.human.load(Ordering::SeqCst) {
+        // What the person starts in the live view is not the run's doing: it would land in that run's workspace and
+        // count against its limit, so it is not kept.
+        fail_download(h, &guid, "non si scaricano file mentre l'utente guida il browser".into());
+    } else if ctx.sandbox == crate::SandboxMode::ReadOnly {
         fail_download(
             h,
             &guid,
@@ -940,7 +1235,7 @@ fn finalize_download(h: &Hub, guid: &str) {
         // Resolved again with the final name: a symlink planted in the folder must not lead out.
         let dest = ctx.resolve(&dest.to_string_lossy(), true).map_err(|e| e.to_string())?;
         if std::fs::rename(&src, &dest).is_err() {
-            std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+            crate::atomic::copy_atomic(&src, &dest).map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(&src);
         }
         ctx.record_created(&dest);

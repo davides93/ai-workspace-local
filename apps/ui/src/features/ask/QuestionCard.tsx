@@ -1,11 +1,11 @@
-import { useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
 import { cx } from "../../shared/lib/cx";
 import { errorMessage, isNotFound } from "../../shared/lib/errors";
 import { qk } from "../../shared/query/keys";
 import type { Question, QuestionReply } from "../../shared/api/types";
-import { Button, Field, Icon, Input, Select } from "../../shared/ui";
+import { Button, Field, Icon, Input, Select, SkeletonLines } from "../../shared/ui";
 import type { FormValues } from "../mcp/model";
 import type { QuestionItem } from "../chat/model/items";
 import { choiceCount, choiceReply, closedText, confirmReply, digitChoice, emptyChoice, formReply, initialFormValues, isTypingTarget, pickChoice, questionTitle, typeOther, type ChoiceState } from "./model";
@@ -13,16 +13,28 @@ import { useAnnounce, useFocusOnOpen } from "./useAskFocus";
 import "./ask.css";
 
 import { t } from "../../shared/i18n";
+// The card of a request for help in the browser carries the live view: loaded only when one is asked for.
+const HandoverCard = lazy(() => import("../browser/HandoverCard").then((m) => ({ default: m.HandoverCard })));
+
 /**
  * A question of the agent, as a row of the conversation: a card to answer while it waits, one quiet line with the answer once
  * it is closed (also when the conversation is loaded again from the stored messages).
  */
 export function QuestionCard({ it }: { it: QuestionItem }) {
-  return it.outcome === undefined ? <OpenQuestion q={it.q} /> : <ClosedQuestion it={it} outcome={it.outcome} />;
+  if (it.outcome !== undefined) return <ClosedQuestion it={it} outcome={it.outcome} />;
+  if (it.q.kind === "handover") {
+    return (
+      <Suspense fallback={<div className="ask ask-open" aria-busy="true"><SkeletonLines lines={3} /></div>}>
+        <HandoverCard q={it.q} />
+      </Suspense>
+    );
+  }
+  return <OpenQuestion q={it.q} />;
 }
 
 function ClosedQuestion({ it, outcome }: { it: QuestionItem; outcome: NonNullable<QuestionItem["outcome"]> }) {
-  const heading = it.q.title?.trim() || it.q.message;
+  // A request for help in the browser is named by what was asked: the engine's title is the same every time, and always Italian.
+  const heading = it.q.kind === "handover" ? it.q.message : it.q.title?.trim() || it.q.message;
   return (
     <div className={cx("ask ask-closed", outcome === "answered" && "is-ok")}>
       <Icon name={outcome === "answered" ? "check" : "close"} size={15} />

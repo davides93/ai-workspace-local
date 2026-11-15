@@ -275,7 +275,7 @@ fn parse_question(args: &Value) -> Result<Question> {
 fn check_answer(q: &Question, a: QuestionAnswer) -> Result<QuestionAnswer> {
     let bad = |m: &str| Error::Invalid(m.to_string());
     match q.kind.as_str() {
-        "confirm" => {
+        "confirm" | "handover" => {
             let confirmed = a.confirmed.ok_or_else(|| bad("la conferma richiede «sì» o «no»"))?;
             Ok(QuestionAnswer { confirmed: Some(confirmed), ..Default::default() })
         }
@@ -387,7 +387,7 @@ impl Drop for WithdrawSecret<'_> {
 
 impl Engine {
     /// How long a question or a request for a secret waits for the person.
-    fn interaction_wait(&self) -> Duration {
+    pub(crate) fn interaction_wait(&self) -> Duration {
         self.approval_timeout().unwrap_or(DEFAULT_WAIT)
     }
 
@@ -405,15 +405,32 @@ impl Engine {
     }
 
     /// Asks the question, stops the run until it is answered, and returns what the model gets.
-    async fn ask(&self, ctx: &ToolContext, mut q: Question) -> ToolOutput {
-        let wait = self.interaction_wait();
-        q.id = new_id("ask");
-        q.run_id = ctx.run_id.clone();
+    async fn ask(&self, ctx: &ToolContext, q: Question) -> ToolOutput {
+        let (outcome, answer) = self.ask_for(ctx, q, self.interaction_wait(), "ask_user", &ctx.run_id).await;
+        json_output(question_result(outcome, answer.as_ref()))
+    }
+
+    /// The same, for the tools that ask something of their own (the handover of the browser): the wait, the
+    /// tool named in the audit, the run the question belongs to (the conversation the person is in: for a sub-agent it
+    /// is the run of the person, see [`Engine::root_run`]) and a question that already has its id (`q.id`) are the
+    /// caller's. Returns how it ended.
+    pub(crate) async fn ask_for(
+        &self,
+        ctx: &ToolContext,
+        mut q: Question,
+        wait: Duration,
+        tool: &str,
+        run_id: &str,
+    ) -> (QuestionOutcome, Option<QuestionAnswer>) {
+        if q.id.is_empty() {
+            q.id = new_id("ask");
+        }
+        q.run_id = run_id.to_string();
         q.expires_at = Some(expires_at(wait));
         let (tx, rx) = oneshot::channel();
         self.0.questions.lock().unwrap().insert(q.id.clone(), PendingQuestion { question: q.clone(), tx });
         let _withdraw = WithdrawQuestion(self, q.id.clone());
-        self.emit(&ctx.run_id, AgEvent::Custom { name: "aiw.question".into(), value: serde_json::to_value(&q).unwrap_or(Value::Null) });
+        self.emit(run_id, AgEvent::Custom { name: "aiw.question".into(), value: serde_json::to_value(&q).unwrap_or(Value::Null) });
         let (outcome, answer) = tokio::select! {
             biased;
             a = rx => a.unwrap_or((QuestionOutcome::Cancelled, None)),
@@ -422,15 +439,15 @@ impl Engine {
         };
         self.0.questions.lock().unwrap().remove(&q.id);
         self.emit(
-            &ctx.run_id,
+            run_id,
             AgEvent::Custom {
                 name: "aiw.question_resolved".into(),
                 value: json!({"id": q.id, "outcome": outcome.as_str(), "answer": answer}),
             },
         );
         let actor = if matches!(outcome, QuestionOutcome::Answered | QuestionOutcome::Declined) { "user" } else { "system" };
-        self.audit_interaction(&ctx.run_id, actor, "question", Some("ask_user"), Some(outcome.as_str()), &format!("domanda `{}`", q.kind));
-        json_output(question_result(outcome, answer.as_ref()))
+        self.audit_interaction(run_id, actor, "question", Some(tool), Some(outcome.as_str()), &format!("domanda `{}`", q.kind));
+        (outcome, answer)
     }
 
     /// The questions of the agent that wait for the person (`GET /api/questions`), the oldest first.

@@ -13,7 +13,8 @@ function focusables(root: HTMLElement): HTMLElement[] {
 /**
  * Modal behaviour shared by Dialog, Drawer, Sheet and the command palette:
  * focus moves inside on open (first `[data-autofocus]`, else the first control, else the
- * container), Tab is trapped, Esc closes, and focus returns to the opener on close.
+ * container), Tab is trapped, Esc closes, and focus returns to the opener on close. Esc is left alone while the
+ * focus is in an element marked `data-own-keys`, which sends the keys elsewhere (and lets Tab leave it).
  */
 export function useModal(ref: RefObject<HTMLElement | null>, onClose: () => void): void {
   const closeRef = useRef(onClose);
@@ -29,7 +30,8 @@ export function useModal(ref: RefObject<HTMLElement | null>, onClose: () => void
 
     const onKey = (e: KeyboardEvent) => {
       if (stack[stack.length - 1] !== token) return;
-      if (e.key === "Escape") {
+      // An element that forwards the keys (`data-own-keys`: the remote view of the browser) keeps Esc for what it forwards to.
+      if (e.key === "Escape" && !(e.target instanceof Element && e.target.closest("[data-own-keys]"))) {
         e.preventDefault();
         e.stopPropagation();
         closeRef.current();

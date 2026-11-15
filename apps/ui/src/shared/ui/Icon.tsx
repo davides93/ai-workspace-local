@@ -13,6 +13,7 @@ const paths = {
   plus: "M10 4v12M4 10h12",
   send: "M4 10l12-6-5 13-2-5z",
   stop: "M6 6h8v8H6z",
+  pause: "M7 4v12M13 4v12",
   power: "M10 3v7M6.2 5.8a6 6 0 1 0 7.6 0",
   play: "M7 5l8 5-8 5z",
   download: "M10 3v10M6 9l4 4 4-4M4 16h12",

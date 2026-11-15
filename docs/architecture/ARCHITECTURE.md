@@ -256,7 +256,7 @@ sequenceDiagram
 - **Eventi**: AG-UI 1.0 (`RUN_STARTED`, `TEXT_MESSAGE_*`, `REASONING_*`, `TOOL_CALL_*`,
   `STATE_SNAPSHOT`, `SUBAGENT_*`, `RUN_FINISHED`/`RUN_ERROR`) più `CUSTOM` con nome
   `aiw.approval_request`, `aiw.approval_resolved`, `aiw.todo`, `aiw.usage` e, per le domande e i segreti
-  dell'agente (§5.2 bis), `aiw.question`, `aiw.question_resolved`, `aiw.secret_request`, `aiw.secret_resolved`.
+  dell'agente (§5.2 bis), `aiw.question`, `aiw.question_resolved`, `aiw.secret_request`, `aiw.secret_resolved` e, per la vista live del browser (`docs/browser-live.md`), `aiw.browser`.
   Ogni evento viene salvato (P17), così i run sono riproducibili.
 - **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo; le chiamate `agent`
   consecutive formano un gruppo a sé, eseguito in parallelo fino a `agents.max_parallel_subagents` (default 3).
@@ -442,8 +442,8 @@ se non è impostato), con l'annullamento del run o con il kill switch (`close_in
 5. altrimenti il valore va alla funzione che già scriveva quella destinazione (`set_provider_auth`, `save_mcp_server`, `set_config`, `update_runtime_settings`), che per un token di provider lo verifica col servizio;
 6. una riga di audit (`secret.set`, solo con il `target`), l'evento `aiw.secret_resolved` e il risultato `{"outcome": "stored", "target": …}`.
 
-Il valore non compare in argomenti e risultato dello strumento, eventi, messaggi salvati, audit, conferme e prompt; un errore della destinazione è ripulito del valore. **Resta in chiaro nello
-store** (stesse tabelle di prima): vedi `SECURITY.md`. Forme degli eventi, codici di errore e comportamento di AG-UI in `docs/agui.md`.
+Il valore non compare in argomenti e risultato dello strumento, eventi, messaggi salvati, audit, conferme e prompt; un errore della destinazione è ripulito del valore. **Resta nello
+store** (stesse tabelle di prima), cifrato a riposo dove c'è un portachiavi (`docs/segreti.md`, `SECURITY.md`). Forme degli eventi, codici di errore e comportamento di AG-UI in `docs/agui.md`.
 
 ### 5.3 Workflow (task operativi)
 
