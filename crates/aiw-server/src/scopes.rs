@@ -112,6 +112,10 @@ const RULES: &[(&str, &str, Required)] = &[
     ("POST", "/api/questions/*", DEVICE),
     ("GET", "/api/secret-requests", DEVICE),
     ("POST", "/api/secret-requests/*", FULL),
+    // The live view of the controlled browser and the human takeover: the page may show a logged-in session (mail, bank),
+    // so the owner only. A paired device does not see it nor drive it (the questions it may answer, above, do not give it).
+    ("*", "/api/browser", FULL),
+    ("*", "/api/browser/**", FULL),
     ("*", "/api/proposals", DEVICE),
     ("*", "/api/proposals/**", DEVICE),
     // Learning, memory, knowledge base (the handlers refuse path imports to anyone who is not local).

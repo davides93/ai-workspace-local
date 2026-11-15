@@ -6,6 +6,8 @@ pub mod adviser;
 pub mod attachments;
 pub mod background;
 pub mod backup;
+mod browser_live;
+pub use browser_live::{Frame as BrowserFrame, HumanInput as BrowserInput, LiveState as BrowserState};
 pub mod channels;
 mod dataset;
 pub mod defaults;
@@ -396,9 +398,11 @@ impl Engine {
         engine.register_peer_pins();
         engine.sync_connectors();
         engine.sync_search();
+        engine.sync_browser();
         training_tool::register(&engine);
         engine.register_channel_tool();
         management::register(&engine);
+        browser_live::register(&engine);
         engine.seed()?;
         engine.resume_workflows();
         if !opts.offline {
@@ -2498,6 +2502,9 @@ impl Engine {
         }
         if key.starts_with("search.") {
             self.sync_search();
+        }
+        if key.starts_with("browser.") {
+            self.sync_browser();
         }
         if key == "workspace.root" {
             if let Some(p) = self.0.config.get_str("workspace.root") {

@@ -63,7 +63,7 @@ pub fn agents() -> Vec<AgentProfile> {
             "Navigatore",
             "Ricerca e azioni nel browser controllato (CDP).",
             "Usi il browser per trovare informazioni e completare moduli. Prima di inviare dati personali, pagamenti o moduli definitivi chiedi conferma. Cita le pagine da cui prendi le informazioni.",
-            &["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_screenshot", "browser_tabs", "browser_tab_new", "browser_tab_select", "browser_select", "browser_hover", "browser_downloads", "browser_console", "web_fetch", "web_search", "todo"],
+            &["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_screenshot", "browser_tabs", "browser_tab_new", "browser_tab_select", "browser_select", "browser_hover", "browser_downloads", "browser_console", "browser_dialog", "browser_handover", "web_fetch", "web_search", "todo"],
             "ask",
             "read-only",
             40,
@@ -362,7 +362,8 @@ mod tests {
         .map(|t| t.name().to_string())
         .collect();
         for a in &all {
-            for t in a.tools.iter().filter(|t| t.starts_with("browser_")) {
+            // `browser_handover` is the engine's own tool (it asks the person, `browser_live.rs`).
+            for t in a.tools.iter().filter(|t| t.starts_with("browser_") && *t != "browser_handover") {
                 assert!(known.contains(t), "{} lists the unknown tool {t}", a.id);
             }
         }
