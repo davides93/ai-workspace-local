@@ -4,6 +4,7 @@ import { serviceBaseUrl } from "../../shared/lib/baseUrl";
 import { Page, PageHeader } from "../../shared/ui";
 import { useLanAddress } from "./api";
 import { AccessPanel, type Audience } from "./components/AccessPanel";
+import { ClientsGuide } from "./components/ClientsGuide";
 import { EndpointCard } from "./components/EndpointCard";
 import { RemoteAgentsPanel } from "./components/RemoteAgentsPanel";
 import { buildEndpoints, lanBaseUrl, type SnippetLang } from "./model/snippets";
@@ -30,6 +31,7 @@ export function IntegrationsView() {
         {endpoints.map((e) => (
           <EndpointCard key={e.id} endpoint={e} lang={lang} onLang={setLang} needsToken={audience === "lan"} />
         ))}
+        <ClientsGuide base={base} token={audience === "lan"} />
         <RemoteAgentsPanel />
       </div>
     </Page>

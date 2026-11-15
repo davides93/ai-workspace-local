@@ -4,7 +4,7 @@ import { t } from "../../../shared/i18n";
 const HELLO = (): string => t("integrations.snippet_hello");
 const SECRET = (): string => t("integrations.snippet_workflow_secret");
 
-export type SnippetLang = "curl" | "python" | "javascript" | "config";
+export type SnippetLang = "curl" | "python" | "javascript" | "typescript" | "config";
 
 export interface Snippet {
   lang: SnippetLang;
@@ -14,7 +14,7 @@ export interface Snippet {
 }
 
 export interface Endpoint {
-  id: "openai" | "anthropic" | "mcp" | "a2a" | "webhook";
+  id: "openai" | "anthropic" | "agui" | "mcp" | "a2a" | "webhook";
   title: string;
   description: string;
   /** Main URL to copy. */
@@ -133,6 +133,47 @@ print(m.content[0].text)`,
 });
 const data = await res.json();
 console.log(data.content[0].text);`,
+        },
+      ],
+    },
+    {
+      id: "agui",
+      title: t("integrations.agenti_ag_ui"),
+      description: t("integrations.un_agente_di_ai_workspace"),
+      url: `${base}/agui/assistant`,
+      guarded: true,
+      snippets: [
+        {
+          lang: "curl", label: "curl",
+          code: `curl -N ${base}/agui/assistant \\
+  -H "Content-Type: application/json" \\
+${curlAuth}  -d '{"threadId": "chat-1", "runId": "run-1", "messages": [{"id": "m1", "role": "user", "content": "${HELLO()}"}]}'`,
+        },
+        {
+          lang: "javascript", label: t("integrations.javascript_ag_ui_client"),
+          code: `const { HttpAgent } = await import("@ag-ui/client");
+
+const agent = new HttpAgent({
+  url: "${base}/agui/assistant",
+  threadId: "chat-1",${tok ? `\n  headers: { Authorization: "${bearer}" },` : ""}
+});
+agent.messages = [{ id: crypto.randomUUID(), role: "user", content: "${HELLO()}" }];
+
+await agent.runAgent({ runId: crypto.randomUUID() });
+console.log(agent.messages.at(-1).content);`,
+        },
+        {
+          lang: "typescript", label: t("integrations.copilotkit_runtime"),
+          code: `import { CopilotRuntime } from "@copilotkit/runtime/v2";
+import { HttpAgent } from "@ag-ui/client";
+
+const runtime = new CopilotRuntime({
+  agents: {
+    aiw: new HttpAgent({
+      url: "${base}/agui/assistant",${tok ? `\n      headers: { Authorization: "${bearer}" },` : ""}
+    }),
+  },
+});`,
         },
       ],
     },

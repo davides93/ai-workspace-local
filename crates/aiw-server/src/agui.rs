@@ -1571,4 +1571,49 @@ mod tests {
         );
         assert_eq!(d(json!({"aiw": {"interactive": "interrupts"}})), Declared::default(), "a string is no declaration");
     }
+
+    #[tokio::test]
+    async fn a_device_token_cannot_answer_the_confirmation_of_a_management_tool_with_resume() {
+        let args = json!({"key": "ui.theme", "value": "dark"});
+        let turns = vec![ScriptedBackend::tool_turn("m1", "aiw_setting_set", args), ScriptedBackend::text_turn("Lascio il tema")];
+        let (app, e, _d, _w) = fixture(turns).await;
+        let props = Some(json!({"aiw": {"interactive": ["interrupts"]}}));
+        let res = post_raw(&app, "assistant", input_with("thr-mgmt", props), &[]).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let rid = header(&res, "x-aiw-run-id");
+        // The stream ends by itself at the interruption, and the run keeps waiting for the owner.
+        let evs = frames(&read_all(res).await);
+        let finished = evs.last().unwrap();
+        assert_eq!((finished["type"].as_str(), finished["outcome"]["type"].as_str()), (Some("RUN_FINISHED"), Some("interrupt")), "{finished}");
+        let interrupt = &finished["outcome"]["interrupts"][0];
+        assert_eq!((interrupt["reason"].as_str(), interrupt["metadata"]["aiw"]["tool"].as_str()), (Some("tool_call"), Some("aiw_setting_set")));
+        let types: Vec<&str> = evs.iter().map(|v| v["type"].as_str().unwrap()).collect();
+        let last_two = &types[types.len() - 3..];
+        assert_eq!(last_two, ["MESSAGES_SNAPSHOT", "STATE_SNAPSHOT", "RUN_FINISHED"], "the snapshots go right before the interruption: {types:?}");
+        assert!(!e.run_done(&rid) && e.approvals().len() == 1, "the closed connection did not cancel the paused run");
+        // A paired device answers: refused, and nothing was decided.
+        let id = interrupt["id"].as_str().unwrap();
+        let resume = json!({
+            "threadId": "thr-mgmt", "runId": "r2", "messages": [{"id": "m1", "role": "user", "content": "Scarica un modello"}],
+            "resume": [{"interruptId": id, "status": "resolved", "payload": {"approved": true}}]
+        });
+        let dev = format!("Bearer {}", e.create_api_token("Telefono", "device", None, None, None).unwrap().token);
+        let mut r = req("POST", "/agui/assistant", Some(LAN), &[("host", "192.168.1.5:7777"), ("authorization", dev.as_str())], Some(resume.clone()));
+        r.extensions_mut().insert(crate::security::TlsConn);
+        let res = tower::ServiceExt::oneshot(app.clone(), r).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let v: Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+        assert!(v["error"].as_str().is_some_and(|m| m.contains("proprietario")), "{v}");
+        assert!(!e.run_done(&rid) && e.approvals().len() == 1, "a refused answer left the confirmation open");
+        // The owner (this computer) answers, with a denial: the run goes on to the end, once.
+        let mut deny = resume;
+        deny["resume"][0]["payload"] = json!({"approved": false});
+        let res = post_raw(&app, "assistant", deny, &[]).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let evs = frames(&read_all(res).await);
+        assert_eq!((evs[0]["type"].as_str(), evs[0]["parentRunId"].as_str(), evs[0]["runId"].as_str()), (Some("RUN_STARTED"), Some("r1"), Some("r2")));
+        assert_eq!(evs.last().unwrap()["type"], "RUN_FINISHED");
+        assert!(evs.last().unwrap().get("outcome").is_none());
+        assert!(e.run_done(&rid) && e.approvals().is_empty());
+    }
 }

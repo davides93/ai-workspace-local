@@ -295,19 +295,19 @@ describe("human-in-the-loop interoperabile (@ag-ui/client 1.0.4)", () => {
     assert.equal(assistantTexts(agent).at(-1), "Scarico la Q4.");
   });
 
-  it("un token device che chiede una conferma di uno strumento di gestione non la decide con resume (403, la conferma resta)", async () => {
-    // Il proprietario ha la conferma; un altro dispositivo non può rispondere al suo posto: qui basta provarlo sul run
-    // dell'Assistente, la cui conferma `aiw_setting_set` è di sola competenza del proprietario.
-    prov.set([call("aiw_setting_set", { key: "ui.theme", value: "dark" }), text("Fatto")]);
+  it("la conferma di uno strumento di gestione dell'Assistente è un'interruzione tool_call e il proprietario la decide con resume", async () => {
+    prov.set([call("aiw_setting_set", { key: "ui.theme", value: "dark" }), text("Lascio il tema com'è")]);
     const agent = makeAgent(latest, srv, "assistant", { messages: [userMessage(`Metti il tema scuro ${uid("t").slice(0, 6)}`)] });
     const r1 = await runCollect(agent, { runId: uid("run"), forwardedProps: INTERRUPTS });
     ok(r1);
     const [it] = r1.outcome.interrupts;
     assert.equal(it.reason, "tool_call");
     assert.equal(it.metadata.aiw.tool, "aiw_setting_set");
-    // Dal computer stesso è il proprietario: la risposta passa. (Per il dispositivo remoto vedi i test Rust: `cargo test -p aiw-server agui`.)
+    // Dal computer stesso è il proprietario. Il rifiuto da un token `device` (403, la pausa resta) è provato nei test Rust
+    // (`cargo test -p aiw-server agui`): qui non c'è un dispositivo remoto.
     const r2 = await runCollect(agent, { runId: uid("run"), forwardedProps: INTERRUPTS, resume: [{ interruptId: it.id, status: "resolved", payload: { approved: false } }] });
     ok(r2);
+    assert.equal(assistantTexts(agent).at(-1), "Lascio il tema com'è");
   });
 });
 
