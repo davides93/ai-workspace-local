@@ -260,7 +260,7 @@ async fn call_inner(
                 None => ToolOutput::text(cap_result(&out)),
             })
         }
-        Op::Tabs | Op::TabNew | Op::TabSelect | Op::TabClose | Op::Upload | Op::Downloads | Op::Console => {
+        Op::Tabs | Op::TabNew | Op::TabSelect | Op::TabClose | Op::Upload | Op::Downloads | Op::Console | Op::Dialog => {
             Ok(ToolOutput::error(NOT_ON_DEVICE))
         }
         Op::Screenshot => {

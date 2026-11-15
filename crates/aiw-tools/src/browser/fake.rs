@@ -19,14 +19,20 @@ pub(super) struct Reply {
     pub result: Value,
     /// Events sent after the answer.
     pub events: Vec<Value>,
+    /// No answer at all (a page blocked by a dialog does not return); the events are still sent.
+    pub silent: bool,
 }
 
 impl Reply {
     pub fn ok(result: Value) -> Self {
-        Reply { result, events: vec![] }
+        Reply { result, events: vec![], silent: false }
     }
     pub fn with(result: Value, events: Vec<Value>) -> Self {
-        Reply { result, events }
+        Reply { result, events, silent: false }
+    }
+    /// The command never gets an answer; `events` are sent anyway.
+    pub fn silent(events: Vec<Value>) -> Self {
+        Reply { result: Value::Null, events, silent: true }
     }
 }
 
@@ -118,7 +124,9 @@ impl FakeCdp {
                             if let Some(s) = &req.session {
                                 answer["sessionId"] = json!(s);
                             }
-                            let _ = out_tx.send(answer.to_string());
+                            if !reply.silent {
+                                let _ = out_tx.send(answer.to_string());
+                            }
                             for e in reply.events {
                                 let _ = out_tx.send(e.to_string());
                             }

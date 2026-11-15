@@ -522,8 +522,23 @@ async fn real_waits_dialogs_console_and_eval() {
     // Dialogs never hang a call: the text is reported and the page goes on.
     let a = r.run("browser_click", json!({"ref": ref_of(&snap, "button \"A\"")})).await;
     assert!(!a.is_error && a.content.contains("Finestra del sito (alert): «ciao»") && a.content.contains("dopo alert"), "{}", a.content);
+    // A `confirm` is a real question now: the click comes back at once (it used to be answered «no» for the agent),
+    // the page waits, and the agent answers with `browser_dialog`.
+    let t = std::time::Instant::now();
     let c = r.run("browser_click", json!({"ref": ref_of(&snap, "button \"C\"")})).await;
-    assert!(c.content.contains("(confirm): «Sicuro?»") && c.content.contains("annullata") && c.content.contains("\nno\n"), "{}", c.content);
+    assert!(t.elapsed() < Duration::from_secs(10), "the click did not hang on the dialog: {:?}", t.elapsed());
+    assert!(
+        !c.is_error && c.content.contains("una conferma (confirm): «Sicuro?»") && c.content.contains("browser_dialog"),
+        "{}",
+        c.content
+    );
+    let c = r.run("browser_dialog", json!({"action": "dismiss"})).await;
+    assert!(!c.is_error && c.content.contains("annullata") && c.content.contains("\nno\n"), "{}", c.content);
+    let snap = r.run("browser_snapshot", json!({})).await.content;
+    let c = r.run("browser_click", json!({"ref": ref_of(&snap, "button \"C\"")})).await;
+    assert!(c.content.contains("browser_dialog"), "{}", c.content);
+    let c = r.run("browser_dialog", json!({"action": "accept"})).await;
+    assert!(c.content.contains("confermata con OK") && c.content.contains("\nsi\n"), "{}", c.content);
 
     // Waits: text appears, another disappears, a selector, a ref, a timeout.
     r.run("browser_click", json!({"ref": ref_of(&snap, "button \"L\"")})).await;
@@ -809,26 +824,31 @@ async fn fake_closing_the_last_tab_leaves_a_blank_one() {
 }
 
 #[tokio::test]
-async fn fake_dialogs_are_answered_at_once_and_reported() {
+async fn fake_dialogs_alert_and_beforeunload_are_answered_at_once_confirm_and_prompt_wait() {
+    // Changed on purpose (issue #18, interactive dialogs): a `confirm` or `prompt` used to be dismissed at once, which
+    // answered «no» to every «are you sure?»; now they wait for the agent or the person (see `tests_live.rs`).
     let fk = Fk::plain().await;
     fk.run("browser_tabs", json!({})).await;
-    for (ty, msg) in [("alert", "Attenzione"), ("confirm", "Sicuro?"), ("prompt", "Nome?"), ("beforeunload", "")] {
+    for (ty, msg) in [("alert", "Attenzione"), ("beforeunload", "")] {
         fk.fake.push(event(Some("S1"), "Page.javascriptDialogOpening", json!({"type": ty, "message": msg, "url": "http://e.example/"})));
     }
     fk.fake.wait_for(|r| r.method == "Page.handleJavaScriptDialog").await;
     fk.settle().await;
     let answers: Vec<bool> =
         fk.fake.commands("Page.handleJavaScriptDialog").iter().map(|r| r.params["accept"].as_bool().unwrap()).collect();
-    // alert and beforeunload have only one way out; confirm and prompt are dismissed.
-    assert_eq!(answers, vec![true, false, false, true]);
+    // alert and beforeunload have only one way out.
+    assert_eq!(answers, vec![true, true]);
     assert!(fk.fake.commands("Page.handleJavaScriptDialog").iter().all(|r| r.session.as_deref() == Some("S1")));
     let out = fk.run("browser_tabs", json!({})).await;
-    assert!(
-        out.content.contains("(alert): «Attenzione»: chiusa con OK") && out.content.contains("(confirm): «Sicuro?»: annullata"),
-        "{}",
-        out.content
-    );
-    assert!(out.content.contains("(prompt): «Nome?»: annullata"), "{}", out.content);
+    assert!(out.content.contains("(alert): «Attenzione»: chiusa con OK"), "{}", out.content);
+    // A confirm is not answered by the browser tools on their own.
+    fk.fake.push(event(
+        Some("S1"),
+        "Page.javascriptDialogOpening",
+        json!({"type": "confirm", "message": "Sicuro?", "url": "http://e.example/"}),
+    ));
+    fk.settle().await;
+    assert_eq!(fk.fake.commands("Page.handleJavaScriptDialog").len(), 2, "no answer was sent for the confirm");
 }
 
 #[tokio::test]
@@ -1293,7 +1313,7 @@ fn eval_is_exec_explicit_and_described_as_running_code() {
     names.sort();
     names.dedup();
     assert_eq!(names.len(), all.len());
-    assert_eq!(all.len(), 19);
+    assert_eq!(all.len(), 20);
     for t in &all {
         assert_eq!(t.parameters()["type"], "object", "{}", t.name());
         assert!(t.name().starts_with("browser_"));
@@ -1307,7 +1327,7 @@ fn eval_is_exec_explicit_and_described_as_running_code() {
     for n in ["browser_navigate", "browser_tab_new"] {
         assert_eq!(risk(n), Risk::Network, "{n}");
     }
-    for n in ["browser_click", "browser_type", "browser_select", "browser_hover", "browser_upload", "browser_tab_close"] {
+    for n in ["browser_click", "browser_type", "browser_select", "browser_hover", "browser_upload", "browser_tab_close", "browser_dialog"] {
         assert_eq!(risk(n), Risk::Computer, "{n}");
     }
 }
@@ -1366,4 +1386,98 @@ fn helpers_parse_refs_waits_and_file_names() {
     assert!(text_snapshot("non json", 5).contains("0 a 0 di 0"));
     assert!(select_error(&RefArg::Num(1), "x", "ok:Uno").is_none());
     assert!(select_error(&RefArg::Num(1), "x", "noopt:A | B").unwrap().contains("A | B"));
+}
+
+/// What a person types who they are (a password, a one-time code, a card number) is never written in a snapshot, in either
+/// format, whatever the field is called (or is not called).
+#[tokio::test]
+#[ignore]
+async fn real_secret_fields_never_reach_the_model() {
+    let page = r#"<html><head><title>Accesso</title></head><body>
+      <label>Nome <input name=nome value="Mario"></label>
+      <label>Password <input type=password name=pw value="PASSWORD-DI-PROVA"></label>
+      <input type=password value="SENZA-NOME-DI-PROVA">
+      <label>Codice <input autocomplete="one-time-code" value="123456-DI-PROVA"></label>
+      <input autocomplete="cc-number" value="4111-DI-PROVA">
+      <input type=submit value="Accedi"></body></html>"#;
+    let Some(r) = Real::start(move |_| html(page)).await else { return };
+    r.go("/").await;
+    let elements = r.run("browser_snapshot", json!({})).await.content;
+    let ax = r.run("browser_snapshot", json!({"format": "ax"})).await.content;
+    for (format, snap) in [("elements", &elements), ("ax", &ax)] {
+        for secret in ["PASSWORD-DI-PROVA", "SENZA-NOME-DI-PROVA", "123456-DI-PROVA", "4111-DI-PROVA"] {
+            assert!(!snap.contains(secret), "{format}: {secret} reached the model:\n{snap}");
+        }
+        assert!(snap.contains("Mario"), "{format}: a normal field keeps its value:\n{snap}");
+        assert!(snap.contains("Accedi"), "{format}: the label of a submit button is its value:\n{snap}");
+    }
+    assert!(elements.contains("(nascosto)"), "{elements}");
+    assert!(r.mgr.close().await);
+}
+
+/// The live view against a real browser: a frame, the person's clicks and keys in CSS pixels (on a display with a scale of 2),
+/// the agent kept out meanwhile, and what the agent sees after the handback.
+#[tokio::test]
+#[ignore]
+async fn real_live_view_frame_input_hidpi_and_handback() {
+    let page = r#"<html><head><title>Vuota</title></head><body style="margin:0">
+      <input id=u style="position:absolute;left:100px;top:100px;width:300px;height:40px" aria-label="Utente">
+      <input id=p type=password style="position:absolute;left:100px;top:200px;width:300px;height:40px" aria-label="Chiave">
+      <button style="position:absolute;left:100px;top:300px;width:200px;height:50px" onclick="document.title='premuto'">Vai</button>
+      </body></html>"#;
+    let Some(r) = Real::start(move |_| html(page)).await else { return };
+    r.go("/").await;
+    let before = r.run("browser_snapshot", json!({})).await.content;
+    let cdp = r.mgr.live_cdp().expect("running");
+    // A display with a scale of 2: the frame and the input are still in CSS pixels.
+    cdp.call("Emulation.setDeviceMetricsOverride", json!({"width": 800, "height": 600, "deviceScaleFactor": 2, "mobile": false}))
+        .await
+        .unwrap();
+    let eval = |expr: &'static str| {
+        let cdp = cdp.clone();
+        async move { cdp.call("Runtime.evaluate", json!({"expression": expr, "returnByValue": true})).await.unwrap()["result"]["value"].clone() }
+    };
+    let frame = r.mgr.frame().await.unwrap().expect("a frame");
+    assert!(frame.jpeg.starts_with(&[0xFF, 0xD8]), "a JPEG");
+    assert_eq!((frame.width, frame.height), (800, 600));
+
+    // The person takes the browser: the agent's call waits.
+    r.mgr.take_control().await.unwrap();
+    let waiting = {
+        let (t, ctx) = (tool(&r.t, "browser_snapshot"), r.ctx.clone());
+        tokio::spawn(async move { t.call(json!({}), &ctx).await.unwrap() })
+    };
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(!waiting.is_finished(), "the agent does not act while the person drives");
+    let click = |x: f64, y: f64| HumanInput::Click { x: x / 800.0, y: y / 600.0, button: None, count: None };
+    r.mgr.human_input(click(250.0, 120.0)).await.unwrap();
+    r.mgr.human_input(HumanInput::Text { text: "mario".into() }).await.unwrap();
+    r.mgr.human_input(HumanInput::Key { key: "Tab".into(), shift: false }).await.unwrap();
+    for c in "chiave-di-prova".chars() {
+        r.mgr.human_input(HumanInput::Key { key: c.to_string(), shift: false }).await.unwrap();
+    }
+    assert_eq!(eval("document.getElementById('u').value").await, "mario");
+    assert_eq!(eval("document.getElementById('p').value").await, "chiave-di-prova");
+    r.mgr.human_input(click(200.0, 325.0)).await.unwrap();
+    assert_eq!(eval("document.title").await, "premuto");
+
+    // Given back: the waiting call goes on and sees the page as it is, minus what is secret.
+    r.mgr.give_back();
+    let after = waiting.await.unwrap();
+    assert!(!after.is_error, "{}", after.content);
+    assert!(after.content.contains("premuto") && after.content.contains("mario"), "{}", after.content);
+    assert!(!after.content.contains("chiave-di-prova"), "the password reached the model:\n{}", after.content);
+    assert!(after.content.contains("(nascosto)"), "{}", after.content);
+    let ax = r.run("browser_snapshot", json!({"format": "ax"})).await.content;
+    assert!(!ax.contains("chiave-di-prova"), "the password reached the model (ax):\n{ax}");
+    // The call that waited renewed the numbers: the button can be clicked by them. After another human turn they are not trusted.
+    let fresh = r.run("browser_snapshot", json!({})).await.content;
+    let ok = r.run("browser_click", json!({"ref": ref_of(&fresh, "button \"Vai\"")})).await;
+    assert!(!ok.is_error, "{}", ok.content);
+    r.mgr.take_control().await.unwrap();
+    r.mgr.give_back();
+    let stale = r.run("browser_click", json!({"ref": ref_of(&before, "button \"Vai\"")})).await;
+    assert!(stale.is_error && stale.content.contains("Rifai browser_snapshot"), "{}", stale.content);
+    assert!(r.mgr.human_input(click(250.0, 120.0)).await.is_err(), "the person cannot type once the agent has it back");
+    assert!(r.mgr.close().await);
 }

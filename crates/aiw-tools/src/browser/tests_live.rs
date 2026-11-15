@@ -177,3 +177,226 @@ async fn addresses_lose_query_and_fragment_after_a_handback_until_the_agent_navi
     assert!(!nav.is_error, "{}", nav.content);
     assert!(!lv.mgr.control().redacting());
 }
+
+// ---------------------------------------------------------------------- interactive dialogs
+
+fn confirm_event(message: &str) -> Value {
+    super::fake::event(
+        Some("S1"),
+        "Page.javascriptDialogOpening",
+        json!({"type": "confirm", "message": message, "url": "http://e.example/"}),
+    )
+}
+
+/// A page whose click blocks on a `confirm` (no answer until it is handled) and whose other commands work.
+fn page_with_confirm_on_click() -> impl Fn(&Req, &mut FakeState) -> Option<Reply> + Send + Sync + 'static {
+    let base = page("http://e.example/");
+    move |req, st| match req.method.as_str() {
+        "Runtime.callFunctionOn" => Some(Reply::silent(vec![confirm_event("Cancellare tutto?")])),
+        _ => base(req, st),
+    }
+}
+
+#[tokio::test]
+async fn a_click_that_opens_a_confirm_comes_back_at_once_and_the_agent_answers_it() {
+    let lv = Live::new(page_with_confirm_on_click()).await;
+    lv.run("browser_snapshot", json!({})).await;
+    let started = std::time::Instant::now();
+    let click = lv.run("browser_click", json!({"ref": "1"})).await;
+    assert!(started.elapsed() < Duration::from_secs(5), "the click did not wait for the 30 s of the browser: {:?}", started.elapsed());
+    assert!(!click.is_error, "{}", click.content);
+    assert!(
+        click.content.contains("una conferma (confirm): «Cancellare tutto?»") && click.content.contains("browser_dialog"),
+        "{}",
+        click.content
+    );
+    let dialog = lv.mgr.live_state().dialog.expect("the state carries the window");
+    assert_eq!((dialog.kind.as_str(), dialog.message.as_str()), ("confirm", "Cancellare tutto?"));
+    assert!(lv.fake.commands("Page.handleJavaScriptDialog").is_empty(), "nobody answered for the agent");
+    // The page is blocked: whatever else the agent asks about it says so at once instead of hanging.
+    let snap = lv.run("browser_snapshot", json!({})).await;
+    assert!(!snap.is_error && snap.content.contains("browser_dialog"), "{}", snap.content);
+    // The agent answers.
+    let done = lv.run("browser_dialog", json!({"action": "accept"})).await;
+    assert!(!done.is_error && done.content.contains("confermata con OK"), "{}", done.content);
+    let sent = lv.fake.commands("Page.handleJavaScriptDialog");
+    assert_eq!((sent.len(), sent[0].params["accept"].as_bool(), sent[0].session.as_deref()), (1, Some(true), Some("S1")));
+    assert!(lv.mgr.live_state().dialog.is_none());
+    let none = lv.run("browser_dialog", json!({"action": "dismiss"})).await;
+    assert!(none.is_error && none.content.contains("Nessuna finestra"), "{}", none.content);
+    assert!(lv.run("browser_dialog", json!({"action": "boh"})).await.is_error);
+}
+
+#[tokio::test]
+async fn a_prompt_gets_the_text_of_the_answer_only_when_it_is_accepted() {
+    let lv = Live::new(page("http://e.example/")).await;
+    lv.run("browser_snapshot", json!({})).await;
+    lv.fake.push(super::fake::event(
+        Some("S1"),
+        "Page.javascriptDialogOpening",
+        json!({"type": "prompt", "message": "Nome?", "defaultPrompt": "Anna"}),
+    ));
+    lv.fake.wait_for(|r| r.method == "Target.setDiscoverTargets").await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let out = lv.run("browser_dialog", json!({"action": "accept", "text": "Mario"})).await;
+    assert!(!out.is_error, "{}", out.content);
+    let sent = lv.fake.commands("Page.handleJavaScriptDialog").pop().unwrap();
+    assert_eq!((sent.params["accept"].as_bool(), sent.params["promptText"].as_str()), (Some(true), Some("Mario")));
+    lv.fake.push(super::fake::event(Some("S1"), "Page.javascriptDialogOpening", json!({"type": "prompt", "message": "Nome?"})));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    lv.run("browser_dialog", json!({"action": "dismiss", "text": "Mario"})).await;
+    let sent = lv.fake.commands("Page.handleJavaScriptDialog").pop().unwrap();
+    assert_eq!((sent.params["accept"].as_bool(), sent.params.get("promptText")), (Some(false), None));
+}
+
+#[tokio::test]
+async fn a_dialog_nobody_answers_is_dismissed_after_the_hold_and_the_agent_is_told() {
+    let lv = Live::new(page("http://e.example/")).await;
+    lv.mgr.set_dialog_hold(Duration::from_millis(300));
+    lv.run("browser_snapshot", json!({})).await;
+    lv.fake.push(confirm_event("Sicuro?"));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(lv.mgr.live_state().dialog.is_some());
+    let sent = lv.fake.wait_for(|r| r.method == "Page.handleJavaScriptDialog").await;
+    assert_eq!(sent.params["accept"], false, "the safe answer");
+    assert!(lv.mgr.live_state().dialog.is_none());
+    let out = lv.run("browser_tabs", json!({})).await;
+    assert!(out.content.contains("«Sicuro?»: annullata automaticamente, nessuno ha risposto"), "{}", out.content);
+}
+
+#[tokio::test]
+async fn the_person_answers_a_dialog_only_while_they_drive() {
+    let lv = Live::new(page("http://e.example/")).await;
+    lv.run("browser_snapshot", json!({})).await;
+    lv.fake.push(confirm_event("Sicuro?"));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(lv.mgr.answer_dialog(true, None).await.is_err(), "not their turn");
+    lv.mgr.take_control().await.unwrap();
+    lv.mgr.answer_dialog(true, None).await.unwrap();
+    assert_eq!(lv.fake.commands("Page.handleJavaScriptDialog")[0].params["accept"], true);
+    assert!(lv.mgr.live_state().dialog.is_none());
+    assert!(lv.mgr.answer_dialog(true, None).await.is_err(), "nothing waits any more");
+}
+
+// ---------------------------------------------------------------------- the live view
+
+/// A page that tells its viewport and gives a «frame».
+fn viewport_page() -> impl Fn(&Req, &mut FakeState) -> Option<Reply> + Send + Sync + 'static {
+    let base = page("http://e.example/");
+    move |req, st| match req.method.as_str() {
+        "Page.getLayoutMetrics" => {
+            Some(Reply::ok(json!({"cssVisualViewport": {"clientWidth": 1000.0, "clientHeight": 500.0, "pageX": 0.0, "pageY": 40.0}})))
+        }
+        "Page.captureScreenshot" => Some(Reply::ok(json!({"data": "SlBFRy1EQVRJ"}))), // "JPEG-DATI"
+        _ => base(req, st),
+    }
+}
+
+#[tokio::test]
+async fn the_live_view_never_starts_a_browser() {
+    let lv = Live::new(page("http://e.example/")).await;
+    assert!(lv.mgr.frame().await.unwrap().is_none());
+    let state = lv.mgr.live_state();
+    assert!(!state.running && state.page.is_none());
+    assert!(lv.mgr.take_control().await.is_err(), "nothing to take");
+    assert!(lv.mgr.human_input(HumanInput::Text { text: "x".into() }).await.is_err());
+    assert!(lv.fake.log.lock().unwrap().is_empty(), "no connection, no command: the browser was never launched");
+}
+
+#[tokio::test]
+async fn a_frame_is_scaled_to_the_viewport_and_comes_while_an_agent_action_holds_the_browser() {
+    let lv = Live::new(viewport_page()).await;
+    lv.run("browser_snapshot", json!({})).await;
+    // `browser_wait` holds the session for as long as it waits: the live view must not wait for it.
+    let long = lv.spawn("browser_wait", json!({"ms": 1500}));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let started = std::time::Instant::now();
+    let frame = lv.mgr.frame().await.unwrap().expect("a frame");
+    assert!(started.elapsed() < Duration::from_millis(1000), "the frame did not wait for the agent: {:?}", started.elapsed());
+    assert_eq!((frame.jpeg.as_slice(), frame.width, frame.height), (&b"JPEG-DATI"[..], 1000, 500));
+    let shot = lv.fake.commands("Page.captureScreenshot").pop().unwrap();
+    assert_eq!(shot.params["format"], "jpeg");
+    assert_eq!(
+        (shot.params["clip"]["width"].as_f64(), shot.params["clip"]["y"].as_f64(), shot.params["clip"]["scale"].as_f64()),
+        (Some(1000.0), Some(40.0), Some(1.0))
+    );
+    long.await.unwrap();
+}
+
+#[tokio::test]
+async fn the_state_names_the_host_and_nothing_else_of_the_address() {
+    let lv = Live::new(page("http://e.example/")).await;
+    lv.run("browser_snapshot", json!({})).await;
+    lv.fake.push(super::fake::event(
+        None,
+        "Target.targetInfoChanged",
+        json!({"targetInfo": {"targetId": "T1", "title": "Accesso", "url": "https://login.example/cb?code=CODICE-DI-PROVA#t=TOKEN"}}),
+    ));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let state = lv.mgr.live_state();
+    let page = state.page.clone().expect("the page in front");
+    assert_eq!((page.host.as_str(), page.title.as_str(), page.secure), ("login.example", "Accesso", true));
+    let json = serde_json::to_string(&state).unwrap();
+    assert!(!json.contains("CODICE-DI-PROVA") && !json.contains("TOKEN") && !json.contains("/cb"), "{json}");
+    assert!(json.contains("\"mode\":\"agent\"") && json.contains("\"running\":true"), "{json}");
+}
+
+#[tokio::test]
+async fn the_input_of_the_person_reaches_the_page_in_css_pixels_and_only_on_their_turn() {
+    let lv = Live::new(viewport_page()).await;
+    lv.run("browser_snapshot", json!({})).await;
+    let click = || HumanInput::Click { x: 0.25, y: 0.5, button: None, count: None };
+    assert!(lv.mgr.human_input(click()).await.is_err(), "the agent has the browser");
+    assert!(lv.fake.commands("Input.dispatchMouseEvent").is_empty());
+    // The agent is mid-action when the person takes the browser: they wait for it.
+    let guard = lv.mgr.control().enter(&lv.ctx.cancel).await.unwrap();
+    lv.mgr.take_control().await.unwrap();
+    assert!(lv.mgr.human_input(click()).await.is_err());
+    drop(guard);
+    lv.mgr.human_input(click()).await.unwrap();
+    let mouse = lv.fake.commands("Input.dispatchMouseEvent");
+    let kinds: Vec<&str> = mouse.iter().map(|r| r.params["type"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["mouseMoved", "mousePressed", "mouseReleased"]);
+    assert_eq!((mouse[1].params["x"].as_f64(), mouse[1].params["y"].as_f64()), (Some(250.0), Some(250.0)));
+    lv.mgr.human_input(HumanInput::Text { text: "123456".into() }).await.unwrap();
+    assert_eq!(lv.fake.commands("Input.insertText")[0].params["text"], "123456");
+    lv.mgr.human_input(HumanInput::Key { key: "Enter".into(), shift: false }).await.unwrap();
+    lv.mgr.human_input(HumanInput::Key { key: "a".into(), shift: true }).await.unwrap();
+    let keys = lv.fake.commands("Input.dispatchKeyEvent");
+    assert_eq!(keys.len(), 4);
+    assert_eq!((keys[0].params["key"].as_str(), keys[0].params["text"].as_str()), (Some("Enter"), Some("\r")));
+    assert_eq!((keys[2].params["text"].as_str(), keys[2].params["modifiers"].as_u64()), (Some("a"), Some(8)));
+    // Nothing the browser would take as a shortcut or as a different request.
+    for bad in [
+        HumanInput::Key { key: "F5".into(), shift: false },
+        HumanInput::Key { key: "Control".into(), shift: false },
+        HumanInput::Key { key: "ab".into(), shift: false },
+        HumanInput::Text { text: String::new() },
+        HumanInput::Text { text: "x".repeat(live::MAX_TEXT_CHARS + 1) },
+        HumanInput::Click { x: 1.5, y: 0.5, button: None, count: None },
+        HumanInput::Click { x: 0.5, y: 0.5, button: Some("back".into()), count: None },
+        HumanInput::Scroll { x: 0.5, y: 0.5, dy: f64::NAN },
+    ] {
+        assert!(lv.mgr.human_input(bad.clone()).await.is_err(), "{bad:?}");
+    }
+    // Given back, the person cannot touch the page any more.
+    lv.mgr.give_back();
+    assert!(lv.mgr.human_input(click()).await.is_err());
+}
+
+#[tokio::test]
+async fn a_download_started_while_the_person_drives_is_not_kept() {
+    let lv = Live::new(page("http://e.example/")).await;
+    lv.run("browser_snapshot", json!({})).await;
+    lv.mgr.take_control().await.unwrap();
+    lv.fake.push(super::fake::event(
+        None,
+        "Browser.downloadWillBegin",
+        json!({"guid": "g1", "url": "http://e.example/f.bin", "suggestedFilename": "f.bin"}),
+    ));
+    let cancel = lv.fake.wait_for(|r| r.method == "Browser.cancelDownload").await;
+    assert_eq!(cancel.params["guid"], "g1");
+    lv.mgr.give_back();
+    let list = lv.run("browser_downloads", json!({})).await;
+    assert!(list.content.contains("non si scaricano file mentre l'utente guida il browser"), "{}", list.content);
+}
