@@ -118,7 +118,9 @@ export function tFields<B extends object, K extends string>(base: B, keys: Recor
  * it to wherever the other language needs it.
  */
 export function tNode(key: MessageKey, slots: Record<string, ReactNode>, params?: Params): ReactNode {
-  const mark = "\u0000";
+  // A private-use character, not NUL: the mockup is one HTML file with the script inline, and the HTML parser turns every NUL of a
+  // script into U+FFFD (the slots then showed as «�cmd�» in the demo).
+  const mark = "\uE000";
   const slotParams: Params = {};
   for (const name of Object.keys(slots)) slotParams[name] = `${mark}${name}${mark}`;
   const text = t(key, { ...params, ...slotParams });

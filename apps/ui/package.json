@@ -17,7 +17,8 @@
     "test:e2e": "playwright test --project=e2e --trace off",
     "test:a11y": "playwright test --project=a11y --trace off",
     "check:bundle": "node scripts/check-bundle-size.mjs",
-    "bench:startup": "node scripts/bench-startup.mjs"
+    "bench:startup": "node scripts/bench-startup.mjs",
+    "shots:design": "node scripts/design-shots.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "5.107.1",

@@ -47,7 +47,7 @@ Regole:
   (`approvals/components`), la stessa card in chat, pannello del run, Panoramica e centro conferme.
   Rotte e `navigate` arrivano da `app/router`. `shared/` non importa mai da `features/` né da `app/`.
 - Gli hook con stato della vista stanno **alla radice del dominio**, non in `model/`: `model/` è
-  logica pura, testabile senza DOM (Vitest gira in ambiente `node`).
+  logica pura, testabile senza DOM (i test `*.test.ts` girano in ambiente `node`; le viste hanno i loro in `*.test.tsx`, vedi §8).
 - Gli import dei componenti condivisi passano da `shared/ui/index.ts`, non dal file del componente.
 - Gli stili del dominio stanno nel suo CSS con prefisso di classe; `shared/styles/components.css`
   tiene solo shell, componenti base e superfici condivise (le regole pre-0.4 di chat, panoramica e
@@ -318,21 +318,92 @@ budget di memoria. `HttpTransport.subscribeRun` scarta gli eventi con `seq` già
 
 ## 8. Test
 
-- **Vitest** (`npm test`, ambiente `node`) per la logica pura: router e `navGate`, formattatori,
-  query key, riduttore della chat e ricostruzione dello storico (errori salvati compresi), funzioni
-  A2UI, parser Markdown, modelli di ogni dominio (varianti, filtri, policy e glob, hook, passi dei
-  workflow, form MCP), `kvRows`, `secrets` e il `MockTransport`.
-- **Smoke Playwright** sul build mockup: ogni rotta della tabella di `routes.tsx` (con valori di prova
-  per i parametri, più una pagina inesistente) a 1440 e 390 px, tema chiaro e scuro; fallisce su
-  errori in console, schermata di errore di una vista, scroll orizzontale e tema sbagliato.
+Tre livelli, dal più veloce al più fedele; ognuno prova ciò che gli altri non vedono.
+
+- **Logica** (`*.test.ts`, Vitest in ambiente `node`, progetto `logic`): router e `navGate`, formattatori, query key, riduttore della
+  chat e ricostruzione dello storico (errori salvati compresi), funzioni A2UI, parser Markdown, tokenizzatore dell'evidenziazione,
+  modelli di ogni dominio (varianti, filtri, policy e glob, hook, passi dei workflow, form MCP), `kvRows`, `secrets`, i cataloghi
+  i18n e il `MockTransport` con i suoi scenari.
+- **Componente** (`*.test.tsx`, Vitest con **jsdom** e Testing Library, progetto `components`): rendono l'app intera, o una scheda,
+  contro il `MockTransport` (`src/test-utils/render.tsx`: `renderApp({ route, mode, scenario, api })` per il guscio con la vista vera,
+  `renderIn(<Scheda />)` per un componente solo, con il query client a disposizione per guardare la cache). Provano ciò che il
+  markup statico non vede: tastiera e focus (`QuestionCard`: cifre, Invio, «Altro»; il focus non viene tolto a chi scrive altrove),
+  ciò che parte verso il trasporto (spia sul metodo) e cosa si vede quando la risposta è rifiutata, 403, 404; l'invariante dei segreti
+  (il valore non compare in pagina, storage, cache di query e mutazioni, né nel messaggio d'errore); le regole di ciascuna
+  modalità (semplice: nessun link fuori dalla chat, nessun agente da scegliere; Sviluppatore: tutte le sezioni); Impostazioni
+  (modalità, tema, lingua, un numero con Invio, ripristino, salvataggio rifiutato); Modelli (schede, ricerca, eliminazione,
+  download); guscio (reindirizzamenti, palette, banner di connessione, accoppiamento). **jsdom non impagina**: niente
+  scorrimento, misure o contrasto, che stanno nei test Playwright. Le prove di una vista non devono dipendere dallo stato lasciato
+  da un'altra nello stesso file (i dati demo sono stato di modulo, per file): si sceglie una sessione diversa o si parte da uno scenario.
+- **Browser** (Playwright sul build mockup, aperto da file system: nessun server, nessuna rete): lo **smoke** apre ogni rotta della
+  tabella di `routes.tsx` (con valori di prova per i parametri, più una pagina inesistente e le visite della modalità semplice) a 1440
+  e 390 px, tema chiaro e scuro, in italiano e in inglese, e fallisce su errori in console, schermata di errore di una vista, scroll
+  orizzontale, tema o lingua sbagliati e su U+FFFD nel testo (un NUL nel codice che il parser HTML ha sostituito); gli **E2E**
+  (`e2e/flows`) provano i flussi; l'**accessibilità** (`e2e/a11y`, axe-core) ogni rotta e stato in entrambi i temi a 390/1440 px, la
+  tastiera e l'albero di accessibilità delle conversazioni lunghe.
 
   ```bash
   cd apps/ui
-  npm run build:mockup           # lo smoke non compila nulla
-  npm run test:smoke             # tutte le rotte, dimensioni e temi
+  npm run build:mockup           # smoke, E2E e accessibilità non compilano nulla
+  npm run test:smoke             # tutte le rotte, dimensioni, temi e lingue
   npm run test:smoke -- --route=runtimes     # solo le rotte che iniziano con /runtimes
   npm run test:smoke -- --shots=/percorso    # salva anche uno screenshot per visita
+  PW_NAME=e2e npm run test:e2e
+  PW_NAME=a11y npm run test:a11y
   ```
 
-  `AIW_SMOKE_HTML` indica un altro build. Serve Chromium (`npx playwright install chromium`).
-- La CI esegue `npm ci`, `typecheck`, `test`, `build`, `build:mockup` e lo smoke.
+  `AIW_SMOKE_HTML` e `AIW_E2E_HTML` indicano un altro build. Serve Chromium (`npx playwright install chromium`, o `AIW_CHROMIUM`).
+- La CI esegue `npm ci`, `typecheck`, `test` (logica e componente), `build`, `build:mockup`, `check:bundle` e lo smoke; gli E2E e
+  l'accessibilità in un lavoro a parte.
+
+### Scenari della demo
+
+Il mockup parte da una demo «ben usata». `?scenario=<nome>` (`shared/api/mock/scenario.ts`; negli E2E `openApp(page, route, { scenario })`;
+nei test di componente `renderApp({ scenario })`, applicato una volta per file) la porta in uno stato che altrimenti non si raggiunge:
+
+| Scenario | Che cosa cambia | A cosa serve |
+|---|---|---|
+| `first-run` | nessun modello, nessuna conversazione, un runtime acceso | primo avvio della modalità semplice, «Prepara tutto» |
+| `mas` | build sandboxed del Mac App Store, una cartella consentita | Impostazioni → «Cartelle consentite», avviso di una cartella rifiutata |
+| `long-chat` | una conversazione di 120 turni (circa 360 righe) con codice in ogni lingua dell'evidenziatore, strumenti, una tabella | evidenziazione, conversazioni lunghe, catture |
+| `offline` | ogni richiesta fallisce con 503 (involucro sul trasporto, i dati non cambiano) | banner «Connessione persa», stato di errore delle viste |
+| `unpaired` | ogni richiesta fallisce con 401 finché non si inserisce il codice `123456` | schermata di accoppiamento, codice sbagliato |
+
+Altri stati si raggiungono interagendo, come una persona: una conferma in attesa (si scrive «Ordina i PDF in Downloads»), un download che
+fallisce (un indirizzo con «fail»), il segreto o la domanda dell'Assistente (`e2e/flows/ask.spec.ts`). `?ui=developer` apre la demo in
+modalità Sviluppatore, `?scope=device` come dispositivo accoppiato che non può fornire segreti.
+
+### Catture di `docs/design`
+
+`npm run shots:design` (dopo `npm run build:mockup`) rifà le catture di `docs/design/screenshots` dal mockup, con le stesse pagine, gli
+stessi formati, un orologio fisso e i font inclusi; `-- --list` dice che cosa mostra ciascuna, `-- --only=nome` ne rifà alcune,
+`-- --mockup` copia anche il mockup in `docs/design/mockup/index.html`. Va rilanciato quando cambia l'aspetto di una di quelle pagine.
+
+### Blocchi di codice e conversazioni lunghe (`features/chat`, `shared/ui`)
+
+**Evidenziazione** (`shared/ui/highlight`). Un tokenizzatore scritto in casa, senza dipendenze: `tokenize(codice, grammatica)` dà
+una lista di pezzi `{ k, v }` che `CodeBlock` rende come `<span class="tok-…">`: mai una stringa HTML, quindi niente da fare l'escape e il
+Markdown resta senza HTML. Grammatiche per js, ts, json, python, shell, rust, c/c++, java, go, c#, css, html/xml, sql, yaml, toml e diff
+(`languages.ts` mappa i nomi delle recinzioni, `ts`, `tsx`, `bash`, `c++`…); un blocco senza lingua o con una lingua sconosciuta resta in
+chiaro: non si indovina. Garanzie provate dai test: i pezzi uniti sono esattamente il testo (copia, selezione e lettori di schermo non
+cambiano), nessun input lo manda in errore o in ciclo (un blocco ancora in streaming, con la stringa non chiusa, arriva fino alla fine),
+nessuna regola va in backtracking sull'intero blocco (prove con input costruiti apposta) e oltre 30 000 caratteri resta in chiaro. Le
+grammatiche sono un **chunk a parte** (`useHighlight` lo importa alla prima occorrenza): il blocco compare in chiaro e poi colorato, con lo
+stesso testo e quindi senza spostamenti. I colori sono `--tok-*` in `tokens.css` (chiaro, scuro e OLED), con prova di contrasto ≥ 4,5:1
+sullo sfondo del blocco e della sua intestazione.
+
+**Conversazioni lunghe.** Le risposte lontane dalla fine (oltre 40 righe: `.ws-log-inner > .ws-msg:nth-last-child(n + 41) > .ws-bubble`) hanno
+`content-visibility: auto` (`chat.css`): il browser non le impagina né le dipinge finché non si avvicinano allo schermo. **Restano nel
+documento**, e per questo ricerca nella pagina, selezione, tastiera e lettori di schermo le vedono come prima; una conversazione di meno
+di 40 righe e la parte viva della lunga (conferme, domande, risposta in corso) non cambiano, e un browser senza la proprietà mostra tutto
+come ha sempre fatto. Non si è usato un elenco virtualizzato che toglie le righe dal documento (react-window e simili) perché rompe
+proprio quelle cinque cose: la ricerca nella pagina non trova ciò che non c'è, e una selezione non attraversa righe assenti. Misurato in
+Chromium con 3600 righe: l'impaginazione per ogni ridimensionamento passa da 79 a 13 ms (a 360 righe da 4,5 a 1,2 ms). Quello che non
+riduce: nodi in memoria e costo di React per montare la lista (le righe sono già `memo`). Il pulsante «Nuovi messaggi» non segue più
+l'altezza della lista (cambia mentre si scorre la storia, quando le righe prendono l'altezza vera) ma la **coda** della conversazione
+(`tailSignature`: riga aggiunta, ultima riga che cresce, nota o proposta sotto la lista). Provato in `e2e/flows/long-chat.spec.ts`
+(apertura in fondo, `window.find`, selezione di tutto il log, scorrimento senza falso avviso, risposta mentre si legge altrove,
+Maiusc+Tab per 180 passi senza salti) e in `e2e/a11y/long-chat.spec.ts` (albero di accessibilità di Chromium con l'accessibilità
+attiva, con e senza il contenimento: stesso testo, stessi ruoli di intestazioni, elenchi, tabelle, codice e pulsanti; cambiano solo i
+nodi derivati dall'impaginazione, come i `paragraph` e i puntini degli elenchi nelle risposte non impaginate). **Non provato**: un lettore di
+schermo vero (NVDA, JAWS, VoiceOver, Orca), WebKit (WKWebView, WebKitGTK) e WebView2.
