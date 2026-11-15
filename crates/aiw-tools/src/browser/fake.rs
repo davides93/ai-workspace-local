@@ -9,13 +9,13 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Clone, Debug)]
-pub(super) struct Req {
+pub struct Req {
     pub session: Option<String>,
     pub method: String,
     pub params: Value,
 }
 
-pub(super) struct Reply {
+pub struct Reply {
     pub result: Value,
     /// Events sent after the answer.
     pub events: Vec<Value>,
@@ -37,7 +37,7 @@ impl Reply {
 }
 
 /// Targets the fake browser has.
-pub(super) struct Target {
+pub struct Target {
     pub id: String,
     pub session: String,
     pub url: String,
@@ -45,20 +45,20 @@ pub(super) struct Target {
 }
 
 #[derive(Default)]
-pub(super) struct FakeState {
+pub struct FakeState {
     pub targets: Vec<Target>,
     pub next: u32,
 }
 
 type Handler = dyn Fn(&Req, &mut FakeState) -> Option<Reply> + Send + Sync;
 
-pub(super) struct FakeCdp {
+pub struct FakeCdp {
     pub url: String,
     pub log: Arc<Mutex<Vec<Req>>>,
     push: mpsc::UnboundedSender<String>,
 }
 
-pub(super) fn attached(session_of_parent: Option<&str>, id: &str, session: &str, url: &str, opener: Option<&str>) -> Value {
+pub fn attached(session_of_parent: Option<&str>, id: &str, session: &str, url: &str, opener: Option<&str>) -> Value {
     let mut ev = json!({"method": "Target.attachedToTarget", "params": {
         "sessionId": session, "waitingForDebugger": true,
         "targetInfo": {"targetId": id, "type": "page", "title": "", "url": url, "openerId": opener.unwrap_or_default()}}});
@@ -68,7 +68,7 @@ pub(super) fn attached(session_of_parent: Option<&str>, id: &str, session: &str,
     ev
 }
 
-pub(super) fn event(session: Option<&str>, method: &str, params: Value) -> Value {
+pub fn event(session: Option<&str>, method: &str, params: Value) -> Value {
     let mut ev = json!({"method": method, "params": params});
     if let Some(s) = session {
         ev["sessionId"] = json!(s);

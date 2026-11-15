@@ -1481,3 +1481,113 @@ async fn real_live_view_frame_input_hidpi_and_handback() {
     assert!(r.mgr.human_input(click(250.0, 120.0)).await.is_err(), "the person cannot type once the agent has it back");
     assert!(r.mgr.close().await);
 }
+
+/// A Chrome the person started themselves (their own profile folder, their own tab) and the agent attached to: it works in a
+/// tab of its own, never sees the person's, and the Chrome stays open when the agent is done.
+#[tokio::test]
+#[ignore]
+async fn real_attach_to_a_chrome_the_person_started() {
+    let Some(bin) = find_chrome() else {
+        eprintln!("skipped: no Chrome/Chromium found");
+        return;
+    };
+    let (port, hits) = serve(|p| {
+        if p == "/lo-schermo-dell-utente" {
+            html("<html><title>SEGRETO-DELL-UTENTE</title><body>la mail dell'utente</body></html>")
+        } else {
+            html("<html><title>Pagina-agente</title><body>ciao <button>Vai</button></body></html>")
+        }
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("profilo-dell-utente");
+    let mut child = tokio::process::Command::new(&bin)
+        .args([
+            "--headless=new",
+            "--remote-debugging-port=0",
+            &format!("--user-data-dir={}", profile.display()),
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--host-resolver-rules=MAP public.test 127.0.0.1",
+            "--no-proxy-server",
+            &format!("http://public.test:{port}/lo-schermo-dell-utente"),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut debug_port = None;
+    for _ in 0..150 {
+        if let Some(p) = std::fs::read_to_string(profile.join("DevToolsActivePort"))
+            .ok()
+            .and_then(|s| s.lines().next().and_then(|l| l.trim().parse::<u16>().ok()))
+        {
+            debug_port = Some(p);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let debug_port = debug_port.expect("the person's Chrome opened its debugging port");
+    let list = || async {
+        reqwest::get(format!("http://127.0.0.1:{debug_port}/json/list"))
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+    let titles = |l: &[Value]| {
+        l.iter().filter(|t| t["type"] == "page").map(|t| t["title"].as_str().unwrap_or_default().to_string()).collect::<Vec<_>>()
+    };
+    let mut seen = vec![];
+    for _ in 0..50 {
+        seen = titles(&list().await);
+        if seen.iter().any(|t| t == "SEGRETO-DELL-UTENTE") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(seen.iter().any(|t| t == "SEGRETO-DELL-UTENTE"), "the person's tab is open: {seen:?}");
+
+    let resolve: ResolveFn = Arc::new(|host, _| {
+        Box::pin(async move {
+            match host.as_str() {
+                "public.test" => Ok(vec!["93.184.216.34".parse().unwrap()]),
+                _ => Err(std::io::Error::other("no dns")),
+            }
+        })
+    });
+    let mut m = BrowserManager::new(dir.path().join("agent-profile"));
+    m.policy.resolve = resolve;
+    m.set_attach(Some(format!("http://127.0.0.1:{debug_port}")));
+    let m = Arc::new(m);
+    let t = tools(m.clone());
+    let ctx = ToolContext::new("run1", dir.path().to_path_buf());
+    let hits_before = hits.load(Ordering::SeqCst);
+    let nav = tool(&t, "browser_navigate").call(json!({"url": format!("http://public.test:{port}/agente")}), &ctx).await.unwrap();
+    assert!(!nav.is_error && nav.content.contains("Pagina-agente"), "{}", nav.content);
+    let tabs = tool(&t, "browser_tabs").call(json!({}), &ctx).await.unwrap();
+    assert!(
+        tabs.content.contains("1 su 8") && !tabs.content.contains("SEGRETO-DELL-UTENTE"),
+        "the person's tab is not the agent's to see:\n{}",
+        tabs.content
+    );
+    let snap = tool(&t, "browser_snapshot").call(json!({}), &ctx).await.unwrap();
+    assert!(!snap.content.contains("SEGRETO-DELL-UTENTE") && !snap.content.contains("la mail dell'utente"), "{}", snap.content);
+    assert!(hits.load(Ordering::SeqCst) > hits_before, "the agent's own page was fetched");
+    // The person's Chrome: both tabs are there.
+    let now = titles(&list().await);
+    assert!(now.iter().any(|t| t == "SEGRETO-DELL-UTENTE") && now.iter().any(|t| t == "Pagina-agente"), "{now:?}");
+
+    // Done: the agent's tab goes, the person's stays, and so does the Chrome.
+    assert!(m.close().await);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let after = titles(&list().await);
+    assert!(after.iter().any(|t| t == "SEGRETO-DELL-UTENTE") && !after.iter().any(|t| t == "Pagina-agente"), "{after:?}");
+    assert!(child.try_wait().unwrap().is_none(), "the person's Chrome is still running");
+    let _ = child.kill().await;
+}

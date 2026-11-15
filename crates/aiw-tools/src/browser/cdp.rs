@@ -110,6 +110,11 @@ pub(crate) struct State {
     pub dialog: Option<PendingDialog>,
     pub dialog_hold: Option<Duration>,
     pub dialogs_opened: u64,
+    /// Attached to somebody's own Chrome: the targets this connection created (or that its pages opened). Everything else
+    /// in that browser is not ours to look at.
+    pub own: HashSet<String>,
+    /// A tab of ours was just asked for: the next page that attaches without an opener is it.
+    pub expecting_own: bool,
 }
 
 impl State {
@@ -144,6 +149,8 @@ struct Hub {
     next: Arc<AtomicU64>,
     /// Woken when a window of the site opens or closes: the calls blocked by it end (see `call_on`).
     dialog_notify: Arc<tokio::sync::Notify>,
+    /// The browser is somebody's own Chrome (see `State::own`), not one we launched.
+    own_only: bool,
     /// Where the browser writes downloads: they are moved into the workspace only once complete
     /// and checked, so the browser itself never writes into the workspace.
     tmp: PathBuf,
@@ -155,6 +162,8 @@ pub(crate) struct Cdp {
     next: Arc<AtomicU64>,
     pub(crate) st: Arc<Mutex<State>>,
     dialog_notify: Arc<tokio::sync::Notify>,
+    /// Connected to somebody's own Chrome: only the tabs this connection opens are ours.
+    own_only: bool,
     tmp: PathBuf,
 }
 
@@ -219,7 +228,7 @@ fn human_size(b: u64) -> String {
 }
 
 impl Cdp {
-    pub(crate) async fn connect(ws_url: &str, policy: Policy, tmp: PathBuf) -> Result<Self> {
+    pub(crate) async fn connect(ws_url: &str, policy: Policy, tmp: PathBuf, own_only: bool) -> Result<Self> {
         let (ws, _) = tokio_tungstenite::connect_async(ws_url).await.map_err(|e| Error::Runtime(format!("CDP: {e}")))?;
         let (mut sink, mut stream) = ws.split();
         let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
@@ -234,8 +243,15 @@ impl Cdp {
         let st: Arc<Mutex<State>> = Default::default();
         let next = Arc::new(AtomicU64::new(1));
         let dialog_notify = Arc::new(tokio::sync::Notify::new());
-        let hub =
-            Hub { st: st.clone(), policy, tx: tx.clone(), next: next.clone(), dialog_notify: dialog_notify.clone(), tmp: tmp.clone() };
+        let hub = Hub {
+            st: st.clone(),
+            policy,
+            tx: tx.clone(),
+            next: next.clone(),
+            dialog_notify: dialog_notify.clone(),
+            own_only,
+            tmp: tmp.clone(),
+        };
         let p2 = pending.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = stream.next().await {
@@ -254,7 +270,7 @@ impl Cdp {
             // The browser went away: whoever waits for an answer is told.
             p2.lock().unwrap().clear();
         });
-        Ok(Self { tx, pending, next, st, dialog_notify, tmp })
+        Ok(Self { tx, pending, next, st, dialog_notify, own_only, tmp })
     }
 
     pub(crate) async fn call_on(&self, session: Option<&str>, method: &str, params: Value) -> Result<Value> {
@@ -405,6 +421,9 @@ impl Cdp {
 
     /// Browser-level setup, once per connection.
     pub(crate) async fn init(&self) -> Result<()> {
+        if self.own_only {
+            return self.init_attached().await;
+        }
         std::fs::create_dir_all(&self.tmp)?;
         self.call_root("Target.setDiscoverTargets", json!({"discover": true})).await?;
         // New pages (popups included) attach paused: the network policy is in place before they run.
@@ -430,6 +449,25 @@ impl Cdp {
             self.new_tab().await?;
         }
         Ok(())
+    }
+
+    /// Setup against somebody's own Chrome: nothing that is theirs is touched. The pages that exist are not attached (the
+    /// ones that attach by themselves are let go again, see `on_attached`), the download behaviour is left alone (so a
+    /// download stays Chrome's, and `browser_downloads` has nothing), and the agent works in a tab of its own.
+    async fn init_attached(&self) -> Result<()> {
+        self.call_root("Target.setDiscoverTargets", json!({"discover": true})).await?;
+        // The popups of our own pages attach paused like in our own browser; whatever else attaches is let go.
+        self.call_root("Target.setAutoAttach", json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true})).await?;
+        self.new_tab().await?;
+        Ok(())
+    }
+
+    /// Closes the tabs this connection opened and nothing else (somebody's own Chrome stays open).
+    pub(crate) async fn close_own_tabs(&self) {
+        let ids: Vec<String> = self.st.lock().unwrap().tabs.iter().map(|t| t.target_id.clone()).collect();
+        for id in ids {
+            let _ = self.call_root("Target.closeTarget", json!({"targetId": id})).await;
+        }
     }
 
     async fn wait_for_any_tab(&self) -> bool {
@@ -475,7 +513,14 @@ impl Cdp {
 
     /// Opens a blank tab and makes it the active one. The caller checks `MAX_TABS` first.
     pub(crate) async fn new_tab(&self) -> Result<String> {
-        let r = self.call_root("Target.createTarget", json!({"url": "about:blank"})).await?;
+        if self.own_only {
+            self.st.lock().unwrap().expecting_own = true;
+        }
+        let r = self.call_root("Target.createTarget", json!({"url": "about:blank"})).await;
+        if r.is_err() {
+            self.st.lock().unwrap().expecting_own = false;
+        }
+        let r = r?;
         let id = r["targetId"].as_str().ok_or_else(|| Error::Runtime("CDP: nessun identificativo per la nuova scheda".into()))?.to_string();
         self.wait_attached(&id).await?;
         self.select_target(&id).await;
@@ -991,6 +1036,28 @@ fn on_attached(h: &Hub, parent: Option<&str>, p: &Value) {
     let ty = info["type"].as_str().unwrap_or_default();
     let target_id = info["targetId"].as_str().unwrap_or_default().to_string();
     let is_tab = ty == "page" && parent.is_none();
+    if h.own_only && parent.is_none() {
+        // Somebody's own Chrome: only the tabs this connection opened (or that its pages opened) are ours. Anything else that
+        // attaches by itself (their tabs, workers, extensions) is let go at once, without a single command of ours.
+        let mine = is_tab && {
+            let mut st = h.st.lock().unwrap();
+            let opener = info["openerId"].as_str().unwrap_or_default();
+            let known = st.own.contains(&target_id) || (!opener.is_empty() && st.own.contains(opener));
+            let fresh = !known && opener.is_empty() && st.expecting_own;
+            if fresh {
+                st.expecting_own = false;
+            }
+            if known || fresh {
+                st.own.insert(target_id.clone());
+            }
+            known || fresh
+        };
+        if !mine {
+            send(h, Some(sid), "Runtime.runIfWaitingForDebugger", json!({}));
+            send(h, None, "Target.detachFromTarget", json!({"sessionId": sid}));
+            return;
+        }
+    }
     if is_tab {
         let mut st = h.st.lock().unwrap();
         if st.tabs.iter().any(|t| t.target_id == target_id && t.session.is_some()) {

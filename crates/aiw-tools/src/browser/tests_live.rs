@@ -400,3 +400,128 @@ async fn a_download_started_while_the_person_drives_is_not_kept() {
     let list = lv.run("browser_downloads", json!({})).await;
     assert!(list.content.contains("non si scaricano file mentre l'utente guida il browser"), "{}", list.content);
 }
+
+#[tokio::test]
+async fn the_state_says_which_control_has_the_focus_only_while_the_person_drives_and_never_its_value() {
+    let lv = Live::new(|req, st| match req.method.as_str() {
+        "Runtime.evaluate" if req.params["expression"].as_str().unwrap_or_default().contains("document.activeElement") => {
+            Some(Reply::ok(json!({"result": {"type": "string", "value": "campo password «Chiave»"}})))
+        }
+        _ => page("http://e.example/")(req, st),
+    })
+    .await;
+    lv.run("browser_snapshot", json!({})).await;
+    assert_eq!(lv.mgr.live_state_with_focus().await.focus, None, "the agent drives: the page is not asked");
+    lv.mgr.take_control().await.unwrap();
+    assert_eq!(lv.mgr.live_state_with_focus().await.focus.as_deref(), Some("campo password «Chiave»"));
+    lv.mgr.give_back();
+    assert_eq!(lv.mgr.live_state_with_focus().await.focus, None);
+}
+
+// ---------------------------------------------------------------------- somebody's own Chrome
+
+/// A manager attached to the endpoint instead of launching a browser.
+fn attached_to(endpoint: String) -> (Arc<BrowserManager>, Vec<Arc<dyn Tool>>, ToolContext, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = BrowserManager::new(dir.path().join("profile"));
+    m.policy.resolve = Arc::new(|_, _| Box::pin(async { Err(std::io::Error::other("no dns")) }));
+    assert!(m.set_attach(Some(endpoint)));
+    let m = Arc::new(m);
+    let t = tools(m.clone());
+    let ctx = ToolContext::new("run1", dir.path().to_path_buf());
+    (m, t, ctx, dir)
+}
+
+async fn call(t: &[Arc<dyn Tool>], ctx: &ToolContext, name: &str, args: Value) -> ToolOutput {
+    let tool = t.iter().find(|x| x.name() == name).unwrap().clone();
+    tool.call(args, ctx).await.unwrap_or_else(|e| ToolOutput::error(format!("ERR: {e}")))
+}
+
+/// Answers `GET /json/version` with the given WebSocket address (what Chrome does on its debugging port).
+async fn version_server(ws: String) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = listener.accept().await else { return };
+            let ws = ws.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf).await;
+                let body = json!({"Browser": "Chrome/150", "webSocketDebuggerUrl": ws}).to_string();
+                let _ = s
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test]
+async fn an_attached_chrome_keeps_the_persons_tabs_out_of_sight_and_stays_open() {
+    let fake = fake::FakeCdp::start(page("http://e.example/")).await;
+    let port = version_server(fake.url.clone()).await;
+    let (mgr, t, ctx, _dir) = attached_to(format!("http://127.0.0.1:{port}"));
+    let first = call(&t, &ctx, "browser_snapshot", json!({})).await;
+    assert!(!first.is_error, "{}", first.content);
+    // The agent works in a tab of its own, made on purpose; nothing of the person's was attached, no download behaviour
+    // was changed, and the pages that already existed were not asked about.
+    assert_eq!(fake.commands("Target.createTarget").len(), 1);
+    assert!(fake.commands("Target.attachToTarget").is_empty() && fake.commands("Target.getTargets").is_empty());
+    assert!(fake.commands("Browser.setDownloadBehavior").is_empty(), "a download stays the person's Chrome's");
+    // The person's tab (T1) and a tab they open later attach by themselves (browser-level auto-attach): they are let go at
+    // once, with no policy, no snapshot and no listing.
+    fake.push(fake::attached(None, "T1", "S1", "https://bank.example/", None));
+    fake.push(fake::attached(None, "T7", "S7", "https://mail.example/", None));
+    let letgo = fake.wait_for(|r| r.method == "Target.detachFromTarget" && r.params["sessionId"] == "S7").await;
+    assert_eq!(letgo.session, None);
+    assert!(fake.commands("Target.detachFromTarget").iter().any(|r| r.params["sessionId"] == "S1"));
+    for s in ["S1", "S7"] {
+        assert!(fake.commands("Fetch.enable").iter().all(|r| r.session.as_deref() != Some(s)), "{s} was intercepted");
+        assert!(fake.commands("Page.enable").iter().all(|r| r.session.as_deref() != Some(s)), "{s} was enabled");
+    }
+    // A popup of our own page is ours, under the same policy as in our own browser.
+    fake.push(fake::attached(None, "T9", "S9", "about:blank", Some("T2")));
+    fake.wait_for(|r| r.method == "Fetch.enable" && r.session.as_deref() == Some("S9")).await;
+    let tabs = call(&t, &ctx, "browser_tabs", json!({})).await;
+    assert!(
+        tabs.content.contains("2 su 8") && !tabs.content.contains("bank.example") && !tabs.content.contains("mail.example"),
+        "{}",
+        tabs.content
+    );
+    // Closing closes our tabs and leaves Chrome open.
+    assert!(mgr.close().await);
+    let closed: Vec<String> =
+        fake.commands("Target.closeTarget").iter().map(|r| r.params["targetId"].as_str().unwrap().to_string()).collect();
+    assert!(closed.contains(&"T2".to_string()) && closed.contains(&"T9".to_string()) && !closed.contains(&"T1".to_string()), "{closed:?}");
+    assert!(fake.commands("Browser.close").is_empty(), "somebody's own Chrome is never closed");
+}
+
+#[tokio::test]
+async fn only_a_chrome_on_this_computer_can_be_attached() {
+    let fake = fake::FakeCdp::start(page("http://e.example/")).await;
+    // An address that is not on this computer is refused before any connection.
+    for bad in ["http://192.168.1.5:9222", "ws://192.168.1.5:9222/devtools/browser/x", "http://example.com:9222"] {
+        let (_mgr, t, ctx, _dir) = attached_to(bad.to_string());
+        let out = call(&t, &ctx, "browser_snapshot", json!({})).await;
+        assert!(out.is_error && out.content.contains("questo computer"), "{bad}: {}", out.content);
+    }
+    // A Chrome on this computer that answers with an address somewhere else is refused too.
+    let port = version_server("ws://192.168.1.5:9222/devtools/browser/x".into()).await;
+    let (_mgr, t, ctx, _dir) = attached_to(format!("http://127.0.0.1:{port}"));
+    let out = call(&t, &ctx, "browser_snapshot", json!({})).await;
+    assert!(out.is_error && out.content.contains("questo computer"), "{}", out.content);
+    assert!(fake.log.lock().unwrap().is_empty(), "nothing was contacted");
+    // Nothing listening: a clear message, not a hang.
+    let (_mgr, t, ctx, _dir) = attached_to("http://127.0.0.1:9".to_string());
+    let out = call(&t, &ctx, "browser_snapshot", json!({})).await;
+    assert!(out.is_error && out.content.contains("--remote-debugging-port"), "{}", out.content);
+}

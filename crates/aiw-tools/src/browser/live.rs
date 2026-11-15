@@ -57,6 +57,9 @@ pub struct LiveState {
     pub control: ControlState,
     pub page: Option<PageInfo>,
     pub dialog: Option<DialogInfo>,
+    /// In words, the control that has the focus in the page (`campo password «Chiave»`): for who cannot see the frame.
+    /// Never a value. Only while the person drives (see [`BrowserManager::live_state_with_focus`]).
+    pub focus: Option<String>,
 }
 
 /// One frame of the page: JPEG bytes and the size of the viewport in CSS pixels it shows.
@@ -113,6 +116,19 @@ const NAMED_KEYS: &[(&str, u32)] = &[
     ("PageDown", 34),
 ];
 
+/// Which control has the focus, in words: its kind and its label (never what is typed in it).
+const FOCUS_JS: &str = r#"(() => {
+  const el = document.activeElement;
+  if (!el || el === document.body || el === document.documentElement) return '';
+  const tag = el.tagName.toLowerCase(), type = (el.getAttribute('type') || '').toLowerCase();
+  const button = tag === 'button' || (tag === 'input' && (type === 'submit' || type === 'button'));
+  const kind = tag === 'input' ? (type === 'password' ? 'campo password' : type === 'checkbox' ? 'casella' : type === 'radio' ? 'opzione' : button ? 'pulsante' : 'campo di testo')
+    : tag === 'textarea' ? 'area di testo' : tag === 'select' ? 'menu a tendina' : tag === 'button' ? 'pulsante' : tag === 'a' ? 'collegamento' : (el.getAttribute('role') || tag);
+  const label = (el.getAttribute('aria-label') || (el.labels && el.labels[0] ? el.labels[0].innerText : '') || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name')
+    || (button ? (tag === 'input' ? el.value : el.innerText) : '') || (tag === 'a' ? el.innerText : '') || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+  return label ? kind + ' «' + label + '»' : kind;
+})()"#;
+
 fn host_of(url: &str) -> Option<(String, bool)> {
     let u = reqwest::Url::parse(url).ok()?;
     Some((u.host_str()?.to_string(), u.scheme() == "https"))
@@ -141,7 +157,20 @@ impl BrowserManager {
             .and_then(|c| c.active_page())
             .and_then(|(title, url)| host_of(&url).map(|(host, secure)| PageInfo { title: super::cdp::clip(&title, 120), host, secure }));
         let dialog = cdp.as_ref().and_then(|c| c.pending_dialog());
-        LiveState { running: cdp.is_some(), headless: self.headless, control: self.control.state(), page, dialog }
+        LiveState { running: cdp.is_some(), headless: self.headless, control: self.control.state(), page, dialog, focus: None }
+    }
+
+    /// [`BrowserManager::live_state`] and, while the person drives, which control has the focus (read from the page; never
+    /// its value). The page is not asked when a window of the site blocks it or when the agent is mid-action.
+    pub async fn live_state_with_focus(&self) -> LiveState {
+        let mut state = self.live_state();
+        if state.running && state.control.mode == super::control::Mode::Human && !state.control.agent_busy && state.dialog.is_none() {
+            if let Some(cdp) = self.live_cdp() {
+                let r = tokio::time::timeout(LIVE_TIMEOUT, cdp.eval(FOCUS_JS)).await;
+                state.focus = r.ok().and_then(|r| r.ok()).and_then(|v| v.as_str().map(String::from)).filter(|t| !t.is_empty());
+            }
+        }
+        state
     }
 
     /// A frame of the page in front. `None` when no browser runs. While a window of the site waits for an answer

@@ -9,8 +9,9 @@
 mod ax;
 mod cdp;
 mod control;
-#[cfg(test)]
-mod fake;
+/// A fake CDP endpoint for the tests of this crate and of the ones above it (`testing` feature).
+#[cfg(any(test, feature = "testing"))]
+pub mod fake;
 mod live;
 #[cfg(test)]
 mod tests;
@@ -172,6 +173,8 @@ fn fetch_patterns() -> Value {
 struct Session {
     child: Option<tokio::process::Child>,
     cdp: Arc<Cdp>,
+    /// Somebody's own Chrome (see `BrowserManager::attach`): closing leaves it open.
+    attached: bool,
 }
 
 /// Owns the controlled browser (one per engine). Lazily started on first use.
@@ -193,9 +196,47 @@ pub struct BrowserManager {
     webview: Mutex<Option<Arc<crate::webview::WebViewHost>>>,
     /// Extra Chrome command-line flags (tests only).
     extra_args: Vec<String>,
-    /// A browser that is already running (tests: a fake CDP endpoint) instead of launching Chrome.
+    /// A Chrome the person started and wants the agent to use (`browser.attach_url`) instead of launching one of ours:
+    /// the DevTools address, always on this computer. Read when the browser starts.
+    attach: Mutex<Option<String>>,
+    /// A browser that is already running as if we had launched it (tests: a fake CDP endpoint).
     #[cfg(test)]
     endpoint: Option<String>,
+}
+
+/// The WebSocket address of the Chrome the person chose, checked at every step: the address they gave must be on this
+/// computer, and so must the one Chrome answers with (a name or a redirect could lead anywhere else).
+async fn attach_endpoint(endpoint: &str) -> Result<String> {
+    let not_here =
+        || Error::Denied("il Chrome da collegare deve stare su questo computer (127.0.0.1, [::1] o localhost, con la porta)".into());
+    if !aiw_core::config::is_loopback_endpoint(endpoint) {
+        return Err(not_here());
+    }
+    if endpoint.trim().to_ascii_lowercase().starts_with("ws://") {
+        return Ok(endpoint.trim().to_string());
+    }
+    let base = reqwest::Url::parse(endpoint.trim()).map_err(|_| not_here())?;
+    let host = base.host_str().ok_or_else(not_here)?;
+    let host = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+    let url = format!("http://{host}:{}/json/version", base.port().ok_or_else(not_here)?);
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(Error::other)?;
+    let reached = |e: String| {
+        Error::Runtime(format!(
+            "non riesco a collegarmi al Chrome indicato ({e}): va avviato da te con --remote-debugging-port e --user-data-dir (da Chrome 136 la porta di debug è ignorata con il profilo predefinito)"
+        ))
+    };
+    let version: Value =
+        client.get(&url).send().await.map_err(|e| reached(e.to_string()))?.json().await.map_err(|e| reached(e.to_string()))?;
+    let ws = version["webSocketDebuggerUrl"].as_str().ok_or_else(|| reached("nessun indirizzo di debug nella risposta".into()))?;
+    if !aiw_core::config::is_loopback_endpoint(ws) {
+        return Err(not_here());
+    }
+    Ok(ws.to_string())
 }
 
 pub fn find_chrome() -> Option<PathBuf> {
@@ -241,6 +282,7 @@ impl BrowserManager {
             policy,
             webview: Mutex::new(None),
             extra_args: vec![],
+            attach: Mutex::new(None),
             #[cfg(test)]
             endpoint: None,
         }
@@ -263,6 +305,22 @@ impl BrowserManager {
         self.webview.lock().unwrap().clone()
     }
 
+    /// The Chrome the person wants the agent to use (`browser.attach_url`), if any.
+    pub fn attach(&self) -> Option<String> {
+        self.attach.lock().unwrap().clone()
+    }
+
+    /// Chooses the Chrome the agent uses: `Some(address)` of a Chrome on this computer started by the person with
+    /// `--remote-debugging-port` and `--user-data-dir`, `None` for the browser of our own. It is read when the browser
+    /// starts: a browser that is already running keeps its own until the kill switch closes it. Returns whether it changed.
+    pub fn set_attach(&self, endpoint: Option<String>) -> bool {
+        let endpoint = endpoint.map(|e| e.trim().to_string()).filter(|e| !e.is_empty());
+        let mut g = self.attach.lock().unwrap();
+        let changed = *g != endpoint;
+        *g = endpoint;
+        changed
+    }
+
     /// How long a `confirm` or `prompt` of a site waits for an answer before it is dismissed (tests shorten it).
     pub fn set_dialog_hold(&self, hold: Duration) {
         *self.dialog_hold.lock().unwrap() = Some(hold);
@@ -275,6 +333,9 @@ impl BrowserManager {
 
     pub fn available(&self) -> std::result::Result<(), String> {
         if self.webview().is_some() {
+            return Ok(());
+        }
+        if self.attach().is_some() {
             return Ok(());
         }
         #[cfg(test)]
@@ -290,11 +351,17 @@ impl BrowserManager {
     async fn launch(&self) -> Result<Session> {
         let tmp = self.profile_dir.join("downloads-tmp");
         let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(endpoint) = self.attach() {
+            let ws = attach_endpoint(&endpoint).await?;
+            let cdp = Cdp::connect(&ws, self.policy.clone(), tmp, true).await?;
+            cdp.init().await?;
+            return Ok(Session { child: None, cdp: Arc::new(cdp), attached: true });
+        }
         #[cfg(test)]
         if let Some(ws) = &self.endpoint {
-            let cdp = Cdp::connect(ws, self.policy.clone(), tmp).await?;
+            let cdp = Cdp::connect(ws, self.policy.clone(), tmp, false).await?;
             cdp.init().await?;
-            return Ok(Session { child: None, cdp: Arc::new(cdp) });
+            return Ok(Session { child: None, cdp: Arc::new(cdp), attached: false });
         }
         let bin = find_chrome().ok_or_else(|| Error::Unsupported("nessun browser Chrome/Edge/Chromium trovato".into()))?;
         std::fs::create_dir_all(&self.profile_dir)?;
@@ -350,9 +417,9 @@ impl BrowserManager {
         let ws = version["webSocketDebuggerUrl"]
             .as_str()
             .ok_or_else(|| Error::Runtime("il browser non ha indicato l'indirizzo di debug".into()))?;
-        let cdp = Cdp::connect(ws, self.policy.clone(), tmp).await?;
+        let cdp = Cdp::connect(ws, self.policy.clone(), tmp, false).await?;
         cdp.init().await?;
-        Ok(Session { child: Some(child), cdp: Arc::new(cdp) })
+        Ok(Session { child: Some(child), cdp: Arc::new(cdp), attached: false })
     }
 
     async fn with<T>(&self, ctx: &ToolContext, f: impl for<'a> FnOnce(&'a Cdp) -> futures::future::BoxFuture<'a, Result<T>>) -> Result<T> {
@@ -394,7 +461,7 @@ impl BrowserManager {
 
     /// Test constructor: talks to an already running (fake) browser endpoint.
     #[cfg(test)]
-    fn for_endpoint(profile_dir: PathBuf, ws_url: String, resolve: ResolveFn) -> Self {
+    pub(crate) fn for_endpoint(profile_dir: PathBuf, ws_url: String, resolve: ResolveFn) -> Self {
         let mut m = Self::new(profile_dir);
         m.policy.resolve = resolve;
         m.endpoint = Some(ws_url);
@@ -412,8 +479,13 @@ impl BrowserManager {
         *self.live.lock().unwrap() = None;
         let mut guard = self.session.lock().await;
         if let Some(mut s) = guard.take() {
-            let _ = s.cdp.call_root("Browser.close", json!({})).await;
-            s.cdp.forget_downloads_tmp();
+            if s.attached {
+                // Somebody's own Chrome: our tabs go, the browser stays (never `Browser.close`, never a kill).
+                s.cdp.close_own_tabs().await;
+            } else {
+                let _ = s.cdp.call_root("Browser.close", json!({})).await;
+                s.cdp.forget_downloads_tmp();
+            }
             if let Some(mut c) = s.child.take() {
                 let _ = c.kill().await;
             }
