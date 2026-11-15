@@ -243,7 +243,8 @@ describe("human-in-the-loop interoperabile (@ag-ui/client 1.0.4)", () => {
     // Il motore chiede le conferme una alla volta: la seconda arriva quando la prima ha avuto risposta.
     assert.equal(r1.outcome.interrupts.length, 1);
     const run2 = uid("run");
-    const r2 = await runCollect(agent, { runId: run2, forwardedProps: INTERRUPTS, resume: [{ interruptId: r1.outcome.interrupts[0].id, status: "resolved", payload: { approved: true } }] });
+    // Chi manda `resume` sa gestire le interruzioni: non serve ripetere la dichiarazione, e la seconda conferma è un'altra pausa.
+    const r2 = await runCollect(agent, { runId: run2, resume: [{ interruptId: r1.outcome.interrupts[0].id, status: "resolved", payload: { approved: true } }] });
     ok(r2);
     assert.equal(r2.events[0].parentRunId, run1);
     assert.equal(r2.outcome?.type, "interrupt", `${r2.types}`);
@@ -251,7 +252,7 @@ describe("human-in-the-loop interoperabile (@ag-ui/client 1.0.4)", () => {
     assert.notEqual(r2.outcome.interrupts[0].id, r1.outcome.interrupts[0].id);
     assert.ok(fs.existsSync(written(a)) && !fs.existsSync(written(b)));
     const run3 = uid("run");
-    const r3 = await runCollect(agent, { runId: run3, forwardedProps: INTERRUPTS, resume: [{ interruptId: r2.outcome.interrupts[0].id, status: "resolved", payload: { approved: true } }] });
+    const r3 = await runCollect(agent, { runId: run3, resume: [{ interruptId: r2.outcome.interrupts[0].id, status: "resolved", payload: { approved: true } }] });
     ok(r3);
     assert.equal(r3.events[0].parentRunId, run2);
     assert.equal(r3.outcome, undefined);
@@ -417,13 +418,16 @@ describe("ripresa, riconnessione e thread durevole (@ag-ui/client 1.0.4)", () =>
   it("gli strumenti del client e parentRunId sono accettati e ignorati: il modello non li vede", async () => {
     prov.set([text("Ok")]);
     const agent = makeAgent(latest, srv, "planner", { messages: [userMessage(`Ciao ${uid("t").slice(0, 6)}`)] });
-    const r = await runCollect(agent, {
-      runId: uid("run"),
-      tools: [{ name: "mostra_grafico", description: "Mostra un grafico", parameters: { type: "object", properties: {} } }],
-    });
+    const tool = { name: "mostra_grafico", description: "Mostra un grafico", parameters: { type: "object", properties: {} } };
+    const r = await runCollect(agent, { runId: uid("run"), tools: [tool] });
     ok(r);
-    const sent = JSON.stringify(prov.requests.at(-1).tools ?? []);
-    assert.ok(!sent.includes("mostra_grafico"), "uno strumento del client è arrivato al modello");
+    assert.ok(!JSON.stringify(prov.requests.at(-1).tools ?? []).includes("mostra_grafico"), "uno strumento del client è arrivato al modello");
+    // `parentRunId` il client non lo lascia mandare da `runAgent`: a mano.
+    prov.set([text("Ok anche così")]);
+    const raw = await rawRun(srv, "planner", { threadId: uid("thr"), runId: uid("run"), parentRunId: "run-precedente", tools: [tool], messages: [userMessage(`Ciao ${uid("t").slice(0, 6)}`)] });
+    assert.equal(raw.status, 200);
+    assert.deepEqual([raw.events[0].type, raw.events.at(-1).type], ["RUN_STARTED", "RUN_FINISHED"], raw.raw);
+    assert.ok(!JSON.stringify(prov.requests.at(-1).tools ?? []).includes("mostra_grafico"));
   });
 
   it("dopo un riavvio il thread continua nella stessa sessione e un messaggio già eseguito non si rifà", async () => {

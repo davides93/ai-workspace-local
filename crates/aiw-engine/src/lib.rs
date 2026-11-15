@@ -1781,7 +1781,7 @@ impl Engine {
 
     /// [`Engine::start_run_from`] with what the client application says about itself for this run
     /// only (`app_context`, a ready-made section of text: the AG-UI `context` and `state`). It goes to
-    /// the model in the system prompt, as data and not as instructions, and is never stored.
+    /// the model in the system prompt, as data and not as instructions, and is not part of the session history.
     #[allow(clippy::too_many_arguments)]
     pub async fn start_run_ctx(
         &self,

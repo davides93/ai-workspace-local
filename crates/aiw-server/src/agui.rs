@@ -70,7 +70,6 @@ struct OpenInterrupt {
 struct Pause {
     /// The run of the engine.
     run_id: String,
-    session_id: String,
     /// The `runId` of the client that was interrupted (the `parentRunId` of the one that resumes).
     client_run_id: String,
     /// The first event of the run that has not been sent.
@@ -511,7 +510,6 @@ impl Follow {
         self.done = true;
         let pause = Pause {
             run_id: self.run_id.clone(),
-            session_id: pc.session_id.clone(),
             client_run_id: self.wire.client_run_id().to_string(),
             next_seq: self.next_seq,
             wire: self.wire.clone(),
@@ -783,6 +781,9 @@ async fn resume_run(
     user: Option<LastUser>,
 ) -> Result<Response, ApiError> {
     let entries = input.resume.as_deref().unwrap_or_default();
+    // A client that sends `resume` has shown that it handles interrupts, whether or not it says so again: the next confirmation
+    // of the run (they come one at a time) is another pause, not a blocking `CUSTOM` it may not know.
+    let declared = Declared { interrupts: true, ..declared };
     let headers = [("x-aiw-session-id", thread.session_id.clone())];
     let refuse = |code: &str, msg: &str| -> Result<Response, ApiError> { Ok(run_error(input, code, msg, &headers)) };
     let Some(pause) = s.agui.pauses.lock().unwrap().get(&input.thread_id).cloned() else {
@@ -1492,13 +1493,12 @@ mod tests {
 
     // ------------------------------------------------------------------ interrupts and resume: the rules of the protocol
 
-    fn state_with_pause(e: &Engine, thread: &str, session: &str, interrupts: &[(&str, Kind)]) -> AppState {
+    fn state_with_pause(e: &Engine, thread: &str, interrupts: &[(&str, Kind)]) -> AppState {
         let st = AppState { engine: e.clone(), agui: Default::default() };
         st.agui.pauses.lock().unwrap().insert(
             thread.into(),
             Pause {
                 run_id: "run_x".into(),
-                session_id: session.into(),
                 client_run_id: "r0".into(),
                 next_seq: 0,
                 wire: Wire::new(thread, "r0", &Value::Null),
@@ -1524,7 +1524,7 @@ mod tests {
     async fn a_resume_must_follow_the_rules_of_the_protocol_and_what_does_not_is_a_run_error() {
         let (_app, e, _d, _w) = fixture(vec![]).await;
         let ses = e.create_session("planner", Some("Pausa".into())).unwrap();
-        let st = state_with_pause(&e, &ses.id, &ses.id, &[("apr_1", Kind::Approval), ("ask_1", Kind::Question)]);
+        let st = state_with_pause(&e, &ses.id, &[("apr_1", Kind::Approval), ("ask_1", Kind::Question)]);
         let resolved = |id: &str, payload: Value| json!({"interruptId": id, "status": "resolved", "payload": payload});
         let code = |evs: &[Value]| {
             assert_eq!(evs.iter().map(|v| v["type"].as_str().unwrap()).collect::<Vec<_>>(), ["RUN_STARTED", "RUN_ERROR"], "{evs:?}");
@@ -1551,9 +1551,10 @@ mod tests {
         let evs = resume_with(&st, &ses.id, fine, json!([{"id": "m-new", "role": "user", "content": "altro"}])).await;
         assert_eq!(code(&evs).0, "resume_with_new_input");
         // Nothing of this touched the pause: it is still there, unanswered.
-        let pauses = st.agui.pauses.lock().unwrap();
-        assert!(pauses.get(&ses.id).is_some_and(|p| p.applied.is_none() && p.interrupts.len() == 2));
-        drop(pauses);
+        {
+            let pauses = st.agui.pauses.lock().unwrap();
+            assert!(pauses.get(&ses.id).is_some_and(|p| p.applied.is_none() && p.interrupts.len() == 2));
+        }
         // A thread nobody paused: no interrupt to answer, and no session made for it.
         let evs = resume_with(&st, "altro-thread", json!([resolved("apr_1", json!({"approved": true}))]), json!([])).await;
         assert_eq!(code(&evs).0, "interrupt_not_found");
@@ -1584,12 +1585,23 @@ mod tests {
         // The stream ends by itself at the interruption, and the run keeps waiting for the owner.
         let evs = frames(&read_all(res).await);
         let finished = evs.last().unwrap();
-        assert_eq!((finished["type"].as_str(), finished["outcome"]["type"].as_str()), (Some("RUN_FINISHED"), Some("interrupt")), "{finished}");
+        assert_eq!(
+            (finished["type"].as_str(), finished["outcome"]["type"].as_str()),
+            (Some("RUN_FINISHED"), Some("interrupt")),
+            "{finished}"
+        );
         let interrupt = &finished["outcome"]["interrupts"][0];
-        assert_eq!((interrupt["reason"].as_str(), interrupt["metadata"]["aiw"]["tool"].as_str()), (Some("tool_call"), Some("aiw_setting_set")));
+        assert_eq!(
+            (interrupt["reason"].as_str(), interrupt["metadata"]["aiw"]["tool"].as_str()),
+            (Some("tool_call"), Some("aiw_setting_set"))
+        );
         let types: Vec<&str> = evs.iter().map(|v| v["type"].as_str().unwrap()).collect();
         let last_two = &types[types.len() - 3..];
-        assert_eq!(last_two, ["MESSAGES_SNAPSHOT", "STATE_SNAPSHOT", "RUN_FINISHED"], "the snapshots go right before the interruption: {types:?}");
+        assert_eq!(
+            last_two,
+            ["MESSAGES_SNAPSHOT", "STATE_SNAPSHOT", "RUN_FINISHED"],
+            "the snapshots go right before the interruption: {types:?}"
+        );
         assert!(!e.run_done(&rid) && e.approvals().len() == 1, "the closed connection did not cancel the paused run");
         // A paired device answers: refused, and nothing was decided.
         let id = interrupt["id"].as_str().unwrap();
@@ -1598,7 +1610,13 @@ mod tests {
             "resume": [{"interruptId": id, "status": "resolved", "payload": {"approved": true}}]
         });
         let dev = format!("Bearer {}", e.create_api_token("Telefono", "device", None, None, None).unwrap().token);
-        let mut r = req("POST", "/agui/assistant", Some(LAN), &[("host", "192.168.1.5:7777"), ("authorization", dev.as_str())], Some(resume.clone()));
+        let mut r = req(
+            "POST",
+            "/agui/assistant",
+            Some(LAN),
+            &[("host", "192.168.1.5:7777"), ("authorization", dev.as_str())],
+            Some(resume.clone()),
+        );
         r.extensions_mut().insert(crate::security::TlsConn);
         let res = tower::ServiceExt::oneshot(app.clone(), r).await.unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
@@ -1611,7 +1629,10 @@ mod tests {
         let res = post_raw(&app, "assistant", deny, &[]).await;
         assert_eq!(res.status(), StatusCode::OK);
         let evs = frames(&read_all(res).await);
-        assert_eq!((evs[0]["type"].as_str(), evs[0]["parentRunId"].as_str(), evs[0]["runId"].as_str()), (Some("RUN_STARTED"), Some("r1"), Some("r2")));
+        assert_eq!(
+            (evs[0]["type"].as_str(), evs[0]["parentRunId"].as_str(), evs[0]["runId"].as_str()),
+            (Some("RUN_STARTED"), Some("r1"), Some("r2"))
+        );
         assert_eq!(evs.last().unwrap()["type"], "RUN_FINISHED");
         assert!(evs.last().unwrap().get("outcome").is_none());
         assert!(e.run_done(&rid) && e.approvals().is_empty());

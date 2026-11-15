@@ -105,7 +105,7 @@ ripresa è di nuovo uno snapshot (un client che ha perso la risposta non ha la b
   nello stato del client: non ha uno strumento per farlo e la risposta non lo cambia.
 - **`context`** (spec: `{description, value}`, descrizione e valore testuali). Ogni voce con un valore non vuoto va al modello
   nella stessa sezione, che dice di trattarla come informazione e non come istruzione: non cambia le regole dell'agente e non
-  dà permessi. Per questo run soltanto: **non entra nella cronologia salvata**. Tolti i caratteri di controllo, tagliato a
+  dà permessi. Per questo run soltanto: **non entra nella cronologia della sessione** (né nelle tracce esportate, che sono i messaggi della sessione). Tolti i caratteri di controllo, tagliato a
   16 000 caratteri in tutto. **Non metterci segreti**: arrivano al modello come ogni altro testo del prompt.
 - Chi controlla i dati è il client già autenticato (token `device` o proprietario): se la tua applicazione vi inoltra
   contenuti di altri (pagine web, posta), restano contenuti di altri, ed è l'agente con le sue regole e approvazioni a

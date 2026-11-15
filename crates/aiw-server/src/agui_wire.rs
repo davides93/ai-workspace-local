@@ -321,7 +321,7 @@ pub(crate) fn diff(old: &Value, new: &Value, base: &str) -> Vec<Value> {
 
 /// The section of the system prompt that carries what the client application says about itself: the `context` entries
 /// (`{description, value}`) and the `state`. It is data for this run only: the model is told it is not instructions,
-/// nothing of it is stored, and it is cut at [`CONTEXT_CHARS`]. `None` when there is nothing.
+/// it is not part of the session history, and it is cut at [`CONTEXT_CHARS`]. `None` when there is nothing.
 pub(crate) fn app_context_section(context: &Value, state: &Value) -> Option<String> {
     let mut out = String::new();
     let clean = |s: &str| s.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).collect::<String>();
