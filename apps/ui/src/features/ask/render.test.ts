@@ -102,6 +102,12 @@ describe("SecretPrompt markup", () => {
     expect(html).toContain("Sarà salvato in: Hugging Face (huggingface.co)");
   });
 
+  it("says plainly that the value is kept on this computer without encryption (the box must not suggest more than that)", () => {
+    const html = secret();
+    expect(html).toContain("l&#x27;assistente non lo vede mai");
+    expect(html).toContain("Su questo computer è salvato senza cifratura.");
+  });
+
   it("the field is protected: password, no autofill, no spellcheck, no capitalisation, empty", () => {
     const html = secret();
     const input = /<input[^>]*type="password"[^>]*>/.exec(html)?.[0] ?? "";
