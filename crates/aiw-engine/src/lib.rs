@@ -2628,9 +2628,10 @@ impl Engine {
             return Err(Error::Unsupported(why));
         }
         // A management tool works only in a chat run the server started for a person. From here
-        // (a workflow, an MCP client) it never does, so nobody is asked to confirm it either.
-        if management::is_management(tool) && self.run_origin(run_id).is_none() {
-            return Err(Error::Denied(management::NOT_IN_A_CHAT.into()));
+        // (a workflow, an MCP client) it never does, so nobody is asked to confirm it either. The
+        // agent loop asks the same question before its own confirmation (`RunHost::refuse_tool`).
+        if let Some(why) = management::refusal(self, run_id, tool) {
+            return Err(Error::Denied(why));
         }
         let mode = self.0.config.get_str("policy.mode").unwrap_or_else(|| "ask".into());
         let policy = Policy { mode, rules: self.run_rules(), sandbox_available: aiw_tools::shell::sandbox_backend().is_some() };

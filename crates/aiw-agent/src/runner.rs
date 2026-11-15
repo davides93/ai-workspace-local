@@ -53,6 +53,14 @@ pub trait RunHost: Send + Sync {
         let _ = from;
         Ok(agent_id.to_string())
     }
+    /// Is this call one the host already knows cannot work in this run (a management tool outside
+    /// a chat of the owner)? The reason is the text the model gets back. It is asked before the
+    /// hooks, the policy and any confirmation, so nobody is asked to confirm what would be refused
+    /// anyway. `None` (the default): nothing stands in the way.
+    fn refuse_tool(&self, run_id: &str, tool: &str) -> Option<String> {
+        let _ = (run_id, tool);
+        None
+    }
     /// Are the memory tools offered in this run? (The setting, and not an evaluation run.)
     fn memory_enabled(&self) -> bool {
         false
@@ -1514,6 +1522,12 @@ impl AgentRunner {
         if !input.agent.tools.iter().any(|t| t == &tc.name || (t == "*" && !tool.explicit_grant())) || !registry.is_enabled(&tc.name) {
             audit("deny", "tool non abilitato per questo agente".into());
             return (ToolOutput::error(format!("Il tool `{}` non è abilitato per questo agente.", tc.name)), None);
+        }
+        // A call the host knows cannot work here is refused before the hooks, the policy and any
+        // confirmation: a question nobody can answer (or whose answer changes nothing) is never asked.
+        if let Some(why) = host.refuse_tool(&input.run_id, &tc.name) {
+            audit("deny", why.clone());
+            return (ToolOutput::error(why), None);
         }
         // PreToolUse hooks.
         let pre =

@@ -9,7 +9,9 @@
 //!    even after «Consenti per la sessione»;
 //! 2. the tool works only in a top-level run the server started for a person ([`RunOrigin`]), and
 //!    a tool that changes something only when that person is the owner (the checks of
-//!    [`require_origin`] and [`require_owner`] are inside each tool, not in the policy);
+//!    [`require_origin`] and [`require_owner`] are inside each tool, not in the policy; the agent
+//!    loop and `Engine::execute_tool` also ask [`refusal`] first, so nobody is asked to confirm a
+//!    call the tool would refuse);
 //! 3. the confirmation is valid only when the owner gives it (`Engine::respond_approval_as`).
 //!
 //! Each file of this folder holds the tools of one area and exports `tools`, which `register`
@@ -79,6 +81,11 @@ pub const STRONG: [&str; 7] = [
 /// What a management tool answers outside a chat run the server started for a person.
 pub const NOT_IN_A_CHAT: &str = "Strumento di gestione: disponibile solo all'Assistente in una chat.";
 
+/// What a management tool that changes something answers when the person who asked is not the
+/// owner (a paired device).
+pub const NOT_THE_OWNER: &str =
+    "Questa azione richiede l'accesso completo di chi usa l'app su questo computer: da questo dispositivo non è consentita.";
+
 /// Is this a management tool? True for the names that start with `aiw_` and for `ask_user`. It
 /// holds for names that are not (or not yet) registered, and it never looks at the registry.
 pub fn is_management(name: &str) -> bool {
@@ -113,11 +120,33 @@ pub(crate) fn require_origin(engine: &Engine, ctx: &ToolContext) -> Result<RunOr
 pub(crate) fn require_owner(engine: &Engine, ctx: &ToolContext) -> Result<RunOrigin> {
     let origin = require_origin(engine, ctx)?;
     if !origin.owner {
-        return Err(Error::Denied(
-            "Questa azione richiede l'accesso completo di chi usa l'app su questo computer: da questo dispositivo non è consentita.".into(),
-        ));
+        return Err(Error::Denied(NOT_THE_OWNER.into()));
     }
     Ok(origin)
+}
+
+/// Why a call to a management tool cannot work, known before the policy or a confirmation come
+/// into it: `None` when nothing stands in its way yet. It is the same refusal the tools make
+/// themselves ([`require_origin`], [`require_owner`], which stay: this one only comes first), so
+/// nobody is asked to confirm what the tool would refuse afterwards.
+///
+/// - not a management tool: `None`;
+/// - a run without an origin (the CLI, a workflow, a channel, a sub-agent): [`NOT_IN_A_CHAT`];
+/// - an origin that is not the owner's (a paired device) and a tool that changes something
+///   ([`MODIFYING`], [`STRONG`]): [`NOT_THE_OWNER`];
+/// - anything else (reading, `ask_user`, `aiw_secret_request`): `None`, those tools decide for
+///   themselves what a device may do.
+pub(crate) fn refusal(engine: &Engine, run_id: &str, tool: &str) -> Option<String> {
+    if !is_management(tool) {
+        return None;
+    }
+    let Some(origin) = engine.run_origin(run_id) else {
+        return Some(NOT_IN_A_CHAT.into());
+    };
+    if !origin.owner && (MODIFYING.contains(&tool) || STRONG.contains(&tool)) {
+        return Some(NOT_THE_OWNER.into());
+    }
+    None
 }
 
 /// Registers the management tools of every area. Called once, when the engine starts.
@@ -463,18 +492,93 @@ mod tests {
         wait_finished(&e, &run2).await;
     }
 
+    /// Did the run ask the person to confirm something (an `aiw.approval_request` event)?
+    fn asked_for_a_confirmation(e: &Engine, run: &str) -> bool {
+        use aiw_core::events::AgEvent;
+        e.run_events(run).iter().any(|x| matches!(&x.event.event, AgEvent::Custom { name, .. } if name == "aiw.approval_request"))
+    }
+
+    /// The audit rows of the tool, as `(decision, detail)`.
+    fn audited(e: &Engine, tool: &str) -> Vec<(String, String)> {
+        e.audit().into_iter().filter(|a| a.tool.as_deref() == Some(tool)).map(|a| (a.decision.unwrap_or_default(), a.detail)).collect()
+    }
+
     #[tokio::test]
-    async fn a_run_without_an_origin_asks_and_then_the_tool_refuses_so_nothing_changes() {
+    async fn a_run_without_an_origin_is_refused_without_asking_anybody() {
         let (e, calls, _d, _w) = with_fake(vec![change(), ScriptedBackend::text_turn("non ho potuto")]).await;
         agent(&e, "gestore", "ask", &["aiw_setting_set"]);
         let s = e.create_session("gestore", None).unwrap();
+        // The CLI, a workflow or a channel start a run like this one. Nobody answers anything: the run must end by itself.
         let run = e.start_run(&s.id, "cambia".into()).await.unwrap();
-        let req = next_approval(&e).await;
-        e.respond_approval_as(&req.id, true, false, true).unwrap();
         wait_finished(&e, &run).await;
-        assert_eq!(calls.load(Ordering::SeqCst), 0, "the owner said yes, but the run has no origin");
+        assert!(!asked_for_a_confirmation(&e, &run), "a confirmation that cannot work is not asked");
+        assert!(e.approvals().is_empty(), "nobody is asked to confirm what the tool would refuse");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing changed");
         let tool_result = e.messages(&s.id).unwrap().into_iter().find(|m| m.role == "tool").unwrap().content;
-        assert!(tool_result.contains("disponibile solo all'Assistente in una chat"), "{tool_result}");
+        assert!(tool_result.contains(NOT_IN_A_CHAT), "{tool_result}");
+        assert_eq!(audited(&e, "aiw_setting_set"), [("deny".to_string(), NOT_IN_A_CHAT.to_string())]);
+        // The run ended by itself, with the one tool message of the refused call (the agent loop's self-check may add a model turn after it).
+        let status = e.sessions().unwrap().into_iter().find(|x| x.id == s.id).unwrap().last_status;
+        assert_eq!(status.as_deref(), Some("succeeded"));
+        assert_eq!(e.messages(&s.id).unwrap().iter().filter(|m| m.role == "tool").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_device_run_that_changes_something_ends_without_a_confirmation_and_can_still_read() {
+        let turns = vec![
+            change(),
+            ScriptedBackend::tool_turn("c2", "aiw_inspect", json!({"topic": "overview"})),
+            ScriptedBackend::text_turn("Da qui non posso cambiarlo, ma ho guardato lo stato."),
+        ];
+        let (e, calls, _d, _w) = with_fake(turns).await;
+        // No time limit on confirmations (the default): before, this run would have waited for an answer nobody could give.
+        e.set_config("global", "approvals.timeout_s", json!(0)).unwrap();
+        agent(&e, "gestore", "ask", &["aiw_setting_set", "aiw_inspect"]);
+        let s = e.create_session("gestore", None).unwrap();
+        let phone = RunOrigin { owner: false, questions: true, secrets: false };
+        let run = e.start_run_from(&s.id, "cambia".into(), None, None, vec![], Some(phone)).await.unwrap();
+        wait_finished(&e, &run).await;
+
+        assert!(!asked_for_a_confirmation(&e, &run));
+        assert!(e.approvals().is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing changed");
+        let results: Vec<String> = e.messages(&s.id).unwrap().into_iter().filter(|m| m.role == "tool").map(|m| m.content).collect();
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert!(results[0].contains("accesso completo") && results[0].contains(NOT_THE_OWNER), "{}", results[0]);
+        // In the same run the reading tool works: a device's chat can look at the state.
+        assert!(results[1].contains("\"installed_models\"") && !results[1].contains("accesso completo"), "{}", results[1]);
+        assert_eq!(audited(&e, "aiw_setting_set"), [("deny".to_string(), NOT_THE_OWNER.to_string())]);
+        assert!(audited(&e, "aiw_inspect").iter().any(|(decision, _)| decision == "allow"));
+        let status = e.sessions().unwrap().into_iter().find(|x| x.id == s.id).unwrap().last_status;
+        assert_eq!(status.as_deref(), Some("succeeded"));
+        assert_eq!(e.messages(&s.id).unwrap().last().unwrap().content, "Da qui non posso cambiarlo, ma ho guardato lo stato.");
+    }
+
+    #[tokio::test]
+    async fn refusal_is_what_the_tools_would_refuse_anyway_and_nothing_more() {
+        let (e, _d, _w) = engine(vec![]).await;
+        let phone = RunOrigin { owner: false, questions: true, secrets: false };
+        let (none, device, owner) = (test_ctx(&e, None).run_id, test_ctx(&e, Some(phone)).run_id, test_ctx(&e, Some(OWNER)).run_id);
+        for name in ALL {
+            let changes = MODIFYING.contains(&name) || STRONG.contains(&name);
+            // Without an origin every management tool is refused, the reading ones too.
+            assert_eq!(refusal(&e, &none, name).as_deref(), Some(NOT_IN_A_CHAT), "{name}");
+            // A device is refused the tools that change something; the others decide for themselves.
+            assert_eq!(refusal(&e, &device, name).as_deref(), changes.then_some(NOT_THE_OWNER), "{name}");
+            // The owner is never refused beforehand.
+            assert_eq!(refusal(&e, &owner, name), None, "{name}");
+        }
+        // A name that is not in the contract but starts with `aiw_` is a management tool all the same (and a modifying one it is not).
+        assert_eq!(refusal(&e, &none, "aiw_something_new").as_deref(), Some(NOT_IN_A_CHAT));
+        assert_eq!(refusal(&e, &device, "aiw_something_new"), None);
+        // An ordinary tool is never concerned, whatever the run.
+        for plain in ["read_file", "write_file", "shell", "agent", "mcp__x__aiw_setting_set"] {
+            assert_eq!(refusal(&e, &none, plain), None, "{plain}");
+            assert_eq!(refusal(&e, &device, plain), None, "{plain}");
+        }
+        // A run nobody registered, or one that ended, has no origin.
+        assert_eq!(refusal(&e, "run_inventato", "aiw_inspect").as_deref(), Some(NOT_IN_A_CHAT));
+        assert!(NOT_THE_OWNER.contains("accesso completo"));
     }
 
     #[tokio::test]
