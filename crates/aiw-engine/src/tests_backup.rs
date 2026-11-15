@@ -141,7 +141,7 @@ async fn a_default_backup_holds_none_of_the_secrets_and_keeps_the_configuration(
 async fn a_backup_with_secrets_holds_them_and_says_so() {
     let (e, data, _ws) = engine_with_secrets().await;
     let out = data.path().join("s.tar.gz");
-    let m = e.backup_create(&BackupOptions { include_secrets: true }, &out).unwrap();
+    let m = e.backup_create(&BackupOptions { include_secrets: true, ..Default::default() }, &out).unwrap();
     assert!(m.sensitive, "the manifest flags it");
     assert!(m.files.iter().any(|f| f.path == "token") && m.files.iter().any(|f| f.path == "tls/key.pem"));
     assert!(!m.excluded.iter().any(|x| x.contains("TLS") || x.contains("segreti")), "{:?}", m.excluded);

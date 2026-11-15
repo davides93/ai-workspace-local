@@ -6,6 +6,10 @@ import { initialValues, toContent, type FormValues } from "../mcp/model";
 import { t } from "../../shared/i18n";
 /** The tool the agent asks a question with (a row of the conversation, `kind: "question"`). */
 export const ASK_TOOL = "ask_user";
+/** The tool with which the agent asks the person to step in in the controlled browser: its question is `kind: "handover"`. */
+export const HANDOVER_TOOL = "browser_handover";
+/** The tool of the agent that a question of this kind stands for: its running card gives way to the question's row. */
+export const toolOfQuestion = (q: Pick<Question, "kind">): string => (q.kind === "handover" ? HANDOVER_TOOL : ASK_TOOL);
 /** The tool the agent asks for a secret with (a row of the conversation, `kind: "secret"`): it never carries the value. */
 export const SECRET_TOOL = "aiw_secret_request";
 /**
@@ -23,7 +27,7 @@ export const SECRET_RESOLVED_EVENT = "aiw.secret_resolved";
 /** The management tools of the Assistente: `aiw_*` and `ask_user` (`is_management` of the engine). */
 export const isManagementTool = (name: string): boolean => name.startsWith("aiw_") || name === ASK_TOOL;
 
-const KINDS: readonly QuestionKind[] = ["choice", "confirm", "form"];
+const KINDS: readonly QuestionKind[] = ["choice", "confirm", "form", "handover"];
 const QUESTION_OUTCOMES: readonly QuestionOutcome[] = ["answered", "declined", "timeout", "cancelled", "unsupported"];
 const SECRET_OUTCOMES: readonly SecretOutcome[] = ["stored", "declined", "timeout", "cancelled", "unsupported"];
 const FIELD_TYPES: readonly QuestionField["type"][] = ["string", "number", "integer", "boolean", "enum"];
@@ -71,6 +75,17 @@ export function parseQuestionArgs(callId: string, args: string): Question | null
   }
 }
 
+/** A request for help in the browser rebuilt from the arguments of a stored `browser_handover` call (`{"reason": …}`): the id is the id of the call. */
+export function parseHandoverArgs(callId: string, args: string): Question | null {
+  try {
+    const v: unknown = JSON.parse(args);
+    const reason = isRecord(v) && typeof v.reason === "string" ? v.reason.trim() : "";
+    return reason ? parseQuestion({ id: callId, kind: "handover", message: reason }) : null;
+  } catch {
+    return null;
+  }
+}
+
 function parseJson(content: string | undefined): Record<string, unknown> | null {
   if (!content) return null;
   try {
@@ -89,6 +104,8 @@ export const asSecretOutcome = (v: unknown): SecretOutcome | null => (SECRET_OUT
 /** How a question ended, from the result of the `ask_user` call (`{"outcome":"answered","selected":["q4"],…}`); `null` when the text is not one. */
 export function parseQuestionResult(content: string | undefined): { outcome: QuestionOutcome; answer: QuestionAnswer | null } | null {
   const v = parseJson(content);
+  // `browser_handover` says `returned` when the person gave the browser back: for the row that is a confirmation.
+  if (v?.outcome === "returned") return { outcome: "answered", answer: { selected: null, other: null, confirmed: true, values: null } };
   const outcome = asQuestionOutcome(v?.outcome);
   if (!v || !outcome) return null;
   return { outcome, answer: outcome === "answered" ? toAnswer(v) : null };
@@ -221,7 +238,7 @@ const yesNo = (b: boolean) => (b ? t("ask.si") : t("ask.no"));
 /** The answer in a few words: the labels picked, «Sì»/«No» (or the labels of the buttons), the values of the form. */
 export function answerSummary(q: Question, a: QuestionAnswer | null): string {
   if (!a) return "";
-  if (q.kind === "confirm") return a.confirmed === null ? "" : a.confirmed ? q.confirm_label?.trim() || t("ask.si") : q.deny_label?.trim() || t("ask.no");
+  if (q.kind === "confirm" || q.kind === "handover") return a.confirmed === null ? "" : a.confirmed ? q.confirm_label?.trim() || t("ask.si") : q.deny_label?.trim() || t("ask.no");
   if (q.kind === "form") {
     const values = a.values ?? {};
     return q.fields.filter((f) => values[f.name] !== undefined).map((f) => `${f.label}: ${typeof values[f.name] === "boolean" ? yesNo(values[f.name] as boolean) : String(values[f.name])}`).join(" · ");
@@ -233,6 +250,10 @@ export function answerSummary(q: Question, a: QuestionAnswer | null): string {
 
 /** The sentence a closed question shows. */
 export function closedText(q: Question, outcome: QuestionOutcome, a: QuestionAnswer | null): string {
+  if (q.kind === "handover") {
+    if (outcome === "answered") return a?.confirmed === false ? t("browser.handover_chiuso_non_finito") : t("browser.handover_chiuso_restituito");
+    if (outcome === "declined") return t("browser.handover_chiuso_non_posso");
+  }
   switch (outcome) {
     case "answered": return t("ask.risposta", { answer: answerSummary(q, a) });
     case "declined": return t("ask.hai_scelto_di_non_rispondere");

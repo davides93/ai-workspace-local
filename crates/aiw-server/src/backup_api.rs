@@ -66,7 +66,7 @@ pub(crate) async fn create(State(s): State<AppState>, Json(body): Json<BackupBod
     let out = tokio::task::spawn_blocking(move || -> Result<BackupFile, Error> {
         let path = scratch(&e, "out");
         let _gone = Cleanup(path.clone());
-        let manifest = e.backup_create(&BackupOptions { include_secrets: body.include_secrets }, &path)?;
+        let manifest = e.backup_create(&BackupOptions { include_secrets: body.include_secrets, ..Default::default() }, &path)?;
         let size = std::fs::metadata(&path)?.len();
         if size > API_BACKUP_MAX_BYTES {
             return Err(Error::Unsupported(format!(

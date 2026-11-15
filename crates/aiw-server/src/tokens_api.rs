@@ -3,7 +3,7 @@
 
 use crate::extract::{Json, Path};
 use crate::{ok, ApiError, ApiResult, AppState, AuthContext};
-use aiw_core::api::{ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus};
+use aiw_core::api::{ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, SecretsAtRest, TlsStatus};
 use aiw_core::Error;
 use aiw_engine::tokens::TokenAuth;
 use aiw_engine::Engine;
@@ -85,6 +85,11 @@ pub(crate) async fn revoke_self(State(s): State<AppState>, axum::Extension(ctx):
 
 pub(crate) async fn tls_status(State(s): State<AppState>) -> ApiResult<TlsStatus> {
     ok(s.engine.tls_status())
+}
+
+/// `GET /api/security/secrets`: whether the secrets are encrypted on disk, and how many are sealed, plain or unreadable. No value.
+pub(crate) async fn secrets_status(State(s): State<AppState>) -> ApiResult<SecretsAtRest> {
+    ok(s.engine.secrets_at_rest())
 }
 
 /// `GET /api/tls/ca`: the same certificate inside JSON (`{pem}`), for the app's own download button.

@@ -96,3 +96,9 @@ export function useTlsStatus() {
   const api = useApi();
   return useQuery({ queryKey: qk.tls(), queryFn: () => api.tlsStatus() });
 }
+
+/** Whether the secrets are encrypted on disk (counts and words, never a value). Only a caller with full access can ask. */
+export function useSecretsAtRest() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.secretsAtRest(), queryFn: () => api.secretsAtRest(), staleTime: 30_000 });
+}

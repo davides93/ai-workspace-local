@@ -441,8 +441,9 @@ impl Engine {
     }
 
     /// Is everything a channel needs to connect there?
-    fn channel_ready(&self, ch: &Channel) -> std::result::Result<(), String> {
-        let secret = |k: &str| ch.secrets.get(k).is_some_and(|v| !v.trim().is_empty());
+    pub(crate) fn channel_ready(&self, ch: &Channel) -> std::result::Result<(), String> {
+        // A sealed value this process could not open is not a token: the channel does not start with ciphertext.
+        let secret = |k: &str| ch.secrets.get(k).is_some_and(|v| !v.trim().is_empty() && !aiw_core::sealed::is_sealed(v));
         let setting = |k: &str| ch.settings.get(k).and_then(|v| v.as_str()).is_some_and(|v| !v.trim().is_empty());
         match ch.kind.as_str() {
             "telegram" if !secret("bot_token") => Err("Manca il token del bot (lo dà @BotFather).".into()),

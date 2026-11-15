@@ -91,6 +91,7 @@ async fn the_scope_matrix_over_the_real_router() {
         ("GET", "/api/tokens", None, [true, false, false, false, false]),
         ("POST", "/api/tokens", Some(json!({"name": "x"})), [true, false, false, false, false]),
         ("GET", "/api/tls", None, [true, false, false, false, false]),
+        ("GET", "/api/security/secrets", None, [true, false, false, false, false]),
         ("GET", "/api/mesh", None, [true, false, false, false, false]),
         ("POST", "/api/backup", Some(json!({"include_secrets": false})), [true, false, false, false, false]),
         ("POST", "/api/backup/inspect", Some(json!({"data": ""})), [true, false, false, false, false]),

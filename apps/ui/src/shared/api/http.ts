@@ -1,10 +1,15 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, ContextCreate, ContextInfo, ContextPatch, DraftStatus, EmailDraft, EmailDraftCreate, EmailDraftPatch, EmailDraftSend, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, ContextCreate, ContextInfo, ContextPatch,
+  DraftStatus, EmailDraft, EmailDraftCreate, EmailDraftPatch, EmailDraftSend, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel,
+  ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch,
+  KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest,
+  PromptOptimization, SecretsAtRest,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, FoldersInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
+  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   CommandAnalysis, PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
@@ -160,6 +165,7 @@ export class HttpTransport implements Transport {
   revokeApiToken = (id: string) => this.req<void>("DELETE", `/tokens/${enc(id)}`);
   rotateApiToken = (id: string) => this.req<ApiTokenCreated>("POST", `/tokens/${enc(id)}/rotate`, {});
   tlsStatus = () => this.req<TlsStatus>("GET", "/tls");
+  secretsAtRest = () => this.req<SecretsAtRest>("GET", "/security/secrets");
   tlsCa = () => this.req<{ pem: string }>("GET", "/tls/ca");
 
   voice = () => this.req<VoiceStatus>("GET", "/voice");
@@ -219,6 +225,11 @@ export class HttpTransport implements Transport {
     this.req<void>("POST", `/approvals/${enc(id)}`, { decision, remember: !!remember });
   questions = () => this.req<Question[]>("GET", "/questions");
   answerQuestion = (id: string, reply: QuestionReply) => this.req<void>("POST", `/questions/${enc(id)}`, reply);
+  browserState = () => this.req<BrowserState>("GET", "/browser");
+  browserFrame = () => this.req<BrowserFrame>("GET", "/browser/frame");
+  browserControl = (action: BrowserControlAction) => this.req<BrowserState>("POST", "/browser/control", { action });
+  browserInput = (input: BrowserInput) => this.req<void>("POST", "/browser/input", input);
+  browserDialog = (reply: BrowserDialogReply) => this.req<void>("POST", "/browser/dialog", reply);
   secretRequests = () => this.req<SecretRequest[]>("GET", "/secret-requests");
   answerSecretRequest = (id: string, reply: SecretReply) => this.req<{ stored?: boolean }>("POST", `/secret-requests/${enc(id)}`, reply);
 
