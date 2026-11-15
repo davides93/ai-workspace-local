@@ -9,6 +9,7 @@ use aiw_tools::connectors::testing::{FakeImap, FakeSmtp, ImapOptions, Security, 
 
 struct Rig {
     e: Engine,
+    backend: ScriptedBackend,
     smtp: FakeSmtp,
     imap: FakeImap,
     channel: String,
@@ -18,7 +19,9 @@ struct Rig {
 
 /// An engine with an email channel that is turned on (it is what sends the drafts).
 async fn rig(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> Rig {
-    let (e, d, ws) = super::tests::engine(turns).await;
+    let (e, d, ws) = super::tests::engine(vec![]).await;
+    let backend = ScriptedBackend::new(turns);
+    e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
     let imap = FakeImap::start(ImapOptions::new(Security::StartTls, &[("INBOX", vec![])])).await;
     let smtp = FakeSmtp::start(Security::StartTls, "assistente@casa.example", "pw-smtp").await;
     e.set_tls_roots_for_tests(vec![imap.cert.clone(), smtp.cert.clone()]);
@@ -41,7 +44,7 @@ async fn rig(turns: Vec<Vec<aiw_runtimes::ChatDelta>>) -> Rig {
     e.channel_patch(&ch.channel.id, ChannelPatch { enabled: Some(true), ..Default::default() }).unwrap();
     let (e2, id) = (e.clone(), ch.channel.id.clone());
     until("email channel connected", move || e2.channel_status(&id).unwrap().state == "connected").await;
-    Rig { e, smtp, imap, channel: ch.channel.id, ws, _d: d }
+    Rig { e, backend, smtp, imap, channel: ch.channel.id, ws, _d: d }
 }
 
 fn draft(to: &str, subject: &str, body: &str) -> EmailDraftCreate {
@@ -460,4 +463,59 @@ async fn drafts_are_distinct_from_the_automatic_replies_of_the_channel() {
     r.e.email_draft_send(&d.id, send_req(&d)).await.unwrap();
     assert_eq!(r.mails().len(), 2);
     assert!(header(&r.mails()[1].2, "Auto-Submitted").is_none());
+}
+
+#[tokio::test]
+async fn a_proactive_suggestion_becomes_a_draft_only_through_the_owner_twice() {
+    use super::proactive::Wake;
+    let instruction = "Prepara una bozza di risposta ad anna@cliente.it con il preventivo";
+    let turns = vec![
+        ScriptedBackend::text_turn(r#"{"act": true, "item": 1, "why": "file nuovo"}"#),
+        ScriptedBackend::text_turn(&format!(
+            r#"{{"title": "Rispondi ad Anna", "noticed": "Anna ha chiesto un preventivo.", "instruction": "{instruction}"}}"#
+        )),
+        ScriptedBackend::tool_turn(
+            "c1",
+            "email_draft",
+            json!({"to": ["anna@cliente.it"], "subject": "Preventivo", "body": "Gentile Anna, ecco il preventivo.", "source": "mail:<richiesta@cliente.it>"}),
+        ),
+        ScriptedBackend::text_turn("La bozza è pronta nell'app."),
+    ];
+    let r = rig(turns).await;
+    r.e.set_config("global", "proactive.level", json!("propose")).unwrap();
+    r.e.set_config("global", "proactive.briefing_time", json!("23:59")).unwrap();
+    let inbox = r.ws.path().join("Posta");
+    std::fs::create_dir(&inbox).unwrap();
+    r.e.set_config("global", "proactive.watch_folders", json!([inbox.display().to_string()])).unwrap();
+    r.e.proactive_tick_at(Wake::Interval, chrono::Local::now() - chrono::Duration::seconds(5)).await.unwrap();
+    std::fs::write(inbox.join("richiesta-anna.txt"), "preventivo per favore").unwrap();
+    let tick = r.e.proactive_tick_at(Wake::Interval, chrono::Local::now() + chrono::Duration::seconds(5)).await.unwrap();
+    assert_eq!(tick.outcome, "proposed", "{tick:?}");
+    // The assistant is told how an email gets written, and its read-only run has no way to write one.
+    {
+        let reqs = r.backend.requests.lock().unwrap();
+        assert!(reqs[1].messages.iter().any(|m| m.text().contains("email_draft") && m.text().contains("le email non partono da sole")));
+        assert!(!reqs[1].tools.iter().any(|t| t.function.name == "email_draft"), "the proactive run only reads");
+    }
+    assert!(r.e.email_drafts(None).unwrap().is_empty(), "a suggestion is not a draft");
+    // The owner approves the proposal: a normal run, under the usual policy, writes the draft. Nothing is sent.
+    let p = r.e.proposals(Some("open"), Some("proposal")).unwrap().remove(0);
+    assert_eq!(p.instruction, instruction);
+    let approved = r.e.proposal_approve(&p.id, None).await.unwrap();
+    let run = approved.run_id.clone().unwrap();
+    until("the draft or a confirmation", || r.e.run_done(&run) || !r.e.approvals().is_empty()).await;
+    if let Some(a) = r.e.approvals().first() {
+        assert_eq!(a.tool, "email_draft");
+        r.e.respond_approval_as(&a.id.clone(), true, false, true).unwrap();
+    }
+    super::tests::wait_finished(&r.e, &run).await;
+    let drafts = r.e.email_drafts(Some("draft")).unwrap();
+    assert_eq!(drafts.len(), 1);
+    assert_eq!((drafts[0].created_by.as_str(), drafts[0].source.as_str()), ("assistant", "mail:<richiesta@cliente.it>"));
+    assert_eq!(drafts[0].session_id, approved.session_id);
+    assert!(r.mails().is_empty(), "the second approval is the owner's, on the draft");
+    // The owner reads the draft and approves it.
+    let sent = r.e.email_draft_send(&drafts[0].id, send_req(&drafts[0])).await.unwrap();
+    assert_eq!(sent.status, "sent");
+    assert_eq!(r.mails().len(), 1);
 }
