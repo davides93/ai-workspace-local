@@ -4,7 +4,7 @@ import { toast } from "../../../shared/lib/toast";
 import type { AgentProfile, ChannelInfo, ChannelMode, ChannelPairing } from "../../../shared/api/types";
 import { Button, Field, Icon, Input, Led, Pill, Segmented, Select, TagInput, Toggle } from "../../../shared/ui";
 import { useDeleteChannel, usePairChannel, useTestChannel, useUpdateChannel } from "../api";
-import { alwaysOnNote, downgradeNote, MODE_LABEL, MODE_NOTE, STATE_LABEL, diffPatch, enableProblem, ignoredNote, kindInfo, minutesLeft, stateTone } from "../model/channels";
+import { alwaysOnNote, downgradeNote, MODE_LABEL, MODE_NOTE, STATE_LABEL, diffPatch, enableProblem, ignoredNote, kindInfo, minutesLeft, pairProblem, stateTone } from "../model/channels";
 
 import { t, tNode } from "../../../shared/i18n";
 /** One channel: status, switch, set-up steps, who may talk, mode, briefing, test and (Telegram) pairing. */
@@ -29,6 +29,8 @@ export function ChannelCard({ channel, agents }: { channel: ChannelInfo; agents:
   const patch = diffPatch(channel, { name, mode, allowed, settings, typedSecrets: typed });
   const dirty = Object.keys(patch).length > 0;
   const blocker = enableProblem(channel);
+  // The pairing code is read by the connector: with the channel off nobody could answer it.
+  const pairBlocker = channel.kind === "telegram" ? pairProblem(channel) : null;
   const state = channel.status.state;
   const busy = update.isPending || remove.isPending;
 
@@ -105,18 +107,19 @@ export function ChannelCard({ channel, agents }: { channel: ChannelInfo; agents:
 
       {error && <p className="chn-error" role="alert">{error}</p>}
       {result && <p className={result.ok ? "chn-ok" : "chn-error"} role="status">{result.detail}</p>}
-      {code && (
+      {code && !pairBlocker && (
         <div className="chn-code" role="status">
           <span>{t("channels.scrivi_al_tuo_bot_questo", { p: Math.max(1, minutesLeft(code.expires_at)) })}</span>
           <code className="mono">{code.command}</code>
         </div>
       )}
 
+      {pairBlocker && <p id={`chn-pair-hint-${channel.id}`} className="faint text-sm">{pairBlocker}</p>}
       <div className="row">
         <Button variant="primary" disabled={!dirty || busy} onClick={save}>{t("channels.salva")}</Button>
         <Button icon="check" disabled={test.isPending} onClick={() => test.mutate(channel.id, { onSuccess: setResult, onError: (e) => setResult({ ok: false, detail: errorMessage(e) }) })}>{t("channels.prova")}</Button>
         {channel.kind === "telegram" && (
-          <Button icon="key" disabled={pair.isPending || !channel.secrets.bot_token} onClick={() => pair.mutate(channel.id, { onSuccess: setCode, onError: (e) => setError(errorMessage(e)) })}>{t("channels.genera_il_codice")}</Button>
+          <Button icon="key" disabled={pair.isPending || !channel.secrets.bot_token || pairBlocker !== null} aria-describedby={pairBlocker ? `chn-pair-hint-${channel.id}` : undefined} onClick={() => pair.mutate(channel.id, { onSuccess: setCode, onError: (e) => setError(errorMessage(e)) })}>{t("channels.genera_il_codice")}</Button>
         )}
         <span className="grow" />
         {confirmDelete ? (

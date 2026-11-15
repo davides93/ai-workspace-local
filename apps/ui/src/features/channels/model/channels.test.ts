@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelInfo } from "../../../shared/api/types";
 import { SECRET_MASK } from "../../../shared/api/types";
-import { accountProblem, diffPatch, emptyAccount, enableProblem, ignoredNote, kindInfo, minutesLeft, missingSecrets, parseFolders, secretsToSend, stateTone } from "./channels";
+import { accountProblem, diffPatch, emptyAccount, enableProblem, ignoredNote, kindInfo, minutesLeft, missingSecrets, pairProblem, parseFolders, secretsToSend, stateTone } from "./channels";
 
 const base = (over: Partial<ChannelInfo> = {}): ChannelInfo => ({
   id: "c1", kind: "telegram", name: "Casa", enabled: false, agent_id: "operator", mode: "read_only", allowed: [], briefing: false,
@@ -13,6 +13,24 @@ describe("guided set-up", () => {
     expect(kindInfo("telegram").steps[0]).toMatch(/BotFather/);
     expect(kindInfo("slack").steps.join(" ")).toMatch(/message\.im/);
     expect(kindInfo("email").steps.join(" ")).toMatch(/password per le app/);
+  });
+});
+
+describe("the pairing code and the order of the Telegram steps", () => {
+  const token = { bot_token: SECRET_MASK };
+  it("is not given while the channel is off or unavailable: the connector reads the code, so the channel must be running", () => {
+    expect(pairProblem(base({ secrets: token }))).toMatch(/accendi prima il canale/i);
+    expect(pairProblem(base({ secrets: token, enabled: true, status: { ...base().status, state: "connecting" } }))).toBeNull();
+    expect(pairProblem(base({ secrets: token, enabled: true, status: { ...base().status, state: "connected" } }))).toBeNull();
+    const phone = base({ secrets: token, enabled: true, status: { ...base().status, state: "unavailable", detail: "Sul telefono i canali funzionano solo con l'app aperta." } });
+    expect(pairProblem(phone)).toMatch(/telefono/);
+  });
+  it("says «Accendi il canale» before «Genera il codice»: in the other order the code can never be answered", () => {
+    const steps = kindInfo("telegram").steps;
+    const on = steps.findIndex((s) => /Accendi il canale/.test(s));
+    const code = steps.findIndex((s) => /Genera il codice/.test(s));
+    expect(on).toBeGreaterThan(-1);
+    expect(code).toBeGreaterThan(on);
   });
 });
 

@@ -253,6 +253,43 @@ async fn pairing_adds_the_sender_with_a_single_use_code_that_expires_and_is_rate
 }
 
 #[tokio::test]
+async fn the_channel_prompt_tells_the_model_not_to_ask_in_words_for_what_needs_no_permission() {
+    use crate::channels::RunKind;
+    let (e, _d, _w) = engine(vec![]).await;
+    for a in [e.channel_agent(RunKind::ReadOnly, "operator").unwrap(), e.channel_agent(RunKind::Ask, "operator").unwrap()] {
+        assert!(a.system_prompt.contains("senza chiedere prima «vuoi che…?»"), "{}", a.system_prompt);
+    }
+    // The permission is asked by the app (Sì/No buttons), not by the model in words.
+    assert!(e.channel_agent(RunKind::Ask, "operator").unwrap().system_prompt.contains("lo chiede l'app da sola"));
+}
+
+#[tokio::test]
+async fn a_pairing_code_is_given_only_while_the_channel_is_on() {
+    let (e, _d, _w) = engine(vec![]).await;
+    let (base, _tg) = fake_telegram().await;
+    e.set_channel_endpoints_for_tests(Some(base), None, 0, 20, 100);
+    let ch = e
+        .channel_create(ChannelCreate {
+            kind: "telegram".into(),
+            secrets: [("bot_token".to_string(), TOKEN.to_string())].into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let id = ch.channel.id;
+    // Off: nobody reads the messages, so a code could never be answered. None is given, and none is kept.
+    let err = e.channel_pair_start(&id).unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)), "{err:?}");
+    assert!(err.to_string().contains("Accendi prima il canale"), "{err}");
+    assert!(e.0.channels.pair.lock().unwrap().get(&id).is_none(), "no code was kept");
+    // On: the code is given as soon as the connector is started, even before it says «connected».
+    e.channel_patch(&id, ChannelPatch { enabled: Some(true), ..Default::default() }).unwrap();
+    assert!(e.channel_pair_start(&id).is_ok());
+    // Off again: refused again.
+    e.channel_patch(&id, ChannelPatch { enabled: Some(false), ..Default::default() }).unwrap();
+    assert!(matches!(e.channel_pair_start(&id).unwrap_err(), Error::Conflict(_)));
+}
+
+#[tokio::test]
 async fn a_message_runs_in_a_session_and_the_answer_goes_back() {
     let r = telegram_rig(vec![ScriptedBackend::text_turn("**Ciao** Mario, ecco la risposta.")], "read_only", &["111"]).await;
     r.connected().await;

@@ -31,11 +31,16 @@ describe("channels in the demo", () => {
 
   it("gives a ten-minute pairing code for Telegram and removes channels", async () => {
     const t = new MockTransport();
-    const c = await t.createChannel({ kind: "telegram" });
+    const c = await t.createChannel({ kind: "telegram", secrets: { bot_token: "1:SEGRETO" } });
+    // The code is read by the connector: with the channel off it is refused, like the engine does (409).
+    await expect(t.pairChannel(c.id)).rejects.toMatchObject({ status: 409 });
+    await expect(t.pairChannel(c.id)).rejects.toThrow(/Accendi prima il canale/);
+    await t.updateChannel(c.id, { enabled: true, secrets: { bot_token: SECRET_MASK } });
     const p = await t.pairChannel(c.id);
     expect(p.command).toBe(`/start ${p.code}`);
     expect(Date.parse(p.expires_at) - Date.now()).toBeGreaterThan(9 * 60_000);
-    expect((await t.testChannel(c.id)).ok).toBe(false);
+    expect((await t.testChannel(c.id)).ok).toBe(true);
+    expect((await t.testChannel((await t.createChannel({ kind: "telegram" })).id)).ok).toBe(false); // no token yet
     await t.deleteChannel(c.id);
     await expect(t.channelStatus(c.id)).rejects.toMatchObject({ status: 404 });
   });
