@@ -77,6 +77,7 @@ Elenco completo e aggiornato in [docs/STATUS.md](docs/STATUS.md) §2.9. In sinte
 
 - **Windows**: rete dei comandi non chiudibile, cartelle non nascondibili in lettura, server MCP non isolabili (servirebbe un AppContainer o regole del firewall).
 - **macOS**: il profilo Seatbelt non è mai stato eseguito su un Mac.
+- **Mac App Store (App Sandbox)**: gli agenti vedono solo la cartella dell'app più le cartelle che l'utente consente col pannello di macOS (Impostazioni → Cartelle consentite). Solo l'utente le aggiunge: nessuna rotta dell'API, impostazione, strumento o modello lo fa. Lì i tool di file leggono e scrivono ma non eliminano; la cartella dei dati e i luoghi di `sandbox.deny_read` (anche alla vera cartella personale) restano nascosti. Il pannello vero e una build firmata con i certificati dello store non sono stati provati; `shell` e MCP non ricevono quelle cartelle. Vedi `docs/store/README.md`.
 - Non coperti dalla sandbox: socket dell'agente SSH e `/run/user`, hook, valutatori degli eval, browser controllato. Server MCP «non isolati» (quelli già presenti prima di questa versione) girano con l'ambiente e i permessi dell'app finché non premi «Isola».
 - Wrapper che nascondono il comando vero (`ssh host «…»`, `docker run …`, interpreti con script propri) non vengono aperti dall'analisi delle regole di policy.
 - Token e TLS: il token `owner` è in chiaro nel file `token`; un browser su un altro dispositivo mostra un avviso finché non installa l'autorità locale; niente fissaggio dell'impronta per server MCP e agenti A2A inseriti a mano.

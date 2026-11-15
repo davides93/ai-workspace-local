@@ -244,6 +244,9 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
     let api = Router::new()
         .route("/api/system", get(system))
         .route("/api/kill", post(kill))
+        // Read-only on purpose: a folder is added by the person in the macOS panel, through the shell
+        // (see `aiw_engine::Engine::add_folders`), never through a route.
+        .route("/api/folders", get(folders))
         .route("/api/pair", post(pair))
         .route("/api/auth/token", delete(tokens_api::revoke_self))
         .route("/api/tokens", get(tokens_api::list).post(tokens_api::create))
@@ -486,6 +489,9 @@ async fn method_not_allowed() -> Response {
 async fn system(State(s): State<AppState>, req: Request) -> ApiResult<SystemInfo> {
     // The pairing code is only shown to the device itself.
     ok(s.engine.system(is_local(&req)))
+}
+async fn folders(State(s): State<AppState>) -> ApiResult<aiw_core::folders::FoldersInfo> {
+    ok(s.engine.folders())
 }
 async fn kill(State(s): State<AppState>) -> ApiResult<Value> {
     ok(s.engine.kill().await)

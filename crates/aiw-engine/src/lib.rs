@@ -1,6 +1,7 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
 pub mod a2a_client;
+mod access;
 pub mod adviser;
 pub mod attachments;
 pub mod background;
@@ -216,6 +217,8 @@ pub(crate) struct Inner {
     pub proactive: proactive::ProactiveRuntime,
     /// Telegram, Slack and email channels (see `channels`).
     pub channels: channels::Runtime,
+    /// Folders of the computer the person handed to the agents (see `access`).
+    pub(crate) folders: Mutex<access::FolderState>,
     pub token: String,
     /// Per-device and per-app tokens: limiter, throttles and revocation notices (see `tokens`).
     pub(crate) tokens: tokens::TokenRuntime,
@@ -373,6 +376,7 @@ impl Engine {
             scheduler: Default::default(),
             proactive: Default::default(),
             channels: Default::default(),
+            folders: Default::default(),
             token,
             tokens: Default::default(),
             net: Default::default(),
@@ -521,7 +525,13 @@ impl Engine {
         let cfg = &self.0.config;
         let list = |key: &str| -> Vec<String> { cfg.get(key).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default() };
         let mut hidden = vec![aiw_core::paths::normalize(&self.0.dirs.root)];
-        hidden.extend(aiw_tools::sandbox::expand_hidden(&list("sandbox.deny_read")));
+        let deny = list("sandbox.deny_read");
+        hidden.extend(aiw_tools::sandbox::expand_hidden(&deny));
+        // A sandboxed app's `~` is its container: the secret locations also have to be hidden at the real home,
+        // which a folder granted by the person can reach.
+        if let Some(home) = self.folder_bridge_home() {
+            hidden.extend(deny.iter().filter_map(|e| e.trim().strip_prefix("~/")).map(|rest| aiw_core::paths::normalize(&home.join(rest))));
+        }
         aiw_tools::ShellSandbox {
             network: cfg.get_str("sandbox.shell_network").as_deref() == Some("on"),
             hidden,
@@ -665,6 +675,7 @@ impl Engine {
             data_dir: self.0.dirs.root.display().to_string(),
             workspace_root: self.workspace_root().display().to_string(),
             sandboxed: self.0.runtimes.sandboxed(),
+            folder_access: self.folders_supported(),
             shell_sandbox: aiw_tools::shell::sandbox_backend().map(String::from),
             mcp_sandbox: aiw_tools::sandbox::can_wrap_process(),
             uptime_s: self.0.started.elapsed().as_secs(),
@@ -1614,6 +1625,7 @@ impl Engine {
             tool_ctx.read_roots.push(ws_aiw);
         }
         tool_ctx.shell = self.shell_sandbox();
+        self.apply_folders(&mut tool_ctx);
         // Files the person attached in this session: read-only, like skills.
         let attached = self.attachments_dir(thread_id);
         if attached.is_dir() {
@@ -1625,8 +1637,9 @@ impl Engine {
         tool_ctx.checkpoint_dir = Some(self.0.dirs.checkpoints());
         tool_ctx.allow_domains =
             self.0.config.get("network.allow_domains").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        let folders_line = self.folders_env_line().unwrap_or_default();
         let env = format!(
-            "# Ambiente\n- Data e ora: {}\n- Dispositivo: {} ({} {}, classe {})\n- Cartella di lavoro: {}{isolated}\n- Inferenza locale: runtime `{}`, modello `{}`",
+            "# Ambiente\n- Data e ora: {}\n- Dispositivo: {} ({} {}, classe {})\n- Cartella di lavoro: {}{isolated}{folders_line}\n- Inferenza locale: runtime `{}`, modello `{}`",
             chrono::Local::now().format("%A %d %B %Y, %H:%M"),
             device.name,
             device.os,
@@ -2468,7 +2481,7 @@ impl Engine {
     pub fn set_config(&self, layer: &str, key: &str, value: Value) -> Result<ConfigView> {
         if key == "workspace.root" && self.0.runtimes.sandboxed() {
             return Err(Error::Unsupported(
-                "la versione Mac App Store (sandbox) lavora nella cartella dell'app: per sceglierne un'altra usa la versione DMG".into(),
+                "la versione Mac App Store (sandbox) lavora nella cartella dell'app: per dare accesso ad altre cartelle del computer usa Impostazioni → Cartelle consentite".into(),
             ));
         }
         if key == "connectors.mail.imap" {
@@ -2716,6 +2729,7 @@ impl Engine {
         let mut ctx = ToolContext::new(run_id, self.workspace_root());
         ctx.sandbox = SandboxMode::parse(&self.0.config.get_str("sandbox.mode").unwrap_or_else(|| "workspace-write".into()));
         ctx.shell = self.shell_sandbox();
+        self.apply_folders(&mut ctx);
         ctx.checkpoint_dir = Some(self.0.dirs.checkpoints());
         ctx.allow_domains = self.0.config.get("network.allow_domains").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         t.call(args, &ctx).await
@@ -2876,6 +2890,9 @@ mod tests_backup;
 mod tests_channels;
 #[cfg(test)]
 mod tests_eval;
+// The folders of the person exist on macOS only; the tests use canonicalised temp dirs (verbatim paths on Windows).
+#[cfg(all(test, unix))]
+mod tests_folders;
 #[cfg(test)]
 mod tests_hardening;
 #[cfg(test)]

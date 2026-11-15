@@ -84,6 +84,11 @@ accorciare le descrizioni o unire strumenti, non togliere le conferme.
   si digita. L'avviso nel compositore non blocca l'invio. L'export delle tracce nasconde per valore esatto tutti i segreti salvati nell'app (anche un token incollato in chat e poi
   salvato), non quelli incollati e mai salvati, a parte gli schemi noti (`sk-…`, `ghp_…`, `Bearer …`).
 
+## Aggiornamento: cartelle consentite nella build Mac App Store
+
+- Nella build TestFlight/Mac App Store (`--features mas`, App Sandbox) l'utente sceglie una o più cartelle del Mac da Impostazioni → *Cartelle consentite* (pannello `NSOpenPanel`, security-scoped bookmark che resta dopo il riavvio, riaperto all'avvio prima dei canali). Gli strumenti file le usano in lettura e scrittura (`ToolContext::write_roots`); `delete_file` rifiuta fuori dal workspace e il ripristino (`rewind`) non copre quelle cartelle. Solo l'utente le aggiunge: nessuna rotta, impostazione o strumento lo fa. Dettagli, limiti e rischi per la revisione Apple in `docs/store/README.md` («Cartelle consentite»).
+- **Provato**: test automatici Rust (confinamento, elenco, persistenza, rinnovo, rifiuti, nessuna via per allargare i permessi), UI (E2E, accessibilità, scenario demo `mas`) e `macos-folders/selftest.sh` in un'app di prova firmata ad hoc in App Sandbox (creazione, riapertura anche in un secondo avvio, rilascio, errori). **Non provato**: il clic sul pannello vero (`selftest.sh --pick`), una build firmata con i certificati dello store, la prova da Telegram su TestFlight; `shell` e MCP non ricevono le cartelle (non provato che i figli le erediterebbero).
+
 ## Aggiornamento dopo le PR #90–#97
 
 - Integrati fix delle porte sidecar, aggiornamenti Actions/UI, primo endpoint AG-UI, copia/cancellazione con checkpoint e recupero delle catture della chat dopo il ricaricamento.

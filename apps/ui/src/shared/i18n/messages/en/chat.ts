@@ -312,4 +312,6 @@ export const chatEn: Record<keyof typeof chatIt, string> = {
   "chat.segreto_chiedi_il_campo": "Remove the text and ask for the protected field",
   "chat.segreto_richiesta_testo": "I need to enter a key or a token: ask me for it with the protected field.",
   "chat.rivedi_la_lezione": "Review the lesson",
+  "chat.cartella_fuori_workspace": "That folder is outside the workspace. If you want the agent to work there, allow it yourself:",
+  "chat.cartella_fuori_workspace_link": "Settings → Allowed folders",
 };

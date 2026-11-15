@@ -11,13 +11,25 @@ fn main() {
     println!("cargo:rerun-if-env-changed=AIW_APPLE_FM_DEVELOPER_DIR");
     println!("cargo:rustc-check-cfg=cfg(aiw_apple_fm_helper)");
     build_apple_helper();
-    build_macos_browser();
+    build_macos_native();
 }
 
-/// Native browser is linked into the sandboxed app, never launched as an external helper.
-fn build_macos_browser() {
+/// The Swift pieces linked into the sandboxed app, never launched as an external helper: the native
+/// browser (`macos-browser/`) and the folders the person grants (`macos-folders/`), one static library.
+fn build_macos_native() {
     println!("cargo:rerun-if-changed=macos-browser");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") || std::env::var_os("CARGO_FEATURE_MACOS_BROWSER").is_none() {
+    println!("cargo:rerun-if-changed=macos-folders");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+    let mut sources = vec![];
+    if std::env::var_os("CARGO_FEATURE_MACOS_BROWSER").is_some() {
+        sources.push("macos-browser/Browser.swift");
+    }
+    if std::env::var_os("CARGO_FEATURE_MACOS_FOLDERS").is_some() {
+        sources.push("macos-folders/Folders.swift");
+    }
+    if sources.is_empty() {
         return;
     }
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
@@ -36,20 +48,20 @@ fn build_macos_browser() {
             "-emit-library",
             "-static",
             "-module-name",
-            "AiwBrowser",
+            "AiwMacosNative",
             "-target",
             &target,
             "-sdk",
             sdk.trim(),
-            "macos-browser/Browser.swift",
-            "-o",
         ])
-        .arg(out.join("libaiw_browser.a"))
+        .args(&sources)
+        .arg("-o")
+        .arg(out.join("libaiw_macos_native.a"))
         .output()
-        .expect("swiftc for native browser");
-    assert!(built.status.success(), "native browser: {}", String::from_utf8_lossy(&built.stderr));
+        .expect("swiftc for the native macOS pieces");
+    assert!(built.status.success(), "native macOS pieces: {}", String::from_utf8_lossy(&built.stderr));
     println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-lib=static=aiw_browser");
+    println!("cargo:rustc-link-lib=static=aiw_macos_native");
     // Apple's linker consumes LC_LINKER_OPTION entries in the Swift object, including its
     // framework/runtime libraries. Supply the SDK stubs; the OS provides the Swift runtime.
     println!("cargo:rustc-link-search=native={}/usr/lib/swift", sdk.trim());

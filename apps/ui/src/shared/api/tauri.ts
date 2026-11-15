@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ApiError, HttpTransport } from "./http";
 import type { TransportCapabilities } from "./transport";
 import { blobToBase64 } from "../lib/base64";
-import type { AgEvent, BackgroundStatus, Transcript } from "./types";
+import type { AgEvent, BackgroundStatus, FoldersAdded, FoldersInfo, Transcript } from "./types";
 
 interface IpcResponse {
   status: number;
@@ -42,6 +42,13 @@ export class TauriTransport extends HttpTransport {
   async openBrowser(): Promise<boolean> {
     return invoke<boolean>("aiw_browser_show");
   }
+
+  /**
+   * The folders of the computer handed to the agents (Mac App Store build). Only these two commands of the shell change
+   * the list, and only from here: no route of the API does, so a model cannot widen its own access.
+   */
+  addFolders = (message: string, prompt: string) => invoke<FoldersAdded>("aiw_folders_add", { message, prompt });
+  removeFolder = (id: string) => invoke<FoldersInfo>("aiw_folders_remove", { id });
 
   /** The IPC bridge carries JSON only: the audio travels as base64. */
   override async transcribe(wav: Blob, language?: string): Promise<Transcript> {

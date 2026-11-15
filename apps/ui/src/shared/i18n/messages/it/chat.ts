@@ -310,4 +310,6 @@ export const chatIt = {
   "chat.segreto_chiedi_il_campo": "Togli il testo e chiedi il campo protetto",
   "chat.segreto_richiesta_testo": "Devo inserire una chiave o un token: chiedimelo con il campo protetto.",
   "chat.rivedi_la_lezione": "Rivedi la lezione",
+  "chat.cartella_fuori_workspace": "Quella cartella è fuori dal workspace. Se vuoi che l'agente ci lavori, consentila tu:",
+  "chat.cartella_fuori_workspace_link": "Impostazioni → Cartelle consentite",
 } as const;

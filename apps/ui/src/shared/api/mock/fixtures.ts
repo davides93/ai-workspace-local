@@ -1,6 +1,6 @@
 import type {
   AgentProfile, AuditEntry, CatalogModel, ChatMessage, ConfigView, Fit, HookConfig, InferenceProfile, LocalModel, McpServer,
-  PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, RemoteAgent, TeamDef, ToolInfo, WorkflowDef, WorkflowRun,
+  FolderGrant, PolicyRule, RuntimeCompat, RuntimeInfo, Session, SettingsSchema, SystemInfo, RemoteAgent, TeamDef, ToolInfo, WorkflowDef, WorkflowRun,
 } from "../types";
 import { RUN_ERROR_MESSAGE, SECRET_MASK } from "../types";
 
@@ -105,6 +105,9 @@ export const runtimes: RuntimeInfo[] = [
     endpoint: "http://192.168.1.42:7777/v1", description: "Runtime condiviso da un altro device AIW in LAN.", loaded_models: ["gemma-4-27b-it-4bit"] }),
   rt({ id: "remote-openai", name: "Endpoint compatibile OpenAI", vendor: "Personalizzato", kind: "remote", status: "stopped", description: "Qualsiasi server OpenAI-compatibile in LAN (vLLM, LocalAI, KoboldCpp…)." }),
 ];
+
+/** Folders handed to the agents, for the scenario of the sandboxed Mac App Store build (`?scenario=mas`). */
+export const folderGrants: FolderGrant[] = [];
 
 export const system: SystemInfo = {
   version: "0.5.0-beta.7",

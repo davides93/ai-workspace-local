@@ -115,6 +115,27 @@ async fn the_ui_answers_the_paths_that_are_not_the_servers() {
     assert!(body.contains("skills"));
 }
 
+/// The agents must not be able to widen their own access: the folders of the computer have a read-only route.
+#[tokio::test]
+async fn the_folders_of_the_computer_can_be_read_but_no_route_changes_them() {
+    let (app, _e, _d) = fixture(None).await;
+    let (st, _, body) = raw(&app, Method::GET, "/api/folders", None, "").await;
+    assert_eq!(st, StatusCode::OK);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((v["supported"].clone(), v["folders"].clone()), (json!(false), json!([])));
+    for (method, path) in [
+        (Method::POST, "/api/folders"),
+        (Method::PUT, "/api/folders"),
+        (Method::PATCH, "/api/folders"),
+        (Method::DELETE, "/api/folders"),
+        (Method::DELETE, "/api/folders/fld_x"),
+        (Method::POST, "/api/folders/fld_x"),
+    ] {
+        let (st, _, body) = raw(&app, method.clone(), path, Some("application/json"), r#"{"path":"/"}"#).await;
+        assert!(st == StatusCode::METHOD_NOT_ALLOWED || st == StatusCode::NOT_FOUND, "{method} {path} -> {st} {body}");
+    }
+}
+
 #[tokio::test]
 async fn a_wrong_method_on_a_real_path_is_a_405_json() {
     let (app, _e, _d) = fixture(None).await;
