@@ -706,6 +706,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(unix)]
     #[tokio::test]
     async fn granted_folders_are_used_by_the_file_tools_but_nothing_is_deleted_there() {
         let ws = tempfile::tempdir().unwrap();

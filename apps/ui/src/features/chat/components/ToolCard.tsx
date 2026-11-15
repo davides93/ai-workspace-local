@@ -6,7 +6,9 @@ import type { ToolItem } from "../model/items";
 import { resultPreview, STATUS_INFO, toolCategory, toolDuration, toolTitle } from "../model/tools";
 import { ImageThumb } from "./ImageThumb";
 import { isOutsideWorkspace } from "../model/folderHint";
-import { useSystem } from "../../../shared/query/system";
+import { useQueryClient } from "@tanstack/react-query";
+import { qk } from "../../../shared/query/keys";
+import type { SystemInfo } from "../../../shared/api/types";
 
 import { t } from "../../../shared/i18n";
 const CLAMP_LINES = 16;
@@ -60,8 +62,9 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolItem }) {
   const preview = tool.status === "running" ? "" : resultPreview(tool.result);
   const bad = tool.status === "failed" || tool.status === "denied";
   // Mac App Store build: a path outside the workspace can be allowed by the person in Settings, never by the agent.
-  const system = useSystem();
-  const folderHint = bad && system.data?.folder_access === true && isOutsideWorkspace(tool.result);
+  // Reads the snapshot the shell already holds without subscribing to it (`useSystem` polls: one timer per card).
+  const queryClient = useQueryClient();
+  const folderHint = bad && isOutsideWorkspace(tool.result) && queryClient.getQueryData<SystemInfo>(qk.system())?.folder_access === true;
   return (
     <div className={cx("ws-tool", `is-${tool.status}`)} data-category={cat.id}>
       <button type="button" className="ws-tool-head" aria-expanded={open} aria-controls={open ? bodyId : undefined} onClick={() => setOpen((v) => !v)}>

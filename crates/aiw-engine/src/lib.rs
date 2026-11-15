@@ -2772,7 +2772,8 @@ mod tests_backup;
 mod tests_channels;
 #[cfg(test)]
 mod tests_eval;
-#[cfg(test)]
+// The folders of the person exist on macOS only; the tests use canonicalised temp dirs (verbatim paths on Windows).
+#[cfg(all(test, unix))]
 mod tests_folders;
 #[cfg(test)]
 mod tests_hardening;

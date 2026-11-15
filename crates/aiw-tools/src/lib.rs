@@ -539,6 +539,8 @@ mod tests {
     }
 
     /// A folder the person granted lives next to the workspace (the Downloads of the real home).
+    /// The feature is macOS-only: these tests run on Unix (`canonicalize` gives `\\?\` paths on Windows).
+    #[cfg(unix)]
     fn with_granted() -> (tempfile::TempDir, tempfile::TempDir, ToolContext) {
         let ws = tempfile::tempdir().unwrap();
         let granted = tempfile::tempdir().unwrap();
@@ -547,6 +549,7 @@ mod tests {
         (ws, granted, ctx)
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_granted_folder_is_readable_and_writable_like_the_workspace() {
         let (_ws, granted, ctx) = with_granted();
@@ -560,6 +563,7 @@ mod tests {
         assert!(bare.resolve(&g.join("a.txt").display().to_string(), true).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_granted_folder_does_not_open_what_is_around_it() {
         let (_ws, granted, ctx) = with_granted();
@@ -572,6 +576,7 @@ mod tests {
         assert!(ctx.resolve("/etc/passwd", false).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_read_only_sandbox_keeps_granted_folders_read_only() {
         let (_ws, granted, mut ctx) = with_granted();

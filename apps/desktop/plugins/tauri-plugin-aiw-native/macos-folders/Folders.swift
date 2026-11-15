@@ -56,8 +56,10 @@ enum FolderGrants {
     }
 
     static func release(path: String) {
+        // The Rust side says the path as `canonicalize` does (`/private/var/…`); the keys are `canonical(_:)` (`/var/…`).
+        let key = canonical(URL(fileURLWithPath: path))
         lock.lock(); defer { lock.unlock() }
-        if let entry = held.removeValue(forKey: path), entry.started {
+        if let entry = held.removeValue(forKey: held[path] != nil ? path : key), entry.started {
             entry.url.stopAccessingSecurityScopedResource()
         }
     }

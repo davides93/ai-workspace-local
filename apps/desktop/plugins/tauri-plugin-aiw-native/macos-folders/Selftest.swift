@@ -84,6 +84,17 @@ struct FoldersSelftest {
         let downloads = URL(fileURLWithPath: realHome!).appendingPathComponent("Downloads").path
         check(list(downloads) == nil, "the sandbox refuses the real Downloads folder before a folder is granted")
 
+        // The path the model writes as `~/Downloads` is the container's: what is it there? The engine judges a path by
+        // where it really lands, and the documentation says the container's `Downloads` is a link to the real one.
+        let containerDownloads = home.appendingPathComponent("Downloads").path
+        let linkTarget = try? FileManager.default.destinationOfSymbolicLink(atPath: containerDownloads)
+        let exists = FileManager.default.fileExists(atPath: containerDownloads)
+        print("INFO: ~/Downloads of the container exists=\(exists) link=\(linkTarget ?? "none") resolved=\(URL(fileURLWithPath: containerDownloads).resolvingSymlinksInPath().path)")
+        if let linkTarget = linkTarget {
+            let landed = URL(fileURLWithPath: linkTarget, relativeTo: home).standardized.resolvingSymlinksInPath().path
+            check(landed == downloads, "the container's ~/Downloads is a link to the real one (\(landed))")
+        }
+
         // 2. A folder the app owns (its container) stands in for a picked one: the bookmark API is the same.
         let dir = home.appendingPathComponent("granted-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
