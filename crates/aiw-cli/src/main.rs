@@ -158,8 +158,8 @@ enum AgentsCmd {
         /// Id dell'agente
         id: String,
         /// `dedicated`: cartella di lavoro sua, che gli altri agenti non leggono; `shared`: il workspace condiviso, come sempre
-        #[arg(long, value_parser = ["dedicated", "shared"])]
-        workspace: Option<String>,
+        #[arg(long = "workspace-mode", value_parser = ["dedicated", "shared"])]
+        workspace_mode: Option<String>,
         /// `closed`: la shell di questo agente non ha mai la rete; `inherit`: vale l'impostazione sandbox.shell_network
         #[arg(long, value_parser = ["closed", "inherit"])]
         shell_network: Option<String>,
@@ -1099,11 +1099,11 @@ fn agents_cmd(engine: &Engine, cmd: AgentsCmd) -> Result<()> {
                 );
             }
         }
-        AgentsCmd::Isolation { id, workspace, shell_network } => {
+        AgentsCmd::Isolation { id, workspace_mode, shell_network } => {
             let mut agent = engine.agent(&id)?;
-            if workspace.is_some() || shell_network.is_some() {
+            if workspace_mode.is_some() || shell_network.is_some() {
                 let mut iso = agent.isolation.clone().unwrap_or_default();
-                match workspace.as_deref() {
+                match workspace_mode.as_deref() {
                     Some("dedicated") => iso.dedicated_workspace = true,
                     Some("shared") => iso.dedicated_workspace = false,
                     _ => {}
@@ -1940,4 +1940,63 @@ async fn run(engine: &Engine, agent: &str, prompt: String, yes: bool, worktree: 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// A flag of a subcommand must not collide with a global one (`--workspace` is global: the first version of
+    /// `aiw agents isolation` reused the name and clap panicked when the command was run).
+    #[test]
+    fn the_agents_commands_parse_next_to_the_global_options() {
+        Cli::command().debug_assert();
+        let parsed = Cli::try_parse_from([
+            "aiw",
+            "--workspace",
+            "/tmp/ws",
+            "agents",
+            "isolation",
+            "alfa",
+            "--workspace-mode",
+            "dedicated",
+            "--shell-network",
+            "closed",
+        ])
+        .unwrap();
+        assert_eq!(parsed.workspace.as_deref(), Some(std::path::Path::new("/tmp/ws")));
+        match parsed.cmd {
+            Cmd::Agents { cmd: Some(AgentsCmd::Isolation { id, workspace_mode, shell_network }) } => {
+                assert_eq!((id.as_str(), workspace_mode.as_deref(), shell_network.as_deref()), ("alfa", Some("dedicated"), Some("closed")));
+            }
+            _ => panic!("not the isolation command"),
+        }
+        let set = Cli::try_parse_from([
+            "aiw",
+            "agents",
+            "credential",
+            "set",
+            "alfa",
+            "github",
+            "--host",
+            "api.example.org",
+            "--host",
+            "git.example.org",
+        ])
+        .unwrap();
+        match set.cmd {
+            Cmd::Agents { cmd: Some(AgentsCmd::Credential { cmd: CredentialCmd::Set { hosts, header, prefix, .. } }) } => {
+                assert_eq!(hosts, ["api.example.org", "git.example.org"]);
+                assert!(header.is_none() && prefix.is_none());
+            }
+            _ => panic!("not the credential command"),
+        }
+        // The value is never an argument: there is no option for it.
+        assert!(Cli::try_parse_from(["aiw", "agents", "credential", "set", "alfa", "github", "--host", "a.example.org", "--value", "x"])
+            .is_err());
+        // A host is required.
+        assert!(Cli::try_parse_from(["aiw", "agents", "credential", "set", "alfa", "github"]).is_err());
+        assert!(Cli::try_parse_from(["aiw", "agents", "isolation", "alfa", "--workspace-mode", "boh"]).is_err());
+    }
 }

@@ -206,6 +206,32 @@ async fn the_credential_survives_a_restart_sealed_and_still_works() {
 }
 
 #[tokio::test]
+async fn a_value_that_cannot_be_opened_counts_as_not_set_and_the_sealed_text_is_never_sent() {
+    let fx = fixture().await;
+    let Fx { e, data, ws, .. } = fx;
+    drop(e);
+    // The data folder with another keychain, which does not hold the key: the value is sealed and stays sealed.
+    let e = engine_with(data.path(), ws.path(), Keychain::Custom(MemoryKeyStore::new())).await;
+    allow_private_network_for(data.path());
+    assert_eq!(e.secrets_at_rest().state, "key_lost");
+    let info = e.agent_credentials("alfa").unwrap();
+    assert!(info.len() == 1 && !info[0].set, "a value that cannot be opened is not set: {info:?}");
+    assert!(e.credential_broker("alfa").unwrap().describe().is_empty(), "the prompt does not offer it");
+    let stand = echo().await;
+    let out = call(&e, &input_of(&e, "alfa"), "web_fetch_auth", get_args(&stand.url("/x"), "github")).await;
+    assert!(matches!(&out, Err(Error::Denied(m)) if m.contains("valore leggibile") && !m.contains("aiwenc1")), "{out:?}");
+    assert!(stand.requests().is_empty(), "the sealed text must never be sent as if it were the token: {:?}", stand.requests());
+    // A change that does not bring a value keeps what is stored, sealed: it is not lost, and it is still not usable.
+    e.set_agent_credential(
+        "alfa",
+        "github",
+        AgentCredentialInput { hosts: vec!["127.0.0.1".into(), "api.example.org".into()], ..Default::default() },
+    )
+    .unwrap();
+    assert!(!e.agent_credentials("alfa").unwrap()[0].set);
+}
+
+#[tokio::test]
 async fn an_agent_never_uses_the_credential_of_another_not_even_one_with_the_same_name_or_a_longer_id() {
     let fx = fixture().await;
     let e = &fx.e;

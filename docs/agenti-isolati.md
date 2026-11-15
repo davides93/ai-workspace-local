@@ -16,12 +16,16 @@ attestazione verso terzi. Un agente cancellato perde il profilo e le credenziali
 
 | Cosa | Come |
 |---|---|
-| Workspace dedicato e rete della shell chiusa | `aiw agents isolation <id> --workspace dedicated --shell-network closed`, oppure `PUT /api/agents/{id}` con `"isolation": {"dedicated_workspace": true, "close_shell_network": true}` (accesso completo) |
-| Spegnere l'isolamento | `aiw agents isolation <id> --workspace shared --shell-network inherit`, oppure `PUT` con i due flag a `false` |
+| Workspace dedicato e rete della shell chiusa | `aiw agents isolation <id> --workspace-mode dedicated --shell-network closed`, oppure `PUT /api/agents/{id}` con `"isolation": {"dedicated_workspace": true, "close_shell_network": true}` (accesso completo) |
+| Spegnere l'isolamento | `aiw agents isolation <id> --workspace-mode shared --shell-network inherit`, oppure `PUT` con i due flag a `false` |
 | Una credenziale | `printf %s "$TOKEN" \| aiw agents credential set <agente> <nome> --host api.example.org`, oppure `PUT /api/agents/{id}/credentials/{nome}` (`{"hosts": [...], "value": "…"}`, accesso completo) |
 | Vedere lo stato | `aiw agents`, `aiw agents credential list <agente>`, `GET /api/agents/{id}/credentials` (nomi, host, stato; mai il valore) |
 | Togliere | `aiw agents credential remove <agente> <nome>`, `DELETE /api/agents/{id}/credentials/{nome}`, oppure eliminare l'agente |
 | Far usare una credenziale all'agente | metti `web_fetch_auth` tra i suoi `tools` (uno strumento a concessione esplicita: un `*` non lo copre) |
+
+Il valore di una credenziale impostata da riga di comando segue la regola di tutti i comandi a esecuzione singola: li cifra solo se la chiave
+del portachiavi c'è già (l'app o `aiw serve` l'hanno creata); se l'app non è mai partita su quella cartella dei dati, il valore resta in chiaro
+nel database finché l'app o il demone non partono e lo cifrano (`aiw secrets status` dice com'è). Con l'app già installata e avviata una volta è cifrato subito.
 
 Solo il proprietario fa tutto questo: la rotta richiede l'ambito `full` (un telefono accoppiato o un'app di terzi ricevono 403),
 nessuno strumento dell'Assistente tocca credenziali o isolamento, e `aiw_agent_save` **non modifica** un agente che ha un isolamento
