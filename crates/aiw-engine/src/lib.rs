@@ -2889,6 +2889,10 @@ mod tests_backup;
 #[cfg(test)]
 mod tests_channels;
 #[cfg(test)]
+mod tests_contexts;
+#[cfg(test)]
+mod tests_drafts;
+#[cfg(test)]
 mod tests_eval;
 // The folders of the person exist on macOS only; the tests use canonicalised temp dirs (verbatim paths on Windows).
 #[cfg(all(test, unix))]

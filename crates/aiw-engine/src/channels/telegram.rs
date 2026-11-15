@@ -217,6 +217,9 @@ async fn handle(engine: &Engine, ch: &Channel, t: &Telegram, tr: &Arc<dyn Transp
             return;
         }
     }
-    let msg = Inbound { conv: chat, senders, name: display_name(&m["from"]), text, files, reply: Value::Null };
+    // Only a private chat is a direct conversation: a group (its id is negative) is never part of a shared context.
+    let direct = m["chat"]["type"].as_str() == Some("private");
+    let id = m["message_id"].as_i64().map(|n| format!("{chat}:{n}"));
+    let msg = Inbound { conv: chat, senders, name: display_name(&m["from"]), text, files, reply: Value::Null, id, answer: None, direct };
     engine.channel_inbound(&ch.id, tr.clone(), msg).await;
 }

@@ -275,6 +275,11 @@ async fn handle(engine: &Engine, ch: &Channel, cfg: &Cfg, tr: &Arc<dyn Transport
         text: body,
         files: vec![],
         reply: serde_json::json!({"to": m.from_addr, "subject": m.subject, "in_reply_to": m.message_id, "references": m.references}),
+        id: Some(m.message_id.clone()).filter(|i| !i.is_empty()).map(|i| format!("{}|{i}", m.from_addr)),
+        // «sì» or «no» in a reply is read from the body alone: `text` starts with the subject line.
+        answer: Some(m.body.clone()),
+        // A mail goes back to its sender alone: it is a direct conversation (the sender is checked first, see `authenticated`).
+        direct: true,
     };
     engine.channel_inbound(&ch.id, tr.clone(), msg).await;
 }
