@@ -4,7 +4,7 @@
 
 ## Harness semplice: una sola chat agentica in modalità semplice (issue #105)
 
-Stato: **integrato nel branch di verifica `wf/harness-verify` (PR di integrazione), non ancora rilasciato**. Il filone porta la modalità semplice a una sola
+Stato: **unito in `main` il 15 novembre 2026 (PR #113–#120, issue #105–#112 chiuse), non ancora in una release** (l'ultima, v0.5.0-beta.11, è precedente). Il filone porta la modalità semplice a una sola
 chat con un agente, l'Assistente, che risponde, delega agli altri agenti e gestisce l'app dalla conversazione. La modalità Sviluppatore non cambia, tranne un agente
 e circa 18 strumenti in più negli elenchi.
 
@@ -49,8 +49,8 @@ accorciare le descrizioni o unire strumenti, non togliere le conferme.
 **Che cosa non c'è, e i residui dell'issue #105:**
 
 - **Segreti ancora in chiaro nello store**: nessun portachiavi del sistema né cifratura a riposo. Il flusso nuovo non peggiora la situazione (stesse scritture, nessun nuovo
-  tipo di documento) ma ne aumenta l'uso. La cifratura a riposo con chiave nel portachiavi del sistema è l'issue #121 (priorità P2, da iniziare appena questo filone è in
-  `main` e da chiudere prima della prima versione non beta con la chat unica); #24 resta per rete locale, TLS e mDNS. Nel frattempo la scheda del segreto dice che il valore è
+  tipo di documento) ma ne aumenta l'uso. La cifratura a riposo con chiave nel portachiavi del sistema è l'issue #121 (priorità P2; il filone è in `main` dal 15 novembre 2026, il lavoro
+  sulla cifratura segue; da chiudere prima della prima versione non beta con la chat unica); #24 resta per rete locale, TLS e mDNS. Nel frattempo la scheda del segreto dice che il valore è
   salvato su questo computer senza cifratura. Dettagli in `SECURITY.md`.
 - **Sezioni senza sostituto nella chat** (solo vista Sviluppatore, candidate a una seconda fase): raccolte di documenti, canali e posta, proposte dell'assistente proattivo,
   aggiornamento dell'app, dispositivi e token, workflow, valutazioni, addestramento, backup, regole di sicurezza e hook. Chi usa la modalità semplice le raggiunge solo
@@ -96,7 +96,7 @@ accorciare le descrizioni o unire strumenti, non togliere le conferme.
 - Spazi condivisi: decisione di discovery approvata, non implementazione. Prima si misurano due settimane di utilizzo; dettagli in `docs/design/spazi-condivisi.md` e follow-up #101.
 - Verifica combinata locale macOS: fmt/clippy, 1139 test Rust passati (8 ignorati), 999 test UI, typecheck/build, 8 E2E e 221 test di accessibilità. Questo non sostituisce i test con servizi/modelli/dispositivi reali.
 - Issue completate chiuse tramite merge: #8, #74 e task #98–#100. #18, #28, #69 e la roadmap #5 restano aperte per i requisiti residui.
-- TypeScript resta 5.9: l’aggiornamento a 7 (#84) richiede prima la compatibilità degli script i18n con l’API JS.
+- TypeScript: l’aggiornamento a 7 (#84) è stato unito il 15 novembre 2026 (7.0.2) con la CI verde (aggiornamento successivo a questa nota).
 
 > 2026-11-03 · v0.4 · Basato su un audit del codice (non della documentazione) eseguito per layer, con
 > verifica avversariale di ogni lacuna e riferimenti `file:riga`, aggiornato dopo i giri di verifica
