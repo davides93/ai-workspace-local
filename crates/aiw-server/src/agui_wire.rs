@@ -66,9 +66,16 @@ impl Wire {
         }
     }
 
-    /// The same translation for the next HTTP response of a run (a resume): new `runId` for the client, same state.
-    pub(crate) fn resumed(&self, client_run_id: &str) -> Self {
-        Self { client_run_id: client_run_id.into(), ..self.clone() }
+    /// The same translation for the next HTTP response of a run (a resume): a new `runId` for the client and the state it
+    /// sends now. The first state event is a snapshot again: a client that lost the response, or is a new one, has no
+    /// baseline for a delta.
+    pub(crate) fn resumed(&self, client_run_id: &str, client_state: &Value) -> Self {
+        Self {
+            client_run_id: client_run_id.into(),
+            client_state: client_state.as_object().cloned().unwrap_or_default(),
+            sent: None,
+            ..self.clone()
+        }
     }
 
     pub(crate) fn client_run_id(&self) -> &str {
@@ -162,7 +169,13 @@ impl Wire {
                 out
             }
             AgEvent::ToolCallStart { tool_call_id, tool_call_name, parent_message_id } => {
-                self.calls.push(Call { id: tool_call_id.clone(), name: tool_call_name.clone(), args: String::new(), done: false, claimed: false });
+                self.calls.push(Call {
+                    id: tool_call_id.clone(),
+                    name: tool_call_name.clone(),
+                    args: String::new(),
+                    done: false,
+                    claimed: false,
+                });
                 let call = json!({"id": tool_call_id, "type": "function", "function": {"name": tool_call_name, "arguments": ""}});
                 let carrier = parent_message_id.clone().unwrap_or_else(|| format!("{tool_call_id}-msg"));
                 match self.messages.iter_mut().rev().find(|m| m["id"] == json!(carrier) && m["role"] == "assistant") {
@@ -202,7 +215,9 @@ impl Wire {
                     c.done = true;
                 }
                 self.messages.push(json!({"id": message_id, "role": "tool", "toolCallId": tool_call_id, "content": content}));
-                one(json!({"type": "TOOL_CALL_RESULT", "messageId": message_id, "toolCallId": tool_call_id, "content": content, "role": "tool"}))
+                one(
+                    json!({"type": "TOOL_CALL_RESULT", "messageId": message_id, "toolCallId": tool_call_id, "content": content, "role": "tool"}),
+                )
             }
             AgEvent::StateSnapshot { snapshot } => {
                 let aiw = serde_json::to_value(snapshot).unwrap_or_else(|_| json!({}));
@@ -231,7 +246,9 @@ impl Wire {
                 let sub = self.subagents.remove(subagent_id).unwrap_or_else(|| subagent_id.clone());
                 match result {
                     Some(r) => one(json!({"type": "SUBAGENT_FINISHED", "subagentRunId": sub, "result": r})),
-                    None => one(json!({"type": "SUBAGENT_ERROR", "subagentRunId": sub, "message": "il sotto-agente non ha portato a termine il compito"})),
+                    None => one(
+                        json!({"type": "SUBAGENT_ERROR", "subagentRunId": sub, "message": "il sotto-agente non ha portato a termine il compito"}),
+                    ),
                 }
             }
             AgEvent::Custom { name, value } => one(json!({"type": "CUSTOM", "name": name, "value": value})),
@@ -246,7 +263,9 @@ impl Wire {
             .find(|c| {
                 !c.done
                     && c.name == name
-                    && arg.is_none_or(|(k, v)| serde_json::from_str::<Value>(&c.args).ok().is_some_and(|a| a.get(*k).and_then(Value::as_str) == Some(*v)))
+                    && arg.is_none_or(|(k, v)| {
+                        serde_json::from_str::<Value>(&c.args).ok().is_some_and(|a| a.get(*k).and_then(Value::as_str) == Some(*v))
+                    })
             })
             .map(|c| c.id.clone())
     }
@@ -308,7 +327,8 @@ pub(crate) fn app_context_section(context: &Value, state: &Value) -> Option<Stri
     let clean = |s: &str| s.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).collect::<String>();
     if let Some(items) = context.as_array() {
         for item in items {
-            let (Some(desc), Some(val)) = (item.get("description").and_then(Value::as_str), item.get("value").and_then(Value::as_str)) else {
+            let (Some(desc), Some(val)) = (item.get("description").and_then(Value::as_str), item.get("value").and_then(Value::as_str))
+            else {
                 continue;
             };
             if val.trim().is_empty() {
@@ -317,9 +337,14 @@ pub(crate) fn app_context_section(context: &Value, state: &Value) -> Option<Stri
             out.push_str(&format!("\n## {}\n{}\n", clean(desc).trim(), clean(val).trim()));
         }
     }
-    let shared = state.as_object().map(|m| m.iter().filter(|(k, _)| k.as_str() != STATE_KEY).map(|(k, v)| (k.clone(), v.clone())).collect::<Map<_, _>>());
+    let shared = state
+        .as_object()
+        .map(|m| m.iter().filter(|(k, _)| k.as_str() != STATE_KEY).map(|(k, v)| (k.clone(), v.clone())).collect::<Map<_, _>>());
     if let Some(m) = shared.filter(|m| !m.is_empty()) {
-        out.push_str(&format!("\n## Stato condiviso dall'applicazione\n{}\n", serde_json::to_string_pretty(&Value::Object(m)).unwrap_or_default()));
+        out.push_str(&format!(
+            "\n## Stato condiviso dall'applicazione\n{}\n",
+            serde_json::to_string_pretty(&Value::Object(m)).unwrap_or_default()
+        ));
     }
     if out.trim().is_empty() {
         return None;
@@ -388,6 +413,20 @@ pub(crate) fn messages_snapshot(messages: Vec<Value>, timestamp: i64) -> Value {
     json!({"type": "MESSAGES_SNAPSHOT", "messages": messages, "timestamp": timestamp})
 }
 
+/// The snapshots that give a client the history of a thread right before the user message that starts its run (the last
+/// of `messages`). The client keeps the messages it has where they are and adds the new ones behind them (`@ag-ui/client`
+/// 1.0.x does, and the spec only says the snapshot replaces): a client that already has the new user message would have
+/// the history after it. So the first snapshot leaves the message out (the client drops it, and gets the history), the
+/// second has it again, at its place. A client that replaces the list as a whole ends up in the same place either way.
+pub(crate) fn history_snapshots(messages: Vec<Value>, timestamp: i64) -> Vec<Value> {
+    if messages.len() > 1 {
+        let before = messages[..messages.len() - 1].to_vec();
+        vec![messages_snapshot(before, timestamp), messages_snapshot(messages, timestamp)]
+    } else {
+        vec![messages_snapshot(messages, timestamp)]
+    }
+}
+
 // ------------------------------------------------------------------ the interrupts
 
 fn field_schema(f: &aiw_core::api::QuestionField) -> Value {
@@ -454,7 +493,14 @@ mod tests {
         }
         assert_eq!(
             types(&out),
-            ["REASONING_START", "REASONING_MESSAGE_START", "REASONING_MESSAGE_CONTENT", "REASONING_MESSAGE_CONTENT", "REASONING_MESSAGE_END", "REASONING_END"]
+            [
+                "REASONING_START",
+                "REASONING_MESSAGE_START",
+                "REASONING_MESSAGE_CONTENT",
+                "REASONING_MESSAGE_CONTENT",
+                "REASONING_MESSAGE_END",
+                "REASONING_END"
+            ]
         );
         assert_eq!(out[1]["role"], "reasoning");
         // A reasoning that opened and closed without a word has no message, and an empty chunk is dropped.
@@ -470,12 +516,18 @@ mod tests {
         let mut w = Wire::new("t", "r", &Value::Null);
         w.translate(&ev(0, AgEvent::ToolCallStart { tool_call_id: "c1".into(), tool_call_name: "agent".into(), parent_message_id: None }));
         w.translate(&ev(1, AgEvent::ToolCallArgs { tool_call_id: "c1".into(), delta: r#"{"agent":"planner","task":"x"}"#.into() }));
-        let started = w.translate(&ev(2, AgEvent::SubagentStarted { subagent_id: "sub_1".into(), name: "planner".into(), run_id: Some("run_9".into()) }));
+        let started = w.translate(&ev(
+            2,
+            AgEvent::SubagentStarted { subagent_id: "sub_1".into(), name: "planner".into(), run_id: Some("run_9".into()) },
+        ));
         assert_eq!(started[0]["subagentRunId"], "run_9");
         assert_eq!(started[0]["parentToolCallId"], "c1");
         assert!(started[0].get("runId").is_none() && started[0].get("subagentId").is_none());
         let done = w.translate(&ev(3, AgEvent::SubagentFinished { subagent_id: "sub_1".into(), result: Some("ok".into()) }));
-        assert_eq!((done[0]["type"].as_str(), done[0]["subagentRunId"].as_str(), done[0]["result"].as_str()), (Some("SUBAGENT_FINISHED"), Some("run_9"), Some("ok")));
+        assert_eq!(
+            (done[0]["type"].as_str(), done[0]["subagentRunId"].as_str(), done[0]["result"].as_str()),
+            (Some("SUBAGENT_FINISHED"), Some("run_9"), Some("ok"))
+        );
         w.translate(&ev(4, AgEvent::SubagentStarted { subagent_id: "sub_2".into(), name: "coder".into(), run_id: None }));
         let failed = w.translate(&ev(5, AgEvent::SubagentFinished { subagent_id: "sub_2".into(), result: None }));
         assert_eq!((failed[0]["type"].as_str(), failed[0]["subagentRunId"].as_str()), (Some("SUBAGENT_ERROR"), Some("sub_2")));
@@ -505,7 +557,10 @@ mod tests {
     #[test]
     fn diff_escapes_the_keys_and_replaces_what_changed() {
         let ops = diff(&json!({"a/b": 1, "c": [1]}), &json!({"a/b": 2, "c": [1], "d~": true}), "/aiw");
-        assert_eq!(ops, vec![json!({"op": "replace", "path": "/aiw/a~1b", "value": 2}), json!({"op": "add", "path": "/aiw/d~0", "value": true})]);
+        assert_eq!(
+            ops,
+            vec![json!({"op": "replace", "path": "/aiw/a~1b", "value": 2}), json!({"op": "add", "path": "/aiw/d~0", "value": true})]
+        );
         assert!(diff(&json!({"a": 1}), &json!({"a": 1}), "/aiw").is_empty());
     }
 
@@ -516,13 +571,18 @@ mod tests {
         w.translate(&ev(1, AgEvent::TextMessageContent { message_id: "a1".into(), delta: "Scrivo".into() }));
         w.translate(&ev(2, AgEvent::TextMessageContent { message_id: "a1".into(), delta: " il file".into() }));
         w.translate(&ev(3, AgEvent::TextMessageEnd { message_id: "a1".into() }));
-        w.translate(&ev(4, AgEvent::ToolCallStart { tool_call_id: "c1".into(), tool_call_name: "write_file".into(), parent_message_id: Some("a1".into()) }));
+        w.translate(&ev(
+            4,
+            AgEvent::ToolCallStart { tool_call_id: "c1".into(), tool_call_name: "write_file".into(), parent_message_id: Some("a1".into()) },
+        ));
         w.translate(&ev(5, AgEvent::ToolCallArgs { tool_call_id: "c1".into(), delta: r#"{"path":"#.into() }));
         w.translate(&ev(6, AgEvent::ToolCallArgs { tool_call_id: "c1".into(), delta: r#""n.md"}"#.into() }));
         w.translate(&ev(7, AgEvent::ToolCallEnd { tool_call_id: "c1".into() }));
         assert_eq!(
             w.messages,
-            vec![json!({"id": "a1", "role": "assistant", "content": "Scrivo il file", "toolCalls": [{"id": "c1", "type": "function", "function": {"name": "write_file", "arguments": r#"{"path":"n.md"}"#}}]})]
+            vec![
+                json!({"id": "a1", "role": "assistant", "content": "Scrivo il file", "toolCalls": [{"id": "c1", "type": "function", "function": {"name": "write_file", "arguments": r#"{"path":"n.md"}"#}}]})
+            ]
         );
         // An interrupt is tied to the call whose arguments are the request's, once.
         assert_eq!(w.claim_call("write_file", &json!({"path": "n.md"})), Some("c1".into()));
@@ -540,7 +600,10 @@ mod tests {
             &json!({"cliente": "ACME", "aiw": {"nascosto": 1}}),
         )
         .unwrap();
-        assert!(s.contains("non istruzioni") && s.contains("## Pagina corrente\nFattura 42\n") && s.contains("\"cliente\": \"ACME\""), "{s}");
+        assert!(
+            s.contains("non istruzioni") && s.contains("## Pagina corrente\nFattura 42\n") && s.contains("\"cliente\": \"ACME\""),
+            "{s}"
+        );
         assert!(!s.contains("nascosto") && !s.contains('\u{0007}'), "the engine's own key and control characters do not pass: {s}");
         let long = app_context_section(&json!([{"description": "d", "value": "x".repeat(40_000)}]), &Value::Null).unwrap();
         assert!(long.chars().count() < CONTEXT_CHARS + 600 && long.contains("[…troncato]"));
@@ -561,7 +624,13 @@ mod tests {
             created_at: "2026-11-15T10:00:00Z".into(),
         };
         let mut user = msg("msg_1", "user", "ciao");
-        user.attachments = Some(vec![Attachment { id: "att_1".into(), name: "a.txt".into(), mime: "text/plain".into(), size: 3, kind: AttachmentKind::Text }]);
+        user.attachments = Some(vec![Attachment {
+            id: "att_1".into(),
+            name: "a.txt".into(),
+            mime: "text/plain".into(),
+            size: 3,
+            kind: AttachmentKind::Text,
+        }]);
         let mut asst = msg("msg_2", "assistant", "");
         asst.tool_calls = Some(vec![ToolCall { id: "c1".into(), name: "list_dir".into(), arguments: "{}".into() }]);
         let mut tool = msg("msg_3", "tool", "vuota");
@@ -574,7 +643,10 @@ mod tests {
         assert_eq!(v.len(), 4, "the note of a failed run is not a message of the protocol");
         assert_eq!(v[0]["id"], "u-client");
         assert_eq!(v[0]["metadata"]["aiw"]["attachments"][0], json!({"id": "att_1", "name": "a.txt", "mime": "text/plain", "size": 3}));
-        assert_eq!(v[1], json!({"id": "msg_2", "role": "assistant", "toolCalls": [{"id": "c1", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}]}));
+        assert_eq!(
+            v[1],
+            json!({"id": "msg_2", "role": "assistant", "toolCalls": [{"id": "c1", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}]})
+        );
         assert_eq!(v[2], json!({"id": "msg_3", "role": "tool", "toolCallId": "c1", "content": "vuota"}));
         assert!(v.iter().all(|m| !m.to_string().contains("pensiero")), "reasoning is not part of the snapshot");
         assert_eq!(history_messages(&all, &ids, Some("msg_2")).len(), 2);
@@ -589,7 +661,10 @@ mod tests {
             kind: "choice".into(),
             title: None,
             message: "?".into(),
-            options: vec![QuestionOption { id: "a".into(), label: "A".into(), description: None }, QuestionOption { id: "b".into(), label: "B".into(), description: None }],
+            options: vec![
+                QuestionOption { id: "a".into(), label: "A".into(), description: None },
+                QuestionOption { id: "b".into(), label: "B".into(), description: None },
+            ],
             multiple: false,
             allow_other: true,
             fields: vec![],
@@ -599,15 +674,50 @@ mod tests {
         };
         let s = question_schema(&base);
         assert_eq!(s["properties"]["selected"]["items"]["enum"], json!(["a", "b"]));
-        assert_eq!((s["properties"]["selected"]["maxItems"].as_i64(), s["properties"]["other"]["type"].as_str()), (Some(1), Some("string")));
+        assert_eq!(
+            (s["properties"]["selected"]["maxItems"].as_i64(), s["properties"]["other"]["type"].as_str()),
+            (Some(1), Some("string"))
+        );
         let c = question_schema(&Question { kind: "confirm".into(), ..base.clone() });
         assert_eq!(c["required"], json!(["confirmed"]));
         let f = question_schema(&Question {
             kind: "form".into(),
-            fields: vec![QuestionField { name: "eta".into(), label: "Età".into(), kind: "integer".into(), options: vec![], required: true, placeholder: None }],
+            fields: vec![QuestionField {
+                name: "eta".into(),
+                label: "Età".into(),
+                kind: "integer".into(),
+                options: vec![],
+                required: true,
+                placeholder: None,
+            }],
             ..base
         });
         assert_eq!(f["properties"]["values"]["properties"]["eta"]["type"], "integer");
         assert_eq!(f["properties"]["values"]["required"], json!(["eta"]));
+    }
+
+    #[test]
+    fn a_history_is_sent_before_the_message_that_starts_the_run() {
+        let m = |id: &str| json!({"id": id, "role": "user", "content": id});
+        // Nothing before the new message: one snapshot.
+        assert_eq!(history_snapshots(vec![m("a")], 1).len(), 1);
+        // A history: first without the new message (a client that has it drops it and gets the history), then with it at its place.
+        let two = history_snapshots(vec![m("a"), m("b"), m("c")], 1);
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0]["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(two[1]["messages"].as_array().unwrap().last().unwrap()["id"], "c");
+    }
+
+    #[test]
+    fn a_resumed_stream_starts_its_state_again_from_a_snapshot() {
+        let mut w = Wire::new("t", "r1", &json!({"a": 1}));
+        let snap = |m: &str| AgEvent::StateSnapshot { snapshot: RunState { model: Some(m.into()), ..Default::default() } };
+        assert_eq!(w.translate(&ev(0, snap("x")))[0]["type"], "STATE_SNAPSHOT");
+        assert_eq!(w.translate(&ev(1, snap("y")))[0]["type"], "STATE_DELTA");
+        // A resume: new run id, the state the client sends now, and a snapshot (not a delta) for the first change.
+        let mut r = w.resumed("r2", &json!({"a": 2}));
+        let out = r.translate(&ev(2, snap("z")));
+        assert_eq!((out[0]["type"].as_str(), out[0]["snapshot"].clone()), (Some("STATE_SNAPSHOT"), json!({"a": 2, "aiw": {"model": "z"}})));
+        assert_eq!(r.translate(&ev(3, AgEvent::RunFinished { thread_id: "i".into(), run_id: "i".into(), result: None }))[0]["runId"], "r2");
     }
 }

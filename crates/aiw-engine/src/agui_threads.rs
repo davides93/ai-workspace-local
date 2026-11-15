@@ -146,7 +146,12 @@ mod tests {
         let other = e.create_session("planner", Some("y".into())).unwrap();
         assert!(e.agui_thread("thr").unwrap().is_none());
         let mut t = AguiThread::new("thr", &ses.id, "planner");
-        t.record(AguiRun { client_run_id: "r1".into(), run_id: "run_1".into(), user_message_id: "m1".into(), user_server_id: "msg_1".into() });
+        t.record(AguiRun {
+            client_run_id: "r1".into(),
+            run_id: "run_1".into(),
+            user_message_id: "m1".into(),
+            user_server_id: "msg_1".into(),
+        });
         e.save_agui_thread(&t).unwrap();
         e.save_agui_thread(&AguiThread::new("thr-2", &other.id, "planner")).unwrap();
         assert_eq!(e.agui_thread("thr").unwrap(), Some(t));

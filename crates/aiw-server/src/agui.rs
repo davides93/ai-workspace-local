@@ -674,7 +674,8 @@ pub(crate) async fn run_agent(
     let paused = s.agui.pauses.lock().unwrap().get(&input.thread_id).cloned();
     if let Some(p) = paused.filter(|p| p.applied.is_none() && !s.engine.run_done(&p.run_id)) {
         let ids: Vec<&str> = p.interrupts.iter().map(|i| i.id.as_str()).collect();
-        let msg = format!("il thread ha interruzioni in attesa di risposta ({}): rispondi con `resume` prima di mandare altro", ids.join(", "));
+        let msg =
+            format!("il thread ha interruzioni in attesa di risposta ({}): rispondi con `resume` prima di mandare altro", ids.join(", "));
         return Ok(run_error(&input, "interrupt_pending", &msg, &[("x-aiw-session-id", thread.session_id.clone())]));
     }
     s.agui.pauses.lock().unwrap().remove(&input.thread_id);
@@ -690,21 +691,18 @@ pub(crate) async fn run_agent(
     let needs_snapshot = !history.is_empty() && !client_prefix.iter().any(|id| known.contains(id));
     let origin = aiw_engine::RunOrigin { owner, questions: declared.questions || declared.interrupts, secrets: declared.secrets && owner };
     let app_context = agui_wire::app_context_section(&input.context, &input.state);
-    let run_id = match s
-        .engine
-        .start_run_ctx(&thread.session_id, user.text.clone(), None, None, user.uploads, Some(origin), app_context)
-        .await
-    {
-        Ok(id) => id,
-        Err(e) => {
-            if created {
-                // Nothing was said in a session that was just made for this request: do not leave it behind.
-                let _ = s.engine.delete_session(&thread.session_id);
-                let _ = s.engine.remove_agui_thread(&input.thread_id);
+    let run_id =
+        match s.engine.start_run_ctx(&thread.session_id, user.text.clone(), None, None, user.uploads, Some(origin), app_context).await {
+            Ok(id) => id,
+            Err(e) => {
+                if created {
+                    // Nothing was said in a session that was just made for this request: do not leave it behind.
+                    let _ = s.engine.delete_session(&thread.session_id);
+                    let _ = s.engine.remove_agui_thread(&input.thread_id);
+                }
+                return Err(e.into());
             }
-            return Err(e.into());
-        }
-    };
+        };
     // The user message the engine stored for this run is the last one of the session: what the client called it is recorded.
     let stored = s.engine.messages(&thread.session_id).unwrap_or_default();
     let server_user = stored.iter().rev().find(|m| m.role == "user").map(|m| m.id.clone()).unwrap_or_default();
@@ -720,7 +718,7 @@ pub(crate) async fn run_agent(
     let mut follow = follow_run(&s, &run_id, 0, wire, false, Some(pause_ctx(&s, &thread, declared, HashSet::new())), true);
     if needs_snapshot {
         let messages = agui_wire::history_messages(&stored, &thread.user_ids, Some(&server_user));
-        follow.after_started.push(agui_wire::messages_snapshot(messages, chrono::Utc::now().timestamp_millis()));
+        follow.after_started.extend(agui_wire::history_snapshots(messages, chrono::Utc::now().timestamp_millis()));
     }
     Ok(stream_response(follow, &thread.session_id, &run_id))
 }
@@ -728,9 +726,12 @@ pub(crate) async fn run_agent(
 /// Is this message the one the run was started with? The id says so for a client that makes its ids up as it should; the text and
 /// the number of files say so for one that sends `m1` every time (another text with a known id is another message).
 fn same_message(engine: &Engine, session_id: &str, run: &AguiRun, user: &LastUser) -> bool {
-    engine.messages(session_id).unwrap_or_default().iter().find(|m| m.id == run.user_server_id).is_some_and(|m| {
-        m.content == user.text && m.attachments.as_ref().map_or(0, Vec::len) == user.uploads.len()
-    })
+    engine
+        .messages(session_id)
+        .unwrap_or_default()
+        .iter()
+        .find(|m| m.id == run.user_server_id)
+        .is_some_and(|m| m.content == user.text && m.attachments.as_ref().map_or(0, Vec::len) == user.uploads.len())
 }
 
 /// Can the run be sent again to a client that asks for it a second time? Yes while it goes and after it finished; no after
@@ -752,13 +753,14 @@ fn replay_run(s: &AppState, input: &RunAgentInput, declared: Declared, thread: A
     let mut follow = follow_run(s, &run.run_id, 0, wire, false, Some(pause_ctx(s, &thread, declared, HashSet::new())), !done);
     let stored = s.engine.messages(&thread.session_id).unwrap_or_default();
     let messages = agui_wire::history_messages(&stored, &thread.user_ids, Some(&run.user_server_id));
-    follow.after_started.push(agui_wire::messages_snapshot(messages, chrono::Utc::now().timestamp_millis()));
+    follow.after_started.extend(agui_wire::history_snapshots(messages, chrono::Utc::now().timestamp_millis()));
     stream_response(follow, &thread.session_id, &run.run_id)
 }
 
 /// A stable text for the answer of a `resume`, to tell a replay of it from another answer.
 fn fingerprint(entries: &[ResumeEntry]) -> String {
-    let mut v: Vec<String> = entries.iter().map(|e| format!("{}|{}|{}", e.interrupt_id, e.status, e.payload.clone().unwrap_or(Value::Null))).collect();
+    let mut v: Vec<String> =
+        entries.iter().map(|e| format!("{}|{}|{}", e.interrupt_id, e.status, e.payload.clone().unwrap_or(Value::Null))).collect();
     v.sort();
     v.join("\n")
 }
@@ -821,7 +823,9 @@ async fn resume_run(
                         Some(a) => Decision::Allow(a),
                         None => return refuse("resume_invalid", &format!("la risposta a {} deve avere `approved` (true o false)", it.id)),
                     },
-                    (Kind::Question, true) => Decision::Reply(QuestionReply { action: "decline".into(), answer: QuestionAnswer::default() }),
+                    (Kind::Question, true) => {
+                        Decision::Reply(QuestionReply { action: "decline".into(), answer: QuestionAnswer::default() })
+                    }
                     (Kind::Question, false) => match e.payload.clone().map(serde_json::from_value::<QuestionAnswer>) {
                         Some(Ok(a)) => Decision::Reply(QuestionReply { action: "answer".into(), answer: a }),
                         _ => return refuse("resume_invalid", &format!("la risposta a {} non ha la forma attesa dalla domanda", it.id)),
@@ -851,7 +855,7 @@ async fn resume_run(
         }
     }
     // The run goes on: a new `runId` for the client, and the events from where the pause left off.
-    let wire = pause.wire.resumed(&input.run_id);
+    let wire = pause.wire.resumed(&input.run_id, &input.state);
     let managed: HashSet<String> = pause.interrupts.iter().map(|i| i.id.clone()).collect();
     let done = s.engine.run_done(&pause.run_id);
     let mut follow = follow_run(s, &pause.run_id, pause.next_seq, wire, true, Some(pause_ctx(s, &thread, declared, managed)), !done);
@@ -1484,5 +1488,87 @@ mod tests {
         let result = tool_result_of(&evs, start["toolCallId"].as_str().unwrap());
         assert_eq!(result["outcome"], "unsupported");
         assert!(customs(&evs, "aiw.secret_request").is_empty() && e.secret_requests().is_empty());
+    }
+
+    // ------------------------------------------------------------------ interrupts and resume: the rules of the protocol
+
+    fn state_with_pause(e: &Engine, thread: &str, session: &str, interrupts: &[(&str, Kind)]) -> AppState {
+        let st = AppState { engine: e.clone(), agui: Default::default() };
+        st.agui.pauses.lock().unwrap().insert(
+            thread.into(),
+            Pause {
+                run_id: "run_x".into(),
+                session_id: session.into(),
+                client_run_id: "r0".into(),
+                next_seq: 0,
+                wire: Wire::new(thread, "r0", &Value::Null),
+                interrupts: interrupts.iter().map(|(id, kind)| OpenInterrupt { id: (*id).into(), kind: kind.clone() }).collect(),
+                applied: None,
+                since: Instant::now(),
+            },
+        );
+        st
+    }
+
+    /// A `resume` sent to the endpoint, as the events of the answer.
+    async fn resume_with(st: &AppState, thread: &str, resume: Value, messages: Value) -> Vec<Value> {
+        let input: RunAgentInput =
+            serde_json::from_value(json!({"threadId": thread, "runId": "r1", "messages": messages, "resume": resume})).unwrap();
+        match run_agent(State(st.clone()), Path("planner".into()), IsOwner(true), Json(input)).await {
+            Ok(res) => frames(&read_all(res).await),
+            Err(_) => panic!("an HTTP error, not a stream"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_resume_must_follow_the_rules_of_the_protocol_and_what_does_not_is_a_run_error() {
+        let (_app, e, _d, _w) = fixture(vec![]).await;
+        let ses = e.create_session("planner", Some("Pausa".into())).unwrap();
+        let st = state_with_pause(&e, &ses.id, &ses.id, &[("apr_1", Kind::Approval), ("ask_1", Kind::Question)]);
+        let resolved = |id: &str, payload: Value| json!({"interruptId": id, "status": "resolved", "payload": payload});
+        let code = |evs: &[Value]| {
+            assert_eq!(evs.iter().map(|v| v["type"].as_str().unwrap()).collect::<Vec<_>>(), ["RUN_STARTED", "RUN_ERROR"], "{evs:?}");
+            (evs[1]["code"].as_str().unwrap().to_string(), evs[0]["runId"].as_str().unwrap().to_string())
+        };
+        // Every open interrupt must be addressed: partial resumes are not supported.
+        let evs = resume_with(&st, &ses.id, json!([resolved("apr_1", json!({"approved": true}))]), json!([])).await;
+        assert_eq!(code(&evs), ("resume_incomplete".to_string(), "r1".to_string()));
+        assert!(evs[1]["message"].as_str().unwrap().contains("ask_1"), "{evs:?}");
+        // An id that is not among the open ones.
+        let evs =
+            resume_with(&st, &ses.id, json!([resolved("apr_1", json!({"approved": true})), resolved("zzz", json!({}))]), json!([])).await;
+        assert_eq!(code(&evs).0, "interrupt_not_found");
+        // A state that does not exist, an approval without `approved`, an answer of the wrong shape.
+        let both = |a: Value, q: Value| json!([a, q]);
+        let bad_status = both(json!({"interruptId": "apr_1", "status": "maybe"}), resolved("ask_1", json!({"confirmed": true})));
+        assert_eq!(code(&resume_with(&st, &ses.id, bad_status, json!([])).await).0, "resume_invalid");
+        let no_approved = both(resolved("apr_1", json!({"si": 1})), resolved("ask_1", json!({"confirmed": true})));
+        assert_eq!(code(&resume_with(&st, &ses.id, no_approved, json!([])).await).0, "resume_invalid");
+        let bad_answer = both(resolved("apr_1", json!({"approved": true})), resolved("ask_1", json!({"selected": "q4"})));
+        assert_eq!(code(&resume_with(&st, &ses.id, bad_answer, json!([])).await).0, "resume_invalid");
+        // The answer comes with a new message of the user: two things at once.
+        let fine = both(resolved("apr_1", json!({"approved": true})), resolved("ask_1", json!({"confirmed": true})));
+        let evs = resume_with(&st, &ses.id, fine, json!([{"id": "m-new", "role": "user", "content": "altro"}])).await;
+        assert_eq!(code(&evs).0, "resume_with_new_input");
+        // Nothing of this touched the pause: it is still there, unanswered.
+        let pauses = st.agui.pauses.lock().unwrap();
+        assert!(pauses.get(&ses.id).is_some_and(|p| p.applied.is_none() && p.interrupts.len() == 2));
+        drop(pauses);
+        // A thread nobody paused: no interrupt to answer, and no session made for it.
+        let evs = resume_with(&st, "altro-thread", json!([resolved("apr_1", json!({"approved": true}))]), json!([])).await;
+        assert_eq!(code(&evs).0, "interrupt_not_found");
+        assert_eq!(e.sessions().unwrap().len(), 1, "a resume for a thread nobody knows made a session");
+    }
+
+    #[test]
+    fn the_client_declares_what_it_can_show() {
+        let d = |v: Value| declared_interactive(&v);
+        assert_eq!(d(json!({})), Declared::default());
+        assert_eq!(d(json!({"aiw": {"interactive": ["interrupts"]}})), Declared { interrupts: true, ..Default::default() });
+        assert_eq!(
+            d(json!({"aiw": {"interactive": ["questions", "secrets", "interrupts", "zzz"]}})),
+            Declared { questions: true, secrets: true, interrupts: true }
+        );
+        assert_eq!(d(json!({"aiw": {"interactive": "interrupts"}})), Declared::default(), "a string is no declaration");
     }
 }

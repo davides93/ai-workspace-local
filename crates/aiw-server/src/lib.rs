@@ -64,7 +64,7 @@ fn ok<T>(v: T) -> ApiResult<T> {
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Engine,
-    /// AG-UI `threadId` -> session id, in memory only (see `agui`).
+    /// What the AG-UI endpoint keeps in memory: its lookups and the runs paused on an interrupt (see `agui`).
     pub(crate) agui: agui::Threads,
 }
 

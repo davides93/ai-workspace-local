@@ -2,8 +2,8 @@
 
 pub mod a2a_client;
 mod access;
-pub mod agui_threads;
 pub mod adviser;
+pub mod agui_threads;
 pub mod attachments;
 pub mod background;
 pub mod backup;
@@ -2083,7 +2083,8 @@ impl Engine {
         self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
         let input = format!("[Passaggio da {from_name}] {summary}");
         // The next agent starts without an origin: a handoff does not carry the person's rights over.
-        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![], None, None).await {
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![], None, None).await
+        {
             note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
         }
     }
