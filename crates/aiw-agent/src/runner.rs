@@ -1581,6 +1581,10 @@ impl AgentRunner {
         let out = match tool.call(args.clone(), &input.tool_ctx).await {
             Ok(o) => o,
             Err(Error::Cancelled) => ToolOutput::error("annullato"),
+            // A refusal of the tool itself (outside the workspace, a read-only sandbox, a hidden place) is final,
+            // like a refusal of the policy: «Negato» keeps the self-check at the end of the run from handing it
+            // back as an action to correct («Controllo automatico…»), and the interface shows it as refused.
+            Err(Error::Denied(why)) => ToolOutput::error(format!("Negato: {why}")),
             Err(e) => ToolOutput::error(e.to_string()),
         };
         let post = run_hooks(
