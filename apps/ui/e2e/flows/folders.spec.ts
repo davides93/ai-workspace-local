@@ -4,13 +4,13 @@ import { expect, openApp, test } from "../support/app";
 // permission that lasts are the shell's; here the demo stands in for them.
 test.describe("allowed folders", () => {
   test("the default demo has no such panel", async ({ page }) => {
-    await openApp(page, "/settings");
+    await openApp(page, "/settings", { mode: "developer" });
     await expect(page.getByRole("heading", { name: "Impostazioni", level: 1 })).toBeVisible();
     await expect(page.getByTestId("folders-panel")).toHaveCount(0);
   });
 
   test("the person adds and removes folders; the workspace setting is gone", async ({ page }) => {
-    await openApp(page, "/settings", { scenario: "mas" });
+    await openApp(page, "/settings", { scenario: "mas", mode: "developer" });
     const panel = page.getByTestId("folders-panel");
     await expect(panel).toBeVisible();
     await expect(page.getByRole("heading", { name: "Cartelle consentite" })).toBeVisible();
@@ -35,8 +35,20 @@ test.describe("allowed folders", () => {
     await expect(panel.getByRole("button", { name: "Aggiungi cartelle…" })).toBeEnabled();
   });
 
-  test("a refusal «fuori dal workspace» in a chat says where the person can allow the folder", async ({ page }) => {
+  test("in the simple interface a refusal «fuori dal workspace» offers «Mostra tutte le sezioni → Impostazioni → Cartelle consentite»", async ({ page }) => {
+    // Settings is not in the simple interface, so the hint is a button that shows every section and opens Settings.
     await openApp(page, "/chat", { scenario: "mas" });
+    await page.getByRole("button", { name: /Guarda la cartella Download/ }).first().click();
+    const hint = page.getByRole("note").filter({ hasText: "fuori dal workspace" });
+    await expect(hint).toBeVisible();
+    await expect(hint.getByRole("link")).toHaveCount(0);
+    await hint.getByRole("button", { name: "Mostra tutte le sezioni → Impostazioni → Cartelle consentite" }).click();
+    await expect(page.getByRole("heading", { name: "Impostazioni", level: 1 })).toBeVisible();
+    await expect(page.getByTestId("folders-panel")).toBeVisible();
+  });
+
+  test("in the developer interface the same refusal links straight to Settings", async ({ page }) => {
+    await openApp(page, "/chat", { scenario: "mas", mode: "developer" });
     await page.getByRole("button", { name: /Guarda la cartella Download/ }).first().click();
     const hint = page.getByRole("note").filter({ hasText: "fuori dal workspace" });
     await expect(hint).toBeVisible();
@@ -47,7 +59,7 @@ test.describe("allowed folders", () => {
 test.describe("allowed folders in English", () => {
   test.use({ locale: "en-US" });
   test("the panel and its buttons follow the language", async ({ page }) => {
-    await openApp(page, "/settings", { scenario: "mas" });
+    await openApp(page, "/settings", { scenario: "mas", mode: "developer" });
     const panel = page.getByTestId("folders-panel");
     await expect(page.getByRole("heading", { name: "Allowed folders" })).toBeVisible();
     await expect(panel.getByRole("button", { name: "Add folders…" })).toBeVisible();

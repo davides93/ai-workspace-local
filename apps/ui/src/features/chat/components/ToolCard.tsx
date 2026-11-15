@@ -1,7 +1,9 @@
 import { memo, useId, useState } from "react";
 import { cx } from "../../../shared/lib/cx";
 import { prettyJson, summarizeArgs } from "../../../shared/lib/args";
-import { CopyButton, Icon, Led, Pill } from "../../../shared/ui";
+import { navigate } from "../../../app/router";
+import { useUiMode } from "../../../app/useUiMode";
+import { Button, CopyButton, Icon, Led, Pill } from "../../../shared/ui";
 import type { ToolItem } from "../model/items";
 import { resultPreview, STATUS_INFO, toolCategory, toolDuration, toolTitle } from "../model/tools";
 import { ImageThumb } from "./ImageThumb";
@@ -64,6 +66,8 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolItem }) {
   // Mac App Store build: a path outside the workspace can be allowed by the person in Settings, never by the agent.
   // Reads the snapshot the shell already holds without subscribing to it (`useSystem` polls: one timer per card).
   const queryClient = useQueryClient();
+  // In the simple interface Settings is not offered: the way there is «Mostra tutte le sezioni».
+  const [uiMode, setUiMode] = useUiMode();
   const folderHint = bad && isOutsideWorkspace(tool.result) && queryClient.getQueryData<SystemInfo>(qk.system())?.folder_access === true;
   return (
     <div className={cx("ws-tool", `is-${tool.status}`)} data-category={cat.id}>
@@ -88,7 +92,12 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolItem }) {
       </button>
       {folderHint && (
         <p className="ws-tool-hint" role="note">
-          {t("chat.cartella_fuori_workspace")} <a href="#/settings">{t("chat.cartella_fuori_workspace_link")}</a>
+          {t("chat.cartella_fuori_workspace")}{" "}
+          {uiMode === "simple" ? (
+            <Button variant="ghost" size="sm" onClick={() => { setUiMode("developer"); navigate("/settings"); }}>{t("chat.cartella_fuori_workspace_mostra")}</Button>
+          ) : (
+            <a href="#/settings">{t("chat.cartella_fuori_workspace_link")}</a>
+          )}
         </p>
       )}
       {tool.images && tool.images.length > 0 && (
