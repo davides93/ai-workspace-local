@@ -53,6 +53,15 @@ pub trait RunHost: Send + Sync {
         let _ = from;
         Ok(agent_id.to_string())
     }
+    /// Is this call one the host already knows cannot work in this run (a management tool outside
+    /// a chat of the owner)? The reason goes into the result the model gets back (as «Negato: …», so
+    /// the self-check at the end of the run takes the refusal as final) and into the audit. It is asked
+    /// before the hooks, the policy and any confirmation, so nobody is asked to confirm what would be
+    /// refused anyway. `None` (the default): nothing stands in the way.
+    fn refuse_tool(&self, run_id: &str, tool: &str) -> Option<String> {
+        let _ = (run_id, tool);
+        None
+    }
     /// Are the memory tools offered in this run? (The setting, and not an evaluation run.)
     fn memory_enabled(&self) -> bool {
         false
@@ -1515,6 +1524,13 @@ impl AgentRunner {
             audit("deny", "tool non abilitato per questo agente".into());
             return (ToolOutput::error(format!("Il tool `{}` non è abilitato per questo agente.", tc.name)), None);
         }
+        // A call the host knows cannot work here is refused before the hooks, the policy and any
+        // confirmation: a question nobody can answer (or whose answer changes nothing) is never asked.
+        if let Some(why) = host.refuse_tool(&input.run_id, &tc.name) {
+            audit("deny", why.clone());
+            // «Negato…» is what marks a refusal as final: the self-check at the end of the run does not hand it back.
+            return (ToolOutput::error(format!("Negato: {why}")), None);
+        }
         // PreToolUse hooks.
         let pre =
             run_hooks(&input.hooks, "PreToolUse", Some(&tc.name), &json!({"tool": tc.name, "args": args, "run_id": input.run_id})).await;
@@ -1539,7 +1555,7 @@ impl AgentRunner {
                     run_id: input.run_id.clone(),
                     tool: tc.name.clone(),
                     args: args.clone(),
-                    reason: format!("{} · {}", reason_text(&reason, tool.risk()), subject.clone().unwrap_or_default())
+                    reason: format!("{} · {}", reason_text(&tc.name, &reason, tool.risk()), subject.clone().unwrap_or_default())
                         .trim_end_matches(" · ")
                         .to_string(),
                     risk: risk_level(tool.risk()).into(),
@@ -1581,6 +1597,10 @@ impl AgentRunner {
         let out = match tool.call(args.clone(), &input.tool_ctx).await {
             Ok(o) => o,
             Err(Error::Cancelled) => ToolOutput::error("annullato"),
+            // A refusal of the tool itself (outside the workspace, a read-only sandbox, a hidden place) is final,
+            // like a refusal of the policy: «Negato» keeps the self-check at the end of the run from handing it
+            // back as an action to correct («Controllo automatico…»), and the interface shows it as refused.
+            Err(Error::Denied(why)) => ToolOutput::error(format!("Negato: {why}")),
             Err(e) => ToolOutput::error(e.to_string()),
         };
         let post = run_hooks(
@@ -1598,8 +1618,15 @@ impl AgentRunner {
     }
 }
 
-fn reason_text(reason: &str, risk: Risk) -> String {
+/// The sentence on the confirmation card. The management tools of the Assistant (`aiw_*`: the engine
+/// owns them, this crate cannot see them) change the app, not files or a shell, so their card says so.
+fn reason_text(tool: &str, reason: &str, risk: Risk) -> String {
+    let management = tool.starts_with("aiw_");
     let base = match risk {
+        Risk::Write if management => "L'Assistente vuole cambiare la configurazione dell'app (modelli, impostazioni, assistenti o ricordi)",
+        Risk::Exec if management => {
+            "L'Assistente vuole eseguire un'azione delicata sull'app (installare, eliminare, collegare un servizio o cambiare impostazioni di macchina)"
+        }
         Risk::Write => "L'agente vuole modificare dei file",
         Risk::Exec => "L'agente vuole eseguire un comando",
         Risk::Computer => "L'agente vuole usare mouse e tastiera",
@@ -1700,6 +1727,38 @@ async fn compact(messages: &mut Vec<Msg>, backend: &dyn ChatBackend, model: &str
     messages.push(Msg::assistant("Ok, riprendo dal riassunto."));
     messages.extend(tail);
     Some(removed)
+}
+
+#[cfg(test)]
+mod reason_text_tests {
+    use super::*;
+
+    #[test]
+    fn management_tools_say_what_they_change_in_the_app() {
+        let write = reason_text("aiw_model_use", "", Risk::Write);
+        assert_eq!(write, "L'Assistente vuole cambiare la configurazione dell'app (modelli, impostazioni, assistenti o ricordi)");
+        let exec = reason_text("aiw_runtime_install", "", Risk::Exec);
+        assert_eq!(
+            exec,
+            "L'Assistente vuole eseguire un'azione delicata sull'app (installare, eliminare, collegare un servizio o cambiare impostazioni di macchina)"
+        );
+        // The rule that made the tool ask still shows after the sentence.
+        assert_eq!(reason_text("aiw_setting_set", "regola incorporata", Risk::Write), format!("{write} (regola incorporata)"));
+    }
+
+    #[test]
+    fn every_other_tool_keeps_its_sentence() {
+        assert_eq!(reason_text("write_file", "", Risk::Write), "L'agente vuole modificare dei file");
+        assert_eq!(reason_text("bash", "", Risk::Exec), "L'agente vuole eseguire un comando");
+        assert_eq!(reason_text("computer", "", Risk::Computer), "L'agente vuole usare mouse e tastiera");
+        assert_eq!(reason_text("web_fetch", "", Risk::Network), "L'agente vuole accedere alla rete");
+        assert_eq!(reason_text("read_file", "", Risk::Read), "L'agente vuole leggere dei dati");
+        assert_eq!(reason_text("bash", "ask", Risk::Exec), "L'agente vuole eseguire un comando (ask)");
+        // The prefix is `aiw_`, not any name that merely contains it, and only the two risks that change the app.
+        assert_eq!(reason_text("my_aiw_tool", "", Risk::Write), "L'agente vuole modificare dei file");
+        assert_eq!(reason_text("aiw_inspect", "", Risk::Read), "L'agente vuole leggere dei dati");
+        assert_eq!(reason_text("aiw_other", "", Risk::Network), "L'agente vuole accedere alla rete");
+    }
 }
 
 #[cfg(test)]

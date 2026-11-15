@@ -21,6 +21,21 @@ describe("finalAnswerIds", () => {
     const items: Item[] = [user("u1"), text("a1"), { kind: "note", id: "n", text: "Controllo automatico" }, text("a2")];
     expect([...finalAnswerIds(items, false)]).toEqual(["a2"]);
   });
+  it("does not rate the text before a question or a secret request when the turn ends on it", () => {
+    const question: Item = {
+      kind: "question",
+      id: "q",
+      q: { id: "q", run_id: "r", kind: "choice", message: "Quale cartella?", options: [], multiple: false, allow_other: true, fields: [] },
+    };
+    const secret: Item = {
+      kind: "secret",
+      id: "s",
+      req: { id: "s", run_id: "r", target: "provider_token:hf", label: "Token Hugging Face", destination: "il portachiavi del sistema" },
+    };
+    expect([...finalAnswerIds([user("u1"), text("a1", false, "Mi serve una cosa."), question], false)]).toEqual([]);
+    expect([...finalAnswerIds([user("u1"), text("a1", false, "Mi serve una chiave."), secret], false)]).toEqual([]);
+    expect([...finalAnswerIds([user("u1"), text("a1"), question, text("a2", false, "Grazie, vado avanti.")], false)]).toEqual(["a2"]);
+  });
   it("leaves out the turn that is still going on, and text still streaming", () => {
     const items = [user("u1"), text("a1"), user("u2"), text("a2")];
     expect([...finalAnswerIds(items, true)]).toEqual(["a1"]);

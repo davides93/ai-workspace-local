@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { PairingScreen } from "../features/pairing/PairingScreen";
 import { ApprovalsCenter } from "../features/approvals/ApprovalsCenter";
+import { AskCenter } from "../features/ask/AskCenter";
 import { McpElicitationCenter } from "../features/mcp/McpElicitationCenter";
 import { useDownloadsWatcher } from "../features/models/api";
 import { rememberChatSession } from "../shared/lib/navMemory";
@@ -9,10 +10,12 @@ import { useConnection } from "../shared/query/system";
 import { EmptyState, PageSkeleton, ToastHost } from "../shared/ui";
 import { CommandPalette } from "./palette/CommandPalette";
 import { onOpenPalette } from "./palette/openPalette";
+import { onOpenMenu } from "./shell/openMenu";
 import { useCommands } from "./palette/useCommands";
 import { routeLabel } from "./navigation";
+import { routeGate, SIMPLE_HOME } from "./routeGate";
 import { useUiMode } from "./useUiMode";
-import { RouteProvider, Link, useRoute } from "./router";
+import { RouteProvider, Link, navigate, useRoute } from "./router";
 import { ROUTES } from "./routes";
 import { ConnectionBanner, DemoBanner } from "./shell/Banners";
 import { ErrorBoundary } from "./shell/ErrorBoundary";
@@ -25,7 +28,7 @@ import { useLanguage } from "./useLanguage";
 export function App() {
   const resolved = useRoute(ROUTES);
   const { needsPairing } = useConnection();
-  const [mode] = useUiMode();
+  const [mode, , configMode] = useUiMode();
   const locale = useLocale();
   useLanguage();
   const commands = useCommands();
@@ -33,6 +36,11 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
   const current = resolved?.route.id;
+  // Simple mode has one route: any other address goes to the chat, but only once the configuration confirms the mode.
+  const gate = routeGate({ routeId: current, mode, configMode });
+  useEffect(() => {
+    if (gate === "redirect") navigate(SIMPLE_HOME, { replace: true });
+  }, [gate]);
   // Remember the open chat before the rail renders, so its Workspace link always points at it.
   if (resolved?.route.id === "chat" && resolved.params.sessionId) rememberChatSession(resolved.params.sessionId);
   useDownloadsWatcher();
@@ -52,6 +60,15 @@ export function App() {
     [],
   );
 
+  // The chat header's «Menu» button (phones, simple mode) opens the sheet the same way.
+  useEffect(
+    () => onOpenMenu(() => {
+      setPaletteOpen(false);
+      setMoreOpen(true);
+    }),
+    [],
+  );
+
   // The sheet is about the section you were in: close it whenever the section changes.
   useEffect(() => setMoreOpen(false), [resolved?.path]);
 
@@ -64,17 +81,20 @@ export function App() {
   return (
     <div className="shell">
       <button type="button" className="skip-link" onClick={() => mainRef.current?.focus()}>{t("shell.vai_al_contenuto")}</button>
-      <Rail current={current} onOpenPalette={() => setPaletteOpen(true)} />
+      <Rail current={current} onOpenPalette={() => setPaletteOpen(true)} onOpenMenu={() => setMoreOpen(true)} />
 
       <main className="main" ref={mainRef} tabIndex={-1} id="main">
         <DemoBanner />
         <ConnectionBanner />
         <ApprovalsCenter />
         <McpElicitationCenter />
+        <AskCenter />
         <ErrorBoundary key={resolved?.route.id ?? "404"}>
           <Suspense fallback={<PageSkeleton />}>
             {needsPairing ? (
               <PairingScreen />
+            ) : gate !== "show" ? (
+              <PageSkeleton />
             ) : View && resolved ? (
               <RouteProvider value={{ params: resolved.params, query: resolved.query }}>
                 <View />

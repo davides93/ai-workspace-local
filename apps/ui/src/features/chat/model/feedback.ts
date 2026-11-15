@@ -3,7 +3,7 @@ import type { Item } from "./items";
 
 /**
  * Ids of the replies that can be rated: the final answer of each turn, i.e. the last text the assistant wrote
- * before the next user message with nothing (a tool call, a confirmation, a sub-agent, a self-check) after it.
+ * before the next user message with nothing (a tool call, a confirmation, a question, a secret request, a sub-agent, a self-check) after it.
  * The turn that is still going on has no final answer yet.
  */
 export function finalAnswerIds(items: Item[], running: boolean): Set<string> {
@@ -24,6 +24,8 @@ export function finalAnswerIds(items: Item[], running: boolean): Set<string> {
         break;
       case "tool":
       case "approval":
+      case "question":
+      case "secret":
       case "subagent":
       case "note":
       case "surface":

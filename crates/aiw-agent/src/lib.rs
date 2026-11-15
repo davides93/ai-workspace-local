@@ -20,7 +20,7 @@ pub mod thinking;
 pub use budget::RunBudget;
 pub use hooks::HookConfig;
 pub use internal::{internal_tools, InternalTool};
-pub use narrow::{narrow_sandbox, narrow_tools};
+pub use narrow::{narrow_sandbox, narrow_tools, narrow_tools_delegating};
 pub use policy::{Decision, Policy, PolicyRule};
 pub use runner::{to_msgs, user_msg, AgentRunner, RunHost, RunInput, RunOutcome, UserExtra};
 pub use skills::Skill;
@@ -63,6 +63,8 @@ mod tests {
         pub(crate) by_model: Mutex<std::collections::HashMap<String, ScriptedBackend>>,
         /// Models whose backend cannot be started.
         pub(crate) unavailable: Mutex<HashSet<String>>,
+        /// Tools the host refuses before anything else (`refuse_tool`), with the reason it gives.
+        pub(crate) refused: Mutex<std::collections::HashMap<String, String>>,
     }
 
     #[async_trait]
@@ -102,6 +104,9 @@ mod tests {
             }
             Ok(format!("{agent} ha svolto: {task}"))
         }
+        fn refuse_tool(&self, _run_id: &str, tool: &str) -> Option<String> {
+            self.refused.lock().unwrap().get(tool).cloned()
+        }
     }
 
     pub fn setup(turns: Vec<Vec<ChatDelta>>, approve: bool) -> (Arc<TestHost>, tempfile::TempDir) {
@@ -121,6 +126,7 @@ mod tests {
             replacement: Mutex::new(None),
             by_model: Default::default(),
             unavailable: Default::default(),
+            refused: Default::default(),
         });
         (host, tempfile::tempdir().unwrap())
     }
@@ -144,6 +150,7 @@ mod tests {
                 candidate_profiles: vec![],
                 roles: None,
                 knowledge: vec![],
+                delegate_tools: vec![],
             },
             profile: InferenceProfile {
                 id: "p".into(),
@@ -172,6 +179,11 @@ mod tests {
             thinking: None,
             roles: None,
         }
+    }
+
+    /// Did the run ask the person to confirm a tool call (an `aiw.approval_request` event)?
+    fn asked_for_a_confirmation(h: &TestHost) -> bool {
+        h.events.lock().unwrap().iter().any(|e| matches!(e, AgEvent::Custom { name, .. } if name == "aiw.approval_request"))
     }
 
     fn types(h: &TestHost) -> Vec<String> {
@@ -239,6 +251,62 @@ mod tests {
         assert!(out.new_messages[2].content.contains("Negato dalla policy"));
         assert!(!dir.path().join("x").exists());
         assert!(!types(&host).contains(&"CUSTOM".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_tool_the_host_refuses_is_denied_before_the_policy_asks_anybody() {
+        let turns = || {
+            vec![
+                ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "out.txt", "content": "ciao"})),
+                ScriptedBackend::text_turn("ok"),
+            ]
+        };
+        // `ask` mode would open a confirmation (the host says yes to it): the refusal comes first, nobody is asked.
+        let (host, dir) = setup(turns(), true);
+        host.refused.lock().unwrap().insert("write_file".into(), "Qui non si può.".into());
+        let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        assert!(!dir.path().join("out.txt").exists(), "the refused call did not run");
+        assert_eq!(out.new_messages[2].content, "ERRORE: Negato: Qui non si può.");
+        // A refusal is final: the self-check at the end of the run does not hand it back with «correggi la chiamata e riprova».
+        assert_eq!(out.final_text, "ok");
+        assert!(
+            !out.new_messages.iter().any(|m| m.content.contains("Controllo automatico")),
+            "{:?}",
+            out.new_messages.iter().map(|m| &m.content).collect::<Vec<_>>()
+        );
+        assert!(!asked_for_a_confirmation(&host), "no approval request: {:?}", types(&host));
+        {
+            let audits = host.audits.lock().unwrap();
+            let mine: Vec<_> = audits.iter().filter(|a| a.tool.as_deref() == Some("write_file")).collect();
+            assert_eq!(mine.len(), 1, "{mine:?}");
+            assert_eq!((mine[0].decision.as_deref(), mine[0].detail.as_str()), (Some("deny"), "Qui non si può."));
+        }
+
+        // The same call, not refused: the confirmation is asked and the file is written (the refusal changes nothing else).
+        let (host, dir) = setup(turns(), true);
+        AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        assert!(asked_for_a_confirmation(&host));
+        assert_eq!(std::fs::read_to_string(dir.path().join("out.txt")).unwrap(), "ciao");
+    }
+
+    #[tokio::test]
+    async fn the_refusal_of_one_tool_leaves_the_other_tools_alone() {
+        let (host, dir) = setup(
+            vec![
+                ScriptedBackend::tool_turn("c1", "shell", json!({"command": "echo no"})),
+                ScriptedBackend::tool_turn("c2", "list_dir", json!({"path": "."})),
+                ScriptedBackend::text_turn("fatto"),
+            ],
+            true,
+        );
+        std::fs::write(dir.path().join("a.txt"), "x").unwrap();
+        host.refused.lock().unwrap().insert("shell".into(), "Niente shell.".into());
+        let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        let tools: Vec<&str> = out.new_messages.iter().filter(|m| m.role == "tool").map(|m| m.content.as_str()).collect();
+        assert_eq!(tools.len(), 2, "{tools:?}");
+        assert_eq!(tools[0], "ERRORE: Negato: Niente shell.");
+        assert!(tools[1].contains("a.txt"), "{}", tools[1]);
+        assert_eq!(out.final_text, "fatto");
     }
 
     #[tokio::test]
@@ -553,6 +621,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_refusal_of_the_tool_itself_is_final_and_the_self_check_does_not_hand_it_back() {
+        // `list_dir` on a folder outside the workspace is refused by the tool («è fuori dal workspace»), as in the
+        // Mac App Store build, where the workspace is the app's own folder and Downloads is not part of it.
+        let (host, dir) = setup(
+            vec![
+                ScriptedBackend::tool_turn("c1", "list_dir", json!({"path": "/"})),
+                ScriptedBackend::text_turn("Non posso guardare fuori dalla cartella di lavoro."),
+            ],
+            true,
+        );
+        let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        let tool = out.new_messages.iter().find(|m| m.role == "tool").unwrap().content.clone();
+        assert!(tool.starts_with("ERRORE: Negato: ") && tool.contains("fuori dal workspace"), "{tool}");
+        // A refusal is final: no note «Controllo automatico…» and no extra model turn to «correct» it.
+        assert_eq!(out.final_text, "Non posso guardare fuori dalla cartella di lavoro.");
+        let all: Vec<&str> = out.new_messages.iter().map(|m| m.content.as_str()).collect();
+        assert!(!all.iter().any(|c| c.contains("Controllo automatico")), "{all:?}");
+    }
+
+    #[tokio::test]
     async fn a_failed_run_hands_back_what_it_did() {
         let (host, dir) = setup(vec![], true);
         std::fs::write(dir.path().join("a.txt"), "x").unwrap();
@@ -710,6 +798,27 @@ mod hook_event_tests {
         assert_eq!(used.len(), 1);
         assert!(used[0].starts_with("run_"), "{used:?}");
         assert_eq!(announced, vec![Some(used[0].clone())], "SUBAGENT_STARTED carries the id the host was told to use");
+    }
+
+    #[tokio::test]
+    async fn a_tool_the_host_refuses_runs_no_hook_and_asks_no_confirmation() {
+        let (host, dir) = tests_support::setup(
+            vec![
+                ScriptedBackend::tool_turn("c1", "write_file", json!({"path": "out.txt", "content": "ciao"})),
+                ScriptedBackend::text_turn("ok"),
+            ],
+            true,
+        );
+        host.refused.lock().unwrap().insert("write_file".into(), "Qui non si può.".into());
+        let log = dir.path().join("events.log");
+        let mut inp = tests_support::input(dir.path(), "ask");
+        inp.hooks = vec![log_hook("PreToolUse", &log), log_hook("PostToolUse", &log)];
+        let out = AgentRunner::run(inp, host.clone()).await.unwrap();
+        assert!(logged(&log).is_empty(), "no hook ran: {:?}", logged(&log));
+        assert!(!dir.path().join("out.txt").exists());
+        assert_eq!(out.new_messages.iter().find(|m| m.role == "tool").unwrap().content, "ERRORE: Negato: Qui non si può.");
+        let evs = host.events.lock().unwrap();
+        assert!(!evs.iter().any(|e| matches!(e, AgEvent::Custom { name, .. } if name == "aiw.approval_request")), "no approval request");
     }
 
     #[tokio::test]

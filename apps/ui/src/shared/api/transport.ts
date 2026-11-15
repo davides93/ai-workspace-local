@@ -1,11 +1,12 @@
 import { t } from "../i18n";
+import { isUiMode } from "../lib/uiMode";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
+  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
-  ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
+  ModelProviderInfo, ModelSearchParams, FoldersAdded, FoldersInfo, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
 
@@ -37,8 +38,17 @@ export interface Transport {
    * Resolves to false when this device has none.
    */
   openBrowser?(): Promise<boolean>;
+  /**
+   * Opens the macOS panel and adds the folders the person picks (Mac App Store build). Only the native
+   * app has it, and only a click of the person reaches it: the agents cannot widen their own access.
+   */
+  addFolders?(message: string, prompt: string): Promise<FoldersAdded>;
+  /** Takes a folder off the list and gives up its permission (native app only). */
+  removeFolder?(id: string): Promise<FoldersInfo>;
 
   system(): Promise<SystemInfo>;
+  /** The folders of the computer handed to the agents besides the workspace (read-only: GET /api/folders). */
+  folders(): Promise<FoldersInfo>;
   kill(): Promise<void>;
 
   runtimes(): Promise<RuntimeInfo[]>;
@@ -218,6 +228,18 @@ export interface Transport {
   runEvents(runId: string): Promise<AgEvent[]>;
   approvals(): Promise<ApprovalRequest[]>;
   respondApproval(id: string, decision: "allow" | "deny", remember?: boolean): Promise<void>;
+  /** Questions of the agent waiting for the person (GET /api/questions). */
+  questions(): Promise<Question[]>;
+  /** Answers a question, or declines it («Non ora»). 400: the answer does not fit (the question stays open); 404: already closed. */
+  answerQuestion(id: string, reply: QuestionReply): Promise<void>;
+  /** Requests for a secret waiting for the person (GET /api/secret-requests): never with a value. */
+  secretRequests(): Promise<SecretRequest[]>;
+  /**
+   * Provides the secret asked for, or declines. The value goes in this call and is kept nowhere (not in a cache, not in
+   * the stored conversation). 400/401: the destination refused it (the request stays open); 403: this device may not
+   * provide secrets; 404: already closed.
+   */
+  answerSecretRequest(id: string, reply: SecretReply): Promise<{ stored?: boolean }>;
 
   workflows(): Promise<WorkflowDef[]>;
   saveWorkflow(w: WorkflowDef): Promise<WorkflowDef>;
@@ -320,11 +342,17 @@ export async function createTransport(): Promise<Transport> {
   const forceMock = typeof __AIW_FORCE_MOCK__ !== "undefined" && __AIW_FORCE_MOCK__;
   if (forceMock || params.get("demo") === "1") {
     const { MockTransport } = await import("./mock");
-    const { applyMockScenario, isMockScenario } = await import("./mock/scenario");
+    const { applyMockScenario, applyMockUiMode, isMockScenario } = await import("./mock/scenario");
     // `?scenario=first-run`: a demo that starts empty (used by the end-to-end tests).
     const scenario = params.get("scenario");
     if (isMockScenario(scenario)) applyMockScenario(scenario);
-    return new MockTransport();
+    // `?ui=developer`: the demo starts in Developer mode (every section); the default is the simple interface.
+    const ui = params.get("ui");
+    if (isUiMode(ui)) applyMockUiMode(ui);
+    const demo = new MockTransport();
+    // `?scope=device`: the demo as a paired device, which may not provide secrets (the end-to-end tests of the card that says so).
+    if (params.get("scope") === "device") demo.secretScope = "device";
+    return demo;
   }
   if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
     const { TauriTransport } = await import("./tauri");

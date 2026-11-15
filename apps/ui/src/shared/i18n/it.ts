@@ -2,6 +2,7 @@
 import { activityIt } from "./messages/it/activity";
 import { agentsIt } from "./messages/it/agents";
 import { approvalsIt } from "./messages/it/approvals";
+import { askIt } from "./messages/it/ask";
 import { capabilitiesIt } from "./messages/it/capabilities";
 import { channelsIt } from "./messages/it/channels";
 import { chatIt } from "./messages/it/chat";
@@ -32,6 +33,7 @@ export const it = {
   ...activityIt,
   ...agentsIt,
   ...approvalsIt,
+  ...askIt,
   ...capabilitiesIt,
   ...channelsIt,
   ...chatIt,

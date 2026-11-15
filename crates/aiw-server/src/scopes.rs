@@ -55,6 +55,9 @@ const RULES: &[(&str, &str, Required)] = &[
     ("POST", "/agui/*", DEVICE),
     // System.
     ("GET", "/api/system", DEVICE),
+    // The folders of this computer handed to the agents: paths of this computer, so the owner only. Read-only:
+    // a folder is added in the macOS panel by the shell, there is no route that does it.
+    ("*", "/api/folders", FULL),
     ("POST", "/api/kill", DEVICE),
     ("GET", "/api/update", DEVICE),
     ("*", "/api/update/**", FULL),
@@ -103,6 +106,12 @@ const RULES: &[(&str, &str, Required)] = &[
     ("*", "/api/runs/**", DEVICE),
     ("*", "/api/approvals", DEVICE),
     ("*", "/api/approvals/**", DEVICE),
+    // Questions of the agent: a paired device answers them like the confirmations. A secret is different: it goes to
+    // where the settings, the provider tokens and the connectors are kept, which a device cannot touch (`full`).
+    ("GET", "/api/questions", DEVICE),
+    ("POST", "/api/questions/*", DEVICE),
+    ("GET", "/api/secret-requests", DEVICE),
+    ("POST", "/api/secret-requests/*", FULL),
     ("*", "/api/proposals", DEVICE),
     ("*", "/api/proposals/**", DEVICE),
     // Learning, memory, knowledge base (the handlers refuse path imports to anyone who is not local).

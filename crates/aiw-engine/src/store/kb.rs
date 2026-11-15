@@ -242,8 +242,11 @@ impl Store {
         Ok(())
     }
 
+    /// Documents in the order they were added. `created_at` only has millisecond resolution and
+    /// ids end in random characters, so two documents added in the same millisecond would come
+    /// out in a random order: `rowid` (assigned in insertion order) breaks the tie.
     fn documents_where(&self, cond: &str, args: &[&str]) -> Result<Vec<KbDocument>> {
-        let sql = format!("SELECT {DOC_COLUMNS} FROM kb_documents d WHERE {cond} ORDER BY d.created_at, d.id");
+        let sql = format!("SELECT {DOC_COLUMNS} FROM kb_documents d WHERE {cond} ORDER BY d.created_at, d.rowid");
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(&sql).map_err(db)?;
         let rows = st.query_map(params_from_iter(args.iter()), doc_row).map_err(db)?;
@@ -468,6 +471,22 @@ mod tests {
         assert!(migrate(&conn).unwrap());
         let status: String = conn.query_row("SELECT status FROM kb_documents WHERE id = 'd'", [], |r| r.get(0)).unwrap();
         assert_eq!(status, "failed", "no job survives a restart");
+    }
+
+    #[test]
+    fn documents_added_at_the_same_instant_come_back_in_insertion_order() {
+        let s = Store::in_memory().unwrap();
+        s.kb_collection_insert(&coll("c1", "Cartella")).unwrap();
+        // Same `created_at` (the helper uses a fixed one) and ids that sort the other way round.
+        for (id, name) in [("kbd_z", "a.md"), ("kbd_m", "sotto/b.rs"), ("kbd_a", "sotto/c.rs")] {
+            s.kb_document_insert(&doc(id, "c1", name)).unwrap();
+        }
+        let names = |docs: Vec<KbDocument>| docs.into_iter().map(|d| d.name).collect::<Vec<_>>();
+        assert_eq!(names(s.kb_documents("c1").unwrap()), ["a.md", "sotto/b.rs", "sotto/c.rs"]);
+        // Replacing one (delete, then add again) puts the new document last.
+        assert!(s.kb_document_delete("kbd_z").unwrap());
+        s.kb_document_insert(&doc("kbd_b", "c1", "a.md")).unwrap();
+        assert_eq!(names(s.kb_documents("c1").unwrap()), ["sotto/b.rs", "sotto/c.rs", "a.md"]);
     }
 
     #[test]

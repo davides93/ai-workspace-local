@@ -199,6 +199,10 @@ pub struct SystemInfo {
     /// Mac App Store build (App Sandbox): see `EngineOptions::sandboxed`.
     #[serde(default)]
     pub sandboxed: bool,
+    /// The person can hand more folders of the computer to the agents (a folder chosen in the macOS
+    /// panel, with a permission that lasts): see `aiw_core::folders`. Only in the sandboxed shell.
+    #[serde(default)]
+    pub folder_access: bool,
     /// Sandbox that contains shell commands on this machine (`bwrap`, `sandbox-exec`,
     /// `windows-low-integrity`), or none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -776,6 +780,11 @@ pub struct AgentProfile {
     /// of them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knowledge: Vec<String>,
+    /// Tools this agent can hand to its sub-agents without using them itself (`"*"`: every tool
+    /// that does not need an explicit grant). A sub-agent gets its own list narrowed to
+    /// `tools` + `delegate_tools` of the parent. Empty: only `tools` count, as always.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegate_tools: Vec<String>,
 }
 
 /// The four jobs a model can have inside one agent run.
@@ -2079,6 +2088,171 @@ pub struct McpElicitationAnswer {
     pub action: String,
     #[serde(default)]
     pub content: Map<String, Value>,
+}
+
+// ---------------------------------------------------------------- questions and secrets of the agent
+//
+// The tools `ask_user` and `aiw_secret_request` stop the run until the person answers. The shapes
+// below are the ones of the events (`aiw.question`, `aiw.question_resolved`, `aiw.secret_request`,
+// `aiw.secret_resolved`) and of the endpoints (`/api/questions`, `/api/secret-requests`): fields in
+// snake_case, an absent value is an explicit `null`.
+
+/// One option of a `choice` question.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QuestionOption {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// One field of a `form` question (`type`: string | number | integer | boolean | enum).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QuestionField {
+    pub name: String,
+    pub label: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The values of an `enum` field.
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+}
+
+/// A question the agent asks the person and waits for (`GET /api/questions`, event `aiw.question`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Question {
+    pub id: String,
+    pub run_id: String,
+    /// choice | confirm | form
+    pub kind: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub message: String,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    #[serde(default)]
+    pub multiple: bool,
+    #[serde(default)]
+    pub allow_other: bool,
+    #[serde(default)]
+    pub fields: Vec<QuestionField>,
+    #[serde(default)]
+    pub confirm_label: Option<String>,
+    #[serde(default)]
+    pub deny_label: Option<String>,
+    /// When the engine stops waiting (RFC 3339).
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+/// What the person answered: only the part that fits the kind of question is not `null`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct QuestionAnswer {
+    /// Ids of the options chosen (`choice`).
+    #[serde(default)]
+    pub selected: Option<Vec<String>>,
+    /// The free answer «Altro» (`choice` with `allow_other`).
+    #[serde(default)]
+    pub other: Option<String>,
+    /// The yes or no of a `confirm`.
+    #[serde(default)]
+    pub confirmed: Option<bool>,
+    /// The values of a `form`, by field name.
+    #[serde(default)]
+    pub values: Option<Map<String, Value>>,
+}
+
+/// Body of `POST /api/questions/{id}`: `action` is `answer` (with the fields of [`QuestionAnswer`],
+/// any of which may be missing) or `decline`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QuestionReply {
+    pub action: String,
+    #[serde(flatten)]
+    pub answer: QuestionAnswer,
+}
+
+/// How a question ended (`outcome` of `aiw.question_resolved` and of the result of `ask_user`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionOutcome {
+    Answered,
+    Declined,
+    Timeout,
+    Cancelled,
+    /// The client of the run cannot show questions: the agent asks in plain text.
+    Unsupported,
+}
+
+impl QuestionOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QuestionOutcome::Answered => "answered",
+            QuestionOutcome::Declined => "declined",
+            QuestionOutcome::Timeout => "timeout",
+            QuestionOutcome::Cancelled => "cancelled",
+            QuestionOutcome::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// A request for a secret the agent made and waits for (`GET /api/secret-requests`, event
+/// `aiw.secret_request`). It never carries a value: the value goes only in the body of the answer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SecretRequest {
+    pub id: String,
+    pub run_id: String,
+    /// Where the secret goes, e.g. `provider_token:hf`: also the reference the model uses to name it.
+    pub target: String,
+    pub label: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// Where the engine will write it, in words. Computed by the engine, never by the model.
+    pub destination: String,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+/// Body of `POST /api/secret-requests/{id}`: `action` is `provide` (with the `value`) or `decline`.
+/// It holds a secret, so it can be neither cloned nor serialised, and `Debug` hides the value.
+#[derive(Deserialize)]
+pub struct SecretAnswer {
+    pub action: String,
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+impl std::fmt::Debug for SecretAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretAnswer").field("action", &self.action).field("value", &self.value.as_ref().map(|_| SECRET_MASK)).finish()
+    }
+}
+
+/// How a request for a secret ended (`outcome` of `aiw.secret_resolved` and of the result of `aiw_secret_request`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretOutcome {
+    Stored,
+    Declined,
+    Timeout,
+    Cancelled,
+    /// The client of the run cannot take a secret: the agent says it has to be entered in the app.
+    Unsupported,
+}
+
+impl SecretOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SecretOutcome::Stored => "stored",
+            SecretOutcome::Declined => "declined",
+            SecretOutcome::Timeout => "timeout",
+            SecretOutcome::Cancelled => "cancelled",
+            SecretOutcome::Unsupported => "unsupported",
+        }
+    }
 }
 
 /// Answer of `POST /api/mcp/servers/{id}/oauth/start`: the page the UI opens in the system browser.

@@ -149,6 +149,8 @@ export function testChannel(id: string): ChannelTestResult {
 export function pairChannel(id: string): ChannelPairing {
   const c = find(id).channel;
   if (c.kind !== "telegram") throw new ApiError(400, "l'abbinamento con un codice c'è solo per Telegram: negli altri canali scrivi l'identificativo nella lista");
+  // As in the engine: the connector reads the code, so a channel that is off cannot give one.
+  if (!c.enabled) throw new ApiError(409, "Accendi prima il canale: il codice funziona solo mentre il canale è acceso e in ascolto.");
   const code = String(Math.floor(100000 + Math.random() * 900000));
   const expires = Date.now() + 10 * 60_000;
   pairs.set(id, { code, expires });

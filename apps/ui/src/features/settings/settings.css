@@ -48,6 +48,14 @@
 .set-bg-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .set-bg-steps { margin: 0; padding-left: var(--space-5); display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-sm); color: var(--fg-muted); }
 
+.set-folders { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); margin-top: var(--space-3); }
+.set-folder-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.set-folder { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); }
+.set-folder-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.set-folder-name { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.set-folder-path { overflow-wrap: anywhere; }
+.set-folder-refused { display: block; font-size: var(--fs-sm); }
+
 .set-voice { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); margin-top: var(--space-3); }
 .set-voice-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .set-voice-row { display: grid; grid-template-columns: 7rem minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); }

@@ -1,6 +1,7 @@
 //! `Engine` — the single facade used by the HTTP server, the CLI and the Tauri shells (ADR 0002).
 
 pub mod a2a_client;
+mod access;
 pub mod adviser;
 pub mod attachments;
 pub mod background;
@@ -14,6 +15,7 @@ mod host;
 pub mod kb;
 mod learning;
 mod mail_accounts;
+pub mod management;
 mod mcp_host;
 mod mcp_oauth;
 pub mod memory;
@@ -98,12 +100,50 @@ pub(crate) struct RunHandle {
     cancel: CancellationToken,
     events: Vec<SeqEvent>,
     done: bool,
+    /// Who started the run, for the runs the server starts for a person (see [`RunOrigin`]).
+    origin: Option<RunOrigin>,
+}
+
+/// Where a top-level run came from and what that caller may do through the agent. Only the
+/// handlers of the server set it (a chat message, an AG-UI request); a run started any other way
+/// (channels, the proactive assistant, workflows, the MCP server, sub-agents) has none, and the
+/// management tools (`aiw_*`, `ask_user`) refuse to work in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RunOrigin {
+    /// The caller has full access to this computer: it may approve the changes the agent asks for.
+    pub owner: bool,
+    /// The client shows the questions of `ask_user` and sends the answer back.
+    pub questions: bool,
+    /// The client shows the requests for a secret and sends the value to the secrets endpoint.
+    pub secrets: bool,
 }
 
 pub(crate) struct PendingApproval {
     req: ApprovalRequest,
     tx: oneshot::Sender<bool>,
     session_id: Option<String>,
+}
+
+/// A question of `ask_user` waiting for the person (see `management::interaction`).
+pub(crate) struct PendingQuestion {
+    question: Question,
+    tx: oneshot::Sender<(QuestionOutcome, Option<QuestionAnswer>)>,
+}
+
+/// A request for a secret waiting for the person. It never holds a value: the value is written to its
+/// destination the moment it arrives (see `management::interaction`).
+pub(crate) struct PendingSecret {
+    request: SecretRequest,
+    /// How the wait ends, and what else the model is told (a `hint`) when the outcome alone would mislead.
+    tx: oneshot::Sender<(SecretOutcome, Option<&'static str>)>,
+    /// The destination as it was resolved when the request was made (raw, never shown or sent anywhere):
+    /// the value is written only if the destination is still the same one.
+    identity: String,
+    /// A value is being written to the destination: no second answer meanwhile.
+    busy: bool,
+    /// The time of the request ran out while a value was being written: the request is closed with
+    /// `timeout` as soon as that write ends without storing the value.
+    expired: bool,
 }
 
 /// Body and stored form of the policy. `rules` is required: a body without it must not be read
@@ -152,6 +192,10 @@ pub(crate) struct Inner {
     pub mcp: Mutex<HashMap<String, Arc<McpClient>>>,
     /// Questions an MCP server asked the person (`elicitation/create`), waiting for an answer.
     pub elicitations: Mutex<HashMap<String, (McpElicitation, oneshot::Sender<aiw_tools::mcp::Elicited>)>>,
+    /// Questions of `ask_user` waiting for the person, by id.
+    pub questions: Mutex<HashMap<String, PendingQuestion>>,
+    /// Requests for a secret of `aiw_secret_request` waiting for the person, by id.
+    pub secret_requests: Mutex<HashMap<String, PendingSecret>>,
     /// OAuth sign-ins in progress, by `state` (see `mcp_oauth`).
     pub oauth_pending: Mutex<HashMap<String, mcp_oauth::PendingAuth>>,
     pub store: Store,
@@ -173,6 +217,8 @@ pub(crate) struct Inner {
     pub proactive: proactive::ProactiveRuntime,
     /// Telegram, Slack and email channels (see `channels`).
     pub channels: channels::Runtime,
+    /// Folders of the computer the person handed to the agents (see `access`).
+    pub(crate) folders: Mutex<access::FolderState>,
     pub token: String,
     /// Per-device and per-app tokens: limiter, throttles and revocation notices (see `tokens`).
     pub(crate) tokens: tokens::TokenRuntime,
@@ -314,6 +360,8 @@ impl Engine {
             route_failures: Default::default(),
             mcp: Default::default(),
             elicitations: Default::default(),
+            questions: Default::default(),
+            secret_requests: Default::default(),
             oauth_pending: Default::default(),
             store,
             runs: Default::default(),
@@ -328,6 +376,7 @@ impl Engine {
             scheduler: Default::default(),
             proactive: Default::default(),
             channels: Default::default(),
+            folders: Default::default(),
             token,
             tokens: Default::default(),
             net: Default::default(),
@@ -349,6 +398,7 @@ impl Engine {
         engine.sync_search();
         training_tool::register(&engine);
         engine.register_channel_tool();
+        management::register(&engine);
         engine.seed()?;
         engine.resume_workflows();
         if !opts.offline {
@@ -475,7 +525,13 @@ impl Engine {
         let cfg = &self.0.config;
         let list = |key: &str| -> Vec<String> { cfg.get(key).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default() };
         let mut hidden = vec![aiw_core::paths::normalize(&self.0.dirs.root)];
-        hidden.extend(aiw_tools::sandbox::expand_hidden(&list("sandbox.deny_read")));
+        let deny = list("sandbox.deny_read");
+        hidden.extend(aiw_tools::sandbox::expand_hidden(&deny));
+        // A sandboxed app's `~` is its container: the secret locations also have to be hidden at the real home,
+        // which a folder granted by the person can reach.
+        if let Some(home) = self.folder_bridge_home() {
+            hidden.extend(deny.iter().filter_map(|e| e.trim().strip_prefix("~/")).map(|rest| aiw_core::paths::normalize(&home.join(rest))));
+        }
         aiw_tools::ShellSandbox {
             network: cfg.get_str("sandbox.shell_network").as_deref() == Some("on"),
             hidden,
@@ -619,6 +675,7 @@ impl Engine {
             data_dir: self.0.dirs.root.display().to_string(),
             workspace_root: self.workspace_root().display().to_string(),
             sandboxed: self.0.runtimes.sandboxed(),
+            folder_access: self.folders_supported(),
             shell_sandbox: aiw_tools::shell::sandbox_backend().map(String::from),
             mcp_sandbox: aiw_tools::sandbox::can_wrap_process(),
             uptime_s: self.0.started.elapsed().as_secs(),
@@ -653,8 +710,12 @@ impl Engine {
         });
     }
 
-    /// Kill switch: cancels runs, rejects approvals, stops AIW-started sidecars and the browser.
+    /// Kill switch: cancels runs, rejects approvals, closes the questions and the requests for a
+    /// secret that wait for the person, stops AIW-started sidecars and the browser.
     pub async fn kill(&self) -> Value {
+        // The questions and the requests for a secret close first, each with its own outcome: the tool
+        // that waits for one wakes up with `cancelled` and writes the closing event itself, before the run ends.
+        let (n_questions, n_secrets) = self.close_interactions();
         let runs: Vec<CancellationToken> = self.0.runs.lock().unwrap().values().filter(|r| !r.done).map(|r| r.cancel.clone()).collect();
         for c in &runs {
             c.cancel();
@@ -673,16 +734,18 @@ impl Engine {
         let sidecars = self.0.runtimes.stop_all().await;
         let browser = self.0.browser.close().await;
         let detail = format!(
-            "{} run, {} conferme, {} addestramenti, {} canali, {} sidecar fermati{}",
+            "{} run, {} conferme, {} domande, {} richieste di segreti, {} addestramenti, {} canali, {} sidecar fermati{}",
             runs.len(),
             n_appr,
+            n_questions,
+            n_secrets,
             training.len(),
             channels_stopped,
             sidecars,
             if browser { ", browser chiuso" } else { "" }
         );
         self.audit_system("kill", &detail);
-        json!({"runs": runs.len(), "approvals": n_appr, "training": training.len(), "channels": channels_stopped, "sidecars": sidecars, "browser": browser})
+        json!({"runs": runs.len(), "approvals": n_appr, "questions": n_questions, "secret_requests": n_secrets, "training": training.len(), "channels": channels_stopped, "sidecars": sidecars, "browser": browser})
     }
 
     // ------------------------------------------------------------------ runtimes
@@ -926,9 +989,14 @@ impl Engine {
         Ok(a)
     }
     /// A name an agent profile may list: `*` (every enabled tool), a registry tool, an internal
-    /// tool of the agent loop, or an MCP tool (`mcp__server__tool`; the server may be offline).
+    /// tool of the agent loop, a management tool by its contract name (it may not be registered
+    /// yet in this build) or an MCP tool (`mcp__server__tool`; the server may be offline).
     fn is_known_tool(&self, name: &str) -> bool {
-        name == "*" || name.starts_with("mcp__") || aiw_agent::internal::is_internal(name) || self.0.tools.get(name).is_some()
+        name == "*"
+            || name.starts_with("mcp__")
+            || aiw_agent::internal::is_internal(name)
+            || management::is_known(name)
+            || self.0.tools.get(name).is_some()
     }
     /// Deletes a custom agent. The agents seeded by [`defaults::agents`] and the ones a workflow
     /// still delegates to are refused with a conflict.
@@ -1016,6 +1084,7 @@ impl Engine {
                     candidate_profiles: vec![],
                     roles: None,
                     knowledge: vec![],
+                    delegate_tools: vec![],
                 }
             }
         };
@@ -1178,6 +1247,14 @@ impl Engine {
             .map(|(i, r)| r.validated().map_err(|e| Error::Invalid(format!("regola {}: {e}", i + 1))))
             .collect::<Result<Vec<_>>>()?;
         self.0.store.put_doc("policy", "default", &PolicyDoc { rules })
+    }
+    /// The rules a run is judged by: the person's own (`policy_rules`, what the policy page shows)
+    /// plus the ones built into the app, which ask for a confirmation for every management tool that
+    /// changes something (see [`management::builtin_rules`]). Every place that builds a policy uses this one.
+    pub fn run_rules(&self) -> Vec<PolicyRule> {
+        let mut rules = self.policy_rules();
+        rules.extend(management::builtin_rules());
+        rules
     }
     pub fn hooks(&self) -> Vec<HookConfig> {
         self.0.store.get_doc::<HooksDoc>("hooks", "default").ok().flatten().unwrap_or_default().hooks
@@ -1400,6 +1477,7 @@ impl Engine {
                 cancel: CancellationToken::new(),
                 events: vec![],
                 done: false,
+                origin: None,
             });
             let seq = h.events.len() as u64;
             h.events.push(SeqEvent { seq, event: timed.clone() });
@@ -1547,6 +1625,7 @@ impl Engine {
             tool_ctx.read_roots.push(ws_aiw);
         }
         tool_ctx.shell = self.shell_sandbox();
+        self.apply_folders(&mut tool_ctx);
         // Files the person attached in this session: read-only, like skills.
         let attached = self.attachments_dir(thread_id);
         if attached.is_dir() {
@@ -1558,8 +1637,9 @@ impl Engine {
         tool_ctx.checkpoint_dir = Some(self.0.dirs.checkpoints());
         tool_ctx.allow_domains =
             self.0.config.get("network.allow_domains").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        let folders_line = self.folders_env_line().unwrap_or_default();
         let env = format!(
-            "# Ambiente\n- Data e ora: {}\n- Dispositivo: {} ({} {}, classe {})\n- Cartella di lavoro: {}{isolated}\n- Inferenza locale: runtime `{}`, modello `{}`",
+            "# Ambiente\n- Data e ora: {}\n- Dispositivo: {} ({} {}, classe {})\n- Cartella di lavoro: {}{isolated}{folders_line}\n- Inferenza locale: runtime `{}`, modello `{}`",
             chrono::Local::now().format("%A %d %B %Y, %H:%M"),
             device.name,
             device.os,
@@ -1573,7 +1653,9 @@ impl Engine {
             .agents()
             .unwrap_or_default()
             .into_iter()
-            .filter(|a| a.id != agent.id)
+            // The Assistant is the agent the person talks to: as a sub-agent it would have none of its management
+            // tools, so the other agents are not offered it (their `agent` and `handoff` tools stay as they were).
+            .filter(|a| a.id != agent.id && a.id != defaults::ASSISTANT_ID)
             .map(|a| (a.id, a.description))
             .chain(self.remote_subagents())
             .collect();
@@ -1595,7 +1677,7 @@ impl Engine {
             thread_id: thread_id.into(),
             policy: Policy {
                 mode: agent.mode.clone(),
-                rules: self.policy_rules(),
+                rules: self.run_rules(),
                 sandbox_available: aiw_tools::shell::sandbox_backend().is_some(),
             },
             agent,
@@ -1677,6 +1759,21 @@ impl Engine {
         thinking: Option<ThinkingMode>,
         uploads: Vec<aiw_core::api::AttachmentUpload>,
     ) -> Result<String> {
+        self.start_run_from(session_id, input, kind, thinking, uploads, None).await
+    }
+
+    /// [`Engine::start_run_attach`] for a run a person asked for through the server: `origin` says
+    /// who they are and what their client can show. `None` is a run without an origin (what
+    /// [`Engine::start_run_attach`] does): the management tools do nothing in it.
+    pub async fn start_run_from(
+        &self,
+        session_id: &str,
+        input: String,
+        kind: Option<&str>,
+        thinking: Option<ThinkingMode>,
+        uploads: Vec<aiw_core::api::AttachmentUpload>,
+        origin: Option<RunOrigin>,
+    ) -> Result<String> {
         if input.trim().is_empty() && uploads.is_empty() {
             return Err(Error::Invalid("messaggio vuoto".into()));
         }
@@ -1691,7 +1788,7 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
-        self.start_run_inner(session_id, input, name, 0, thinking, files).await
+        self.start_run_inner(session_id, input, name, 0, thinking, files, origin).await
     }
 
     /// Most handoffs one user message can chain before the conversation stops with a note.
@@ -1699,6 +1796,7 @@ impl Engine {
 
     /// Starts a run; `hops` is how many handoffs led to it (0 for a run the user asked for). Boxed:
     /// a handoff starts the next run from inside the task of the previous one.
+    #[allow(clippy::too_many_arguments)]
     fn start_run_inner<'a>(
         &'a self,
         session_id: &'a str,
@@ -1707,10 +1805,12 @@ impl Engine {
         hops: u32,
         thinking: Option<ThinkingMode>,
         files: Vec<attachments::Prepared>,
+        origin: Option<RunOrigin>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files))
+        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files, origin))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn start_run_body(
         &self,
         session_id: &str,
@@ -1719,6 +1819,7 @@ impl Engine {
         hops: u32,
         thinking: Option<ThinkingMode>,
         files: Vec<attachments::Prepared>,
+        origin: Option<RunOrigin>,
     ) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
@@ -1755,7 +1856,7 @@ impl Engine {
             }
             runs.insert(
                 run_id.clone(),
-                RunHandle { session_id: Some(session_id.into()), cancel: cancel.clone(), events: vec![], done: false },
+                RunHandle { session_id: Some(session_id.into()), cancel: cancel.clone(), events: vec![], done: false, origin },
             );
         }
         // The files are written now that the run is registered (a second run on the session is
@@ -1958,9 +2059,16 @@ impl Engine {
         }
         self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
         let input = format!("[Passaggio da {from_name}] {summary}");
-        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![]).await {
+        // The next agent starts without an origin: a handoff does not carry the person's rights over.
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![], None).await {
             note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
         }
+    }
+
+    /// Who started a run that is still going, when the server started it for a person. `None` for
+    /// every other run (and for one that has finished): see [`RunOrigin`].
+    pub fn run_origin(&self, run_id: &str) -> Option<RunOrigin> {
+        self.0.runs.lock().unwrap().get(run_id).filter(|h| !h.done).and_then(|h| h.origin)
     }
 
     pub fn cancel_run(&self, run_id: &str) -> Result<()> {
@@ -2027,14 +2135,31 @@ impl Engine {
             ApprovalOutcome::Denied
         }
     }
+    /// Answers a confirmation as someone who is not the owner (a channel, a paired phone): that is
+    /// enough for the tools of the agents, but never for a management tool, which only the owner may
+    /// decide (see [`Engine::respond_approval_as`]).
     pub fn respond_approval(&self, id: &str, allow: bool, remember: bool) -> Result<()> {
-        let p = self
-            .0
-            .approvals
-            .lock()
-            .unwrap()
-            .remove(id)
-            .ok_or_else(|| Error::NotFound(format!("richiesta {id} non trovata (forse già gestita)")))?;
+        self.respond_approval_as(id, allow, remember, false)
+    }
+
+    /// Answers a confirmation. `owner` says whether the caller has full access to this computer:
+    /// the request of a management tool answered by anyone else is refused and stays open.
+    pub fn respond_approval_as(&self, id: &str, allow: bool, remember: bool, owner: bool) -> Result<()> {
+        let (p, remember) = {
+            let mut approvals = self.0.approvals.lock().unwrap();
+            let management = match approvals.get(id) {
+                Some(p) => management::is_management(&p.req.tool),
+                None => return Err(Error::NotFound(format!("richiesta {id} non trovata (forse già gestita)"))),
+            };
+            if management && !owner {
+                return Err(Error::Denied(
+                    "Questa richiesta può essere decisa solo dal proprietario, dall'app su questo computer: da qui non è consentito."
+                        .into(),
+                ));
+            }
+            // «Consenti per la sessione» does not exist for a management tool.
+            (approvals.remove(id).expect("the request was found above"), remember && !management)
+        };
         if allow && remember {
             if let Some(s) = &p.session_id {
                 self.session_allow(s).lock().unwrap().insert(p.req.tool.clone());
@@ -2356,7 +2481,7 @@ impl Engine {
     pub fn set_config(&self, layer: &str, key: &str, value: Value) -> Result<ConfigView> {
         if key == "workspace.root" && self.0.runtimes.sandboxed() {
             return Err(Error::Unsupported(
-                "la versione Mac App Store (sandbox) lavora nella cartella dell'app: per sceglierne un'altra usa la versione DMG".into(),
+                "la versione Mac App Store (sandbox) lavora nella cartella dell'app: per dare accesso ad altre cartelle del computer usa Impostazioni → Cartelle consentite".into(),
             ));
         }
         if key == "connectors.mail.imap" {
@@ -2549,8 +2674,14 @@ impl Engine {
         if let Err(why) = t.available() {
             return Err(Error::Unsupported(why));
         }
+        // A management tool works only in a chat run the server started for a person. From here
+        // (a workflow, an MCP client) it never does, so nobody is asked to confirm it either. The
+        // agent loop asks the same question before its own confirmation (`RunHost::refuse_tool`).
+        if let Some(why) = management::refusal(self, run_id, tool) {
+            return Err(Error::Denied(why));
+        }
         let mode = self.0.config.get_str("policy.mode").unwrap_or_else(|| "ask".into());
-        let policy = Policy { mode, rules: self.policy_rules(), sandbox_available: aiw_tools::shell::sandbox_backend().is_some() };
+        let policy = Policy { mode, rules: self.run_rules(), sandbox_available: aiw_tools::shell::sandbox_backend().is_some() };
         let subject = t.subject(&args);
         let audit = |decision: &str| {
             let _ = self.0.store.add_audit(&AuditEntry {
@@ -2598,6 +2729,7 @@ impl Engine {
         let mut ctx = ToolContext::new(run_id, self.workspace_root());
         ctx.sandbox = SandboxMode::parse(&self.0.config.get_str("sandbox.mode").unwrap_or_else(|| "workspace-write".into()));
         ctx.shell = self.shell_sandbox();
+        self.apply_folders(&mut ctx);
         ctx.checkpoint_dir = Some(self.0.dirs.checkpoints());
         ctx.allow_domains = self.0.config.get("network.allow_domains").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         t.call(args, &ctx).await
@@ -2758,6 +2890,9 @@ mod tests_backup;
 mod tests_channels;
 #[cfg(test)]
 mod tests_eval;
+// The folders of the person exist on macOS only; the tests use canonicalised temp dirs (verbatim paths on Windows).
+#[cfg(all(test, unix))]
+mod tests_folders;
 #[cfg(test)]
 mod tests_hardening;
 #[cfg(test)]

@@ -1,5 +1,21 @@
 # Stato dell'app e come procedere
 
+> Aggiornamento 15 novembre 2026 · release v0.5.0-beta.11, build store 5013. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
+
+## Aggiornamento: cartelle consentite nella build Mac App Store
+
+- Nella build TestFlight/Mac App Store (`--features mas`, App Sandbox) l'utente sceglie una o più cartelle del Mac da Impostazioni → *Cartelle consentite* (pannello `NSOpenPanel`, security-scoped bookmark che resta dopo il riavvio, riaperto all'avvio prima dei canali). Gli strumenti file le usano in lettura e scrittura (`ToolContext::write_roots`); `delete_file` rifiuta fuori dal workspace e il ripristino (`rewind`) non copre quelle cartelle. Solo l'utente le aggiunge: nessuna rotta, impostazione o strumento lo fa. Dettagli, limiti e rischi per la revisione Apple in `docs/store/README.md` («Cartelle consentite»).
+- **Provato**: test automatici Rust (confinamento, elenco, persistenza, rinnovo, rifiuti, nessuna via per allargare i permessi), UI (E2E, accessibilità, scenario demo `mas`) e `macos-folders/selftest.sh` in un'app di prova firmata ad hoc in App Sandbox (creazione, riapertura anche in un secondo avvio, rilascio, errori). **Non provato**: il clic sul pannello vero (`selftest.sh --pick`), una build firmata con i certificati dello store, la prova da Telegram su TestFlight; `shell` e MCP non ricevono le cartelle (non provato che i figli le erediterebbero).
+
+## Aggiornamento dopo le PR #90–#97
+
+- Integrati fix delle porte sidecar, aggiornamenti Actions/UI, primo endpoint AG-UI, copia/cancellazione con checkpoint e recupero delle catture della chat dopo il ricaricamento.
+- AG-UI è un primo taglio: mapping thread in memoria; stato, contesto e tool client ignorati; nessuna prova con client AG-UI reale. Requisiti residui nella issue #69, guida in `docs/agui.md`.
+- Spazi condivisi: decisione di discovery approvata, non implementazione. Prima si misurano due settimane di utilizzo; dettagli in `docs/design/spazi-condivisi.md` e follow-up #101.
+- Verifica combinata locale macOS: fmt/clippy, 1139 test Rust passati (8 ignorati), 999 test UI, typecheck/build, 8 E2E e 221 test di accessibilità. Questo non sostituisce i test con servizi/modelli/dispositivi reali.
+- Issue completate chiuse tramite merge: #8, #74 e task #98–#100. #18, #28, #69 e la roadmap #5 restano aperte per i requisiti residui.
+- TypeScript resta 5.9: l’aggiornamento a 7 (#84) richiede prima la compatibilità degli script i18n con l’API JS.
+
 > 2026-11-03 · v0.4 · Basato su un audit del codice (non della documentazione) eseguito per layer, con
 > verifica avversariale di ogni lacuna e riferimenti `file:riga`, aggiornato dopo i giri di verifica
 > end to end, la revisione di sicurezza e la revisione dell'agent loop. Le voci **v0.4** indicano cosa
@@ -67,7 +83,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 
 | Funzione | Stato | Note |
 |---|---|---|
-| File: read, write, edit, list, glob, grep, move | ✅ | **v0.4** confinamento anche rispetto ai symlink; radici di lettura che sono symlink ignorate; `read_file` limitato a 16 MB, `grep` controlla la dimensione prima di leggere |
+| File: read, write, edit, list, glob, grep, move, copy, delete | ✅ | **v0.4** confinamento anche rispetto ai symlink; radici di lettura che sono symlink ignorate; `read_file` limitato a 16 MB, `grep` controlla la dimensione prima di leggere; copia/cancellazione hanno checkpoint e rewind, `delete_file` richiede concessione esplicita |
 | Shell in sandbox: bwrap (Linux), sandbox-exec (macOS), integrità bassa + job object (Windows) | 🟡 | Linux: rete chiusa di default (`sandbox.shell_network`), cartella dei dati e credenziali (`sandbox.deny_read`) nascoste, variabili segrete tolte: **provato con bwrap vero**. macOS: stessa cosa con un profilo Seatbelt, **solo il testo del profilo è provato**, mai eseguito su un Mac. Windows: **rete non chiudibile e letture non nascondibili** (integrità bassa limita solo le scritture); le variabili segrete sono tolte. Le regole di policy leggono ogni comando di una riga composta |
 | `web_fetch` anti-SSRF | ✅ **v0.4** | redirect rivalidati a ogni salto, DNS fissato, IPv6 e range speciali bloccati; lettura limitata a 5 MB |
 | Ricerca web | 🟡 | strumento `web_search` (`aiw-tools/src/search.rs`) con `search.provider` = `auto` \| `duckduckgo` \| `searxng` \| `brave` \| `off`; chiave di Brave mascherata dall'API e solo a livello di macchina, indirizzo di SearXNG validato; sezione «Ricerca web» nelle Impostazioni; l'assistente proattivo la usa solo a `act_readonly`. **Mai provata contro i provider veri da questo ambiente**: i test usano un server locale con risposte scritte a mano nella forma attesa. Il parser di DuckDuckGo dipende dall'HTML della pagina `html.duckduckgo.com` e può smettere di funzionare se cambia; DuckDuckGo può chiedere una verifica anti-bot (l'errore lo dice). Gli agenti predefiniti già salvati non ricevono `web_search` da soli (solo le nuove installazioni) |
@@ -101,7 +117,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 | CPU (AVX2/AVX-512/NEON/dotprod/i8mm) | tutti i backend | ✅ |
 | Metal | llama.cpp embedded (automatico su macOS/iOS), llama-server, mlx-lm | ✅ **v0.4** (prima il motore embedded non veniva registrato); non eseguito su hardware reale |
 | CUDA | sidecar con `-ngl 999`, vLLM/SGLang/TRT-LLM, embedded con feature `llama-cuda` | 🟡 il lavoro facoltativo `cuda` di `release.yml` (daemon, Linux e Windows x64, CUDA 12.8) è scritto ma mai eseguito; nessun binario CUDA provato su una GPU; le release di default non lo includono |
-| Vulkan | sidecar, embedded con `llama-vulkan` | 🟡 **v0.4** il job `daemon-gpu` è stato tolto dalla release con il commit 3cb23ae (recuperabile dalla storia); oggi nessun flusso costruisce Vulkan |
+| Vulkan | sidecar, embedded con `llama-vulkan` | 🟡 il lavoro facoltativo `vulkan` di `release.yml` (daemon, Linux e Windows x64) è tornato dopo la rimozione con il commit 3cb23ae: compila e collega su GitHub (esecuzione 43606831203, 14 novembre 2026), ma nessun binario è provato su una GPU e le release di default non lo includono |
 | ROCm | solo sidecar | 🟡 **v0.4** rilevamento con `rocm-smi`/`rocminfo` |
 | MLX | solo sidecar `mlx-lm` (Python) | 🟡 MLX Swift in-process assente; **v0.4** MLX riservato ai Mac Apple Silicon, repository MLX scaricabili |
 | DirectML, QNN, OpenVINO, Core ML | tramite gli execution provider di ORT GenAI o i server che li gestiscono (Foundry, Lemonade, OVMS) | 🟡 AIW non li pilota direttamente |
@@ -153,7 +169,7 @@ sezioni a cinque e la prima esecuzione a un solo pulsante; `developer` (vista «
 | Computer-use | ✅ | ✅ | ❌ escluso in CI | ❌ | ❌ |
 | Firma e notarizzazione | 🟡 flusso pronto, attivo solo con i segreti (PFX o Azure), mai eseguito | 🟡 flusso pronto (Developer ID + notarizzazione), attivo solo con i segreti, mai eseguito | — | ❌ | ❌ (lo store firma a parte, `store.yml`) |
 
-Facoltativi, scritti ma **mai eseguiti su GitHub** (`release.yml`, target `arm64` o `all`): app Linux arm64 (deb/AppImage/rpm) e Windows arm64 (NSIS, solo CPU, senza computer-use), daemon arm64 e daemon CUDA 12; `release-check.yml` (`cargo check` arm64 su Linux e Windows) invece è passato sulle pull request il 13 novembre 2026: non prova il packaging né CUDA. Non costruiti: Android x86_64/armv7 (`store.yml` fa solo aarch64). Dalla release non escono più l'app Linux x64 né i daemon x64/macOS (commit 3cb23ae).
+Facoltativi (`release.yml`, target `linux`, `arm64`, `cuda`, `vulkan` o `all`): app Linux x64 e arm64 (deb/AppImage/rpm; build e rpm con versione `0.5.0` e release `0.beta.N` provati su GitHub il 14 novembre 2026, esecuzione 43606831203, mai installati su una distribuzione), daemon Vulkan Linux e Windows (compilano, esecuzione 43606831203), app Windows arm64 (NSIS, solo CPU, senza computer-use), daemon arm64 e daemon CUDA 12 (verificare nelle esecuzioni manuali di `release.yml` quali siano passate: questa riga non è stata ricontrollata); `release-check.yml` (`cargo check` arm64 su Linux e Windows) invece è passato sulle pull request il 13 novembre 2026: non prova il packaging né CUDA. Non costruiti: Android x86_64/armv7 (`store.yml` fa solo aarch64). Dalla release di default non escono l'app Linux x64 né i daemon x64/macOS (commit 3cb23ae): l'app Linux x64 è tornata come target facoltativo `linux-x64`.
 
 ### 2.8 Correzioni dopo la bozza
 

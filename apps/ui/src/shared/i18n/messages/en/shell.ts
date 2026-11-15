@@ -71,4 +71,7 @@ export const shellEn: Record<keyof typeof shellIt, string> = {
   "shell.more": "More",
   "shell.pair_help": "On the device that runs AI Workspace open {devices} and enter the 6-digit code here. The code changes every 10 minutes.",
   "shell.backend_unreachable_demo": "Backend unreachable: demo mode",
+  "shell.menu": "Menu",
+  "shell.aggiornamento_disponibile_titolo": "Update available",
+  "shell.cmd_download_model_prompt": "Download a model that suits this computer",
 };

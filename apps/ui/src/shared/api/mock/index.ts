@@ -8,14 +8,14 @@ import { mockRoute } from "./route";
 import { mockSpeak, mockTtsStatus } from "./voice";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
-  AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
+  AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest,
   ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, SessionImage, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
+  ChannelCreate, ChannelPatch, FoldersAdded, FoldersInfo, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, maskConfigSecrets, mcp, models, nid, now, policyRules, profiles,
-  remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
+  folderGrants, remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
 import * as mem from "./memories";
@@ -27,6 +27,7 @@ import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimization
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 import * as training from "./training";
+import { AskStore, assistantScript, checkProviderToken, runAssistantScript, type AssistantScript } from "./assistant";
 
 /** A simulated download: files transferred one after the other, then verified. */
 interface MockJob {
@@ -126,6 +127,12 @@ const VOICE_DEMO_SENTENCES = ["Quali file ho modificato oggi nel workspace?", "R
 /** Demo statistics of the router, by `agent|profile`. */
 const routingStats = new Map<string, RoutingCandidate>([["operator|balanced", { profile: "balanced", n: 12, reward_sum: 9, mean: 0.75 }]]);
 
+/** What the demo of the macOS panel offers, in order. */
+const DEMO_FOLDERS = [
+  { name: "Documenti", path: "/Users/demo/Documents" },
+  { name: "Progetti", path: "/Users/demo/Progetti" },
+];
+
 export class MockTransport implements Transport {
   readonly kind = "mock" as const;
   readonly capabilities: TransportCapabilities = { demo: true, native: false, pairing: false };
@@ -145,8 +152,24 @@ export class MockTransport implements Transport {
   }
 
   async system() { return structuredClone(system); }
+  async folders(): Promise<FoldersInfo> { return { supported: system.folder_access === true, folders: structuredClone(folderGrants) }; }
+  /** Demo of the macOS panel: the next of a few folders of the demo user, never the same twice. */
+  async addFolders(_message: string, _prompt: string): Promise<FoldersAdded> {
+    if (!system.folder_access) throw new ApiError(422, "questa versione lavora in una cartella sola: si sceglie in Impostazioni");
+    await sleep(250);
+    const next = DEMO_FOLDERS.find((f) => !folderGrants.some((g) => g.path === f.path));
+    if (next) folderGrants.push({ id: nid("fld"), name: next.name, path: next.path, available: true, added: now() });
+    return { supported: true, folders: structuredClone(folderGrants), added: next ? 1 : 0, refused: [] };
+  }
+  async removeFolder(id: string): Promise<FoldersInfo> {
+    const i = folderGrants.findIndex((g) => g.id === id);
+    if (i < 0) throw new ApiError(404, `cartella ${id} non trovata`);
+    folderGrants.splice(i, 1);
+    return { supported: system.folder_access === true, folders: structuredClone(folderGrants) };
+  }
   async kill() {
     for (const [, p] of this.pendingApprovals) p.resolve(false);
+    this.ask.cancelRun();
     audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "kill", detail: "Kill switch premuto dalla UI" });
   }
 
@@ -823,9 +846,11 @@ export class MockTransport implements Transport {
   }
   async backgroundCheckNow() { return this.backgroundNow(); }
 
+  /** The run of the Assistente that is going on in a session (`assistant.ts`): a conversation opened again re-attaches to it, like the live one. */
+  private assistantRuns = new Map<string, string>();
   async activeRun(sessionId?: string) {
     if (sessionId !== undefined && !sessions.some((s) => s.id === sessionId)) throw new ApiError(404, `sessione ${sessionId} non trovata`);
-    return null;
+    return (sessionId !== undefined ? this.assistantRuns.get(sessionId) : undefined) ?? null;
   }
   /** The screenshots the demo emitted for the session's runs, in the order they were taken. */
   async sessionImages(sessionId: string): Promise<SessionImage[]> {
@@ -942,6 +967,27 @@ export class MockTransport implements Transport {
     p.resolve(decision === "allow");
   }
 
+  // Questions of the agent and requests for a secret: the scripted runs of `assistant.ts` wait on them.
+  private readonly ask = new AskStore();
+  /** `device`: this browser is a paired device, which may not provide secrets (403, as the server answers); `?scope=device` in the address of the demo. */
+  secretScope: "full" | "device" = "full";
+  async questions(): Promise<Question[]> { return this.ask.openQuestions(); }
+  async answerQuestion(id: string, reply: QuestionReply) { this.ask.answerQuestion(id, reply); }
+  async secretRequests(): Promise<SecretRequest[]> { return this.ask.openSecrets(); }
+  async answerSecretRequest(id: string, reply: SecretReply): Promise<{ stored?: boolean }> {
+    if (this.secretScope === "device") throw new ApiError(403, "questo dispositivo non può fornire segreti: serve l'accesso completo");
+    return this.ask.answerSecret(id, reply, (target, value) => this.storeSecret(target, value));
+  }
+  /** Writes a secret where its target says. The demo only marks the provider as set up: the value is checked and dropped, never kept. */
+  private storeSecret(target: string, value: string): void {
+    checkProviderToken(target, value);
+    if (target.startsWith("provider_token:")) {
+      const id = target.slice("provider_token:".length);
+      this.providerAuth.set(id, { ...this.providerAuth.get(id), configured: true });
+    }
+    audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "secret.set", detail: target });
+  }
+
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void) {
     (this.runLog.get(runId) ?? []).forEach(onEvent);
     const set = this.runListeners.get(runId) ?? new Set();
@@ -950,6 +996,7 @@ export class MockTransport implements Transport {
     return () => set.delete(onEvent);
   }
   async cancelRun(runId: string) {
+    this.ask.cancelRun(runId);
     this.emit(runId, { type: "RUN_ERROR", message: "Run annullato dall'utente", code: "cancelled" });
   }
 
@@ -1051,8 +1098,8 @@ export class MockTransport implements Transport {
   }
 
   /** `image`: a screenshot the tool produced, sent as the `aiw.image` custom event (base64 data, no `data:` prefix). */
-  private async toolCall(runId: string, name: string, args: unknown, result: string, approval?: { reason: string; risk: ApprovalRequest["risk"] }, image?: { mime: string; data: string }) {
-    const toolCallId = nid("call");
+  private async toolCall(runId: string, name: string, args: unknown, result: string, approval?: { reason: string; risk: ApprovalRequest["risk"] }, image?: { mime: string; data: string }, callId?: string) {
+    const toolCallId = callId ?? nid("call");
     this.emit(runId, { type: "TOOL_CALL_START", toolCallId, toolCallName: name });
     this.emit(runId, { type: "TOOL_CALL_ARGS", toolCallId, delta: JSON.stringify(args) });
     this.emit(runId, { type: "TOOL_CALL_END", toolCallId });
@@ -1135,7 +1182,32 @@ export class MockTransport implements Transport {
     this.finish(sessionId, reply);
   }
 
+  /** The Assistente's questions and requests for a secret (`assistant.ts`): the same in every session, whatever its agent. */
+  private async assistantRun(runId: string, sessionId: string, script: AssistantScript) {
+    await sleep(150);
+    this.assistantRuns.set(sessionId, runId);
+    await runAssistantScript({
+      runId, threadId: sessionId, ask: this.ask, nid, now,
+      emit: (e) => this.emit(runId, e),
+      say: async (text) => {
+        const m = nid("m");
+        this.emit(runId, { type: "TEXT_MESSAGE_START", messageId: m, role: "assistant" });
+        await this.streamText(runId, m, text, "text");
+        this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m });
+      },
+      tool: (name, args, result, id, approval) => this.toolCall(runId, name, args, result, approval, undefined, id),
+      finish: (stored, final) => {
+        (sessionMessages[sessionId] ??= []).push(...stored);
+        this.finish(sessionId, final);
+      },
+    }, script).finally(() => {
+      if (this.assistantRuns.get(sessionId) === runId) this.assistantRuns.delete(sessionId);
+    });
+  }
+
   private async scriptedRun(runId: string, sessionId: string, input: string) {
+    const script = assistantScript(input);
+    if (script) return this.assistantRun(runId, sessionId, script);
     if (sessions.find((x) => x.id === sessionId)?.agent_id === "browser") return this.browserRun(runId, sessionId);
     if (sessions.find((x) => x.id === sessionId)?.agent_id === "teacher") return this.teacherRun(runId, sessionId, input);
     await sleep(150);

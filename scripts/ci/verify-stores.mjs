@@ -1,7 +1,9 @@
 // Read store state using CI credentials; never upload a build or commit a Play edit.
 import { sign } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
-const [provider, build = '5011'] = process.argv.slice(2);
+const [provider, requestedBuild] = process.argv.slice(2);
+const build = requestedBuild || String(JSON.parse(readFileSync(new URL('../../apps/desktop/src-tauri/tauri.conf.json', import.meta.url), 'utf8')).bundle.android.versionCode);
 if (!/^\d+$/.test(build)) throw new Error('Build must be numeric');
 const bundle = 'dev.aiworkspace.local';
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');

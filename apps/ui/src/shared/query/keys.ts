@@ -8,6 +8,7 @@ import type { ModelSearchParams } from "../api/types";
  */
 export const qk = {
   system: () => ["system"] as const,
+  folders: () => ["folders"] as const,
 
   runtimes: {
     all: () => ["runtimes"] as const,
@@ -48,6 +49,9 @@ export const qk = {
   },
 
   approvals: () => ["approvals"] as const,
+  /** Questions of the agent and requests for a secret (`features/ask`). */
+  questions: () => ["questions"] as const,
+  secretRequests: () => ["secret-requests"] as const,
   runEvents: (runId: string) => ["runs", "events", runId] as const,
 
   lessons: {

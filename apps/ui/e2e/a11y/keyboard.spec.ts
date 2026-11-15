@@ -3,7 +3,8 @@ import { expect, openApp, test } from "../support/app";
 
 // Keyboard-only use: the main navigation can be reached with Tab and shows where the focus is,
 // dialogs keep the focus inside and close with Esc (giving the focus back), the command palette
-// works without the mouse.
+// works without the mouse. The navigation tests are of the developer interface (the simple one has no
+// section list); the simple one has its own: skip link, menu, message box.
 
 /** The focused element, with what a keyboard user needs to see: a name, and a visible focus indicator. */
 async function focused(page: Page) {
@@ -33,7 +34,7 @@ async function tabUntil(page: Page, done: (f: NonNullable<Awaited<ReturnType<typ
 
 test.describe("keyboard", () => {
   test("the main navigation is reachable with Tab and the focus is visible", async ({ page }) => {
-    await openApp(page, "/");
+    await openApp(page, "/", { mode: "developer" });
     // First stop: the skip link; then the navigation, in order.
     await page.keyboard.press("Tab");
     expect((await focused(page))?.name).toBe("Vai al contenuto");
@@ -56,9 +57,10 @@ test.describe("keyboard", () => {
 
   test("the phone tab bar is reachable with Tab", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await openApp(page, "/");
+    await openApp(page, "/", { mode: "developer" });
     const bar = page.getByRole("navigation", { name: "Sezioni" });
-    await expect(bar.getByRole("link", { name: "Chat" })).toBeVisible();
+    // Developer mode names the chat section «Workspace» (the simple interface calls it «Chat» and has no tab bar).
+    await expect(bar.getByRole("link", { name: "Workspace" })).toBeVisible();
     const seen = new Set<string>();
     const stops = await tabUntil(page, (f) => {
       if (f.href) seen.add(f.href);
@@ -105,7 +107,7 @@ test.describe("keyboard", () => {
   });
 
   test("the command palette opens with Ctrl+K, filters, navigates with the arrows and closes with Esc", async ({ page }) => {
-    await openApp(page, "/");
+    await openApp(page, "/", { mode: "developer" });
     await page.keyboard.press("Control+k");
     const palette = page.getByRole("dialog", { name: "Cerca e comandi" });
     await expect(palette).toBeVisible();
@@ -137,5 +139,87 @@ test.describe("keyboard", () => {
     await page.keyboard.press("Enter");
     await expect(palette).toBeHidden();
     await expect(page.getByRole("heading", { name: "Impostazioni", level: 1 })).toBeVisible();
+  });
+
+  test.describe("simple interface", () => {
+    test("desktop: the skip link, the menu and the message box are reachable with Tab, in that order of use", async ({ page }) => {
+      await openApp(page, "/chat");
+      // The skip link (the message box has the focus on a mouse device, so it is reached directly): Enter moves the focus to the content.
+      const skip = page.getByRole("button", { name: "Vai al contenuto" });
+      await skip.focus();
+      await page.keyboard.press("Enter");
+      await expect(page.locator("#main")).toBeFocused();
+
+      // From the skip link, the next stops are the rail: search, then the menu button, which opens the sheet, with its focus trap.
+      await skip.focus();
+      const rail = page.getByRole("navigation", { name: "Sezioni" });
+      const stops = await tabUntil(page, (f) => f.name === "Menu", 80);
+      expect(stops.filter((s) => !s.visible).map((s) => `${s.tag}:${s.name}`), "stops without a visible focus indicator").toEqual([]);
+      await expectModal(page, rail.getByRole("button", { name: "Menu" }), page.getByRole("dialog", { name: "Menu" }));
+
+      // The message box is one Tab stop of the page.
+      await page.locator("#main").focus();
+      const box = await tabUntil(page, (f) => f.tag === "textarea", 80);
+      expect(box.at(-1)?.name).toBe("Messaggio");
+    });
+
+    // The things a person must be able to do without a mouse, on every width: switch to the developer view, change language and
+    // theme, stop everything. Desktop has the kill switch and the way to the developer view in the rail; the menu has the rest.
+    for (const size of [{ name: "390", width: 390, height: 844 }, { name: "1440", width: 1440, height: 900 }]) {
+      test(`${size.name}: kill switch, language, theme and the developer view are reachable with Tab`, async ({ page }) => {
+        await page.setViewportSize({ width: size.width, height: size.height });
+        await openApp(page, "/chat");
+        const wanted = ["Kill switch", "Italiano", "English", "Sistema", "Chiaro", "Scuro", "Semplice", "Sviluppatore"];
+        const seen = new Set<string>();
+
+        // Open the menu with the keyboard.
+        const menu = page.getByRole("button", { name: "Menu", exact: true });
+        await menu.focus();
+        await page.keyboard.press("Enter");
+        const dialog = page.getByRole("dialog", { name: "Menu" });
+        await expect(dialog).toBeVisible();
+        const stops = await tabUntil(page, (f) => {
+          for (const w of wanted) if (f.name === w || f.name.startsWith(`${w} `) || f.name.startsWith(w)) seen.add(w);
+          return wanted.every((w) => seen.has(w));
+        }, 40);
+        expect([...seen].sort()).toEqual([...wanted].sort());
+        expect(stops.filter((s) => !s.visible).map((s) => `${s.tag}:${s.name}`), "stops without a visible focus indicator").toEqual([]);
+
+        // The developer view with the keyboard: the section list appears.
+        await dialog.getByRole("group", { name: "Modalità dell'interfaccia" }).getByRole("button", { name: "Sviluppatore" }).focus();
+        await page.keyboard.press("Enter");
+        await page.keyboard.press("Escape");
+        await expect(dialog).toBeHidden();
+        const sections = page.getByRole("navigation", { name: "Sezioni" }).getByRole("link", { name: "Runtime" });
+        const bar = page.getByRole("navigation", { name: "Sezioni principali" }).getByRole("link", { name: "Runtime" });
+        await expect(size.width < 701 ? bar : sections).toBeVisible();
+      });
+    }
+
+    test("desktop: the kill switch and «Mostra tutte le sezioni» are in the rail, one Tab stop each", async ({ page }) => {
+      await openApp(page, "/chat");
+      const seen = new Set<string>();
+      await tabUntil(page, (f) => {
+        seen.add(f.name);
+        return seen.has("Kill switch") || [...seen].some((n) => n.startsWith("Kill switch"));
+      }, 80);
+      expect([...seen].some((n) => n === "Mostra tutte le sezioni")).toBe(true);
+    });
+
+    test("the command palette offers the chat, a new session and the download of a model, and the last types the request in the message box", async ({ page }) => {
+      await openApp(page, "/chat");
+      await page.keyboard.press("Control+k");
+      const palette = page.getByRole("dialog", { name: "Cerca e comandi" });
+      await expect(palette).toBeVisible();
+      const options = palette.getByRole("option");
+      await expect(options.filter({ hasText: "Impostazioni" })).toHaveCount(0);
+      await expect(options.filter({ hasText: "Modelli" })).toHaveCount(0);
+      await expect(options.filter({ hasText: "Nuova sessione" })).toHaveCount(1);
+      await palette.getByRole("combobox", { name: "Cerca una sezione o un comando" }).fill("scarica");
+      await page.keyboard.press("Enter");
+      await expect(palette).toBeHidden();
+      await expect(page).toHaveURL(/#\/chat/);
+      await expect(page.getByRole("textbox", { name: "Messaggio" })).toHaveValue("Scarica un modello adatto a questo computer");
+    });
   });
 });

@@ -1,9 +1,11 @@
 import { expect, openApp, test } from "../support/app";
 
-// First start of the simple interface: pick the recommended model, watch it download (simulated),
-// then land in the first chat and get a streamed answer.
+// First start of the simple interface: the «Per iniziare» panel is in the chat (the home page redirects to it); pick the
+// recommended model, watch it download (simulated), then land in the first chat and get a streamed answer.
 test("first run: recommended model, simulated download, first streamed chat", async ({ page }) => {
+  // The address of the old home page leads to the chat, where the panel is.
   await openApp(page, "/", { scenario: "first-run" });
+  await expect(page).toHaveURL(/#\/chat$/);
 
   const panel = page.getByRole("heading", { name: "Per iniziare" });
   await expect(panel).toBeVisible();

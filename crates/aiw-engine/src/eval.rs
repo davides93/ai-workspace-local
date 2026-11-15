@@ -263,7 +263,7 @@ impl EvalHost for Engine {
             .runs
             .lock()
             .unwrap()
-            .insert(run_id.clone(), RunHandle { session_id: None, cancel: cancel.clone(), events: vec![], done: false });
+            .insert(run_id.clone(), RunHandle { session_id: None, cancel: cancel.clone(), events: vec![], done: false, origin: None });
         self.0.store.start_run(&run_id, None)?;
 
         let own_budget = agent.budget.clone().unwrap_or_default();

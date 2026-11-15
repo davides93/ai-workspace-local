@@ -2,7 +2,7 @@ import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
-  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, RuntimeInfo, Session, SessionImage, SystemInfo,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, FoldersInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
@@ -90,6 +90,7 @@ export class HttpTransport implements Transport {
   }
 
   system = () => this.req<SystemInfo>("GET", "/system");
+  folders = () => this.req<FoldersInfo>("GET", "/folders");
   kill = () => this.req<void>("POST", "/kill");
 
   runtimes = () => this.req<RuntimeInfo[]>("GET", "/runtimes");
@@ -216,6 +217,10 @@ export class HttpTransport implements Transport {
   approvals = () => this.req<ApprovalRequest[]>("GET", "/approvals");
   respondApproval = (id: string, decision: "allow" | "deny", remember?: boolean) =>
     this.req<void>("POST", `/approvals/${enc(id)}`, { decision, remember: !!remember });
+  questions = () => this.req<Question[]>("GET", "/questions");
+  answerQuestion = (id: string, reply: QuestionReply) => this.req<void>("POST", `/questions/${enc(id)}`, reply);
+  secretRequests = () => this.req<SecretRequest[]>("GET", "/secret-requests");
+  answerSecretRequest = (id: string, reply: SecretReply) => this.req<{ stored?: boolean }>("POST", `/secret-requests/${enc(id)}`, reply);
 
   /**
    * Streams the AG-UI events of a run over SSE. The server replays the whole history on every
