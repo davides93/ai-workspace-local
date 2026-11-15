@@ -503,6 +503,10 @@ async fn an_attached_chrome_keeps_the_persons_tabs_out_of_sight_and_stays_open()
         fake.commands("Target.closeTarget").iter().map(|r| r.params["targetId"].as_str().unwrap().to_string()).collect();
     assert!(closed.contains(&"T2".to_string()) && closed.contains(&"T9".to_string()) && !closed.contains(&"T1".to_string()), "{closed:?}");
     assert!(fake.commands("Browser.close").is_empty(), "somebody's own Chrome is never closed");
+    // And the connection does not go on watching it: auto-attach is off again, so the person's new tabs are not paused any more.
+    let off = fake.commands("Target.setAutoAttach").pop().unwrap();
+    assert_eq!((off.params["autoAttach"].as_bool(), off.session), (Some(false), None));
+    assert_eq!(fake.commands("Target.setDiscoverTargets").pop().unwrap().params["discover"], false);
 }
 
 #[tokio::test]

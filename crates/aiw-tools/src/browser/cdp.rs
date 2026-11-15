@@ -462,12 +462,17 @@ impl Cdp {
         Ok(())
     }
 
-    /// Closes the tabs this connection opened and nothing else (somebody's own Chrome stays open).
+    /// Lets go of somebody's own Chrome: closes the tabs this connection opened and nothing else, stops the auto-attach (which
+    /// would keep pausing and releasing the person's new tabs), and closes the connection (Chrome itself stays open).
     pub(crate) async fn close_own_tabs(&self) {
         let ids: Vec<String> = self.st.lock().unwrap().tabs.iter().map(|t| t.target_id.clone()).collect();
         for id in ids {
             let _ = self.call_root("Target.closeTarget", json!({"targetId": id})).await;
         }
+        let _ =
+            self.call_root("Target.setAutoAttach", json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true})).await;
+        let _ = self.call_root("Target.setDiscoverTargets", json!({"discover": false})).await;
+        let _ = self.tx.send(Message::Close(None));
     }
 
     async fn wait_for_any_tab(&self) -> bool {
