@@ -1,5 +1,6 @@
 import { useApi } from "../../../shared/api/context";
 import { t } from "../../../shared/i18n";
+import { errorMessage } from "../../../shared/lib/errors";
 import { Button, Pill, Section } from "../../../shared/ui";
 import { useFolderActions, useFolders } from "../api";
 
@@ -20,7 +21,9 @@ export function FoldersPanel({ workspace }: { workspace: string }) {
     <Section title={t("settings.cartelle_consentite_titolo")} hint={t("settings.cartelle_consentite_hint")}>
     <div className="panel set-folders" data-testid="folders-panel">
       <p className="set-hint">{t("settings.cartelle_spiegazione", { workspace })}</p>
-      {list.length === 0 ? (
+      {folders.isError ? (
+        <p role="alert" className="set-warn"><span>{errorMessage(folders.error)}</span></p>
+      ) : list.length === 0 ? (
         <p className="set-hint" data-testid="folders-empty">{t("settings.cartelle_vuote")}</p>
       ) : (
         <ul className="set-folder-list" aria-label={t("settings.cartelle_consentite_titolo")}>

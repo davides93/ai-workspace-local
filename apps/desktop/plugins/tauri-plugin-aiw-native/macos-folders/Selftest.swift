@@ -107,6 +107,21 @@ struct FoldersSelftest {
         check(callNow("open", ["bookmark": bookmark])["error"] == nil, "it can be reopened after a release")
         _ = callNow("release", ["path": path])
 
+        // A folder that was renamed: the bookmark follows it and comes back stale, so a fresh one is handed over.
+        let moved = home.appendingPathComponent("moved-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.moveItem(at: dir, to: moved)
+        let renamed = callNow("open", ["bookmark": bookmark])
+        check(renamed["error"] == nil, "a renamed folder is still found: \(renamed["error"] ?? "ok")")
+        let renamedResult = renamed["result"] as! [String: Any]
+        check(renamedResult["path"] as? String == FolderGrants.canonical(moved), "it reopens at the new place")
+        let fresh = renamedResult["bookmark"] as? String
+        check(fresh != nil, "the stale bookmark is replaced by a fresh one")
+        _ = callNow("release", ["path": FolderGrants.canonical(moved)])
+        let again = callNow("open", ["bookmark": fresh!])
+        check(again["error"] == nil && (again["result"] as! [String: Any])["bookmark"] == nil, "the fresh bookmark opens and is not stale")
+        _ = callNow("release", ["path": FolderGrants.canonical(moved)])
+        try FileManager.default.moveItem(at: moved, to: dir)
+
         if args.contains("--save") {
             let saved = home.appendingPathComponent("saved-folder")
             try? FileManager.default.removeItem(at: saved)

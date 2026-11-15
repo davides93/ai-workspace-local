@@ -246,6 +246,8 @@ async fn what_cannot_be_granted_is_refused_with_a_reason_and_duplicates_are_igno
     let r = e.add_folders("m", "p").unwrap();
     assert_eq!((r.added, r.info.folders.len()), (0, 1));
     assert!(r.refused[0].contains("è già dentro"), "{:?}", r.refused);
+    assert!(bridge.released.lock().unwrap().contains(&g.join("sotto")), "the permission opened for the inner folder is given up");
+    assert!(!bridge.released.lock().unwrap().iter().rev().take(1).any(|p| *p == g), "the one of the folder on the list stays");
     // A cancelled panel changes nothing.
     bridge.will_pick(vec![]);
     let r = e.add_folders("m", "p").unwrap();

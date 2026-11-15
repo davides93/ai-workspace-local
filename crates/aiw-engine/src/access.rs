@@ -168,8 +168,10 @@ impl Engine {
                 st.list.iter().filter_map(|e| Some((e.name.clone(), e.path.clone()?))).collect()
             };
             if let Some((n, _)) = existing.iter().find(|(_, ep)| canon.starts_with(ep)) {
-                // Already there, or inside one that is: nothing to add, and the permission held for it stays.
+                // Already there, or inside one that is: nothing to add. The permission held for the same folder stays;
+                // the one the panel just opened for a folder inside another is given up.
                 if !existing.iter().any(|(_, ep)| *ep == canon) {
+                    bridge.release(&canon);
                     out.refused.push(format!("«{name}» è già dentro «{n}»"));
                 }
                 continue;
