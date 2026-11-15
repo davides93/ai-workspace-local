@@ -794,6 +794,7 @@ impl Engine {
             label,
             reason,
             destination: resolved.destination,
+            at_rest: self.secrets_at_rest_word().into(),
             expires_at: Some(expires_at(wait)),
         };
         let (tx, rx) = oneshot::channel();

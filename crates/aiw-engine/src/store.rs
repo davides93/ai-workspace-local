@@ -3,12 +3,13 @@
 
 use aiw_core::api::{AuditEntry, ChatMessage, Feedback, Session, WorkflowRun};
 use aiw_core::events::SeqEvent;
+use aiw_core::sealed::{is_sealed, SecretCodec, SecretRead};
 use aiw_core::{Error, Result};
 use aiw_workflow::WorkflowState;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 
 /// One row of the `runs` table.
 #[derive(Debug, Clone)]
@@ -35,6 +36,9 @@ pub struct Store {
     fts: bool,
     /// Same for the knowledge-base passages.
     kb_fts: bool,
+    /// Seals and opens the secrets of the documents of the kinds in `vault::rules` (see [`Store::set_codec`]). Without one,
+    /// documents are stored exactly as they are given.
+    codec: RwLock<Option<Arc<dyn SecretCodec>>>,
 }
 
 fn db<E: std::fmt::Display>(e: E) -> Error {
@@ -195,7 +199,7 @@ impl Store {
         // Not part of any step: what runs at every start, and what depends on this build's SQLite.
         let fts = memory::has_fts(&conn)?;
         let kb_fts = kb::start(&conn)?;
-        Ok(Self { conn: Mutex::new(conn), fts, kb_fts })
+        Ok(Self { conn: Mutex::new(conn), fts, kb_fts, codec: RwLock::new(None) })
     }
 
     /// The schema version of this database (always [`SCHEMA_VERSION`] once it is open).
@@ -284,8 +288,60 @@ impl Store {
     }
 
     // ---------------- documents
+    //
+    // The one place where documents are written and read, and so the one place where secrets are sealed and opened: a document
+    // of a kind in `vault::rules` has its secret strings sealed on the way in and opened on the way out, whoever calls. A caller
+    // sees plain values both ways. What cannot be opened (the key is not reachable, or lost) comes back as the stored sealed
+    // string and goes back in unchanged, so reading and saving a document never destroys a value that cannot be read.
+
+    /// Hands the store the codec of the secrets at rest. Without it nothing is sealed or opened.
+    pub fn set_codec(&self, codec: Arc<dyn SecretCodec>) {
+        *self.codec.write().unwrap() = Some(codec);
+    }
+
+    fn codec(&self) -> Option<Arc<dyn SecretCodec>> {
+        self.codec.read().unwrap().clone()
+    }
+
+    fn seal_doc(&self, kind: &str, v: &mut serde_json::Value) {
+        let Some(codec) = self.codec() else { return };
+        crate::vault::rules::visit_secrets(kind, v, &mut |s| {
+            if !s.is_empty() && !is_sealed(s) {
+                if let Some(sealed) = codec.seal(s) {
+                    *s = sealed;
+                }
+            }
+        });
+    }
+
+    fn open_doc(&self, kind: &str, v: &mut serde_json::Value) {
+        let Some(codec) = self.codec() else { return };
+        crate::vault::rules::visit_secrets(kind, v, &mut |s| {
+            if is_sealed(s) {
+                if let SecretRead::Opened(plain) = codec.open(s) {
+                    *s = plain;
+                }
+            }
+        });
+    }
+
+    fn parse_doc<T: DeserializeOwned>(&self, kind: &str, text: &str) -> Result<T> {
+        if crate::vault::rules::rule_for(kind).is_none() {
+            return serde_json::from_str(text).map_err(Error::from);
+        }
+        let mut v: serde_json::Value = serde_json::from_str(text)?;
+        self.open_doc(kind, &mut v);
+        serde_json::from_value(v).map_err(Error::from)
+    }
+
     pub fn put_doc<T: Serialize>(&self, kind: &str, id: &str, v: &T) -> Result<()> {
-        let json = serde_json::to_string(v)?;
+        let json = if crate::vault::rules::rule_for(kind).is_some() {
+            let mut value = serde_json::to_value(v)?;
+            self.seal_doc(kind, &mut value);
+            serde_json::to_string(&value)?
+        } else {
+            serde_json::to_string(v)?
+        };
         self.conn
             .lock()
             .unwrap()
@@ -301,15 +357,18 @@ impl Store {
             .query_row("SELECT json FROM documents WHERE kind=?1 AND id=?2", params![kind, id], |r| r.get(0))
             .optional()
             .map_err(db)?;
-        s.map(|s| serde_json::from_str(&s).map_err(Error::from)).transpose()
+        s.map(|s| self.parse_doc(kind, &s)).transpose()
     }
     pub fn list_docs<T: DeserializeOwned>(&self, kind: &str) -> Result<Vec<T>> {
-        let c = self.conn.lock().unwrap();
-        let mut st = c.prepare("SELECT json FROM documents WHERE kind=?1 ORDER BY rowid").map_err(db)?;
-        let rows = st.query_map(params![kind], |r| r.get::<_, String>(0)).map_err(db)?;
+        let texts: Vec<String> = {
+            let c = self.conn.lock().unwrap();
+            let mut st = c.prepare("SELECT json FROM documents WHERE kind=?1 ORDER BY rowid").map_err(db)?;
+            let rows = st.query_map(params![kind], |r| r.get::<_, String>(0)).map_err(db)?;
+            rows.collect::<std::result::Result<_, _>>().map_err(db)?
+        };
         let mut out = Vec::new();
-        for r in rows {
-            match serde_json::from_str(&r.map_err(db)?) {
+        for text in texts {
+            match self.parse_doc(kind, &text) {
                 Ok(v) => out.push(v),
                 Err(e) => tracing::warn!(kind, "skipping invalid document: {e}"),
             }
@@ -318,6 +377,78 @@ impl Store {
     }
     pub fn delete_doc(&self, kind: &str, id: &str) -> Result<bool> {
         Ok(self.conn.lock().unwrap().execute("DELETE FROM documents WHERE kind=?1 AND id=?2", params![kind, id]).map_err(db)? > 0)
+    }
+
+    /// Writes a document only if there is none of that kind and id yet; says whether it did. Two processes starting together
+    /// race on this (see the vault): the loser reads what the winner wrote.
+    pub(crate) fn insert_doc_if_absent<T: Serialize>(&self, kind: &str, id: &str, v: &T) -> Result<bool> {
+        let json = serde_json::to_string(v)?;
+        let n = self
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO documents(kind,id,json,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(kind,id) DO NOTHING",
+                params![kind, id, json, aiw_core::now_rfc3339()],
+            )
+            .map_err(db)?;
+        Ok(n > 0)
+    }
+
+    /// Every secret string of every document of the kinds that hold secrets, as stored (sealed or not), with its kind. Read
+    /// only: it is what the status counts.
+    pub(crate) fn stored_secret_strings(&self) -> Result<Vec<(String, String)>> {
+        let mut out = vec![];
+        let c = self.conn.lock().unwrap();
+        for kind in crate::vault::rules::secret_kinds() {
+            let mut st = c.prepare("SELECT json FROM documents WHERE kind=?1").map_err(db)?;
+            let rows = st.query_map(params![kind], |r| r.get::<_, String>(0)).map_err(db)?;
+            for text in rows {
+                let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text.map_err(db)?) else { continue };
+                crate::vault::rules::visit_secrets(kind, &mut v, &mut |s| {
+                    if !s.is_empty() {
+                        out.push((kind.to_string(), s.clone()));
+                    }
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Rewrites, in one transaction, every document of the kinds that hold secrets for which `f` says it changed it (the
+    /// migration that seals what was plain, and the one that unseals it). `f` works on the stored form, not through the codec.
+    /// The pages that held the old values are overwritten (`secure_delete`) and the log is truncated, so that a plain value
+    /// does not stay behind in the file. Returns how many documents were rewritten.
+    pub(crate) fn rewrite_secret_docs(&self, f: &mut dyn FnMut(&str, &mut serde_json::Value) -> bool) -> Result<usize> {
+        let c = self.conn.lock().unwrap();
+        let before: i64 = c.query_row("PRAGMA secure_delete", [], |r| r.get(0)).map_err(db)?;
+        c.execute_batch("PRAGMA secure_delete = ON").map_err(db)?;
+        let done = (|| -> Result<usize> {
+            let tx = c.unchecked_transaction().map_err(db)?;
+            let mut changed = 0;
+            for kind in crate::vault::rules::secret_kinds() {
+                let rows: Vec<(String, String)> = {
+                    let mut st = tx.prepare("SELECT id, json FROM documents WHERE kind=?1").map_err(db)?;
+                    let r = st.query_map(params![kind], |r| Ok((r.get(0)?, r.get(1)?))).map_err(db)?;
+                    r.collect::<std::result::Result<_, _>>().map_err(db)?
+                };
+                for (id, text) in rows {
+                    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+                    if f(kind, &mut v) {
+                        tx.execute("UPDATE documents SET json=?3 WHERE kind=?1 AND id=?2", params![kind, id, v.to_string()]).map_err(db)?;
+                        changed += 1;
+                    }
+                }
+            }
+            tx.commit().map_err(db)?;
+            Ok(changed)
+        })();
+        c.execute_batch(&format!("PRAGMA secure_delete = {before}")).map_err(db)?;
+        if matches!(done, Ok(n) if n > 0) {
+            // Best effort: a reader in another process can keep the log from being truncated.
+            let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        }
+        done
     }
 
     // ---------------- sessions & messages

@@ -5,6 +5,7 @@
 //! * [`schema`] — settings schemas used to generate configuration forms (ADR 0003).
 //! * [`config`] — layered configuration: defaults → global → device → workspace.
 //! * [`paths`] — data directories per platform.
+//! * [`sealed`] — secrets at rest: the shape of a sealed value and the hook that seals and opens it.
 #![recursion_limit = "256"]
 
 pub mod api;
@@ -15,6 +16,7 @@ pub mod folders;
 pub mod ids;
 pub mod paths;
 pub mod schema;
+pub mod sealed;
 pub mod tlspin;
 
 pub use error::{Error, Result};

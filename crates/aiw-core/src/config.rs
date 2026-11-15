@@ -3,10 +3,11 @@
 
 use crate::api::{ConfigLayerView, ConfigView, SECRET_MASK};
 use crate::schema::SettingsSchema;
+use crate::sealed::{is_sealed, SecretCodec, SecretRead};
 use crate::{Error, Result};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layer {
@@ -99,6 +100,7 @@ pub fn app_schema() -> SettingsSchema {
             "server.tls": {"type": "string", "title": "Cifratura della rete (TLS)", "description": "Con l'accesso dalla LAN attivo, cifra il traffico verso gli altri dispositivi. off = HTTP in chiaro; self_signed = certificato generato da AIW (il pairing porta l'impronta); files = il tuo certificato. Ha effetto al riavvio del servizio", "enum": ["off", "self_signed", "files"], "default": "off"},
             "server.tls.cert_file": {"type": "string", "title": "Certificato TLS (file PEM)", "description": "Solo con server.tls = files: percorso del certificato (e dell'eventuale catena) in formato PEM", "default": ""},
             "server.tls.key_file": {"type": "string", "title": "Chiave privata TLS (file PEM)", "description": "Solo con server.tls = files: percorso della chiave privata in formato PEM", "default": ""},
+            "security.secrets_at_rest": {"type": "string", "title": "Segreti cifrati sul disco", "description": "auto = i segreti (token, chiavi, password) si cifrano con una chiave custodita nel portachiavi del sistema, dove c'è; off = restano in chiaro, e quelli già cifrati tornano in chiaro alla partenza successiva. Ha effetto al riavvio. Non protegge da un programma che gira con il tuo stesso utente", "enum": ["auto", "off"], "default": "auto"},
             "models.dir": {"type": "string", "title": "Cartella modelli", "default": ""},
             "workspace.root": {"type": "string", "title": "Cartella di lavoro degli agenti", "default": ""},
             "telemetry.otlp": {"type": "string", "title": "Endpoint OTLP (vuoto = disattivato)", "default": ""},
@@ -160,6 +162,8 @@ const WORKSPACE_FORBIDDEN: &[&str] = &[
     "server.tls",
     "server.tls.cert_file",
     "server.tls.key_file",
+    // Whether the secrets are encrypted on disk is the person's choice: a repository cannot switch it off.
+    "security.secrets_at_rest",
     "models.dir",
     "workspace.root",
     "telemetry.otlp",
@@ -228,6 +232,7 @@ const MANAGEMENT_NEVER: &[&str] = &[
     "server.tls",
     "server.tls.cert_file",
     "server.tls.key_file",
+    "security.secrets_at_rest",
     "telemetry.otlp",
 ];
 
@@ -330,6 +335,9 @@ pub struct LayeredConfig {
     global: RwLock<Map<String, Value>>,
     device: RwLock<Map<String, Value>>,
     workspace: RwLock<Map<String, Value>>,
+    /// Seals the secret settings on their way to the files and opens them on the way back (see [`LayeredConfig::set_codec`]).
+    /// The maps in memory hold the plain value; a value the codec cannot open stays sealed there and is written back as is.
+    codec: RwLock<Option<Arc<dyn SecretCodec>>>,
 }
 
 fn read_layer(p: &Path) -> Map<String, Value> {
@@ -368,7 +376,139 @@ impl LayeredConfig {
             global: RwLock::new(global),
             device: RwLock::new(device),
             workspace: RwLock::new(workspace),
+            codec: RwLock::new(None),
         }
+    }
+
+    /// Names of the settings the schema marks as secret.
+    fn secret_keys(&self) -> impl Iterator<Item = &String> {
+        self.schema.properties.iter().filter(|(_, f)| f.secret).map(|(k, _)| k)
+    }
+
+    fn codec(&self) -> Option<Arc<dyn SecretCodec>> {
+        self.codec.read().unwrap().clone()
+    }
+
+    /// Opens the sealed secret settings of `m` in place. What cannot be opened stays sealed (it is kept, not lost).
+    fn open_secrets(&self, m: &mut Map<String, Value>) {
+        let Some(codec) = self.codec() else { return };
+        for k in self.secret_keys() {
+            if let Some(Value::String(s)) = m.get_mut(k) {
+                if let SecretRead::Opened(plain) = codec.open(s) {
+                    *s = plain;
+                }
+            }
+        }
+    }
+
+    /// `m` as it goes to the file: every plain secret setting sealed, when the codec can seal.
+    fn sealed_copy(&self, m: &Map<String, Value>) -> Map<String, Value> {
+        let mut out = m.clone();
+        let Some(codec) = self.codec() else { return out };
+        for k in self.secret_keys() {
+            if let Some(Value::String(s)) = out.get_mut(k) {
+                if !s.is_empty() && !is_sealed(s) {
+                    if let Some(sealed) = codec.seal(s) {
+                        *s = sealed;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Hands the layers the codec of the secrets at rest: the secret settings read so far are opened in memory, and from now
+    /// on every write to a file seals them. Call it before anything reads a secret setting. Call
+    /// [`LayeredConfig::reconcile_files`] after it to bring the files already on disk in line (seal or unseal).
+    pub fn set_codec(&self, codec: Arc<dyn SecretCodec>) {
+        *self.codec.write().unwrap() = Some(codec);
+        for layer in [&self.global, &self.device, &self.workspace] {
+            self.open_secrets(&mut layer.write().unwrap());
+        }
+    }
+
+    /// Rewrites the layer files whose secret settings are stored differently from what the codec wants now: plain ones are
+    /// sealed (the migration), sealed ones are written plain when the codec no longer seals (the way back). A file that is
+    /// already right is not touched, and a value that cannot be opened is never changed. Returns how many values changed form.
+    pub fn reconcile_files(&self) -> Result<usize> {
+        let Some(codec) = self.codec() else { return Ok(0) };
+        let sealing = codec.is_sealing();
+        let mut changed = 0;
+        let layers = [
+            (&self.global, Some(self.global_path.clone())),
+            (&self.device, Some(self.device_path.clone())),
+            (&self.workspace, self.workspace_path.read().unwrap().clone()),
+        ];
+        for (lock, path) in layers {
+            let Some(path) = path else { continue };
+            // Only a file that exists and reads: an empty map in memory must never replace a file that could not be parsed.
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(Value::Object(mut file)) = serde_json::from_str::<Value>(&text) else { continue };
+            let memory = lock.read().unwrap();
+            let mut touched = 0;
+            for k in self.secret_keys() {
+                let Some(on_disk) = file.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string) else { continue };
+                let new = if is_sealed(&on_disk) {
+                    // Sealed on disk. Switched off: write the plain value, if this process could open it.
+                    match memory.get(k).and_then(Value::as_str) {
+                        Some(plain) if !sealing && !is_sealed(plain) => Some(plain.to_string()),
+                        _ => None,
+                    }
+                } else if sealing {
+                    codec.seal(&on_disk)
+                } else {
+                    None
+                };
+                if let Some(new) = new {
+                    file.insert(k.clone(), Value::String(new));
+                    touched += 1;
+                }
+            }
+            if touched > 0 {
+                write_layer(&path, &file)?;
+                changed += touched;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Clears (removes) every secret setting whose stored string `unreadable` says cannot be opened, and writes the layers. Only
+    /// on an explicit request (`aiw secrets forget-unreadable`). Returns how many were cleared.
+    pub fn clear_unreadable_secrets(&self, unreadable: &dyn Fn(&str) -> bool) -> usize {
+        let mut cleared = 0;
+        let layers = [
+            (&self.global, Some(self.global_path.clone())),
+            (&self.device, Some(self.device_path.clone())),
+            (&self.workspace, self.workspace_path.read().unwrap().clone()),
+        ];
+        for (lock, path) in layers {
+            let mut m = lock.write().unwrap();
+            let before = cleared;
+            for k in self.secret_keys() {
+                if m.get(k).and_then(Value::as_str).is_some_and(unreadable) {
+                    m.remove(k);
+                    cleared += 1;
+                }
+            }
+            if cleared > before {
+                if let Some(path) = path {
+                    let _ = write_layer(&path, &self.sealed_copy(&m));
+                }
+            }
+        }
+        cleared
+    }
+
+    /// The strings the secret settings have in the layer files on disk right now (not the ones in memory): what the status
+    /// counts as sealed, plain or unreadable.
+    pub fn secrets_on_disk(&self) -> Vec<String> {
+        let mut out = vec![];
+        let paths = [Some(self.global_path.clone()), Some(self.device_path.clone()), self.workspace_path.read().unwrap().clone()];
+        for p in paths.into_iter().flatten() {
+            let m = read_layer(&p);
+            out.extend(self.secret_keys().filter_map(|k| m.get(k).and_then(Value::as_str)).filter(|s| !s.is_empty()).map(str::to_string));
+        }
+        out
     }
 
     pub fn schema(&self) -> &SettingsSchema {
@@ -378,7 +518,9 @@ impl LayeredConfig {
     /// Points the workspace layer at `<root>/.aiw/config.json` and reloads it.
     pub fn set_workspace_root(&self, root: Option<&Path>) {
         let p = root.map(|r| r.join(".aiw").join("config.json"));
-        *self.workspace.write().unwrap() = p.as_deref().map(read_layer).unwrap_or_default();
+        let mut layer = p.as_deref().map(read_layer).unwrap_or_default();
+        self.open_secrets(&mut layer);
+        *self.workspace.write().unwrap() = layer;
         *self.workspace_path.write().unwrap() = p;
     }
 
@@ -393,6 +535,13 @@ impl LayeredConfig {
         for (k, v) in workspace {
             if let Some(v) = self.workspace_value(&k, Some(&v)) {
                 out.insert(k, v);
+            }
+        }
+        // A secret this process cannot open is "not set" for everything that uses it (it stays stored, see `open_secrets`).
+        let defaults = self.schema.defaults();
+        for k in self.secret_keys() {
+            if out.get(k).and_then(Value::as_str).is_some_and(is_sealed) {
+                out.insert(k.clone(), defaults.get(k).cloned().unwrap_or(Value::String(String::new())));
             }
         }
         out
@@ -410,6 +559,10 @@ impl LayeredConfig {
     fn machine_value(&self, key: &str) -> Option<Value> {
         for l in [&self.device, &self.global] {
             if let Some(v) = l.read().unwrap().get(key) {
+                // A sealed secret this process could not open is not a value (see `open_secrets`).
+                if v.as_str().is_some_and(is_sealed) && self.schema.properties.get(key).is_some_and(|f| f.secret) {
+                    continue;
+                }
                 return Some(v.clone());
             }
         }
@@ -494,7 +647,7 @@ impl LayeredConfig {
         } else {
             m.insert(key.to_string(), value);
         }
-        write_layer(&path, &m)
+        write_layer(&path, &self.sealed_copy(&m))
     }
 
     /// `values` with every non-empty secret setting replaced by [`SECRET_MASK`] (the API never shows one).
@@ -746,6 +899,7 @@ mod tests {
             "server.tls",
             "server.tls.cert_file",
             "server.tls.key_file",
+            "security.secrets_at_rest",
             "telemetry.otlp",
         ];
         expected.sort_unstable();
