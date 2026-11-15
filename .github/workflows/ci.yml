@@ -68,8 +68,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           dbus-run-session -- bash -c '
-            echo -n "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
-            cargo test -p aiw-engine --lib vault::tests::real_keychain -- --ignored --nocapture --test-threads=1
+            # With a password: the login keyring is created and unlocked without a graphical prompt (an empty one asks for it).
+            echo -n "test-password" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            cargo test -p aiw-engine --lib vault::tests::real_keychain::the_ -- --ignored --nocapture --test-threads=1
           '
 
   ui:

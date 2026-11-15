@@ -225,6 +225,12 @@ mod os {
         }
     }
 
+    impl Default for OsKeyStore {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl OsKeyStore {
         pub fn new() -> Self {
             Self::with_service(SERVICE)

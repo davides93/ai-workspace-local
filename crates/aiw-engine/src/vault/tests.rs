@@ -676,7 +676,7 @@ mod backup_with_sealed_secrets {
 /// These talk to the keychain of the machine they run on (macOS Keychain, Windows Credential Manager, the Secret Service of a
 /// Linux session), with a service name of their own that is never the app's, and remove what they made. They are `#[ignore]`
 /// because a headless runner has none: run them on purpose with
-/// `cargo test -p aiw-engine --lib vault::tests::real_keychain -- --ignored --test-threads=1`.
+/// `cargo test -p aiw-engine --lib vault::tests::real_keychain -- --ignored --test-threads=1` (on Linux with a Secret Service session, `real_keychain::the_`; the test that expects no service is `real_keychain::without_a_secret_service`).
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod real_keychain {
     use super::*;
