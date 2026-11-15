@@ -129,11 +129,20 @@ describe("SecretPrompt", () => {
     expect(el.value).toBe("");
   });
 
-  it("says what it is for and where the value goes, and that it is kept on this computer without encryption", () => {
+  it("says what it is for and where the value goes, and that on this computer it is encrypted with a key in the keychain", async () => {
     setup();
     expect(screen.getByText("Serve per scaricare modelli riservati")).toBeInTheDocument();
     expect(screen.getByText("Sarà salvato in: Hugging Face (huggingface.co)")).toBeInTheDocument();
-    expect(screen.getByText(/Su questo computer è salvato senza cifratura/)).toBeInTheDocument();
+    expect(await screen.findByText(/Su questo computer è cifrato, con una chiave custodita nel portachiavi del sistema/)).toBeInTheDocument();
+    expect(screen.queryByText(/salvato senza cifratura/)).toBeNull();
+  });
+
+  it("says that it is kept without encryption when the system keychain is not available", async () => {
+    const api = new MockTransport();
+    vi.spyOn(api, "secretsAtRest").mockResolvedValue({ state: "unavailable", backend: "", encrypted: 0, plain: 2, unreadable: 0 });
+    renderIn(<SecretPrompt it={item()} />, api);
+    expect(await screen.findByText(/Su questo computer è salvato senza cifratura/)).toBeInTheDocument();
+    expect(screen.queryByText(/è cifrato, con una chiave/)).toBeNull();
   });
 
   it("a closed request is one line that says only that it was saved, with no field and no value", () => {
