@@ -1635,8 +1635,15 @@ mod tests {
             assert_eq!(e.tool_registry().get(name).map(|t| t.risk()), Some(expected), "{name}");
         }
         // The two lists name these eight and, for the other areas, only the tools of the other items: nothing was left without an owner.
-        let others =
-            ["aiw_model_download", "aiw_model_use", "aiw_model_delete", "aiw_runtime_control", "aiw_runtime_install", "aiw_secret_clear"];
+        let others = [
+            "aiw_model_download",
+            "aiw_model_use",
+            "aiw_model_delete",
+            "aiw_runtime_control",
+            "aiw_runtime_install",
+            "aiw_secret_clear",
+            "aiw_task",
+        ];
         let contract: BTreeSet<&str> = MODIFYING.iter().chain(STRONG.iter()).copied().collect();
         let owned: BTreeSet<&str> = mine.iter().chain(others.iter()).copied().collect();
         assert_eq!(contract, owned);

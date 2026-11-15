@@ -22,8 +22,8 @@ use serde_json::{json, Map, Value};
 use std::sync::{Arc, Weak};
 
 /// What the tool can look at.
-pub(crate) const TOPICS: [&str; 10] =
-    ["overview", "models", "downloads", "runtimes", "agents", "connectors", "settings", "memory", "secrets", "activity"];
+pub(crate) const TOPICS: [&str; 11] =
+    ["overview", "models", "downloads", "runtimes", "agents", "connectors", "settings", "memory", "secrets", "activity", "tasks"];
 
 /// Most entries of a list (the answer says how many there are and how to narrow it down).
 const MAX_ITEMS: usize = 30;
@@ -45,7 +45,7 @@ impl Tool for Inspect {
     }
 
     fn description(&self) -> &str {
-        "Legge lo stato di AI Workspace prima di cambiare qualcosa: modelli installati e consigliati, download, motori di esecuzione, assistenti, connettori, impostazioni, ricordi, quali segreti sono impostati, attività recente. Risposta breve (al massimo 30 voci per elenco), mai con valori segreti. Non indovinare nomi di modelli, chiavi di impostazioni o identificativi: guardali qui."
+        "Legge lo stato di AI Workspace prima di cambiare qualcosa: modelli installati e consigliati, download, motori di esecuzione, assistenti, connettori, impostazioni, ricordi, quali segreti sono impostati, attività recente, lavori in background. Risposta breve (al massimo 30 voci per elenco), mai con valori segreti. Non indovinare nomi di modelli, chiavi di impostazioni o identificativi: guardali qui."
     }
 
     fn parameters(&self) -> Value {
@@ -53,7 +53,7 @@ impl Tool for Inspect {
             "type": "object",
             "required": ["topic"],
             "properties": {
-                "topic": {"type": "string", "enum": TOPICS, "description": "Che cosa guardare: overview (riepilogo), models (modelli e consigli), downloads, runtimes (motori), agents (assistenti, profili, team), connectors (server MCP), settings, memory (ricordi), secrets (quali segreti sono impostati), activity (registro recente)."},
+                "topic": {"type": "string", "enum": TOPICS, "description": "Che cosa guardare: overview (riepilogo), models (modelli e consigli), downloads, runtimes (motori), agents (assistenti, profili, team), connectors (server MCP), settings, memory (ricordi), secrets (quali segreti sono impostati), activity (registro recente), tasks (lavori in background e proposte)."},
                 "id": {"type": "string", "description": "Identificativo di una voce, per il dettaglio (modello, motore, assistente, connettore). Per un motore include il piano di installazione."},
                 "query": {"type": "string", "description": "Filtra le voci per testo (nome, chiave, contenuto)."},
                 "refresh": {"type": "boolean", "description": "Solo per runtimes: rileva di nuovo i motori installati prima di rispondere."}
@@ -112,6 +112,7 @@ pub(crate) async fn render(e: &Engine, args: &Value) -> Result<String> {
         "settings" => settings(e, &a),
         "memory" => memory(e, &a)?,
         "secrets" => secrets(e),
+        "tasks" => tasks(e, &a)?,
         _ => activity(e, &a),
     };
     Ok(finish(e, value))
@@ -496,6 +497,46 @@ fn memory(e: &Engine, a: &Args) -> Result<Value> {
         })
         .collect();
     Ok(json!({"counts": counts, "memories": listing(items)}))
+}
+
+// ------------------------------------------------------------------ background tasks and proposals
+
+/// The work the assistant does in the background, the proposals that wait for the person and today's briefing: what
+/// `aiw_task` acts on. Text that comes from elsewhere (instructions of a proposal, what an agent said) is clipped and redacted.
+fn tasks(e: &Engine, a: &Args) -> Result<Value> {
+    let list = e.tasks(None)?;
+    let items = list
+        .iter()
+        .filter(|t| hit(&a.query, &[&t.title, &t.instruction, &t.status]))
+        .filter(|t| a.id.as_deref().is_none_or(|id| t.id == id))
+        .map(|t| {
+            json!({
+                "id": t.id, "title": text(&t.title, 80), "status": t.status, "stopping": t.stopping,
+                "pause_reason": t.pause_reason, "pause_text": t.pause_text.as_deref().map(|w| text(w, 200)),
+                "auto_resume": t.auto_resume,
+                "waiting_approval": t.waiting_approval.as_ref().map(|r| json!({"tool": r.tool, "reason": text(&r.reason, 160)})),
+                "steps": t.progress.turns, "minutes": t.progress.seconds / 60,
+                "last_tool": t.progress.last_tool, "last_said": t.progress.last_text.as_deref().map(|w| text(w, 160)),
+                "pending_instructions": t.instructions.iter().filter(|i| i.status == "pending").count(),
+                "result": t.result.as_deref().map(|w| text(w, 240)), "error": t.error.as_deref().map(|w| text(w, 160)),
+            })
+        })
+        .collect();
+    let proposals = e.proposals(Some("open"), Some("proposal"))?;
+    let open = proposals
+        .iter()
+        .filter(|p| hit(&a.query, &[&p.title, &p.noticed, &p.instruction]))
+        .map(|p| json!({"id": p.id, "title": text(&p.title, 80), "noticed": text(&p.noticed, 240), "instruction": text(&p.instruction, 300)}))
+        .collect();
+    let briefing = e.proposals(Some("open"), Some("briefing"))?.into_iter().next().map(|b| text(&b.noticed, 600));
+    let status = e.proactive_status();
+    Ok(json!({
+        "tasks": listing(items),
+        "open_proposals": listing(open),
+        "briefing": briefing,
+        "assistant": {"level": status.level, "minutes_used_today": status.budget_used_minutes, "minutes_per_day": status.budget_minutes,
+                      "stopped_by_kill_switch": status.stopped_by_kill_switch},
+    }))
 }
 
 // ------------------------------------------------------------------ secrets
@@ -902,7 +943,7 @@ mod tests {
         assert_eq!(tool.risk(), Risk::Read);
         assert!(tool.explicit_grant(), "a `*` in an agent's tools does not include it");
         assert_eq!(tool.subject(&json!({"topic": "secrets"})), Some("secrets".into()));
-        assert_eq!(tool.parameters()["properties"]["topic"]["enum"].as_array().unwrap().len(), 10);
+        assert_eq!(tool.parameters()["properties"]["topic"]["enum"].as_array().unwrap().len(), 11);
         let args = json!({"topic": "overview"});
         let err = tool.call(args.clone(), &test_ctx(&e, None)).await.unwrap_err();
         assert!(matches!(err, Error::Denied(_)) && err.to_string().contains("disponibile solo all'Assistente in una chat"), "{err}");
