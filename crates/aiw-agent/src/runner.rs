@@ -54,9 +54,10 @@ pub trait RunHost: Send + Sync {
         Ok(agent_id.to_string())
     }
     /// Is this call one the host already knows cannot work in this run (a management tool outside
-    /// a chat of the owner)? The reason is the text the model gets back. It is asked before the
-    /// hooks, the policy and any confirmation, so nobody is asked to confirm what would be refused
-    /// anyway. `None` (the default): nothing stands in the way.
+    /// a chat of the owner)? The reason goes into the result the model gets back (as «Negato: …», so
+    /// the self-check at the end of the run takes the refusal as final) and into the audit. It is asked
+    /// before the hooks, the policy and any confirmation, so nobody is asked to confirm what would be
+    /// refused anyway. `None` (the default): nothing stands in the way.
     fn refuse_tool(&self, run_id: &str, tool: &str) -> Option<String> {
         let _ = (run_id, tool);
         None
