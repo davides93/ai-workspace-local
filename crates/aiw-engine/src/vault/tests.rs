@@ -89,7 +89,7 @@ fn raw_doc(home: &Home, kind: &str, id: &str) -> String {
 
 fn started(home: &Home, ks: &Arc<MemoryKeyStore>) -> (Store, LayeredConfig, Arc<Vault>) {
     let (store, config) = home.open();
-    let vault = start(&store, &config, &Keychain::Custom(ks.clone()));
+    let vault = start(&store, &config, &Keychain::Custom(ks.clone()), true);
     (store, config, vault)
 }
 
@@ -173,7 +173,7 @@ fn plain_secrets_from_before_are_sealed_at_the_first_start_with_a_keychain_and_n
     // The way every install has been until now: no keychain, plain values in the database and in the configuration file.
     {
         let (store, config) = home.open();
-        let vault = start(&store, &config, &Keychain::None);
+        let vault = start(&store, &config, &Keychain::None, true);
         assert_eq!(vault.phase().code(), "not_used");
         write_secrets(&store, &config);
         let st = vault.status(&store, &config);
@@ -189,6 +189,9 @@ fn plain_secrets_from_before_are_sealed_at_the_first_start_with_a_keychain_and_n
     read_back(&store, &config); // no data lost
     let st = vault.status(&store, &config);
     assert_eq!((st.encrypted, st.plain, st.unreadable), (N, 0, 0), "{st:?}");
+    // Looked at while the engine still has the database open (so the `-wal` is whatever the migration left, not what closing it
+    // would clean up), and again once it is closed.
+    assert_no_plain_on_disk(&home);
     drop(store);
     assert_no_plain_on_disk(&home); // not in the database, not in its log, not in a freed page, not in the settings file
 
@@ -295,7 +298,7 @@ fn a_keychain_that_refuses_the_key_or_loses_it_is_not_used() {
     let home = Home::new();
     let (store, config) = home.open();
     let ks = Arc::new(Amnesiac(MemoryKeyStore::default()));
-    let vault = start(&store, &config, &Keychain::Custom(ks.clone()));
+    let vault = start(&store, &config, &Keychain::Custom(ks.clone()), true);
     assert_eq!(vault.phase().code(), "unavailable");
     assert!(ks.0.is_empty(), "the item that could not be verified is removed again");
     store.put_doc("secret", "k", &json!({"value": IMAP})).unwrap();
@@ -306,7 +309,7 @@ fn a_keychain_that_refuses_the_key_or_loses_it_is_not_used() {
 fn a_build_without_a_keychain_says_not_used_and_keeps_secrets_plain() {
     let home = Home::new();
     let (store, config) = home.open();
-    let vault = start(&store, &config, &Keychain::None);
+    let vault = start(&store, &config, &Keychain::None, true);
     let st = vault.status(&store, &config);
     assert_eq!(st.state, "not_used");
     assert!(st.backend.is_none() && st.detail.is_some());
@@ -365,7 +368,7 @@ fn forgetting_the_unreadable_clears_them_and_makes_a_new_key_so_the_secrets_can_
     let (store, config, vault) = started(&home, &ks);
     assert_eq!(vault.phase(), Phase::KeyLost);
 
-    let cleared = vault.forget_unreadable(&store, &config, true);
+    let cleared = vault.forget_unreadable(&store, &config, true).unwrap();
     assert_eq!(cleared as u64, N);
     assert_eq!(vault.phase(), Phase::Active, "nothing sealed is left, so a new key is made");
     assert_eq!(ks.len(), 1);
@@ -428,6 +431,148 @@ fn a_data_folder_copied_without_secrets_gets_a_new_key_without_complaint() {
     assert_eq!(other.len(), 1);
     write_secrets(&store, &config);
     read_back(&store, &config);
+}
+
+// ---------------------------------------------------------------------------------------------------- review: data-loss guards
+
+#[test]
+fn forgetting_the_unreadable_refuses_when_the_keychain_is_only_unreachable() {
+    let home = Home::new();
+    let ks = MemoryKeyStore::new();
+    {
+        let (store, config, _) = started(&home, &ks);
+        write_secrets(&store, &config);
+    }
+    ks.deny(Some("il portachiavi è bloccato"));
+    let (store, config, vault) = started(&home, &ks);
+    assert_eq!(vault.phase().code(), "unavailable");
+    // Every sealed value looks unreadable now, and all of them are perfectly good: nothing may be cleared.
+    let err = vault.forget_unreadable(&store, &config, true).unwrap_err();
+    assert!(err.contains("non tolgo nulla"), "{err}");
+    drop((store, config));
+    ks.deny(None);
+    let (store, config, vault) = started(&home, &ks);
+    assert_eq!(vault.phase(), Phase::Active);
+    read_back(&store, &config);
+
+    // And without a keychain at all there is nothing sealed to forget.
+    let plain = Home::new();
+    let (store, config) = plain.open();
+    let vault = start(&store, &config, &Keychain::None, true);
+    assert!(vault.forget_unreadable(&store, &config, true).is_err());
+}
+
+#[test]
+fn a_value_sealed_by_a_newer_format_is_never_cleared_by_forget_unreadable() {
+    let home = Home::new();
+    let ks = MemoryKeyStore::new();
+    let (store, config, vault) = started(&home, &ks);
+    store.put_doc("secret", "future", &json!({"value": "aiwenc2:ffffffff:AAAAAAAA"})).unwrap();
+    assert_eq!(vault.forget_unreadable(&store, &config, true), Ok(0));
+    assert_eq!(store.get_doc::<Value>("secret", "future").unwrap().unwrap()["value"], "aiwenc2:ffffffff:AAAAAAAA");
+}
+
+#[test]
+fn switching_off_with_a_settings_file_that_cannot_be_read_keeps_the_key() {
+    let home = Home::new();
+    let ks = MemoryKeyStore::new();
+    {
+        let (store, config, _) = started(&home, &ks);
+        write_secrets(&store, &config);
+    }
+    let config = LayeredConfig::load(app_schema(), home.config_file(), home.root.join("device.json"), None);
+    config.set(Layer::Global, "security.secrets_at_rest", json!("off")).unwrap();
+    // A device settings file nobody can parse may hold a sealed secret: the key must not go while that is possible.
+    std::fs::write(home.root.join("device.json"), "{ rotto").unwrap();
+    let (store, _config, vault) = started(&home, &ks);
+    assert_eq!(vault.phase(), Phase::Off);
+    assert_eq!(ks.len(), 1, "the key stays: something unreadable may still need it");
+    assert!(store.get_doc::<Value>("vault", "main").unwrap().is_some());
+    assert_eq!(store.get_doc::<Value>("model_provider", "hf").unwrap().unwrap()["token"], HF, "what could be unsealed was");
+}
+
+#[test]
+fn a_database_without_a_vault_row_next_to_sealed_settings_is_declared_not_given_a_new_key() {
+    let home = Home::new();
+    let ks = MemoryKeyStore::new();
+    {
+        let (store, config, _) = started(&home, &ks);
+        write_secrets(&store, &config);
+    }
+    // A restore replaced the database with one that has no vault row; the settings file kept its sealed key.
+    for f in ["aiw.db", "aiw.db-wal", "aiw.db-shm"] {
+        let _ = std::fs::remove_file(home.root.join(f));
+    }
+    let before = ks.accounts();
+    let (_store, config, vault) = started(&home, &ks);
+    assert_eq!(vault.phase(), Phase::KeyLost);
+    assert_eq!(ks.accounts(), before, "no new key");
+    assert_eq!(config.get_str("search.brave_api_key"), None);
+}
+
+#[test]
+fn a_one_shot_command_reads_the_key_and_changes_nothing_about_the_vault() {
+    let home = Home::new();
+    let ks = MemoryKeyStore::new();
+    {
+        let (store, config, _) = started(&home, &ks);
+        write_secrets(&store, &config);
+    }
+    // The setting says off (the app has not restarted yet); a command run meanwhile must not unseal anything or remove the key.
+    let config = LayeredConfig::load(app_schema(), home.config_file(), home.root.join("device.json"), None);
+    config.set(Layer::Global, "security.secrets_at_rest", json!("off")).unwrap();
+    let (store, config) = home.open();
+    let vault = start(&store, &config, &Keychain::Custom(ks.clone()), false);
+    assert_eq!(vault.phase(), Phase::Off);
+    read_back(&store, &config); // it opens what is sealed
+    assert_eq!(ks.len(), 1);
+    assert!(store.get_doc::<Value>("vault", "main").unwrap().is_some());
+    assert!(raw_doc(&home, "model_provider", "hf").contains("aiwenc1:"), "still sealed on disk");
+    drop((store, config));
+
+    // On a data folder that never had a vault it makes none and says who does.
+    let fresh = Home::new();
+    let empty = MemoryKeyStore::new();
+    let (store, config) = fresh.open();
+    let vault = start(&store, &config, &Keychain::Custom(empty.clone()), false);
+    assert_eq!(vault.phase().code(), "not_used");
+    assert!(empty.is_empty());
+    assert!(store.get_doc::<Value>("vault", "main").unwrap().is_none());
+}
+
+#[test]
+fn earlier_plain_versions_of_a_value_do_not_stay_behind_in_free_pages() {
+    const OLD: &str = "TEST_ONLY_old_rotated_token_";
+    const GONE: &str = "TEST_ONLY_deleted_account_pw_";
+    let home = Home::new();
+    {
+        // An install from before: no keychain, a token rotated twice, an account created and deleted.
+        let (store, config) = home.open();
+        let _ = start(&store, &config, &Keychain::None, true);
+        store.put_doc("secret", "k", &json!({"value": format!("{OLD}{}", "a".repeat(3000))})).unwrap();
+        store.put_doc("secret", "k", &json!({"value": format!("{OLD}{}", "b".repeat(3000))})).unwrap();
+        store.put_doc("secret", "gone", &json!({"value": format!("{GONE}{}", "c".repeat(3000))})).unwrap();
+        store.delete_doc("secret", "gone").unwrap();
+        store.put_doc("secret", "k", &json!({"value": IMAP})).unwrap();
+    }
+    let on_disk = |needle: &str| disk_text(&home).iter().any(|(_, b)| contains(b, needle));
+    assert!(on_disk(OLD) && on_disk(GONE), "the setup must leave the old versions in the file, or this test proves nothing");
+
+    let ks = MemoryKeyStore::new();
+    let (store, _config, _vault) = started(&home, &ks);
+    // While the database is open, and after it is closed.
+    assert!(!on_disk(OLD) && !on_disk(GONE) && !on_disk(IMAP), "an earlier version of a secret is still in the file");
+    drop(store);
+    assert!(!on_disk(OLD) && !on_disk(GONE) && !on_disk(IMAP));
+}
+
+#[test]
+fn debug_never_prints_a_key() {
+    let shown = format!("{:?} {:?}", KeyRead::Found(vec![7; 32]), MemoryKeyStore::new());
+    assert!(!shown.contains("7, 7") && shown.contains("32 byte"), "{shown}");
+    let ks = MemoryKeyStore::new();
+    ks.write("a", &[9; 32]).unwrap();
+    assert!(!format!("{ks:?}").contains("9, 9"));
 }
 
 // ---------------------------------------------------------------------------------------------------- two processes
@@ -725,7 +870,7 @@ mod real_keychain {
         assert!(ks.write("account", &[1; 32]).is_err());
         let home = Home::new();
         let (store, config) = home.open();
-        let vault = start(&store, &config, &Keychain::Custom(ks));
+        let vault = start(&store, &config, &Keychain::Custom(ks), true);
         let Phase::Unavailable(why) = vault.phase() else { panic!("{:?}", vault.phase()) };
         assert!(!why.is_empty());
         write_secrets(&store, &config);
@@ -742,7 +887,7 @@ mod real_keychain {
         let home = Home::new();
         let ks = Arc::new(OsKeyStore::with_service(SERVICE));
         let (store, config) = home.open();
-        let vault = start(&store, &config, &Keychain::Custom(ks.clone()));
+        let vault = start(&store, &config, &Keychain::Custom(ks.clone()), true);
         let account = store.get_doc::<VaultRow>(VAULT_KIND, VAULT_ID).unwrap().map(|r| r.account);
         let _cleanup = account.clone().map(|a| Cleanup(ks.clone(), a));
         assert_eq!(vault.phase(), Phase::Active, "the real keychain was not usable here: {:?}", vault.phase());
@@ -753,14 +898,14 @@ mod real_keychain {
 
         // A new process (a restart) finds the same key in the same keychain.
         let (store, config) = home.open();
-        let vault = start(&store, &config, &Keychain::Custom(Arc::new(OsKeyStore::with_service(SERVICE))));
+        let vault = start(&store, &config, &Keychain::Custom(Arc::new(OsKeyStore::with_service(SERVICE))), true);
         assert_eq!(vault.phase(), Phase::Active);
         read_back(&store, &config);
 
         // The person deletes the item in the keychain app: the state says so, nothing is touched or remade.
         ks.remove(account.as_deref().unwrap()).unwrap();
         let (store2, config2) = Home::open_again(&home);
-        let vault2 = start(&store2, &config2, &Keychain::Custom(Arc::new(OsKeyStore::with_service(SERVICE))));
+        let vault2 = start(&store2, &config2, &Keychain::Custom(Arc::new(OsKeyStore::with_service(SERVICE))), true);
         assert_eq!(vault2.phase(), Phase::KeyLost);
         assert_eq!(ks.read(account.as_deref().unwrap()), KeyRead::Missing, "no new key over a vault that has sealed values");
         drop((store, config));
@@ -772,4 +917,47 @@ impl Home {
     fn open_again(home: &Home) -> (Store, LayeredConfig) {
         home.open()
     }
+}
+
+#[tokio::test]
+async fn a_channel_or_mail_account_whose_secret_cannot_be_opened_is_not_started_with_the_ciphertext() {
+    use aiw_core::api::{ChannelCreate, MailAccount};
+    let (data, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let ks = MemoryKeyStore::new();
+    let opts = |ks: Arc<MemoryKeyStore>| crate::EngineOptions {
+        data_dir: Some(data.path().to_path_buf()),
+        workspace_root: Some(ws.path().to_path_buf()),
+        mode: "embedded".into(),
+        offline: true,
+        keychain: Keychain::Custom(ks),
+        ..Default::default()
+    };
+    let e = crate::Engine::new(opts(ks.clone())).await.unwrap();
+    let ch = e
+        .channel_create(ChannelCreate {
+            kind: "telegram".into(),
+            name: "Bot".into(),
+            secrets: [("bot_token".to_string(), BOT.to_string())].into(),
+            ..Default::default()
+        })
+        .unwrap();
+    e.set_mail_accounts(vec![MailAccount {
+        id: "personale".into(),
+        host: "imap.example.org".into(),
+        port: 993,
+        username: "io@example.org".into(),
+        password: IMAP.into(),
+        folders: vec![],
+    }])
+    .unwrap();
+    let channel = e.0.store.get_doc::<aiw_core::api::Channel>("channel", &ch.channel.id).unwrap().unwrap();
+    assert!(e.channel_ready(&channel).is_ok());
+    drop(e);
+    // The key is gone: the secrets are unreadable, the channel says a token is missing instead of connecting with ciphertext.
+    ks.wipe();
+    let e = crate::Engine::new(opts(ks.clone())).await.unwrap();
+    assert_eq!(e.0.vault.phase(), Phase::KeyLost);
+    let channel = e.0.store.get_doc::<aiw_core::api::Channel>("channel", &ch.channel.id).unwrap().unwrap();
+    assert!(e.channel_ready(&channel).unwrap_err().contains("Manca il token"));
+    assert!(e.imap_password("personale").is_none());
 }

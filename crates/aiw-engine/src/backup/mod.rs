@@ -340,7 +340,10 @@ enum DbSecrets<'a> {
 
 /// Opens every sealed secret of a copy of the database with `codec`; what cannot be opened is cleared (a sealed value is of no
 /// use anywhere else) and counted. The vault row goes: it describes this computer's keychain. Returns how many were cleared.
-fn open_secrets_in_db(c: &Connection, codec: &dyn SecretCodec) -> Result<usize> {
+///
+/// With `scrub` the plain value never reaches the copy: an opened address keeps its host and path and loses its credentials, any
+/// other opened secret is emptied at once. (A copy that is killed halfway must not leave a plain database in the data folder.)
+fn open_secrets_in_db(c: &Connection, codec: &dyn SecretCodec, scrub: bool) -> Result<usize> {
     if !table_exists(c, "documents")? {
         return Ok(0);
     }
@@ -358,7 +361,8 @@ fn open_secrets_in_db(c: &Connection, codec: &dyn SecretCodec) -> Result<usize> 
             rules::visit_secrets(kind, &mut v, &mut |s| {
                 if is_sealed(s) {
                     match codec.open(s) {
-                        SecretRead::Opened(plain) => *s = plain,
+                        SecretRead::Opened(plain) if !scrub => *s = plain,
+                        SecretRead::Opened(plain) => *s = if plain.contains("://") { scrub_url(&plain) } else { String::new() },
                         _ => {
                             s.clear();
                             lost += 1;
@@ -391,7 +395,7 @@ fn snapshot_db(src: &Path, dest: &Path, secrets: DbSecrets) -> Result<(i64, usiz
         DbSecrets::Scrub(codec) => {
             copy.execute_batch("PRAGMA secure_delete = ON").map_err(db_err)?;
             if let Some(codec) = codec {
-                open_secrets_in_db(&copy, codec)?;
+                lost = open_secrets_in_db(&copy, codec, true)?;
             }
             scrub_db(&copy)?;
             copy.execute_batch("VACUUM").map_err(db_err)?;
@@ -399,7 +403,7 @@ fn snapshot_db(src: &Path, dest: &Path, secrets: DbSecrets) -> Result<(i64, usiz
         DbSecrets::Open(codec) => {
             // The archive does not keep a sealed copy next to the plain one: old pages are overwritten and the file compacted.
             copy.execute_batch("PRAGMA secure_delete = ON").map_err(db_err)?;
-            lost = open_secrets_in_db(&copy, codec)?;
+            lost = open_secrets_in_db(&copy, codec, false)?;
             copy.execute_batch("VACUUM").map_err(db_err)?;
         }
         DbSecrets::AsStored => {}
@@ -589,6 +593,10 @@ pub fn create(dirs: &DataDirs, opts: &BackupOptions, out: &Path) -> Result<Backu
                 "{unopened} segreti cifrati non si sono potuti aprire (la chiave non è raggiungibile): non sono nel backup e vanno inseriti di nuovo"
             ));
         }
+    } else if unopened > 0 {
+        skipped.push(format!(
+            "{unopened} valori cifrati non si sono potuti aprire (la chiave non è raggiungibile): gli indirizzi che portavano una credenziale sono stati svuotati del tutto, host e percorso compresi"
+        ));
     }
     let manifest = BackupManifest {
         format: FORMAT,

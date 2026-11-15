@@ -585,6 +585,9 @@ async fn main() -> Result<()> {
         workspace_root: cli.workspace.clone(),
         mode: if serve_mode { "daemon".into() } else { "embedded".into() },
         keychain: aiw_engine::vault::Keychain::System,
+        // Only what stays up (`aiw serve`) may make the key or migrate: a one-shot command can run next to the app, which holds
+        // the key in memory and would write back what it has.
+        secrets_read_only: !serve_mode,
         ..Default::default()
     })
     .await
@@ -1460,6 +1463,18 @@ fn secrets_lines(s: &aiw_core::api::SecretsAtRest) -> Vec<String> {
     ]
 }
 
+/// `aiw secrets encrypt|decrypt` write the global layer; a value set in the device layer wins over it, and the command would
+/// then report a success that changed nothing.
+fn warn_if_overridden(engine: &Engine, wanted: &str) {
+    let now = engine.config().effective.get("security.secrets_at_rest").and_then(|v| v.as_str().map(String::from));
+    if now.as_deref().unwrap_or("auto") != wanted {
+        eprintln!(
+            "ATTENZIONE: l'impostazione security.secrets_at_rest vale «{}» perché la decide un altro livello (dispositivo o cartella di lavoro): cambiala lì, il comando non ha effetto.",
+            now.unwrap_or_default()
+        );
+    }
+}
+
 /// `aiw secrets`: these never start the whole app (no network, no background loops) and the ones that change something refuse to
 /// run while another process has the data open: that process holds the secrets in memory and would write them back.
 async fn secrets_cmd(data: Option<PathBuf>, workspace: Option<PathBuf>, cmd: SecretsCmd) -> Result<()> {
@@ -1474,6 +1489,8 @@ async fn secrets_cmd(data: Option<PathBuf>, workspace: Option<PathBuf>, cmd: Sec
         mode: "embedded".into(),
         offline: true,
         keychain: aiw_engine::vault::Keychain::System,
+        // `status` only reads; the others are the explicit requests that may change the vault (and refused above if the data are in use).
+        secrets_read_only: !changes,
         ..Default::default()
     })
     .await
@@ -1487,12 +1504,14 @@ async fn secrets_cmd(data: Option<PathBuf>, workspace: Option<PathBuf>, cmd: Sec
         SecretsCmd::Status => show(&engine),
         SecretsCmd::Encrypt => {
             engine.set_config("global", "security.secrets_at_rest", serde_json::json!("auto"))?;
+            warn_if_overridden(&engine, "auto");
             let m = engine.secrets_reconcile();
             println!("Cifrati {} documenti e {} impostazioni.", m.sealed_docs, m.sealed_settings);
             show(&engine);
         }
         SecretsCmd::Decrypt => {
             engine.set_config("global", "security.secrets_at_rest", serde_json::json!("off"))?;
+            warn_if_overridden(&engine, "off");
             let m = engine.secrets_reconcile();
             println!("Riportati in chiaro {} documenti e {} impostazioni.", m.unsealed_docs, m.unsealed_settings);
             show(&engine);
@@ -1513,7 +1532,7 @@ async fn secrets_cmd(data: Option<PathBuf>, workspace: Option<PathBuf>, cmd: Sec
                     bail!("annullato: non ho toccato nulla");
                 }
             }
-            let n = engine.secrets_forget_unreadable();
+            let n = engine.secrets_forget_unreadable().map_err(|e| anyhow::anyhow!(e))?;
             println!("Tolti {n} segreti illeggibili: reinseriscili dall'app.");
             show(&engine);
         }

@@ -417,8 +417,8 @@ impl Store {
 
     /// Rewrites, in one transaction, every document of the kinds that hold secrets for which `f` says it changed it (the
     /// migration that seals what was plain, and the one that unseals it). `f` works on the stored form, not through the codec.
-    /// The pages that held the old values are overwritten (`secure_delete`) and the log is truncated, so that a plain value
-    /// does not stay behind in the file. Returns how many documents were rewritten.
+    /// The pages that held the old values are overwritten (`secure_delete`), the file is compacted (`VACUUM`, which also drops the
+    /// free pages that kept earlier versions of a value) and the log is truncated, so that a plain value does not stay behind. Returns how many documents were rewritten.
     pub(crate) fn rewrite_secret_docs(&self, f: &mut dyn FnMut(&str, &mut serde_json::Value) -> bool) -> Result<usize> {
         let c = self.conn.lock().unwrap();
         let before: i64 = c.query_row("PRAGMA secure_delete", [], |r| r.get(0)).map_err(db)?;
@@ -443,11 +443,15 @@ impl Store {
             tx.commit().map_err(db)?;
             Ok(changed)
         })();
-        c.execute_batch(&format!("PRAGMA secure_delete = {before}")).map_err(db)?;
         if matches!(done, Ok(n) if n > 0) {
-            // Best effort: a reader in another process can keep the log from being truncated.
+            // Rewriting the rows overwrites their cells, but the pages that held EARLIER versions of a value (a token that was
+            // rotated, an account that was deleted, a document saved several times before the upgrade) are free pages that
+            // still hold it. Compacting the file drops them; then the log is truncated so that none of it stays in the `-wal`.
+            // Best effort: a reader in another process can make either fail, and the docs say so.
+            let _ = c.execute_batch("VACUUM");
             let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         }
+        c.execute_batch(&format!("PRAGMA secure_delete = {before}")).map_err(db)?;
         done
     }
 

@@ -22,9 +22,10 @@
 //!
 //! * *The key is not in the keychain any more* (the item was deleted, the data folder came from another computer) while sealed
 //!   values exist: the state is `key_lost`. Nothing is deleted and no new key is made over the old item; the sealed values stay
-//!   as they are, are read as "not set", and `aiw secrets forget-unreadable` clears them so that the secrets are entered again.
+//!   as they are (they do not open), and `aiw secrets forget-unreadable` clears them so that the secrets are entered again.
 //! * *The keychain cannot be used now* (locked, denied, no session): never a new key. The state is `unavailable`; the sealed
-//!   values stay where they are and are read as "not set" for this run.
+//!   values stay where they are and do not open for this run (a channel or mail account with such a secret says it is missing; any
+//!   other consumer would get the sealed string as is, which no service accepts).
 //! * *A value that cannot be opened* comes back from `get_doc` as its stored string and goes back in unchanged on the next
 //!   `put_doc`: saving a document never destroys it.
 //! * *Two processes starting together* both make a key, but only one claims the vault row; the other removes its item and uses
@@ -178,9 +179,30 @@ impl Vault {
             }
         };
         match row {
+            // No vault row but sealed values (a restore that replaced the database and left a settings file sealed, a row that
+            // was lost): a key made now would not open them, and they would be unreadable for good. Declared, not remade.
+            None if sealed_values_exist(store, config) => self.set(Phase::KeyLost, None, None),
             None if wanted => self.create(store),
             None => self.set(Phase::Off, None, None),
             Some(row) => self.adopt(store, config, row, wanted),
+        }
+    }
+
+    /// The phase for a process that must not change anything about the vault (see [`start`]): it finds the key of an existing vault
+    /// and says what it finds. With no vault yet it makes none and reports that the app does it.
+    pub fn reconcile_readonly(&self, store: &Store, wanted: bool) {
+        if !self.keystore.is_used() {
+            self.set(Phase::NotUsed(self.keystore.backend()), None, None);
+            return;
+        }
+        match store.get_doc::<VaultRow>(VAULT_KIND, VAULT_ID) {
+            Ok(Some(row)) => self.use_row(&row, wanted, None),
+            Ok(None) => self.set(
+                Phase::NotUsed("la cifratura dei segreti la avvia l'app (o `aiw serve`); questo comando non la cambia".into()),
+                None,
+                None,
+            ),
+            Err(e) => self.set(Phase::Unavailable(format!("il database non risponde: {e}")), None, None),
         }
     }
 
@@ -194,12 +216,7 @@ impl Vault {
         let outcome = (|| -> Result<(Arc<Key>, VaultRow), String> {
             self.keystore.write(&account, &bytes).map_err(|e| format!("il portachiavi non accetta la chiave: {e}"))?;
             // Never seal with a key that cannot be read back: the secrets would be lost with the next start.
-            match self.keystore.read(&account) {
-                KeyRead::Found(back) if back == bytes => {}
-                KeyRead::Found(_) => return Err("il portachiavi restituisce una chiave diversa da quella salvata".into()),
-                KeyRead::Missing => return Err("il portachiavi non conserva la chiave appena salvata".into()),
-                KeyRead::Inaccessible(e) => return Err(format!("il portachiavi non si legge: {e}")),
-            }
+            self.read_back(&account, &bytes)?;
             let key = Key::from_bytes(&bytes)?;
             let row = VaultRow { account: account.clone(), key_id: key.id().to_string(), created_at: aiw_core::now_rfc3339() };
             Ok((Arc::new(key), row))
@@ -231,6 +248,24 @@ impl Vault {
                 self.set(Phase::Unavailable(format!("il database non risponde: {e}")), None, None);
             }
         }
+    }
+
+    /// Reads the item just written and checks it is the key. A few tries: some stores (Windows Credential Manager) can answer "no
+    /// such item" to a read made right after a write from another thread.
+    fn read_back(&self, account: &str, bytes: &[u8]) -> Result<(), String> {
+        let mut last = String::new();
+        for attempt in 0..4 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            match self.keystore.read(account) {
+                KeyRead::Found(back) if back == bytes => return Ok(()),
+                KeyRead::Found(_) => return Err("il portachiavi restituisce una chiave diversa da quella salvata".into()),
+                KeyRead::Missing => last = "il portachiavi non conserva la chiave appena salvata".into(),
+                KeyRead::Inaccessible(e) => return Err(format!("il portachiavi non si legge: {e}")),
+            }
+        }
+        Err(last)
     }
 
     /// The vault exists: find its key. `missing` is the decision when the key is not there (see the module documentation).
@@ -280,10 +315,7 @@ impl Vault {
         };
         let done = (|| -> Result<(Arc<Key>, VaultRow), String> {
             self.keystore.write(account, &bytes).map_err(|e| format!("il portachiavi non accetta la chiave: {e}"))?;
-            match self.keystore.read(account) {
-                KeyRead::Found(back) if back == bytes => {}
-                _ => return Err("il portachiavi non restituisce la chiave appena salvata".into()),
-            }
+            self.read_back(account, &bytes)?;
             let key = Key::from_bytes(&bytes)?;
             let row = VaultRow { account: account.into(), key_id: key.id().to_string(), created_at: aiw_core::now_rfc3339() };
             Ok((Arc::new(key), row))
@@ -334,6 +366,7 @@ impl Vault {
                 }
             }
             (Phase::Off, Some(key)) => {
+                let mut clean = true;
                 match store.rewrite_secret_docs(&mut |kind, doc| {
                     let mut changed = false;
                     rules::visit_secrets(kind, doc, &mut |s| {
@@ -347,14 +380,21 @@ impl Vault {
                     changed
                 }) {
                     Ok(n) => m.unsealed_docs = n,
-                    Err(e) => tracing::warn!("segreti a riposo: il ritorno in chiaro del database non è riuscito: {e}"),
+                    Err(e) => {
+                        clean = false;
+                        tracing::warn!("segreti a riposo: il ritorno in chiaro del database non è riuscito: {e}");
+                    }
                 }
                 match config.reconcile_files() {
                     Ok(n) => m.unsealed_settings = n,
-                    Err(e) => tracing::warn!("segreti a riposo: il ritorno in chiaro delle impostazioni non è riuscito: {e}"),
+                    Err(e) => {
+                        clean = false;
+                        tracing::warn!("segreti a riposo: il ritorno in chiaro delle impostazioni non è riuscito: {e}");
+                    }
                 }
-                // Only when nothing sealed is left, the key is not needed any more: remove it and forget the vault.
-                if !sealed_values_exist(store, config) {
+                // Only when every step worked and nothing sealed is left (an unreadable store or file counts as "something is
+                // left"), the key is not needed any more: remove it and forget the vault.
+                if clean && !sealed_values_exist(store, config) {
                     if let Some(account) = account {
                         match self.keystore.remove(&account) {
                             Ok(()) => {
@@ -375,11 +415,24 @@ impl Vault {
     /// Clears every secret that cannot be opened (a value sealed with a key that is gone), so that it can be entered again, and
     /// makes a new key when nothing sealed is left. Returns how many values were cleared. This is the only way a sealed value
     /// is ever discarded, and only on an explicit request.
-    pub fn forget_unreadable(&self, store: &Store, config: &LayeredConfig, wanted: bool) -> usize {
-        let key = self.key();
+    ///
+    /// It refuses unless the vault *knows* the key is gone (`key_lost`) or has the key and some values are not its own: with the
+    /// keychain locked, denied or unreachable (`unavailable`) every sealed value looks unreadable, and clearing them would destroy
+    /// secrets that are perfectly good. Only values of this format (`aiwenc1:`) are touched: one a newer build wrote is left alone.
+    pub fn forget_unreadable(&self, store: &Store, config: &LayeredConfig, wanted: bool) -> Result<usize, String> {
+        let key = match (self.phase(), self.key()) {
+            (Phase::KeyLost, k) => k,
+            (Phase::Active | Phase::Off, Some(k)) => Some(k),
+            (Phase::Unavailable(why), _) => {
+                return Err(format!(
+                    "il portachiavi non è raggiungibile ora ({why}): i segreti cifrati potrebbero essere buoni, non tolgo nulla"
+                ))
+            }
+            _ => return Err("non c'è nessun segreto cifrato da togliere in questo stato".into()),
+        };
+        let unreadable = |s: &str| s.starts_with(aiw_core::sealed::SEALED_PREFIX) && key.as_ref().is_none_or(|k| k.open(s).is_none());
         let mut cleared = 0;
-        let unreadable = |s: &str| is_sealed(s) && key.as_ref().is_none_or(|k| k.open(s).is_none());
-        let _ = store.rewrite_secret_docs(&mut |kind, doc| {
+        let docs = store.rewrite_secret_docs(&mut |kind, doc| {
             let mut changed = false;
             rules::visit_secrets(kind, doc, &mut |s| {
                 if unreadable(s) {
@@ -390,10 +443,14 @@ impl Vault {
             });
             changed
         });
+        if let Err(e) = docs {
+            // The transaction rolled back: nothing was cleared.
+            return Err(format!("il database non si è lasciato modificare, non ho tolto nulla: {e}"));
+        }
         cleared += config.clear_unreadable_secrets(&|s| unreadable(s));
         self.reconcile(store, config, wanted);
         let _ = self.migrate(store, config);
-        cleared
+        Ok(cleared)
     }
 
     // ------------------------------------------------------------------------------------------------ report
@@ -455,10 +512,18 @@ impl Vault {
     }
 }
 
-/// Is any stored secret sealed (documents and settings files)?
+/// Is any stored secret sealed (documents and settings files)? What cannot be looked at (a database that does not answer, a
+/// settings file that does not parse) counts as "yes": the answer decides whether a key may be removed or replaced, and the safe
+/// side of a doubt is to keep it.
 fn sealed_values_exist(store: &Store, config: &LayeredConfig) -> bool {
-    store.stored_secret_strings().unwrap_or_default().iter().any(|(_, s)| is_sealed(s))
-        || config.secrets_on_disk().iter().any(|s| is_sealed(s))
+    let Ok(docs) = store.stored_secret_strings() else { return true };
+    if docs.iter().any(|(_, s)| is_sealed(s)) {
+        return true;
+    }
+    match config.secrets_on_disk_checked() {
+        Some(files) => files.iter().any(|s| is_sealed(s)),
+        None => true,
+    }
 }
 
 impl SecretCodec for Vault {
@@ -525,12 +590,24 @@ impl Keychain {
 
 /// Starts the vault of a data folder: reconciles it, hands the store and the configuration their codec, runs the migration.
 /// Call it right after the store is opened and before anything reads a secret.
-pub fn start(store: &Store, config: &LayeredConfig, keychain: &Keychain) -> Arc<Vault> {
+///
+/// `maintain` is true for what stays up (the app, the daemon) and for the commands that ask for it (`aiw secrets encrypt`,
+/// `decrypt`, `forget-unreadable`): they may make the key and migrate. A one-shot command (`aiw doctor`, `aiw run`, `aiw secrets
+/// status`) passes false: it reads the key if there is one, so what it writes is sealed too and what it reads opens, but it
+/// changes nothing about the vault, because another process may have the data open and hold the key in memory.
+pub fn start(store: &Store, config: &LayeredConfig, keychain: &Keychain, maintain: bool) -> Arc<Vault> {
     let vault = Vault::new(keychain.keystore());
     let wanted = config.get_str("security.secrets_at_rest").as_deref() != Some("off");
-    vault.reconcile(store, config, wanted);
+    if maintain {
+        vault.reconcile(store, config, wanted);
+    } else {
+        vault.reconcile_readonly(store, wanted);
+    }
     store.set_codec(vault.clone());
     config.set_codec(vault.clone());
+    if !maintain {
+        return vault;
+    }
     let m = vault.migrate(store, config);
     if m != Migration::default() {
         tracing::info!(

@@ -434,11 +434,9 @@ impl LayeredConfig {
         let Some(codec) = self.codec() else { return Ok(0) };
         let sealing = codec.is_sealing();
         let mut changed = 0;
-        let layers = [
-            (&self.global, Some(self.global_path.clone())),
-            (&self.device, Some(self.device_path.clone())),
-            (&self.workspace, self.workspace_path.read().unwrap().clone()),
-        ];
+        // The workspace layer is the repository's file, not the person's: it is never rewritten here (a machine secret is not
+        // read from it either: see `WORKSPACE_FORBIDDEN`).
+        let layers = [(&self.global, Some(self.global_path.clone())), (&self.device, Some(self.device_path.clone()))];
         for (lock, path) in layers {
             let Some(path) = path else { continue };
             // Only a file that exists and reads: an empty map in memory must never replace a file that could not be parsed.
@@ -476,11 +474,7 @@ impl LayeredConfig {
     /// on an explicit request (`aiw secrets forget-unreadable`). Returns how many were cleared.
     pub fn clear_unreadable_secrets(&self, unreadable: &dyn Fn(&str) -> bool) -> usize {
         let mut cleared = 0;
-        let layers = [
-            (&self.global, Some(self.global_path.clone())),
-            (&self.device, Some(self.device_path.clone())),
-            (&self.workspace, self.workspace_path.read().unwrap().clone()),
-        ];
+        let layers = [(&self.global, Some(self.global_path.clone())), (&self.device, Some(self.device_path.clone()))];
         for (lock, path) in layers {
             let mut m = lock.write().unwrap();
             let before = cleared;
@@ -497,6 +491,23 @@ impl LayeredConfig {
             }
         }
         cleared
+    }
+
+    /// Like [`LayeredConfig::secrets_on_disk`], but `None` when a layer file exists and cannot be read or parsed: then nothing can be
+    /// said about what it holds, and a caller that is about to remove a key must assume the worst.
+    pub fn secrets_on_disk_checked(&self) -> Option<Vec<String>> {
+        let mut out = vec![];
+        let paths = [Some(self.global_path.clone()), Some(self.device_path.clone()), self.workspace_path.read().unwrap().clone()];
+        for p in paths.into_iter().flatten() {
+            let text = match std::fs::read_to_string(&p) {
+                Ok(t) => t,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return None,
+            };
+            let Ok(Value::Object(m)) = serde_json::from_str::<Value>(&text) else { return None };
+            out.extend(self.secret_keys().filter_map(|k| m.get(k).and_then(Value::as_str)).filter(|s| !s.is_empty()).map(str::to_string));
+        }
+        Some(out)
     }
 
     /// The strings the secret settings have in the layer files on disk right now (not the ones in memory): what the status

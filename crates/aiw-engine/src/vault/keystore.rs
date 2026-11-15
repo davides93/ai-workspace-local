@@ -16,13 +16,23 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
-/// What reading the key gave. See the module documentation for why the three cases are separate.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What reading the key gave. See the module documentation for why the three cases are separate. `Debug` never prints the key.
+#[derive(Clone, PartialEq, Eq)]
 pub enum KeyRead {
     Found(Vec<u8>),
     Missing,
     /// The keychain could not be used; the text says why, for a person.
     Inaccessible(String),
+}
+
+impl std::fmt::Debug for KeyRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeyRead::Found(k) => write!(f, "Found({} byte)", k.len()),
+            KeyRead::Missing => write!(f, "Missing"),
+            KeyRead::Inaccessible(why) => write!(f, "Inaccessible({why})"),
+        }
+    }
 }
 
 /// A place that keeps one small secret per account.
@@ -72,13 +82,19 @@ impl KeyStore for NoKeyStore {
 }
 
 /// A keychain in memory, for tests (also of the other crates: `EngineOptions::secrets`). It can be told to fail like a real one.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct MemoryKeyStore {
     items: Mutex<HashMap<String, Vec<u8>>>,
     /// While set, every call answers like a locked keychain.
     denied: Mutex<Option<String>>,
     /// While set, writes fail but reads work (a keychain that refuses new items).
     read_only: Mutex<bool>,
+}
+
+impl std::fmt::Debug for MemoryKeyStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MemoryKeyStore({} items)", self.len())
+    }
 }
 
 impl MemoryKeyStore {
@@ -174,7 +190,7 @@ mod os {
     /// How long a keychain call may take. A keychain waiting for a person (an unlock dialog nobody sees, a session without a
     /// screen) must not hold the start of the app: after this the call is given up on and the secrets are declared
     /// unreachable for this run. The call itself is left to finish on its thread.
-    const PATIENCE: Duration = Duration::from_secs(20);
+    const PATIENCE: Duration = Duration::from_secs(10);
 
     #[cfg(target_os = "macos")]
     const BACKEND: &str = "Portachiavi di macOS (Keychain)";
@@ -265,7 +281,13 @@ mod os {
         ) -> Result<keyring_core::Result<T>, String> {
             let store = self.store()?;
             let (service, account) = (self.service.clone(), account.to_string());
-            match within(move || store.build(&service, &account, None).and_then(op)) {
+            match within(move || {
+                // Windows: the default persistence of a credential is "Enterprise" (it roams with a domain profile); the key belongs
+                // to this computer, next to the database it opens, so it is stored as "Local". The other stores take no modifier.
+                let local: std::collections::HashMap<&str, &str> = [("persistence", "Local")].into_iter().collect();
+                let modifiers = cfg!(target_os = "windows").then_some(&local);
+                store.build(&service, &account, modifiers).and_then(op)
+            }) {
                 Some(r) => Ok(r),
                 None => {
                     self.stuck.store(true, Ordering::Relaxed);

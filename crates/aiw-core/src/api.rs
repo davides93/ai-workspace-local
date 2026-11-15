@@ -2234,7 +2234,7 @@ pub struct SecretsAtRest {
     pub encrypted: u64,
     /// Secret values stored as they are.
     pub plain: u64,
-    /// Sealed values that cannot be opened now: they are kept, and read as "not set".
+    /// Sealed values that cannot be opened now: they are kept as they are and do not open (see `docs/segreti.md`).
     pub unreadable: u64,
 }
 

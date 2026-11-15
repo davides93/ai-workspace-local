@@ -28,7 +28,7 @@ impl Engine {
     }
 
     /// Clears the secrets that cannot be opened (see [`super::Vault::forget_unreadable`]). Returns how many.
-    pub fn secrets_forget_unreadable(&self) -> usize {
+    pub fn secrets_forget_unreadable(&self) -> Result<usize, String> {
         let wanted = self.0.config.get_str("security.secrets_at_rest").as_deref() != Some("off");
         self.0.vault.forget_unreadable(&self.0.store, &self.0.config, wanted)
     }

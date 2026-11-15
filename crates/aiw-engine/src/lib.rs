@@ -90,6 +90,9 @@ pub struct EngineOptions {
     /// and the state says so, which is what the tests and the short-lived background worker want. The app and the daemon
     /// ask for [`vault::Keychain::System`].
     pub keychain: vault::Keychain,
+    /// The vault is only read, never made, migrated or changed (see [`vault::start`]): for a one-shot command that may run while
+    /// the app or the daemon has the same data open. The app and the daemon leave it false.
+    pub secrets_read_only: bool,
 }
 
 /// One event on the global bus (Tauri forwards these as `aiw://run-event`).
@@ -294,7 +297,7 @@ impl Engine {
         let store = Store::open(&dirs.db_file())?;
         // Before anything reads a secret: documents and settings are sealed and opened from here on, and what was stored plain
         // is migrated (or, where there is no keychain, left as it is with the state declared). It never fails the start.
-        let vault = vault::start(&store, &config, &opts.keychain);
+        let vault = vault::start(&store, &config, &opts.keychain, !opts.secrets_read_only);
         mcp_host::migrate_mcp_approvals(&store);
         let overrides: Vec<Value> = store.list_docs("runtime_settings")?;
         runtimes.load_overrides(

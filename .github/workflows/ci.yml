@@ -55,15 +55,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Servizio dei segreti (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11 libsecret-tools
       - name: Portachiavi del sistema (Windows, macOS)
         if: runner.os != 'Linux'
         run: cargo test -p aiw-engine --lib vault::tests::real_keychain -- --ignored --nocapture --test-threads=1
+      # Before gnome-keyring is installed: a runner that has it could start it by D-Bus activation and the test expects none.
       - name: Linux senza servizio dei segreti
         if: runner.os == 'Linux'
         run: env -u DBUS_SESSION_BUS_ADDRESS cargo test -p aiw-engine --lib vault::tests::real_keychain::without_a_secret_service -- --ignored --nocapture --test-threads=1
+      - name: Servizio dei segreti (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11 libsecret-tools
       - name: Linux con il servizio dei segreti (gnome-keyring su una sessione D-Bus)
         if: runner.os == 'Linux'
         run: |

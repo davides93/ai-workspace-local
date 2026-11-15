@@ -49,10 +49,12 @@ fn setting_u64(ch: &Channel, k: &str) -> Option<u64> {
 fn config(engine: &Engine, ch: &Channel) -> Result<Cfg, String> {
     let roots = engine.tls_roots();
     let imap_user = setting_str(ch, "imap_user");
-    let imap_password = ch.secrets.get("imap_password").cloned().unwrap_or_default();
+    // A sealed value this process could not open is "not set", never a password to log in with.
+    let usable = |k: &str| ch.secrets.get(k).filter(|p| !aiw_core::sealed::is_sealed(p)).cloned();
+    let imap_password = usable("imap_password").unwrap_or_default();
     let folder = Some(setting_str(ch, "folder")).filter(|f| !f.is_empty()).unwrap_or_else(|| "INBOX".into());
     let smtp_user = Some(setting_str(ch, "smtp_user")).filter(|u| !u.is_empty()).unwrap_or_else(|| imap_user.clone());
-    let smtp_password = ch.secrets.get("smtp_password").filter(|p| !p.is_empty()).cloned().unwrap_or_else(|| imap_password.clone());
+    let smtp_password = usable("smtp_password").filter(|p| !p.is_empty()).unwrap_or_else(|| imap_password.clone());
     let from = Some(setting_str(ch, "from")).filter(|f| !f.is_empty()).unwrap_or_else(|| smtp_user.clone());
     if !smtp::valid_address(&from) {
         return Err("Serve l'indirizzo da cui rispondere (campo «Indirizzo mittente»).".into());
