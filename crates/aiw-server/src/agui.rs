@@ -61,9 +61,6 @@ const SETTLE: Duration = Duration::from_millis(150);
 const MAX_ID_LEN: usize = 256;
 const MAX_STATE_BYTES: usize = 1 << 20;
 
-/// What `Pause.applied` holds for a pause whose interrupts were closed elsewhere before anybody answered here.
-const CLOSED: &str = "\u{0}closed";
-
 /// The pause a thread waits on, and the ones before it that were answered.
 struct Slot {
     current: Pause,
@@ -513,6 +510,10 @@ impl Follow {
                 if let Some(c) = call {
                     i["toolCallId"] = json!(c);
                 }
+                // The wait for a confirmation has a limit only when `approvals.timeout_s` sets one.
+                if let Some(t) = approval_expiry(&self.engine) {
+                    i["expiresAt"] = json!(t);
+                }
                 if self.wire.is_open_subagent(&req.run_id) {
                     i["subagentRunId"] = json!(req.run_id);
                     waiting.push((req.run_id.clone(), req.id.clone()));
@@ -580,7 +581,7 @@ impl Follow {
             run_id: self.run_id.clone(),
             client_run_id: self.wire.client_run_id().to_string(),
             next_seq: self.next_seq,
-            wire: self.wire.clone(),
+            wire: self.wire.clone().light(),
             interrupts: open,
             applied: None,
             since: Instant::now(),
@@ -786,9 +787,7 @@ pub(crate) async fn run_agent(
             Ok(id) => id,
             Err(e) => {
                 if created {
-                    // Nothing was said in a session that was just made for this request: do not leave it behind.
-                    let _ = s.engine.delete_session(&thread.session_id);
-                    let _ = s.engine.remove_agui_thread(&input.thread_id);
+                    abandon_new_session(&s, &thread.session_id, &input.thread_id);
                 }
                 return Err(e.into());
             }
@@ -814,6 +813,29 @@ pub(crate) async fn run_agent(
         follow.after_started.extend(agui_wire::history_snapshots(messages, chrono::Utc::now().timestamp_millis()));
     }
     Ok(stream_response(follow, &thread.session_id, &run_id))
+}
+
+/// When a request that made its session cannot start its run, the session goes too: nothing was said in it. Unless another request
+/// of the same thread got there first and is using it (it has a run or messages): that one is not touched.
+fn abandon_new_session(s: &AppState, session_id: &str, thread_id: &str) {
+    let _guard = s.agui.threads.lock().unwrap();
+    let in_use = s.engine.active_run(session_id).is_some() || s.engine.messages(session_id).map(|m| !m.is_empty()).unwrap_or(true);
+    if !in_use {
+        let _ = s.engine.delete_session(session_id);
+        let _ = s.engine.remove_agui_thread(thread_id);
+    }
+}
+
+/// When a confirmation stops being answerable, as an RFC 3339 time: `seconds` after `now`, `None` for no limit (0).
+fn expiry_after(now: chrono::DateTime<chrono::Utc>, seconds: u64) -> Option<String> {
+    let secs = i64::try_from(seconds).ok().filter(|s| *s > 0)?;
+    Some((now + chrono::Duration::seconds(secs)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+/// The `expiresAt` of a confirmation: the setting `approvals.timeout_s` (0, the default, is no limit).
+fn approval_expiry(engine: &Engine) -> Option<String> {
+    let secs = engine.config().effective.get("approvals.timeout_s").and_then(Value::as_u64)?;
+    expiry_after(chrono::Utc::now(), secs)
 }
 
 /// Adds a run to the thread record, read again under the lock so that two requests of one thread do not lose each other's run.
@@ -923,6 +945,7 @@ async fn resume_run(
         let theirs: HashSet<&str> = p.interrupts.iter().map(|i| i.id.as_str()).collect();
         theirs == ids
     });
+    let mut lost: Vec<String> = vec![];
     let pause = if ids.iter().all(|id| open.contains(id)) {
         if let Some(missing) = current.interrupts.iter().find(|i| !ids.contains(i.id.as_str())) {
             return refuse("resume_incomplete", &format!("`resume` deve rispondere a tutte le interruzioni aperte: manca {}", missing.id));
@@ -958,7 +981,7 @@ async fn resume_run(
             };
             decisions.push((it, decision));
         }
-        let mut closed: Vec<&str> = vec![];
+        let mut closed: HashSet<String> = HashSet::new();
         for (it, decision) in &decisions {
             let r = match decision {
                 Decision::Allow(_) => s.engine.check_approval_answer(&it.id, owner),
@@ -966,26 +989,26 @@ async fn resume_run(
             };
             match r {
                 Ok(()) => {}
-                Err(Error::NotFound(_)) => closed.push(&it.id),
+                Err(Error::NotFound(_)) => {
+                    closed.insert(it.id.clone());
+                }
                 Err(Error::Invalid(m)) => return refuse("resume_invalid", &m),
                 // Not the owner of a management tool, and the like: an HTTP error, the pause stays.
                 Err(e) => return Err(e.into()),
             }
         }
-        if !closed.is_empty() {
-            // Closed meanwhile, in the app or because the wait ran out: the run went on without this answer, which is not applied
-            // in silence. The pause is over (the answered ones before it stay); sending the message again brings the stream of the run.
-            if let Some(sl) = s.agui.pauses.lock().unwrap().get_mut(&input.thread_id) {
-                if sl.current.run_id == current.run_id && sl.current.next_seq == current.next_seq && sl.current.applied.is_none() {
-                    sl.current.applied = Some(CLOSED.into());
-                }
-            }
-            let msg = format!(
-                "le interruzioni {} sono già chiuse (nell'app o per scadenza): il run è andato avanti senza questa risposta; rimanda il messaggio per riprenderne lo stream",
-                closed.join(", ")
-            );
-            return refuse("interrupt_closed", &msg);
-        }
+        // Closed meanwhile, in the app or because the wait ran out: the run went on without them. The stream goes on all the same (a
+        // client that has them pending cannot continue the thread any other way). An answer that loses nothing (a refusal, a
+        // cancellation, a declined question) is just not needed; one that would have been acted on is told in `aiw.interrupt_closed`.
+        lost = decisions
+            .iter()
+            .filter(|(it, d)| {
+                closed.contains(&it.id) && matches!(d, Decision::Allow(true))
+                    || matches!(d, Decision::Reply(r) if r.action == "answer" && closed.contains(&it.id))
+            })
+            .map(|(it, _)| it.id.clone())
+            .collect();
+        decisions.retain(|(it, _)| !closed.contains(&it.id));
         // The answer is recorded first, under the lock: of two answers that arrive together, one wins and the other is a replay or a conflict.
         {
             let mut pauses = s.agui.pauses.lock().unwrap();
@@ -1021,12 +1044,6 @@ async fn resume_run(
         // A pause that was answered: the same answer again is safe, another one is a conflict.
         match &pause.applied {
             Some(done) if *done == print => {}
-            Some(done) if done == CLOSED => {
-                return refuse(
-                    "interrupt_closed",
-                    "queste interruzioni sono già chiuse (nell'app o per scadenza): rimanda il messaggio per riprendere lo stream del run",
-                );
-            }
             _ => return refuse("resume_conflict", "queste interruzioni hanno già ricevuto una risposta diversa"),
         }
     }
@@ -1044,6 +1061,13 @@ async fn resume_run(
     });
     for data in again {
         follow.out.push_back(Frame { seq: None, data });
+    }
+    if !lost.is_empty() {
+        let value = json!({"interrupt_ids": lost, "reason": "closed_elsewhere"});
+        follow.out.push_back(Frame {
+            seq: None,
+            data: json!({"type": "CUSTOM", "name": "aiw.interrupt_closed", "value": value, "timestamp": ts}),
+        });
     }
     Ok(stream_response(follow, &thread.session_id, &pause.run_id))
 }
@@ -1848,5 +1872,27 @@ mod tests {
         assert_eq!(st, StatusCode::BAD_REQUEST, "{msg}");
         assert!(msg.contains("state"), "{msg}");
         assert!(e.sessions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_confirmation_expires_only_when_the_setting_says_so() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-15T10:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        assert_eq!(expiry_after(now, 0), None);
+        assert_eq!(expiry_after(now, 300).as_deref(), Some("2026-11-15T10:05:00Z"));
+    }
+
+    #[tokio::test]
+    async fn a_session_made_for_a_request_that_failed_goes_unless_another_request_uses_it() {
+        let (app, e, _d, _w) = fixture(vec![ScriptedBackend::text_turn("Ok")]).await;
+        let st = AppState { engine: e.clone(), agui: Default::default() };
+        assert_eq!(approval_expiry(&e), None, "no limit unless approvals.timeout_s is set");
+        let empty = e.create_session("planner", None).unwrap();
+        abandon_new_session(&st, &empty.id, "thr-empty");
+        assert!(e.session(&empty.id).is_err(), "an empty session made for the failed request stays behind");
+        // A session that another request of the thread already used (it has messages) is left alone.
+        let (_, sid, _, _) = run(&app, "planner", input("thr-used", "r1", json!("ciao"))).await;
+        wait_for("the message is stored", || e.messages(&sid).map(|m| !m.is_empty()).unwrap_or(false)).await;
+        abandon_new_session(&st, &sid, "thr-used");
+        assert!(e.session(&sid).is_ok(), "a session in use was deleted");
     }
 }

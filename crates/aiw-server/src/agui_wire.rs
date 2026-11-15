@@ -97,6 +97,13 @@ impl Wire {
         }
     }
 
+    /// The same translation without the state of the client: what is kept with a pause (the next request brings its own, see
+    /// [`Wire::resumed`]), so that a pause does not hold a megabyte of the client's state for a day.
+    pub(crate) fn light(mut self) -> Self {
+        self.client_state.clear();
+        self
+    }
+
     pub(crate) fn client_run_id(&self) -> &str {
         &self.client_run_id
     }

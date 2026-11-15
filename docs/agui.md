@@ -238,7 +238,7 @@ la pausa resta aperta):
 | risposta a tutte le interruzioni aperte, nessuna parziale | `resume_incomplete` |
 | `interruptId` che esiste tra quelle aperte, stesso thread | `interrupt_not_found` (anche dopo un riavvio: le pause sono in memoria) |
 | `payload` della forma attesa, `status` `resolved` o `cancelled`, nessuna interruzione due volte | `resume_invalid`: prima si controllano **tutte** le risposte e solo dopo se ne applica una, quindi una risposta che non va non ne consuma nessuna e la pausa resta |
-| l'interruzione è ancora aperta | `interrupt_closed` se è già stata chiusa altrove (nell'app, o la domanda è scaduta dopo 300 s): la risposta non si applica in silenzio, la pausa finisce e rimandare il messaggio riprende lo stream del run |
+| l'interruzione è ancora aperta | se è già stata chiusa altrove (nell'app, o la domanda è scaduta dopo 300 s) il run è andato avanti: non è un errore (il client vero resterebbe bloccato con le interruzioni «in sospeso»), lo stream riprende e, se la risposta sarebbe servita (un sì, la risposta a una domanda), porta un `CUSTOM aiw.interrupt_closed` con gli id; le altre interruzioni della stessa pausa si applicano |
 | altro input su un thread con interruzioni aperte | `interrupt_pending` |
 | `resume` insieme a un messaggio utente nuovo | `resume_with_new_input` |
 | stesso `resume` rimandato (anche da un client che ha perso la risposta, e anche dopo una seconda pausa: si tengono le ultime 8 già risposte) | **sicuro**: si rimanda il run da dov'era, senza applicare due volte la decisione. Se due risposte uguali arrivano insieme vince la prima registrata; con due flussi aperti sullo stesso run, quello che resta non è annullato dalla chiusura dell'altro |
@@ -246,8 +246,10 @@ la pausa resta aperta):
 
 Il client vero fa già da sé una parte di questi controlli (`@ag-ui/client` 1.0.4 rifiuta di mandare un `resume` che non risponde
 a tutte le interruzioni aperte o un input nuovo mentre ce ne sono): i casi che arrivano al server sono provati con richieste scritte
-a mano. Le conferme non portano `expiresAt` (la scadenza, se c'è, è `approvals.timeout_s`: nessuna per impostazione predefinita);
-le domande sì.
+a mano. Le conferme portano `expiresAt` solo se `approvals.timeout_s` fissa un limite (nessuno per impostazione predefinita);
+le domande sempre. Un messaggio già eseguito rimandato mentre una pausa è aperta riceve **il replay**, non `interrupt_pending`:
+è voluto, perché è il modo di un client che ha perso l'esito `interrupt` di averlo di nuovo (la pausa si ricrea); un messaggio nuovo
+riceve `interrupt_pending`.
 
 **La conferma di uno strumento di gestione vale solo se arriva dal proprietario**, anche da `resume`: gli strumenti `aiw_*` che
 modificano qualcosa (e `aiw_secret_clear`) chiedono sempre conferma, in qualunque modalità dell'agente e anche dopo «Consenti per la

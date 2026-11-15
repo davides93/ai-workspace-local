@@ -336,34 +336,37 @@ describe("human-in-the-loop interoperabile (@ag-ui/client 1.0.4)", () => {
     assert.equal(assistantTexts(agent).at(-1), "Ho le due risposte");
   });
 
-  it("una risposta a una conferma già chiusa nell'app è un RUN_ERROR interrupt_closed e non passa in silenzio", async () => {
-    const file = `chiusa-${uid("f").slice(0, 8)}.md`;
-    prov.set([call("write_file", { path: file, content: "x" }), text("Non scrivo")]);
-    const agent = makeAgent(latest, srv, "operator", { messages: [userMessage(`Scrivi ${file}`)] });
-    const r1 = await runCollect(agent, { runId: uid("run"), forwardedProps: INTERRUPTS });
-    ok(r1);
-    const [it] = r1.outcome.interrupts;
-    const [ap] = await approvalsOf(file);
-    // La persona nega dall'app; poi il client, che non lo sa, risponde di sì.
-    assert.equal((await srv.api("POST", `/api/approvals/${ap.id}`, { decision: "deny" })).status, 200);
-    // Il run va avanti da solo: si aspetta che finisca, perché non consumi il copione del test dopo.
-    await until("il run finisce", async () => {
-      const ev = (await srv.api("GET", `/api/runs/${ap.run_id}/events.json`)).json ?? [];
-      const last = ev.at(-1)?.event ?? ev.at(-1);
-      return last && ["RUN_ERROR", "RUN_FINISHED"].includes(last.type);
-    });
-    const r = await rawRun(srv, "operator", {
-      threadId: agent.threadId, runId: uid("run"), messages: structuredClone(agent.messages), forwardedProps: INTERRUPTS,
-      resume: [{ interruptId: it.id, status: "resolved", payload: { approved: true } }],
-    });
-    assert.equal(r.events[1]?.code, "interrupt_closed", r.raw);
-    assert.ok(!fs.existsSync(written(file)), "la risposta tardiva ha eseguito lo strumento");
-    // Rimandata, è ancora «chiusa» (non un conflitto, non una pausa sconosciuta).
-    const again = await rawRun(srv, "operator", {
-      threadId: agent.threadId, runId: uid("run"), messages: structuredClone(agent.messages), forwardedProps: INTERRUPTS,
-      resume: [{ interruptId: it.id, status: "resolved", payload: { approved: true } }],
-    });
-    assert.equal(again.events[1]?.code, "interrupt_closed", again.raw);
+  it("una risposta a una conferma già chiusa nell'app non blocca il client: lo stream riprende e dice che la risposta non è servita", async () => {
+    for (const answer of [{ status: "resolved", payload: { approved: true } }, { status: "cancelled" }]) {
+      const file = `chiusa-${uid("f").slice(0, 8)}.md`;
+      prov.set([call("write_file", { path: file, content: "x" }), text("Non scrivo")]);
+      const agent = makeAgent(latest, srv, "operator", { messages: [userMessage(`Scrivi ${file}`)] });
+      const r1 = await runCollect(agent, { runId: uid("run"), forwardedProps: INTERRUPTS });
+      ok(r1);
+      const [it] = r1.outcome.interrupts;
+      const [ap] = await approvalsOf(file);
+      // La persona nega dall'app; poi il client, che non lo sa, risponde (di sì, o annulla).
+      assert.equal((await srv.api("POST", `/api/approvals/${ap.id}`, { decision: "deny" })).status, 200);
+      await until("il run finisce", async () => {
+        const ev = (await srv.api("GET", `/api/runs/${ap.run_id}/events.json`)).json ?? [];
+        const last = ev.at(-1)?.event ?? ev.at(-1);
+        return last && ["RUN_ERROR", "RUN_FINISHED"].includes(last.type);
+      });
+      // Con il client vero: se la risposta fosse un errore, il thread resterebbe bloccato su «interruzioni in sospeso».
+      const r = await runCollect(agent, { runId: uid("run"), resume: [{ interruptId: it.id, ...answer }] });
+      ok(r);
+      assert.equal(r.runError, undefined, JSON.stringify(r.runError));
+      assert.equal(r.types.at(-1), "RUN_FINISHED", `${r.types}`);
+      assert.ok(!fs.existsSync(written(file)), "la risposta tardiva ha eseguito lo strumento");
+      const notice = r.events.find((e) => e.type === "CUSTOM" && e.name === "aiw.interrupt_closed");
+      assert.equal(Boolean(notice), answer.status === "resolved", `l'avviso c'è solo per una risposta che sarebbe servita: ${r.types}`);
+      if (notice) assert.deepEqual(notice.value.interrupt_ids, [it.id]);
+      // E il thread continua: un messaggio nuovo parte.
+      prov.set([text("Eccomi")]);
+      agent.addMessage(userMessage("Ci sei?"));
+      ok(await runCollect(agent, { runId: uid("run") }));
+      assert.equal(assistantTexts(agent).at(-1), "Eccomi");
+    }
   });
 
   it("una catena: la stessa risposta rimandata dopo la seconda pausa rifà lo stream fino alla seconda pausa", async () => {
