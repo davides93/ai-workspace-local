@@ -143,3 +143,57 @@ async fn bodies_that_do_not_fit_are_refused_with_a_fixed_sentence_that_never_quo
     let (st, _) = dispatch(app.clone(), "POST", "/api/browser/dialog", Some(json!({"action": "boh"}))).await;
     assert_eq!(st, 400);
 }
+
+/// A writer that keeps everything the logs say.
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+    fn make_writer(&'a self) -> Captured {
+        self.clone()
+    }
+}
+
+#[tokio::test]
+async fn nothing_the_person_types_or_sees_reaches_the_logs_and_the_addresses_in_them_have_no_query() {
+    use tracing_subscriber::util::SubscriberInitExt;
+    let logs = Captured::default();
+    // The most the app can log: everything at `trace`, with the rules that hold whatever `RUST_LOG` says.
+    let filter = aiw_core::QUIET_LOG_TARGETS.iter().fold(tracing_subscriber::EnvFilter::new("trace"), |f, d| f.add_directive(d.parse().unwrap()));
+    let _guard = tracing_subscriber::fmt().with_env_filter(filter).with_writer(logs.clone()).with_ansi(false).finish().set_default();
+    let (app, e, fake, _a, _b) = running().await;
+    let (typed, code) = ("PASSWORD-DI-PROVA", "CODICE-DI-PROVA");
+    for (path, body) in [
+        ("/api/browser/control", json!({"action": "take"})),
+        ("/api/browser/input", json!({"type": "text", "text": typed})),
+        ("/api/browser/input", json!({"type": "key", "key": "x"})),
+        ("/api/browser/input", json!({"type": "click", "x": 0.5, "y": 0.5})),
+    ] {
+        let (st, v) = dispatch(app.clone(), "POST", path, Some(body)).await;
+        assert_eq!(st, 200, "{path}: {v}");
+    }
+    let (st, _) = dispatch(app.clone(), "GET", "/api/browser/frame", None).await;
+    assert_eq!(st, 200);
+    // A page that asks for an address the policy refuses, with a code in its query: it is logged (that is useful), without the query.
+    fake.push(aiw_tools::browser::fake::event(Some("S2"), "Fetch.requestPaused", json!({"requestId": "r1", "request": {"url": format!("http://127.0.0.1:9/cb?code={code}#t={code}")}})));
+    fake.wait_for(|r| r.method == "Fetch.failRequest").await;
+    let (st, _) = dispatch(app.clone(), "POST", "/api/browser/control", Some(json!({"action": "give_back"}))).await;
+    assert_eq!(st, 200);
+    let text = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
+    for secret in [typed, code, "JPEG-DATI", "SlBFRy1EQVRJ"] {
+        assert!(!text.contains(secret), "{secret} is in the logs:\n{text}");
+    }
+    assert!(text.contains("request blocked by network policy") && text.contains("127.0.0.1:9/cb"), "the block is logged:\n{text}");
+    drop(e);
+}
