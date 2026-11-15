@@ -312,4 +312,5 @@ export const chatIt = {
   "chat.rivedi_la_lezione": "Rivedi la lezione",
   "chat.cartella_fuori_workspace": "Quella cartella è fuori dal workspace. Se vuoi che l'agente ci lavori, consentila tu:",
   "chat.cartella_fuori_workspace_link": "Impostazioni → Cartelle consentite",
+  "chat.cartella_fuori_workspace_mostra": "Mostra tutte le sezioni → Impostazioni → Cartelle consentite",
 } as const;
