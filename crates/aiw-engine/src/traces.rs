@@ -261,7 +261,9 @@ impl Engine {
             Some("any") => Some(0),
             Some(other) => return Err(Error::Invalid(format!("«{other}» non è un filtro valido per rated: usa up, down o any"))),
         };
-        let redactor = filter.redact.then(|| Redactor::new(mcp_secret_values(store)));
+        // Every secret the app stores (provider tokens, secret settings, mail passwords…), not only the MCP ones:
+        // a token the person once pasted in a conversation is hidden by its exact value too.
+        let redactor = filter.redact.then(|| Redactor::new(self.known_secrets()));
         let clean = |s: &str| redactor.as_ref().map(|r| r.apply(s)).unwrap_or_else(|| s.to_string());
         let mut out = Vec::new();
         for s in store.all_sessions()? {
