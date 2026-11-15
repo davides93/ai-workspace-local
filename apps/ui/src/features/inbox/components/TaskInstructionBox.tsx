@@ -40,7 +40,7 @@ export function TaskInstructionBox({ busy, disabled, hint, onSend }: {
         <label htmlFor={`${id}-i`}>{t("inbox.task_instruction")}</label>
         <Textarea
           id={`${id}-i`} rows={2} value={text} disabled={disabled} placeholder={t("inbox.task_instruction_placeholder")}
-          aria-invalid={check.over || undefined} aria-describedby={`${id}-h ${id}-c`}
+          aria-invalid={check.over || undefined} aria-describedby={`${id}-h ${id}-c`} aria-keyshortcuts="Control+Enter Meta+Enter"
           onChange={(e) => {
             setText(e.target.value);
             // Cleared by hand: what comes next is typed again.

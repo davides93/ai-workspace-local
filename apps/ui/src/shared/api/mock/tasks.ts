@@ -61,8 +61,8 @@ const base = (over: Partial<BackgroundTask> & Pick<BackgroundTask, "id" | "title
 /** The demo workspace: one task at work, three paused for different reasons, two finished. */
 function seed(): { tasks: BackgroundTask[]; script: Map<string, Ask[]> } {
   const run = base({
-    id: "tsk_demo_run", title: "Riordinare le fatture in Scaricati", session_id: "ses_pdf", status: "running", segments: 2,
-    instruction: "Guarda i file nuovi in Scaricati e sposta le fatture in Documenti/Fatture, una cartella per fornitore.",
+    id: "tsk_demo_run", title: "Archiviare le fatture di ottobre", session_id: "ses_pdf", status: "running", segments: 2,
+    instruction: "Guarda i file nuovi in Scaricati e sposta le fatture di ottobre in Documenti/Fatture, una cartella per fornitore.",
     run_ids: ["run_tsk_demo_a", "run_tsk_demo_b"], current_run_id: "run_tsk_demo_b", created_at: ago(35), updated_at: ago(1),
     limits: { max_seconds: 1800, max_turns: 40 },
     progress: { turns: 3, tokens: 5200, seconds: 240, last_tool: "list_dir", last_text: "Ho trovato 4 file che sembrano fatture: due di Rossi Srl e due di Bianchi SpA. Sto preparando le cartelle.", updated_at: ago(1) },
@@ -195,7 +195,7 @@ export class TaskStore {
       if (!tm) continue;
       if (tm.stopAt !== undefined && tm.stopAt <= at && t.status === "running" && t.stopping) {
         t.progress.turns += 1;
-        this.enterPause(t, "user", "L'hai messa in pausa tu: si è fermato dopo l'ultimo passo.", "In pausa, come avevi chiesto.");
+        this.enterPause(t, "user", "L'hai messo in pausa tu: si è fermato dopo l'ultimo passo.", "In pausa, come avevi chiesto.");
       }
       if (tm.readAt !== undefined && tm.readAt <= at && t.status === "running" && !t.stopping) {
         tm.readAt = undefined;
@@ -254,7 +254,7 @@ export class TaskStore {
     if (t.status === "paused") throw new ApiError(409, `il lavoro «${t.title}» è già in pausa`);
     if (t.status === "queued" || t.waiting_approval) {
       // Waiting (for its turn or for a confirmation) there is no step to finish.
-      this.enterPause(t, "user", "L'hai messa in pausa tu.", "In pausa, come avevi chiesto.");
+      this.enterPause(t, "user", "L'hai messo in pausa tu.", "In pausa, come avevi chiesto.");
     } else if (!t.stopping) {
       t.stopping = true;
       this.timer(t.id).stopAt = Date.now() + STEP_MS;

@@ -1,5 +1,5 @@
 import { expect, openApp, test } from "../support/app";
-import { expectNoBlockingViolations, expectNoPlaceholderLeaks } from "../support/scan";
+import { expectNoBlockingViolations, expectNoHorizontalScroll, expectNoPlaceholderLeaks } from "../support/scan";
 import { FAKE_KEY, messageBox, startDownloadThenGoSimple } from "../support/simple";
 
 // Screens that only exist after an interaction (overlays, a running chat, the first run) and the
@@ -110,6 +110,43 @@ for (const size of SIZES) {
         await expectNoBlockingViolations(page, info);
       });
 
+      test("proposals: the background tasks in every state, the refusal, the dialog, no sideways scroll", async ({ page }, info) => {
+        await openApp(page, "/inbox", { theme, mode: "developer" });
+        const tasks = page.getByRole("region", { name: "Lavori in background" });
+        const run = tasks.getByRole("article", { name: "Archiviare le fatture di ottobre" });
+        // The demo: one at work, paused for quiet hours, a spent budget and a restart, two finished.
+        await expect(tasks.getByRole("article")).toHaveCount(4);
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+        await expectNoHorizontalScroll(page, ".tk");
+        // The history of every finished task, with the box that is switched off.
+        for (const details of await tasks.getByText("Dettagli", { exact: true }).all()) await details.click();
+        await expectNoBlockingViolations(page, info);
+        await expectNoHorizontalScroll(page, ".tk");
+        // A pause asked (the step is being finished), then paused, then the confirmation it asks for after the resume.
+        await run.getByRole("button", { name: "Pausa", exact: true }).click();
+        await expect(run.getByText("Si sta fermando", { exact: true })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expect(run.getByText("In pausa", { exact: true })).toBeVisible();
+        await run.getByRole("button", { name: "Riprendi", exact: true }).click();
+        await expect(run.getByRole("group", { name: "Conferma in attesa" })).toBeVisible();
+        await run.getByText(/^Cronologia \(\d+\)$/).click();
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+        await expectNoHorizontalScroll(page, ".tk");
+        // The engine's refusal to resume in quiet hours, and an instruction that is too long.
+        await tasks.getByRole("article", { name: "Confrontare le offerte dei fornitori" }).getByRole("button", { name: "Riprendi", exact: true }).click();
+        await expect(tasks.locator(".tk-refusal")).toBeVisible();
+        await run.getByRole("textbox", { name: "Istruzione" }).fill("a".repeat(4001));
+        await expect(run.getByRole("alert").filter({ hasText: "supera i 4000 caratteri" })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expectNoHorizontalScroll(page, ".tk");
+        // The question before cancelling.
+        await run.getByRole("button", { name: "Annulla", exact: true }).click();
+        await expect(page.getByRole("dialog", { name: "Annullare il lavoro?" })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+      });
+
       test("documents with a search result", async ({ page }, info) => {
         await openApp(page, "/documents", { theme, mode: "developer" });
         const search = page.getByRole("region", { name: "Cerca nei documenti" });
@@ -123,7 +160,7 @@ for (const size of SIZES) {
 
     test.describe(`${size.name} · ${theme} · English`, () => {
       test.use({ viewport: size.viewport, colorScheme: theme, locale: "en-US" });
-      for (const route of ["/", "/chat/ses_pdf", "/models", "/settings", "/documents", "/devices"]) {
+      for (const route of ["/", "/chat/ses_pdf", "/models", "/settings", "/documents", "/devices", "/inbox"]) {
         test(route, async ({ page }, info) => {
           await openApp(page, route, { theme, mode: "developer" });
           await expect(page.locator("html")).toHaveAttribute("lang", "en");
