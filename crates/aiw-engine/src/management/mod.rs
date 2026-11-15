@@ -582,6 +582,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_registered_management_tool_needs_an_explicit_grant() {
+        // A `*` in an agent's tools (the Assistant's `delegate_tools`, `coder`'s tools) covers only tools without an explicit grant:
+        // this is what keeps every management tool, present and future, out of a sub-agent's reach. No name is listed by hand.
+        let (e, _d, _w) = engine(vec![]).await;
+        let registered = e.tool_registry().all();
+        let management: Vec<_> = registered.iter().filter(|t| is_management(t.name())).collect();
+        assert!(!management.is_empty(), "the engine registers at least the management tools of this build");
+        for tool in management {
+            assert!(tool.explicit_grant(), "{} is a management tool: `*` must not cover it", tool.name());
+        }
+    }
+
+    #[tokio::test]
     async fn an_agent_may_list_the_management_tools_even_before_they_are_registered() {
         let (e, _d, _w) = engine(vec![]).await;
         // `aiw_model_delete` is not registered by this item, `ask_user` neither: the profile is valid all the same.
