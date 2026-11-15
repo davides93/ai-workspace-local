@@ -59,6 +59,7 @@ struct StoredFile {
     mime: String,
     sha256: String,
     source: String,
+    size: u64,
     /// base64
     data: String,
 }
@@ -68,7 +69,7 @@ impl StoredFile {
         DraftAttachment {
             name: self.name.clone(),
             mime: self.mime.clone(),
-            size: base64::engine::general_purpose::STANDARD.decode(&self.data).map(|d| d.len() as u64).unwrap_or(0),
+            size: self.size,
             sha256: self.sha256.clone(),
             source: self.source.clone(),
         }
@@ -212,9 +213,11 @@ impl Engine {
         super::email::sender_address(ch)
     }
 
-    /// SHA-256 of everything that goes on the wire. It does not change unless something that is sent does.
-    fn draft_hash(&self, d: &EmailDraft, files: &[StoredFile], from: &str) -> String {
-        let attachments: Vec<Value> = files.iter().map(|f| json!([f.name, f.mime, f.meta().size, f.sha256])).collect();
+    /// SHA-256 of everything that goes on the wire. It does not change unless something that is sent does. The attachments
+    /// enter by name, type, size and hash, as kept in the draft (they are written together with the files, and checked
+    /// against them when the draft is sent): listing drafts never has to read the files.
+    fn draft_hash(&self, d: &EmailDraft, from: &str) -> String {
+        let attachments: Vec<Value> = d.attachments.iter().map(|a| json!([a.name, a.mime, a.size, a.sha256])).collect();
         let canonical = json!([
             "aiw-email-draft-v1",
             d.channel_id,
@@ -259,7 +262,7 @@ impl Engine {
             if files.len() >= MAX_ATTACHMENTS {
                 return Err(Error::Invalid(format!("al massimo {MAX_ATTACHMENTS} allegati")));
             }
-            let total: u64 = files.iter().map(|f| f.meta().size).sum::<u64>() + data.len() as u64;
+            let total: u64 = files.iter().map(|f| f.size).sum::<u64>() + data.len() as u64;
             if total > MAX_TOTAL_BYTES {
                 return Err(Error::Invalid(format!("gli allegati insieme superano {} MB", MAX_TOTAL_BYTES >> 20)));
             }
@@ -269,6 +272,7 @@ impl Engine {
                 name,
                 sha256: sha,
                 source: text::excerpt(raw, 200),
+                size: data.len() as u64,
                 data: base64::engine::general_purpose::STANDARD.encode(&data),
             });
         }
@@ -295,29 +299,32 @@ impl Engine {
     }
 
     /// The draft as the API shows it: sender, hash and duplicate are computed now.
-    fn draft_present(&self, mut d: EmailDraft) -> EmailDraft {
-        let files = self.draft_files(&d.id);
-        d.attachments = files.iter().map(StoredFile::meta).collect();
+    fn draft_present(&self, d: EmailDraft) -> EmailDraft {
+        let all = self.drafts_raw();
+        self.draft_present_in(d, &all)
+    }
+
+    /// [`Engine::draft_present`] when the list of drafts is already in hand (the listing reads it once).
+    fn draft_present_in(&self, mut d: EmailDraft, all: &[EmailDraft]) -> EmailDraft {
         if let Ok(ch) = self.channel_doc(&d.channel_id) {
             d.from = self.draft_from(&ch);
         }
-        d.content_hash = self.draft_hash(&d, &files, &d.from);
-        d.duplicate_of = self.draft_twin(&d);
+        d.content_hash = self.draft_hash(&d, &d.from);
+        d.duplicate_of = Self::draft_twin(&d, all);
         d
     }
 
     /// Another draft with the same content that was not refused and is recent: worth a look before sending.
-    fn draft_twin(&self, d: &EmailDraft) -> Option<String> {
+    fn draft_twin(d: &EmailDraft, all: &[EmailDraft]) -> Option<String> {
         let now = chrono::Utc::now();
-        self.drafts_raw()
-            .into_iter()
+        all.iter()
             .filter(|o| o.id != d.id && matches!(o.status.as_str(), "draft" | "sending" | "sent" | "uncertain"))
             .filter(|o| {
                 chrono::DateTime::parse_from_rfc3339(&o.created_at)
                     .is_ok_and(|t| (now - t.to_utc()).to_std().is_ok_and(|age| age < DUPLICATE_WINDOW))
             })
             .find(|o| o.content_hash == d.content_hash)
-            .map(|o| o.id)
+            .map(|o| o.id.clone())
     }
 
     // ------------------------------------------------------------------ the API
@@ -346,11 +353,11 @@ impl Engine {
             }
         }
         self.drafts_recover();
-        Ok(self
-            .drafts_raw()
-            .into_iter()
+        let all = self.drafts_raw();
+        Ok(all
+            .iter()
             .filter(|d| status.filter(|s| !s.is_empty()).is_none_or(|s| d.status == s))
-            .map(|d| self.draft_present(d))
+            .map(|d| self.draft_present_in(d.clone(), &all))
             .collect())
     }
 
@@ -392,14 +399,16 @@ impl Engine {
         Self::draft_check_recipients(&d)?;
         let mut files = Vec::new();
         self.draft_attach(ctx, &n.attachments, &mut files)?;
+        d.attachments = files.iter().map(StoredFile::meta).collect();
         d.from = self.draft_from(&ch);
-        d.content_hash = self.draft_hash(&d, &files, &d.from);
+        d.content_hash = self.draft_hash(&d, &d.from);
+        let all = self.drafts_raw();
         if n.created_by == "assistant" {
-            if let Some(twin) = self.draft_twin(&d).and_then(|id| self.draft_doc(&id).ok()) {
+            if let Some(twin) = Self::draft_twin(&d, &all).and_then(|id| self.draft_doc(&id).ok()) {
                 return Ok((self.draft_present(twin), false));
             }
         }
-        if self.drafts_raw().iter().filter(|o| o.status == "draft").count() >= MAX_OPEN {
+        if all.iter().filter(|o| o.status == "draft").count() >= MAX_OPEN {
             return Err(Error::Invalid(format!("ci sono già {MAX_OPEN} bozze in attesa: rifiutane o inviane qualcuna")));
         }
         self.0.store.put_doc("email_draft_files", &d.id, &files)?;
@@ -470,8 +479,9 @@ impl Engine {
         d.note = None;
         d.revision += 1;
         d.updated_at = now_rfc3339();
+        d.attachments = files.iter().map(StoredFile::meta).collect();
         d.from = self.channel_doc(&d.channel_id).map(|c| self.draft_from(&c)).unwrap_or_default();
-        d.content_hash = self.draft_hash(&d, &files, &d.from);
+        d.content_hash = self.draft_hash(&d, &d.from);
         self.0.store.put_doc("email_draft_files", &d.id, &files)?;
         self.0.store.put_doc("email_draft", &d.id, &d)?;
         let d = self.draft_present(d);
@@ -581,7 +591,13 @@ impl Engine {
         let cfg = super::email::smtp_config(self, &ch).map_err(Error::Invalid)?;
         let files = self.draft_files(id);
         let from = self.draft_from(&ch);
-        let hash = self.draft_hash(&d, &files, &from);
+        // The files and the description of them kept in the draft were written together: if they ever differ, nothing is sent.
+        if files.iter().map(StoredFile::meta).map(|a| (a.name, a.mime, a.size, a.sha256)).collect::<Vec<_>>()
+            != d.attachments.iter().map(|a| (a.name.clone(), a.mime.clone(), a.size, a.sha256.clone())).collect::<Vec<_>>()
+        {
+            return Err(Error::Conflict("gli allegati della bozza non corrispondono più ai file salvati: ricrea la bozza".into()));
+        }
+        let hash = self.draft_hash(&d, &from);
         if !constant_eq(&hash, req.approved_hash.trim()) {
             return Err(Error::Conflict(
                 "la bozza è cambiata dopo la tua revisione (o il mittente del canale è cambiato): riguardala e approva il contenuto che vedi ora".into(),
