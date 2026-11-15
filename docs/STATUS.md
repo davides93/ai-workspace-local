@@ -49,8 +49,9 @@ accorciare le descrizioni o unire strumenti, non togliere le conferme.
 **Che cosa non c'è, e i residui dell'issue #105:**
 
 - **Segreti ancora in chiaro nello store**: nessun portachiavi del sistema né cifratura a riposo. Il flusso nuovo non peggiora la situazione (stesse scritture, nessun nuovo
-  tipo di documento) ma ne aumenta l'uso. Resta da pianificare l'item separato «portachiavi o cifratura a riposo», collegato a #24 (il contenuto della issue #24 non è stato
-  letto). Dettagli in `SECURITY.md`.
+  tipo di documento) ma ne aumenta l'uso. La cifratura a riposo con chiave nel portachiavi del sistema è l'issue #121 (priorità P2, da iniziare appena questo filone è in
+  `main` e da chiudere prima della prima versione non beta con la chat unica); #24 resta per rete locale, TLS e mDNS. Nel frattempo la scheda del segreto dice che il valore è
+  salvato su questo computer senza cifratura. Dettagli in `SECURITY.md`.
 - **Sezioni senza sostituto nella chat** (solo vista Sviluppatore, candidate a una seconda fase): raccolte di documenti, canali e posta, proposte dell'assistente proattivo,
   aggiornamento dell'app, dispositivi e token, workflow, valutazioni, addestramento, backup, regole di sicurezza e hook. Chi usa la modalità semplice le raggiunge solo
   passando a Sviluppatore.
@@ -59,7 +60,13 @@ accorciare le descrizioni o unire strumenti, non togliere le conferme.
   simulato. Il comportamento dei modelli locali piccoli è sconosciuto (vedi la misura sopra). Non si sa che cosa faccia `@ag-ui/client` o CopilotKit con gli eventi `CUSTOM aiw.*`.
 - **AG-UI non è human-in-the-loop interoperabile**: domande, segreti e conferme sono eventi `CUSTOM aiw.*` con risposta su endpoint REST; `resume` e gli strumenti del client
   restano ignorati; una connessione che cade annulla il run.
-- **Dispositivi accoppiati** (token `device`): possono conversare, leggere lo stato e rispondere alle domande, ma non confermare strumenti di gestione né dare segreti.
+- **Dispositivi accoppiati** (token `device`): possono conversare, leggere lo stato e rispondere alle domande e alle conferme degli strumenti ordinari, ma non confermare strumenti
+  di gestione, dare segreti né cambiare `ui.mode` (è un'impostazione condivisa con il computer: il passaggio a Sviluppatore si fa dal computer). Decisione del 15 novembre 2026. Un run
+  avviato da un dispositivo che chiama uno strumento di gestione che modifica qualcosa è rifiutato subito, prima della conferma (prima apriva una conferma a cui nessuno poteva
+  dare esito e, con `approvals.timeout_s = 0`, il predefinito, restava in attesa senza limite).
+- **Configurazione illeggibile** (decisione del 15 novembre 2026): se la configurazione non si legge, decide l'ultima modalità nota del dispositivo, la stessa con cui la shell è già
+  disegnata: in semplice (anche quando nessuna modalità è mai stata salvata) ogni indirizzo va alla chat; con Sviluppatore salvato si apre l'indirizzo richiesto. Caso accettato:
+  Sviluppatore su un dispositivo mai usato con configurazione che fallisce atterra nella chat.
 - **Prompt injection**: le mitigazioni sono la conferma sempre richiesta e solo dal proprietario, l'assenza di strumenti di lettura di web, file e posta nell'Assistente,
   l'assenza di strumenti di gestione nei subagenti, le protezioni che l'agente non può toccare, la destinazione del segreto calcolata dal motore, l'avviso nella scheda e la
   regola nel prompt. Non c'è un blocco automatico degli strumenti di gestione dopo contenuto non fidato; il rischio residuo è chi approva senza leggere.
@@ -67,7 +74,12 @@ accorciare le descrizioni o unire strumenti, non togliere le conferme.
   precedente dove ha senso e l'audit registra tutto.
 - **Kill switch**: chiude run, conferme, domande e richieste di segreto in attesa, addestramenti, canali, sidecar e browser; **non è verificato** che interrompa download di
   modelli e installazioni di motori già avviati (non sono run; nel codice di `kill` non si annullano). Pausa e ripresa esplicite dei download non esistono: annullare conserva il `.part`.
-- **Terminale**: `aiw run` non dà un'origine al run, quindi un'Assistente avviato dal terminale non può usare gli strumenti di gestione (da decidere se debba).
+- **Terminale**: `aiw run` non dà un'origine al run, quindi un'Assistente avviato dal terminale non usa gli strumenti di gestione (decisione del 15 novembre 2026: resta così, perché
+  `--yes` approverebbe da solo installazioni e cancellazioni e da terminale non ci sono domande né segreti). Il rifiuto è immediato, senza chiedere conferma, e l'aiuto di `aiw run`
+  rimanda a `aiw models`, `aiw runtimes`, `aiw profile`.
+- **`delegate_tools` dell'Assistente** (decisione del 15 novembre 2026): resta `["*"]`. I vincoli non dipendono da quel valore: un subagente non riceve mai uno strumento di gestione,
+  non supera modalità e sandbox del padre e `*` non copre gli strumenti a concessione esplicita (un test fissa che ogni strumento di gestione registrato la richiede). Uno strumento
+  nuovo e delicato registrato senza concessione esplicita diventerebbe delegabile.
 - **Testo incollato nella chat** resta nella sessione (messaggi, eventi, prompt delle chiamate successive); `render_ui` con un campo `obscured` salva e invia al modello ciò che vi
   si digita. L'avviso nel compositore non blocca l'invio. L'export delle tracce nasconde per valore esatto tutti i segreti salvati nell'app (anche un token incollato in chat e poi
   salvato), non quelli incollati e mai salvati, a parte gli schemi noti (`sk-…`, `ghp_…`, `Bearer …`).

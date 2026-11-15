@@ -143,7 +143,9 @@ dal proprietario…») se chi risponde non ha accesso completo: un token `device
 senza TLS. La richiesta resta aperta. Anche la risposta di un canale (Telegram, Slack, email) è rifiutata per queste
 richieste: i canali rispondono come non proprietari.
 Hanno accesso completo le richieste dal computer stesso senza token e quelle col token `owner` su TLS. Le conferme
-degli strumenti ordinari (`write_file`, `shell`, …) si possono ancora dare con un token `device`.
+degli strumenti ordinari (`write_file`, `shell`, …) si possono ancora dare con un token `device`. Un run avviato con un
+token `device` che chiama uno strumento di gestione che modifica qualcosa non apre nemmeno la conferma: lo strumento è
+rifiutato subito («accesso completo…»), perché nessuno potrebbe darle esito.
 
 ## L'agente `assistant`: domande, segreti e strumenti di gestione
 
