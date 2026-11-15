@@ -255,13 +255,18 @@ sequenceDiagram
 
 - **Eventi**: AG-UI 1.0 (`RUN_STARTED`, `TEXT_MESSAGE_*`, `REASONING_*`, `TOOL_CALL_*`,
   `STATE_SNAPSHOT`, `SUBAGENT_*`, `RUN_FINISHED`/`RUN_ERROR`) più `CUSTOM` con nome
-  `aiw.approval_request`, `aiw.todo`, `aiw.usage`. Ogni evento viene salvato (P17), così i run
-  sono riproducibili.
+  `aiw.approval_request`, `aiw.approval_resolved`, `aiw.todo`, `aiw.usage` e, per le domande e i segreti
+  dell'agente (§5.2 bis), `aiw.question`, `aiw.question_resolved`, `aiw.secret_request`, `aiw.secret_resolved`.
+  Ogni evento viene salvato (P17), così i run sono riproducibili.
 - **Tool paralleli**: le tool call read-only dello stesso turno vengono eseguite in parallelo; le chiamate `agent`
   consecutive formano un gruppo a sé, eseguito in parallelo fino a `agents.max_parallel_subagents` (default 3).
 - **Subagenti** (P09): il tool `agent` avvia un run figlio con un profilo diverso e contesto
   isolato; al padre torna solo il risultato. Modalità di approvazione, sandbox e tool del figlio
-  non sono mai più ampi di quelli del padre.
+  non sono mai più ampi di quelli del padre. Un padre può concedere ai figli strumenti che non usa lui
+  (`AgentProfile.delegate_tools`, `"*"` = tutti quelli che non richiedono una concessione esplicita): il figlio riceve
+  la propria lista ristretta a `tools` + `delegate_tools` del padre (`aiw_agent::narrow_tools_delegating`, applicata in
+  `host.rs`); con `delegate_tools` vuoto è l'intersezione di prima. Gli strumenti di gestione (`aiw_*`, `ask_user`)
+  vengono tolti sempre dalla lista di un figlio.
 - **Budget del run**: `RunBudget` (token, turni del modello, tempo) è creato dall'engine per il run di primo livello
   dai limiti dell'agente (`budget`) o dalle impostazioni `agents.budget.*` (0 = nessun limite) ed è condiviso con tutti i
   subagenti. All'inizio di ogni turno, se è esaurito, il run termina normalmente con l'evento `aiw.budget_exceeded` e
@@ -357,14 +362,14 @@ proprio id (`SUBAGENT_STARTED.runId`) i cui eventi la UI legge da `GET /api/runs
 | Elemento | Default | Personalizzabile |
 |---|---|---|
 | Modalità | `ask` (chiede conferma per gli effetti collaterali) | `plan` (solo lettura), `auto-edit` (modifica file senza chiedere, comandi su conferma), `auto` (tutto entro la sandbox), `yolo` (tutto, sconsigliato) |
-| Regole | allow: read, list, search, web_fetch su host pubblici, web_search · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow |
+| Regole | allow: read, list, search, web_fetch su host pubblici, web_search · ask: write, edit, shell, browser, computer · deny: percorsi fuori dal workspace. In più, **incorporate nell'app** (non nell'elenco delle regole della persona): `ask` per i 14 strumenti di gestione che modificano (§5.2 bis), valida anche in `auto` e `yolo` e dopo «Consenti per la sessione» | Regole `tool(pattern)` per agente o workspace, es. `shell(git status*)` → allow. Una regola `allow` o `deny` scritta dalla persona in Sicurezza vince su quella incorporata |
 | Sandbox OS (P07) | `workspace-write`: Linux bwrap, macOS sandbox-exec, Windows token a integrità Low + job object + desktop dedicato (`aiw-winsandbox`) | `read-only`, `workspace-write`, `off` |
 | Rete della shell | **Chiusa** (`sandbox.shell_network` = `off`; Linux `--unshare-net`, macOS `(deny network*)`). Le installazioni esistenti sono state migrate a `on`. **Windows: non chiudibile** | `on`/`off` a livello di macchina; un workspace può solo restringere |
 | Cartelle nascoste ai comandi | La cartella dei dati di AIW e `sandbox.deny_read` (`.ssh`, `.gnupg`, `.aws`, gcloud, `.kube`, docker, `.netrc`, `.npmrc`, `.pypirc`, profili dei browser, portachiavi); skill e allegati di sessione restano leggibili. I tool di file rispettano lo stesso elenco. **Windows: non nascondibili** | `sandbox.deny_read` (solo macchina) |
 | Ambiente dei comandi | Variabili che sembrano segreti (`*_TOKEN`, `*_KEY`, `*_SECRET`, `*PASSWORD*`, `AIW_*`, credenziali cloud) tolte anche con sandbox `off` | `sandbox.env_allow` |
 | Rete dei tool | Consentita solo per i tool web e browser | Allowlist di domini |
 | Audit (P22) | Ogni decisione di policy ed esecuzione viene registrata con l'ID del run | Esportabile in JSONL |
-| Kill switch | `POST /kill` e scorciatoia globale: ferma run, sidecar avviati per i run e browser | — |
+| Kill switch | `POST /kill` e scorciatoia globale: ferma run, conferme, domande e richieste di segreto in attesa, addestramenti, canali, sidecar avviati per i run e browser. Non è verificato che interrompa download di modelli e installazioni di motori già avviati | — |
 
 **Come è fatta la sandbox della shell** (`aiw-tools/src/sandbox.rs`, costruttori di argomenti puri e testati per sistema):
 Linux `bwrap --die-with-parent --new-session --unshare-pid --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp`, con `--unshare-net` a rete spenta,
@@ -384,6 +389,61 @@ Il soggetto della policy per il tool shell è solo `command` (un argomento in pi
 ambiente ripulito (solo una base sicura più le variabili configurate, `HOME` in una cartella privata sotto `<dati>/mcp-home/<id>`). Prima di avviare un
 comando nuovo o cambiato serve l'approvazione del proprietario (token `owner`): si salva l'hash sha256 di (trasporto, comando, argomenti, **nomi** delle variabili);
 una definizione che arriva da un workspace o da un'importazione non è mai approvata da sola. Senza lanciatore (Windows) un server con isolamento richiesto non parte.
+
+### 5.2 bis Assistente, strumenti di gestione, domande e segreti
+
+L'agente predefinito `assistant` («Assistente») è l'unico agente della chat in modalità semplice (`crates/aiw-engine/src/defaults.rs`: modalità `ask`,
+profilo `auto:agent`, 40 turni, `delegate_tools: ["*"]`; gli agenti predefiniti sono 7, con `operator`, `coder`, `browser`, `desktop`, `planner`, `teacher`).
+Risponde, delega agli altri agenti con il tool `agent` e gestisce l'app con strumenti `aiw_*`. Non ha strumenti che leggono web, file o posta né scrivono file: il testo non
+fidato gli arriva solo come risposta di un subagente. Ha 25 strumenti: 7 interni (`agent`, `todo`, `memory_save`, `memory_search`, `memory_update`, `memory_forget`,
+`kb_search`, che non stanno nel registro) e 18 del registro (`crates/aiw-engine/src/management/`). Quanto pesano nel contesto del modello è misurato in `docs/STATUS.md`.
+
+| Strumento | Rischio | Conferma | Effetto |
+|---|---|---|---|
+| `aiw_inspect` | `read` | no | stato compatto (`topic`: `overview`, `models`, `downloads`, `runtimes`, `agents`, `connectors`, `settings`, `memory`, `secrets`, `activity`), al massimo 30 voci, mai un valore segreto |
+| `aiw_model_search` | `network` | no | cerca modelli (catalogo e provider) con l'adattamento al dispositivo |
+| `aiw_model_download`, `aiw_model_use`, `aiw_runtime_control`, `aiw_setting_set`, `aiw_agent_save`, `aiw_memory_review`, `aiw_secret_clear` | `write` | sempre | scarica o annulla un download; fissa il modello di un agente (o `auto`); avvia o ferma un motore; cambia un'impostazione ordinaria (risponde col valore precedente); crea o modifica un assistente con limiti; ripristina o decide un ricordo o una proposta; toglie un segreto salvato |
+| `aiw_model_delete`, `aiw_runtime_install`, `aiw_setting_set_protected`, `aiw_connector_save`, `aiw_connector_remove`, `aiw_agent_delete`, `aiw_memory_delete` | `exec` (rischio alto) | sempre | elimina un modello; installa un motore; cambia una delle sei chiavi di macchina (`workspace.root`, `models.dir`, `server.lan`, `update.*`); aggiunge, modifica o rimuove un server MCP; elimina un assistente; cancella ricordi per sempre |
+| `ask_user` | `read` | no | domanda a scelta, sì o no, o modulo; il run aspetta |
+| `aiw_secret_request` | `read` | no (il consenso è l'inserimento) | chiede un segreto in un campo protetto; il run aspetta; il modello non vede mai il valore |
+
+Tutti hanno `explicit_grant = true` (un agente li usa solo se li elenca, `*` non li copre) e sono registrati dal motore con accesso a `Engine`, come `training_harness` e
+`channel_send`. Passano quindi da concessione, hook, policy, approvazione e audit del ciclo. Tre protezioni valgono dovunque lo strumento sia chiamato:
+
+1. **Regole incorporate**: `management::builtin_rules()` dà una regola `ask` per ognuno dei 14 strumenti che modificano; `Engine::run_rules()` le aggiunge alle regole della persona dove si costruisce
+   una policy (l'input di un run e `Engine::execute_tool`). `GET /api/policy` mostra solo le regole della persona.
+2. **Origine del run** (`RunOrigin { owner, questions, secrets }`, `Engine::start_run_from`, `Engine::run_origin`): la conservano solo i run di primo livello che il server avvia per
+   una persona. `POST /api/sessions/{id}/runs`: `owner` = accesso completo di chi chiama, `questions` vero, `secrets` = `owner`. `POST /agui/{agent}`: `owner` come sopra, `questions`
+   e `secrets` da `forwardedProps.aiw.interactive` (e `secrets` solo con `owner`). Ogni altro avvio (canali, assistente proattivo, workflow, server MCP, A2A, subagenti, CLI,
+   `execute_tool`) non ha origine, e ogni strumento `aiw_*` e `ask_user` rifiuta senza origine («disponibile solo all'Assistente in una chat»); quelli che modificano richiedono
+   anche `owner`. Il controllo è dentro lo strumento e non dipende dalle regole di policy. `tools/list` del server MCP di AIW non elenca gli strumenti di gestione.
+3. **Conferma solo del proprietario** (`Engine::respond_approval_as(id, allow, remember, owner)`): per uno strumento di gestione una risposta senza `owner` è `Denied` (403) e la
+   richiesta resta aperta, e `remember` è ignorato. Il gestore REST passa l'accesso completo del chiamante, la CLI `true`; `respond_approval`, che usano i canali, vale come non proprietario.
+
+**Impostazioni**: `aiw_setting_set` accetta solo le chiavi elencate per nome come ordinarie (`ORDINARY` in `management/admin.rs`: una chiave nuova dello schema è rifiutata finché qualcuno
+non la classifica, e un test lo ricorda); le chiavi segrete vanno con `aiw_secret_request`; `policy.mode`, `sandbox.*`, `network.allow_domains`, `approvals.timeout_s`, `server.port`,
+`server.tls*`, `telemetry.otlp` e gli account di posta non si cambiano mai da qui (`aiw_core::config::is_management_forbidden_key`). `aiw_agent_save` non crea agenti più liberi
+(modalità `plan` o `ask`, sandbox `read-only` o `workspace-write`, niente `*`, `aiw_*`, `ask_user`, strumenti a concessione esplicita o `delegate_tools`) e non modifica
+`assistant` né gli altri agenti integrati. `aiw_connector_save` rifiuta valori per nomi che sembrano segreti: i nomi vanno in `secret_env` e `secret_headers`, i valori arrivano
+con `aiw_secret_request`; cambiare ciò che decide dove vanno i segreti (tipo, indirizzo, comando, argomenti, variabili d'ambiente, intestazioni di instradamento) toglie i segreti
+salvati del connettore, e la scheda di conferma lo dice.
+
+**Domande e segreti** (`management/interaction.rs`): `ask_user` e `aiw_secret_request` mettono la richiesta in una mappa di `Inner` (`questions`, `secret_requests`), emettono
+l'evento (`aiw.question`, `aiw.secret_request`) e attendono su un `oneshot`, come le domande dei server MCP. L'attesa finisce con la risposta, con `approvals.timeout_s` (300 secondi
+se non è impostato), con l'annullamento del run o con il kill switch (`close_interactions`), e lo strumento scrive da sé l'evento di chiusura (`aiw.question_resolved`,
+`aiw.secret_resolved`) prima della fine del run. Senza `RunOrigin.questions` o `RunOrigin.secrets` rispondono subito `unsupported`, senza eventi. Le risposte arrivano su
+`POST /api/questions/{id}` (`device`) e `POST /api/secret-requests/{id}` (`full`); le liste (`GET`, `device`) non hanno mai un valore. Il flusso di un segreto:
+
+1. il modello indica solo `target` (`provider_token:<id>`, `mcp_env:<connettore>:<NOME>`, `mcp_header:<connettore>:<Nome>`, `setting:<chiave>`, `runtime_setting:<motore>:<chiave>`), etichetta e motivo;
+2. il motore risolve il `target` (deve esistere; per MCP il nome deve essere già dichiarato nel connettore), calcola da sé il testo `destination` e ne tiene l'identità grezza
+   (indirizzo o comando interi);
+3. l'evento `aiw.secret_request` non ha un campo per il valore; il client lo mostra con la `destination` e invia il valore **solo** nel corpo di `POST /api/secret-requests/{id}`;
+4. alla risposta il `target` si risolve di nuovo: se l'identità non è più quella mostrata, niente si scrive, la richiesta si chiude (409) e il modello sente `declined` con un avviso;
+5. altrimenti il valore va alla funzione che già scriveva quella destinazione (`set_provider_auth`, `save_mcp_server`, `set_config`, `update_runtime_settings`), che per un token di provider lo verifica col servizio;
+6. una riga di audit (`secret.set`, solo con il `target`), l'evento `aiw.secret_resolved` e il risultato `{"outcome": "stored", "target": …}`.
+
+Il valore non compare in argomenti e risultato dello strumento, eventi, messaggi salvati, audit, conferme e prompt; un errore della destinazione è ripulito del valore. **Resta in chiaro nello
+store** (stesse tabelle di prima): vedi `SECURITY.md`. Forme degli eventi, codici di errore e comportamento di AG-UI in `docs/agui.md`.
 
 ### 5.3 Workflow (task operativi)
 
@@ -695,7 +755,8 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | `web_search` | tutte | Rischio `network`, soggetto della policy = la `query`. Motore scelto dalla persona (`search.provider`: `auto`, `duckduckgo`, `searxng`, `brave`, `off`; indirizzo di SearXNG e chiave di Brave nelle impostazioni, a livello di macchina, chiave mascherata dall'API), mai dal modello. `auto`: SearXNG se c'è l'indirizzo, poi Brave se c'è la chiave, poi DuckDuckGo (pagina HTML, parser tollerante). Con `off` `Tool::available` dà un errore e lo strumento non è offerto. Il motore copia le impostazioni nel `SearchSettings` condiviso a ogni modifica; 20 s, risposta fino a 2 MB, risultati 1–10 (predefinito 5) |
 | `browser_*` (navigate, snapshot, click, type, scroll, back, press, wait, screenshot, tabs, tab_new, tab_select, tab_close, select, hover, upload, downloads, console, eval) | desktop (Chrome/Edge/Chromium via CDP) · telefoni: WebView in-app con un sottoinsieme | Snapshot con `format` `elements` (di serie: riferimenti numerati), `ax` (albero di accessibilità con ref `eN` stabili) o `text` (testo leggibile a pagine); screenshot per i VLM. Collegamento al browser intero (non a una pagina) con `Target.setAutoAttach` in pausa: ogni scheda, anche quelle aperte dal sito, riceve `Fetch.enable` prima di partire, quindi la policy di rete vale per ogni richiesta. Schede (max 8), attese (testo, selettore, navigazione, rete inattiva, max 30 s, annullabili), finestre di dialogo chiuse da sole e riportate, console (100 voci). Download in `<workspace>/downloads/<run>/` solo con scrittura (10 per run, 200 MB, stessa policy di rete, `record_created`). `browser_upload` legge solo da workspace e cartelle di lettura (rischio `computer`); `browser_eval` esegue JavaScript nella pagina: rischio `exec`, `explicit_grant`, mai nei run proattivi. Su telefono: niente schede, console, download, upload, albero |
 | `computer_*` (screenshot, click, type, key, scroll) | desktop (feature `computer-use`) · Android via AccessibilityService (plugin) | Modalità *vision* oppure *accessibility* |
-| `todo`, `agent` (subagente), `skill` | tutte | — |
+| `todo`, `agent` (subagente), `skill` | tutte | `agent` può concedere ai figli anche strumenti che il padre non elenca (`delegate_tools`) |
+| `aiw_*` (17) e `ask_user` | tutte | Strumenti di gestione dell'Assistente e domande all'utente, registrati dal motore (`management/`): vedi §5.2 bis. Tutti a concessione esplicita; quelli che modificano chiedono sempre conferma, solo dal proprietario; funzionano solo in un run di primo livello avviato dal server per una persona. Non sono offerti dal server MCP di AIW |
 | `kb_search` | tutte | Rischio `read`, nessuna conferma. Visibile solo se esiste una raccolta di documenti; cerca per parole chiave e per significato nelle raccolte dell'agente (`AgentProfile.knowledge`, vuoto = tutte) e restituisce estratti «[documento · parte N]» |
 | `mcp__<server>__<tool>` | tutte (stdio solo desktop) | Client MCP: stdio e streamable HTTP; con le risorse anche `mcp__<server>__list_resources` e `mcp__<server>__read_resource` (rischio `read`) |
 
@@ -721,7 +782,11 @@ pollice premia quello giusto. `GET`/`DELETE /api/agents/{id}/routing` leggono e 
 | GET/POST | `/api/sessions` · POST `/api/sessions/{id}/runs` | Sessioni e run. Il corpo del run ha `input`, `kind?`, `thinking?` e `attachments?: [{name, mime, data}]` (base64; al massimo 8 file, 10 MB ciascuno, 25 MB in tutto, errore 400 in italiano; il testo può mancare se c'è un allegato) |
 | GET | `/api/sessions/{id}/attachments/{attachment_id}` | Un allegato di un messaggio: `{name, mime, data}` (base64), 404 in JSON se manca |
 | GET | `/api/runs/{id}/events` (SSE) | Stream AG-UI |
-| POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione |
+| POST | `/api/approvals/{id}` | Risposta a una richiesta di approvazione (`{decision: allow|deny, remember?}`, ambito `device`). Per uno strumento di gestione vale solo con accesso completo: altrimenti 403 e la richiesta resta aperta |
+| GET | `/api/questions` · POST `/api/questions/{id}` | Domande dell'agente (`ask_user`) in attesa e loro risposta (`{action: answer, selected?, other?, confirmed?, values?}` o `{action: decline}`); ambito `device`; 400 se la risposta non va con la domanda (resta aperta), 404 se già chiusa |
+| GET | `/api/secret-requests` | Richieste di segreto in attesa (`aiw_secret_request`), mai con un valore; ambito `device` |
+| POST | `/api/secret-requests/{id}` | `{action: provide, value}` o `{action: decline}`; il valore sta solo in questo corpo. Ambito **`full`**; errori 400, 401 (la destinazione rifiuta il valore), 404, 409 (un valore in salvataggio, o destinazione cambiata dopo la richiesta) |
+| POST | `/agui/{agent}` | Ingresso AG-UI: un `RunAgentInput` e lo stream SSE del run nella risposta; legge `forwardedProps.aiw.interactive` (`questions`, `secrets`). Ambito `device`; vedi `docs/agui.md` |
 | GET | `/api/proposals` · `/api/proposals/{id}` · POST `…/approve` `…/dismiss` · GET `/api/proactive/status` · POST `/api/proactive/tick` | Assistente proattivo |
 | GET/POST | `/api/channels` · PATCH/DELETE `/api/channels/{id}` · POST `…/test` `…/pair` · GET `…/status` | Canali (Telegram, Slack, email); segreti mascherati, solo a livello di macchina |
 | GET/PUT/POST | `/api/connectors/mail/accounts` · POST `/api/connectors/mail/test` | Account IMAP del connettore di posta (sola lettura) |

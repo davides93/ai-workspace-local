@@ -2,6 +2,88 @@
 
 > Aggiornamento 15 novembre 2026 · release v0.5.0-beta.11, build store 5013. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
 
+## Harness semplice: una sola chat agentica in modalità semplice (issue #105)
+
+Stato: **integrato nel branch di verifica `wf/harness-verify` (PR di integrazione), non ancora rilasciato**. Il filone porta la modalità semplice a una sola
+chat con un agente, l'Assistente, che risponde, delega agli altri agenti e gestisce l'app dalla conversazione. La modalità Sviluppatore non cambia, tranne un agente
+e circa 18 strumenti in più negli elenchi.
+
+**Che cosa c'è (verificato nel codice e con test automatici):**
+
+- **Agente `assistant`** («Assistente»): predefinito dal codice (`crates/aiw-engine/src/defaults.rs`), modalità `ask`, profilo `auto:agent`, 40 turni, 25 strumenti. Arriva
+  anche nelle installazioni esistenti. `agent.default` resta `operator`: è l'interfaccia semplice a creare le sessioni con `assistant`. Gli agenti predefiniti sono ora **7**
+  (`operator`, `coder`, `browser`, `desktop`, `planner`, `teacher`, `assistant`).
+- **`delegate_tools`** (nuovo campo di `AgentProfile`): strumenti che un agente può concedere ai sottoagenti senza usarli. L'Assistente ha `["*"]`, quindi `browser` e
+  `desktop` ricevono i propri strumenti; un `*` non copre gli strumenti a concessione esplicita, modalità e sandbox del sottoagente restano al più quelle del padre, e un
+  sottoagente non riceve mai uno strumento di gestione. Con `delegate_tools` vuoto il comportamento è quello di prima.
+- **Strumenti di gestione** (`crates/aiw-engine/src/management/`): `aiw_inspect`, `aiw_model_search`, `aiw_model_download`, `aiw_model_use`, `aiw_model_delete`,
+  `aiw_runtime_control`, `aiw_runtime_install`, `aiw_setting_set`, `aiw_setting_set_protected`, `aiw_connector_save`, `aiw_connector_remove`, `aiw_agent_save`,
+  `aiw_agent_delete`, `aiw_memory_review`, `aiw_memory_delete`, `aiw_secret_request`, `aiw_secret_clear` e `ask_user`. Sono strumenti del registro: passano da policy,
+  hook, audit e approvazioni. Le 14 modifiche chiedono **sempre** conferma (regola `ask` incorporata, anche in `auto` e `yolo`, mai «Consenti per la sessione») e la
+  conferma vale solo dal proprietario (`respond_approval_as`: un token `device` o il token `owner` dalla LAN senza TLS ricevono 403, la risposta di un canale è rifiutata, e la
+  richiesta resta aperta). Funzionano solo in un run di primo livello avviato dal server (`RunOrigin`); un subagente, un workflow, il server MCP di AIW (che non li elenca), un
+  canale, l'assistente proattivo, A2A e `aiw run` sul terminale li rifiutano.
+- **Chiavi di impostazione**: `aiw_setting_set` cambia solo chiavi classificate per nome come ordinarie (un test fallisce se una chiave nuova dello schema non è
+  classificata); `aiw_setting_set_protected` accetta sei chiavi di macchina (`workspace.root`, `models.dir`, `server.lan`, `update.channel`, `update.auto_check`,
+  `update.auto_download`); le protezioni (modalità di approvazione, sandbox, rete, TLS, `approvals.timeout_s`, porta, telemetria) l'agente non le cambia.
+- **Domande e segreti**: `ask_user` (scelta singola o multipla, conferma, modulo), `GET/POST /api/questions`, eventi `aiw.question` e `aiw.question_resolved`;
+  `aiw_secret_request` e `GET/POST /api/secret-requests` (il POST richiede accesso completo), eventi `aiw.secret_request` e `aiw.secret_resolved`. Il valore di un
+  segreto passa solo dal corpo di quel POST e dalla funzione che già scriveva la destinazione: non compare in argomenti, risultati, eventi, messaggi salvati, audit,
+  conferme né prompt (un test lo cerca in tutti). Forme e codici di errore in `docs/agui.md`.
+- **AG-UI**: `POST /agui/assistant` legge `forwardedProps.aiw.interactive` (`questions`, `secrets`); senza dichiarazione `ask_user` e `aiw_secret_request` rispondono
+  subito `unsupported` e l'agente chiede in testo. Giro completo provato in-process da `crates/aiw-server/src/tests_harness.rs`.
+- **Interfaccia**: in modalità semplice resta visibile solo la chat, il pannello «Per iniziare» sta dentro la chat, le nuove sessioni usano `assistant`, schede di domanda
+  e di richiesta di segreto con centro globale (`AskCenter`), scheda di conferma degli strumenti `aiw_*` senza «Consenti per la sessione» e con un avviso dopo la lettura di
+  contenuti esterni, avviso nel compositore quando il testo sembra un segreto. Il mockup parte in Sviluppatore con `?ui=developer`.
+
+**Misura del contesto** (test `the_assistant_sends_the_model_a_prompt_and_tool_schemas_of_a_size_that_is_measured_and_bounded` in `crates/aiw-engine/src/management/mod.rs`,
+da rilanciare con `cargo test -p aiw-engine the_assistant_sends -- --nocapture`): prompt del profilo 2287 caratteri; messaggio di sistema della prima chiamata 2999
+caratteri; **24 strumenti offerti** nella prima chiamata (25 elencati: `kb_search` compare solo se esiste una raccolta di documenti), con 22 509 caratteri di schemi;
+in tutto **25 508 caratteri, circa 7 300 token** (stima: caratteri / 3,5, non il conteggio di un tokenizer vero; un modello diverso conta diversamente). I più grandi:
+`aiw_connector_save` (2 471 caratteri), `ask_user` (2 193), `aiw_agent_save` (1 712). Il calcolo che decide quando compattare la conversazione (`estimate_tokens` in
+`crates/aiw-agent/src/runner.rs`) guarda solo i messaggi, non gli schemi degli strumenti. Un profilo Ollama o un profilo «da scaricare» parte con una finestra di 8 192 token
+(`defaults.rs`): la parte fissa di una chiamata dell'Assistente ne occuperebbe circa l'89 %, prima ancora del primo messaggio. **Non è stato provato come si comportano i
+modelli locali piccoli con questi 24-25 strumenti** (se sbagliano le chiamate, se rispettano le istruzioni, se la finestra basta): se risulta insufficiente la leva è
+accorciare le descrizioni o unire strumenti, non togliere le conferme.
+
+**Che cosa non c'è, e i residui dell'issue #105:**
+
+- **Segreti ancora in chiaro nello store**: nessun portachiavi del sistema né cifratura a riposo. Il flusso nuovo non peggiora la situazione (stesse scritture, nessun nuovo
+  tipo di documento) ma ne aumenta l'uso. La cifratura a riposo con chiave nel portachiavi del sistema è l'issue #121 (priorità P2, da iniziare appena questo filone è in
+  `main` e da chiudere prima della prima versione non beta con la chat unica); #24 resta per rete locale, TLS e mDNS. Nel frattempo la scheda del segreto dice che il valore è
+  salvato su questo computer senza cifratura. Dettagli in `SECURITY.md`.
+- **Sezioni senza sostituto nella chat** (solo vista Sviluppatore, candidate a una seconda fase): raccolte di documenti, canali e posta, proposte dell'assistente proattivo,
+  aggiornamento dell'app, dispositivi e token, workflow, valutazioni, addestramento, backup, regole di sicurezza e hook. Chi usa la modalità semplice le raggiunge solo
+  passando a Sviluppatore.
+- **Senza un modello funzionante nulla di agentico gira**: nel primo avvio e quando il modello sparisce vale solo il pannello deterministico «Per iniziare» dentro la chat.
+- **Mai provato con un modello vero, con un client AG-UI reale né con l'app compilata**: i test usano backend a copione, provider finti, il mockup nel browser e un client
+  simulato. Il comportamento dei modelli locali piccoli è sconosciuto (vedi la misura sopra). Non si sa che cosa faccia `@ag-ui/client` o CopilotKit con gli eventi `CUSTOM aiw.*`.
+- **AG-UI non è human-in-the-loop interoperabile**: domande, segreti e conferme sono eventi `CUSTOM aiw.*` con risposta su endpoint REST; `resume` e gli strumenti del client
+  restano ignorati; una connessione che cade annulla il run.
+- **Dispositivi accoppiati** (token `device`): possono conversare, leggere lo stato e rispondere alle domande e alle conferme degli strumenti ordinari, ma non confermare strumenti
+  di gestione, dare segreti né cambiare `ui.mode` (è un'impostazione condivisa con il computer: il passaggio a Sviluppatore si fa dal computer). Decisione del 15 novembre 2026. Un run
+  avviato da un dispositivo che chiama uno strumento di gestione che modifica qualcosa è rifiutato subito, prima della conferma (prima apriva una conferma a cui nessuno poteva
+  dare esito e, con `approvals.timeout_s = 0`, il predefinito, restava in attesa senza limite).
+- **Configurazione illeggibile** (decisione del 15 novembre 2026): se la configurazione non si legge, decide l'ultima modalità nota del dispositivo, la stessa con cui la shell è già
+  disegnata: in semplice (anche quando nessuna modalità è mai stata salvata) ogni indirizzo va alla chat; con Sviluppatore salvato si apre l'indirizzo richiesto. Caso accettato:
+  Sviluppatore su un dispositivo mai usato con configurazione che fallisce atterra nella chat.
+- **Prompt injection**: le mitigazioni sono la conferma sempre richiesta e solo dal proprietario, l'assenza di strumenti di lettura di web, file e posta nell'Assistente,
+  l'assenza di strumenti di gestione nei subagenti, le protezioni che l'agente non può toccare, la destinazione del segreto calcolata dal motore, l'avviso nella scheda e la
+  regola nel prompt. Non c'è un blocco automatico degli strumenti di gestione dopo contenuto non fidato; il rischio residuo è chi approva senza leggere.
+- **Checkpoint e rewind** coprono solo i file del workspace: impostazioni, assistenti, connettori, modelli eliminati e segreti non si annullano. Gli strumenti riportano il valore
+  precedente dove ha senso e l'audit registra tutto.
+- **Kill switch**: chiude run, conferme, domande e richieste di segreto in attesa, addestramenti, canali, sidecar e browser; **non è verificato** che interrompa download di
+  modelli e installazioni di motori già avviati (non sono run; nel codice di `kill` non si annullano). Pausa e ripresa esplicite dei download non esistono: annullare conserva il `.part`.
+- **Terminale**: `aiw run` non dà un'origine al run, quindi un'Assistente avviato dal terminale non usa gli strumenti di gestione (decisione del 15 novembre 2026: resta così, perché
+  `--yes` approverebbe da solo installazioni e cancellazioni e da terminale non ci sono domande né segreti). Il rifiuto è immediato, senza chiedere conferma, e l'aiuto di `aiw run`
+  dice che da terminale restano `aiw models`, `aiw runtimes` e `aiw profile` (per modelli e motori); per connettori, segreti e impostazioni non c'è un comando equivalente: si usa l'app.
+- **`delegate_tools` dell'Assistente** (decisione del 15 novembre 2026): resta `["*"]`. I vincoli non dipendono da quel valore: un subagente non riceve mai uno strumento di gestione,
+  non supera modalità e sandbox del padre e `*` non copre gli strumenti a concessione esplicita (un test fissa che ogni strumento di gestione registrato la richiede). Uno strumento
+  nuovo e delicato registrato senza concessione esplicita diventerebbe delegabile.
+- **Testo incollato nella chat** resta nella sessione (messaggi, eventi, prompt delle chiamate successive); `render_ui` con un campo `obscured` salva e invia al modello ciò che vi
+  si digita. L'avviso nel compositore non blocca l'invio. L'export delle tracce nasconde per valore esatto tutti i segreti salvati nell'app (anche un token incollato in chat e poi
+  salvato), non quelli incollati e mai salvati, a parte gli schemi noti (`sk-…`, `ghp_…`, `Bearer …`).
+
 ## Aggiornamento: cartelle consentite nella build Mac App Store
 
 - Nella build TestFlight/Mac App Store (`--features mas`, App Sandbox) l'utente sceglie una o più cartelle del Mac da Impostazioni → *Cartelle consentite* (pannello `NSOpenPanel`, security-scoped bookmark che resta dopo il riavvio, riaperto all'avvio prima dei canali). Gli strumenti file le usano in lettura e scrittura (`ToolContext::write_roots`); `delete_file` rifiuta fuori dal workspace e il ripristino (`rewind`) non copre quelle cartelle. Solo l'utente le aggiunge: nessuna rotta, impostazione o strumento lo fa. Dettagli, limiti e rischi per la revisione Apple in `docs/store/README.md` («Cartelle consentite»).
@@ -53,7 +135,7 @@ Legenda: ✅ implementato end to end · 🟡 parziale · 📄 solo manifest o di
 
 | Funzione | Stato | Note |
 |---|---|---|
-| Agenti (5 predefiniti: operator, coder, browser, desktop, planner) e loop con streaming AG-UI | ✅ | tool read-only in parallelo, max turni, self-check sugli errori dei tool; **budget per run** (token, turni del modello, secondi) condiviso con i subagenti, per agente (`budget`) o dalle impostazioni `agents.budget.*`: a limite esaurito il run si chiude con l'avviso `aiw.budget_exceeded`; **output strutturato**: un agente può avere `output_schema` (sottoinsieme di JSON Schema), la risposta finale viene estratta e validata con un tentativo di correzione, il JSON valido è in `RunFinished.result.json`; nessun `response_format` verso i runtime |
+| Agenti (7 predefiniti: operator, coder, browser, desktop, planner, teacher, assistant) e loop con streaming AG-UI | ✅ | tool read-only in parallelo, max turni, self-check sugli errori dei tool; **budget per run** (token, turni del modello, secondi) condiviso con i subagenti, per agente (`budget`) o dalle impostazioni `agents.budget.*`: a limite esaurito il run si chiude con l'avviso `aiw.budget_exceeded`; **output strutturato**: un agente può avere `output_schema` (sottoinsieme di JSON Schema), la risposta finale viene estratta e validata con un tentativo di correzione, il JSON valido è in `RunFinished.result.json`; nessun `response_format` verso i runtime |
 | Subagenti (tool `agent`, contesto isolato, profondità 2) | ✅ | modalità di approvazione, sandbox e tool del subagente non sono mai più ampi di quelli del padre; più chiamate `agent` nello stesso turno girano in parallelo (limite `agents.max_parallel_subagents`, default 3; attenzione a subagenti che scrivono negli stessi file) |
 | Skill `SKILL.md`, memoria `AGENTS.md` | ✅ | nessuna UI per le skill |
 | Hook (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SubagentStart, SubagentStop, PreCompact) | ✅ | SessionStart parte al primo messaggio di una conversazione e aggiunge contesto al prompt di sistema; SubagentStart/SubagentStop usano il filtro sul nome dell'agente; PreCompact può saltare la compattazione; **v0.4** editor degli hook nella UI; un prompt bloccato da `UserPromptSubmit` resta visibile in chat ma non arriva al modello |
@@ -157,8 +239,8 @@ su hash con parametri (sessione, agente e workflow nell'URL), nuova architettura
 estratto, contrasto AA in entrambi i temi, layout corretti su telefono e tablet. Dettagli in
 [UI-ARCHITECTURE.md](design/UI-ARCHITECTURE.md). La UI mostra l'errore di un run salvato come quello
 dal vivo, raggruppa i tool interni, mostra i segreti MCP mascherati e riporta a `#/chat` se la
-sessione aperta è stata eliminata altrove. Il profilo ha `thinking`/`thinking_budget` (Ragionamento spento, automatico o approfondito, risolto a ogni chiamata del ciclo agente e traducibile per runtime dal campo `thinking` del manifest; override per run nella richiesta di avvio) e la UI semplice parla di «Stile» e «Ragionamento». L'impostazione `ui.mode` (default `simple`) riduce le
-sezioni a cinque e la prima esecuzione a un solo pulsante; `developer` (vista «Sviluppatore») mostra tutto; in modalità semplice la Panoramica mostra solo «Nuova chat», «Scarica un modello», «Il tuo assistente», approvazioni, conversazioni recenti e lezioni. Il consigliere dei modelli (`aiw-engine::adviser`, `GET /api/recommend`) sceglie per compito il modello installato e quello da scaricare; i profili `auto:chat|agent|reasoning|vision` (usati dagli agenti nuovi) sono risolti da lui all'avvio del run, e la UI semplice nasconde i modelli che non girano sul dispositivo (interruttore «Mostra tutti»). La shell desktop (`apps/desktop/src-tauri/src/desktop.rs`, plugin ufficiali tray-icon, notification, autostart e single-instance) tiene l'app viva: icona nel tray, chiusura nel tray, avvio all'accesso, avvisi per approvazioni, run finiti e download (logica in `aiw_engine::notices`, testata); da verificare in CI e a mano perché non compilata in locale.
+sessione aperta è stata eliminata altrove. Il profilo ha `thinking`/`thinking_budget` (Ragionamento spento, automatico o approfondito, risolto a ogni chiamata del ciclo agente e traducibile per runtime dal campo `thinking` del manifest; override per run nella richiesta di avvio) e la UI semplice parla di «Stile» e «Ragionamento». L'impostazione `ui.mode` (default `simple`) riduce l'interfaccia
+alla **sola chat** con l'agente Assistente e la prima esecuzione a un solo pulsante dentro la chat (ogni altro indirizzo, vecchi hash compresi, porta a `/chat`; prima del filone «Harness semplice» le sezioni visibili erano nove, non cinque come scriveva questo documento); `developer` (vista «Sviluppatore») mostra tutto, come prima. Dettagli e limiti nella sezione «Harness semplice» in cima a questo documento. Il consigliere dei modelli (`aiw-engine::adviser`, `GET /api/recommend`) sceglie per compito il modello installato e quello da scaricare; i profili `auto:chat|agent|reasoning|vision` (usati dagli agenti nuovi) sono risolti da lui all'avvio del run, e la UI semplice nasconde i modelli che non girano sul dispositivo (interruttore «Mostra tutti»). La shell desktop (`apps/desktop/src-tauri/src/desktop.rs`, plugin ufficiali tray-icon, notification, autostart e single-instance) tiene l'app viva: icona nel tray, chiusura nel tray, avvio all'accesso, avvisi per approvazioni, run finiti e download (logica in `aiw_engine::notices`, testata); da verificare in CI e a mano perché non compilata in locale.
 
 ### 2.7 Piattaforme e build
 
