@@ -68,6 +68,8 @@ test.describe("questions of the agent", () => {
     await expect(log(page).getByText("Va bene, non scarico nulla.")).toBeVisible();
 
     // Stopping the run while a question waits: nobody can answer it any more.
+    // The first run must be over (the stop button gone) before the next message goes: otherwise it can be dropped under load.
+    await expect(page.getByRole("button", { name: "Ferma" })).toBeHidden();
     await page.locator("#composer").fill("Scarica un modello");
     await page.locator("#composer").press("Enter");
     const second = log(page).getByRole("form", { name: "Quale modello?" });
