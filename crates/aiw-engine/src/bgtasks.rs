@@ -155,7 +155,7 @@ fn pending(t: &BackgroundTask) -> Vec<&TaskInstruction> {
 fn exhausted(t: &BackgroundTask) -> Option<String> {
     let l = &t.limits;
     if let Some(m) = l.max_seconds.filter(|m| t.progress.seconds >= *m) {
-        return Some(format!("{} minuti di lavoro", (m + 59) / 60));
+        return Some(format!("{} minuti di lavoro", m.div_ceil(60)));
     }
     if let Some(m) = l.max_turns.filter(|m| t.progress.turns >= *m) {
         return Some(format!("{m} passi del modello"));
@@ -385,7 +385,8 @@ impl Engine {
         let agent_id = req.agent_id.clone().filter(|a| !a.trim().is_empty()).unwrap_or_else(|| self.cfg_str("proactive.agent", "operator"));
         let agent = self.agent(&agent_id)?;
         let t = self.task_new(&req.instruction, req.title.as_deref(), &agent, "user", None, req.limits)?;
-        self.audit_user("task.start", &t.title);
+        // The audit says which task and how long the instruction was, never the text: a secret pasted in it must not reach the log.
+        self.audit_user("task.start", &format!("{} ({} caratteri di istruzioni)", t.id, t.instruction.chars().count()));
         self.task_begin(t).await
     }
 
@@ -555,7 +556,7 @@ impl Engine {
                 let _ = self.cancel_run(run);
             }
         }
-        self.audit_user("task.pause", &t.title);
+        self.audit_user("task.pause", &t.id);
         Ok(self.task_view(t))
     }
 
@@ -589,7 +590,7 @@ impl Engine {
             })?;
         }
         let t = self.task_launch(id, Claim::Start { force: Some(req.force) }).await?;
-        self.audit_user("task.resume", &format!("{}{}", t.title, if req.force { " (comunque)" } else { "" }));
+        self.audit_user("task.resume", &format!("{}{}", t.id, if req.force { " (comunque)" } else { "" }));
         Ok(self.task_view(t))
     }
 
@@ -638,7 +639,7 @@ impl Engine {
             note(t, format!("Istruzione ricevuta: «{}».", short(text, 80)));
             Ok(())
         })?;
-        self.audit_user("task.instruct", &format!("{}: {}", t.title, short(text, 120)));
+        self.audit_user("task.instruct", &format!("{} ({} caratteri, {source})", t.id, text.chars().count()));
         Ok(self.task_view(t))
     }
 
@@ -662,7 +663,7 @@ impl Engine {
         if let Some(run) = run {
             let _ = self.cancel_run(&run);
         }
-        self.audit_user("task.cancel", &t.title);
+        self.audit_user("task.cancel", &t.id);
         Ok(self.task_view(t))
     }
 
@@ -875,7 +876,7 @@ impl Engine {
             let (e, id) = (self.clone(), t.id.clone());
             tokio::spawn(async move {
                 match e.task_launch(&id, Claim::Start { force: None }).await {
-                    Ok(t) => e.audit_system("task.resume", &format!("{} (da solo)", t.title)),
+                    Ok(t) => e.audit_system("task.resume", &format!("{} (da solo)", t.id)),
                     // Someone else got there first (the person, or an earlier pass): nothing to do.
                     Err(Error::Conflict(_)) => {}
                     Err(err) => tracing::warn!("lavoro in background: ripresa non riuscita: {err}"),

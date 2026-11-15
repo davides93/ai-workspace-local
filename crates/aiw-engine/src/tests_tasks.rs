@@ -693,3 +693,67 @@ async fn a_paused_task_survives_a_restart_with_its_instructions_and_resumes_from
     assert!(user_texts(req).iter().any(|u| u.contains("Poi controlla")));
     assert!(e.messages(&session).unwrap().len() > stored_before);
 }
+
+// ------------------------------------------------------------------------------------ voice (without a real voice)
+
+/// A speech recognizer that answers with a fixed sentence: the real one (the system's, or whisper.cpp) needs a
+/// microphone and a speaker of flesh and blood, which these tests do not have.
+struct FakeStt;
+
+impl crate::voice::NativeStt for FakeStt {
+    fn transcribe(&self, wav: &[u8], language: Option<&str>) -> Result<String> {
+        if wav.len() < 44 {
+            return Err(Error::Invalid("audio vuoto".into()));
+        }
+        assert_eq!(language, Some("it"));
+        Ok("Aggiungi anche il totale in fondo".into())
+    }
+}
+
+#[tokio::test]
+async fn a_dictated_instruction_is_transcribed_first_and_reaches_the_task_like_a_typed_one() {
+    let r = rig(vec![hold("c1"), text("Fatto, con il totale.")]).await;
+    let e = &r.e;
+    e.register_native_stt(Arc::new(FakeStt));
+    let t = e.task_start(start("Prepara il rendiconto")).await.unwrap();
+    r.entered.notified().await;
+    // The app records, the engine transcribes, the person reads the text and sends it as an instruction «voice».
+    let wav = vec![0u8; 4096];
+    let said = e.transcribe(&wav, "audio/wav", Some("it")).await.unwrap();
+    assert_eq!(said.text, "Aggiungi anche il totale in fondo");
+    // A recording that gives nothing is an error before any instruction exists: the task is untouched.
+    assert!(e.transcribe(&[], "audio/wav", Some("it")).await.is_err());
+    assert!(e.task(&t.id).unwrap().instructions.is_empty());
+    e.task_instruct(&t.id, &said.text, Some("voice")).unwrap();
+    r.release.notify_one();
+    let done = wait_status(e, &t.id, "succeeded").await;
+    assert_eq!((done.instructions[0].source.as_str(), done.instructions[0].status.as_str()), ("voice", "delivered"));
+    let second = &r.backend.requests.lock().unwrap()[1];
+    assert!(user_texts(second).iter().any(|u| u.contains("Aggiungi anche il totale in fondo")));
+}
+
+// ------------------------------------------------------------------------------------ audit
+
+#[tokio::test]
+async fn the_audit_names_the_task_and_never_the_text_of_an_instruction() {
+    let r = rig(vec![hold("c1"), text("Fatto.")]).await;
+    let e = &r.e;
+    let secret = "hunter2-SEGRETISSIMO";
+    let t = e.task_start(start(&format!("Entra con la password {secret} e riordina"))).await.unwrap();
+    r.entered.notified().await;
+    e.task_instruct(&t.id, &format!("Riprova con {secret}"), None).unwrap();
+    e.task_pause(&t.id).unwrap();
+    r.release.notify_one();
+    wait_status(e, &t.id, "paused").await;
+    e.task_resume(&t.id, TaskResume::default()).await.unwrap();
+    wait_status(e, &t.id, "succeeded").await;
+    let audit = e.audit();
+    assert!(
+        !audit.iter().any(|a| a.detail.contains(secret) || a.tool.as_deref().is_some_and(|x| x.contains(secret))),
+        "no text of an instruction in the audit"
+    );
+    for action in ["task.start", "task.instruct", "task.pause", "task.resume"] {
+        let entry = audit.iter().find(|a| a.action == action).unwrap_or_else(|| panic!("{action} is audited"));
+        assert!(entry.detail.starts_with(&t.id), "{action}: {}", entry.detail);
+    }
+}
