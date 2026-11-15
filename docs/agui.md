@@ -222,6 +222,10 @@ si annuncia prima, poi si apre la richiesta) e, per ogni richiesta, quello di ch
 `confirm_label` e `deny_label`) o `form` (da 1 a 8 `fields` con `name`, `label`, `type` tra `string`, `number`,
 `integer`, `boolean`, `enum`, e per `enum` le `options`; `required`, `placeholder`). Un campo il cui nome, etichetta o
 segnaposto chiede un segreto (password, token, chiave) è rifiutato: i segreti non passano da `ask_user`.
+Il quarto valore, `handover`, lo apre solo `browser_handover` (l'agente chiede all'utente di fare login o 2FA nel browser: `message` è
+ciò che deve fare, `confirm_label` e `deny_label` i due pulsanti, si risponde come a un `confirm`); il client che non sa
+mostrare la vista live può far rispondere «Non posso ora». Mentre dura, l'evento `aiw.browser` (`{"mode": "agent"|"paused"|"human",
+"handover": bool}`) dice chi guida il browser. Vedi `docs/browser-live.md`.
 
 `aiw.question_resolved`, alla chiusura:
 
