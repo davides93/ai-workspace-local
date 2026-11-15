@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../shared/api/context";
-import { errorMessage, errorStatus } from "../../shared/lib/errors";
+import { errorMessage, errorStatus, isNotFound } from "../../shared/lib/errors";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import type { ApprovalRequest, BackgroundTask, BudgetLimits, ProposalQuery } from "../../shared/api/types";
@@ -77,10 +77,15 @@ export function useOpenProposalCount(): number {
 
 // ---- background tasks: what the assistant does while the person is away
 
-/** Refreshed every 4 s while something is at work (or stopping), else every 20 s. */
+/**
+ * Refreshed every 4 s while something is at work (or stopping), else every 20 s. An engine that has no tasks (404) is not asked again.
+ */
 export function useTasks() {
   const api = useApi();
-  return useQuery({ queryKey: qk.tasks.list(), queryFn: () => api.tasks(), refetchInterval: (q) => pollInterval(q.state.data), placeholderData: (prev) => prev });
+  return useQuery({
+    queryKey: qk.tasks.list(), queryFn: () => api.tasks(), placeholderData: (prev) => prev,
+    refetchInterval: (q) => (isNotFound(q.state.error) ? false : pollInterval(q.state.data)),
+  });
 }
 
 /** Puts the engine's answer in the list at once, then asks again. */
