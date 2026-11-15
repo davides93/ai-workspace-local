@@ -37,6 +37,17 @@ test.describe("long conversation", () => {
     expect(await page.locator(".ws-log-inner .codeblock").count()).toBeGreaterThanOrEqual(120);
   });
 
+  test("a reply far from the end is laid out as wide, with the same text width, as one near the end", async ({ page }) => {
+    // The padding and the negative margin of the rule must give the same content box (the text wraps in the same places).
+    const widths = await page.evaluate(() => {
+      const md = [...document.querySelectorAll(".ws-log-inner > .ws-msg > .ws-bubble > .md")];
+      return { far: md[0].getBoundingClientRect().width, near: md[md.length - 1].getBoundingClientRect().width, count: md.length };
+    });
+    expect(widths.count).toBeGreaterThan(100);
+    expect(widths.far).toBeGreaterThan(300);
+    expect(widths.far).toBeCloseTo(widths.near, 1);
+  });
+
   test("find in page finds a word in the part that is not laid out, and the engine lays that row out for the match", async ({ page }) => {
     const before = await skipped(page);
     expect(before.skipped).toBeGreaterThan(0);
@@ -92,15 +103,21 @@ test.describe("long conversation", () => {
     const log = page.locator(".ws-log");
     await messageBox(page).fill("Ordina i PDF in Downloads");
     await page.getByRole("button", { name: "Invia" }).click();
-    // At the end, the reply is followed as it grows.
-    await expect(conversation(page).getByText("Inizio guardando cosa c'è nella cartella Downloads.")).toBeVisible();
+    // At the end, the reply is followed as it grows, up to the confirmation that stops the run.
+    await expect(conversation(page).getByRole("article", { name: "shell" })).toBeVisible();
     await expect.poll(() => atEnd(page)).toBeLessThanOrEqual(64);
-    // The reader goes back to re-read: the next things that arrive raise the pill and do not pull the view.
+    // The reader goes back to re-read. The run is parked on the confirmation: nothing arrives until it is answered, so what comes
+    // next (the tool's result, the end of the run) comes after the reader has left the end, whatever the speed of the machine.
     await log.evaluate((el) => { el.scrollTop = el.scrollHeight / 2; });
-    await expect(pill(page)).toBeVisible();
+    await expect.poll(() => atEnd(page)).toBeGreaterThan(1000);
+    await expect(pill(page)).toHaveCount(0);
     const top = await log.evaluate((el) => el.scrollTop);
-    await page.waitForTimeout(300);
-    expect(Math.abs((await log.evaluate((el) => el.scrollTop)) - top)).toBeLessThan(200);
+    // Answered from the banner's drawer, which does not scroll the log.
+    await page.getByRole("button", { name: /1 conferma in attesa/ }).click();
+    await page.getByRole("dialog", { name: "Conferme in attesa (1)" }).getByRole("button", { name: "Consenti", exact: true }).click();
+    await expect(pill(page)).toBeVisible();
+    // The new things did not pull the view: it is where the reader left it, give or take what the rows above resolved to.
+    expect(Math.abs((await log.evaluate((el) => el.scrollTop)) - top)).toBeLessThan(400);
     await pill(page).click();
     await expect.poll(() => atEnd(page)).toBeLessThanOrEqual(64);
     await expect(pill(page)).toHaveCount(0);

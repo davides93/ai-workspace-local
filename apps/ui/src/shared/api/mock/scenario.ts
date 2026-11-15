@@ -11,8 +11,8 @@ import { LONG_CHAT_ID, longChatMessages } from "./long-chat";
  *
  * - `first-run`: a runtime that is up, no model on disk, no conversation: what the first start of
  *   the simple interface looks like before "Prepara tutto".
- * - `long-chat`: the default demo plus one very long conversation (`ses_long`, about four hundred rows with code in every language of the
- *   highlighter, tool cards, a table and a list): what a person who uses the app for months has. It is the first session of the list.
+ * - `long-chat`: the default demo plus one very long conversation (`ses_long`, about 360 rows with code in every language of the
+ *   highlighter, tool cards, tables, lists, quotes and links): what a person who uses the app for months has. It is the first session of the list.
  * - `offline`: the workspace does not answer (every request fails with a 503): the connection banner and the error state of every view.
  * - `unpaired`: this browser has no token on a device that wants one (every request fails with a 401 until the pairing code `123456`
  *   is entered): the pairing screen, then the app. A wrong code is refused.

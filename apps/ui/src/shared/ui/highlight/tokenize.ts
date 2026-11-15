@@ -4,8 +4,9 @@
 //  - the runs, joined, are exactly the input (copying, selecting and screen readers see the same text);
 //  - it never throws and never loops: every step consumes at least one character, and an unfinished string or comment (a block
 //    that is still streaming) runs to its end;
-//  - no rule backtracks over the whole input: a pathological block costs a few milliseconds, and a block over
-//    `MAX_HIGHLIGHT_CHARS` is not highlighted at all.
+//  - no rule can be retried at every position of a long run: a rule that is a greedy run followed by a lookahead starts with a
+//    lookbehind, so the run is tried only at its start (the test feeds every grammar inputs built to defeat this, with a bound per
+//    input); a block over `MAX_HIGHLIGHT_CHARS` is not highlighted at all.
 // This file holds every grammar, so it is its own chunk (`useHighlight.ts` imports it on demand).
 import type { GrammarId } from "./languages";
 
@@ -163,15 +164,15 @@ const CSS: Grammar = {
     r("kw", /@[\w-]+/), r("kw", /!important\b/),
     r("num", /#[\da-fA-F]{3,8}\b/),
     r("num", /(?<![\w#-])-?(?:\d+\.?\d*|\.\d+)(?:%|[a-zA-Z]+)?/),
-    r("attr", /--[\w-]+/), r("attr", /[\w-]+(?=[ \t]*:[ \t\n])/),
+    r("attr", /--[\w-]+/), r("attr", /(?<![\w-])[\w-]+(?=[ \t]*:[ \t\n])/),
     r("ty", /[.#][A-Za-z_-][\w-]*/), r("lit", /::?[A-Za-z-]+/),
-    r("fn", /[A-Za-z-]+(?=\()/),
+    r("fn", /(?<![A-Za-z-])[A-Za-z-]+(?=\()/),
   ],
 };
 
 /** A whole tag, split into its name, attribute names and quoted values. */
 const TAG = /<\/?[A-Za-z][\w:.-]*(?:\s+[^\s=<>"'/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>]+))?)*\s*\/?>?/y;
-const TAG_PARTS = /(<\/?[A-Za-z][\w:.-]*)|("[^"]*"?|'[^']*'?)|([^\s=<>"'/]+)(?=\s*=)/g;
+const TAG_PARTS = /(<\/?[A-Za-z][\w:.-]*)|("[^"]*"?|'[^']*'?)|((?<![^\s=<>"'/])[^\s=<>"'/]+)(?=\s*=)/g;
 const htmlTag: Scanner = (code, i) => {
   TAG.lastIndex = i;
   const m = TAG.exec(code);
@@ -204,7 +205,7 @@ const SQL: Grammar = {
 const YAML: Grammar = {
   rules: [
     r("com", /(?<![^\s])#[^\n]*/), r("str", DQ), r("str", SQ),
-    r("attr", /[\w.@/-]+(?=[ \t]*:(?:[ \t]|\n|$))/),
+    r("attr", /(?<![\w.@/-])[\w.@/-]+(?=[ \t]*:(?:[ \t]|\n|$))/),
     r("ty", /[&*][\w-]+/), r("num", NUM),
   ],
   lit: set("true false null yes no on off ~ True False Null"),
@@ -215,7 +216,7 @@ const TOML: Grammar = {
     r("com", /#[^\n]*/),
     r("str", /"""[\s\S]*?(?:"""|$)/), r("str", /'''[\s\S]*?(?:'''|$)/), r("str", DQ), r("str", /'[^'\n]*'?/),
     r("ty", new RegExp(`${LINE_START}\\[\\[?[^\\]\\n]*\\]?\\]?`)),
-    r("attr", /[\w.-]+(?=[ \t]*=)/),
+    r("attr", /(?<![\w.-])[\w.-]+(?=[ \t]*=)/),
     r("num", /\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?/), r("num", NUM),
   ],
   lit: set("true false inf nan"),

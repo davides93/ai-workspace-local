@@ -66,8 +66,11 @@ export function renderIn(
   api: MockTransport = new MockTransport(),
   client: QueryClient = createQueryClient(),
 ): RenderResult & { user: ReturnType<typeof setup>; client: QueryClient; api: MockTransport } {
-  const result = render(<QueryClientProvider client={client}><ApiProvider api={api}>{ui}</ApiProvider></QueryClientProvider>);
-  return Object.assign(result, { user: setup(), client, api });
+  const wrap = (el: ReactElement) => <QueryClientProvider client={client}><ApiProvider api={api}>{el}</ApiProvider></QueryClientProvider>;
+  const result = render(wrap(ui));
+  const rerender = result.rerender;
+  // `rerender` keeps the providers around the new element.
+  return Object.assign(result, { user: setup(), client, api, rerender: (el: ReactElement) => rerender(wrap(el)) });
 }
 
 export { screen, waitFor, within };

@@ -365,7 +365,7 @@ nei test di componente `renderApp({ scenario })`, applicato una volta per file) 
 |---|---|---|
 | `first-run` | nessun modello, nessuna conversazione, un runtime acceso | primo avvio della modalità semplice, «Prepara tutto» |
 | `mas` | build sandboxed del Mac App Store, una cartella consentita | Impostazioni → «Cartelle consentite», avviso di una cartella rifiutata |
-| `long-chat` | una conversazione di 120 turni (circa 360 righe) con codice in ogni lingua dell'evidenziatore, strumenti, una tabella | evidenziazione, conversazioni lunghe, catture |
+| `long-chat` | una conversazione di 120 turni (circa 360 righe) con codice in ogni lingua dell'evidenziatore, strumenti, tabelle, elenchi, citazioni e collegamenti | evidenziazione, conversazioni lunghe, catture |
 | `offline` | ogni richiesta fallisce con 503 (involucro sul trasporto, i dati non cambiano) | banner «Connessione persa», stato di errore delle viste |
 | `unpaired` | ogni richiesta fallisce con 401 finché non si inserisce il codice `123456` | schermata di accoppiamento, codice sbagliato |
 
@@ -387,25 +387,31 @@ Markdown resta senza HTML. Grammatiche per js, ts, json, python, shell, rust, c/
 (`languages.ts` mappa i nomi delle recinzioni, `ts`, `tsx`, `bash`, `c++`…); un blocco senza lingua o con una lingua sconosciuta resta in
 chiaro: non si indovina. Garanzie provate dai test: i pezzi uniti sono esattamente il testo (copia, selezione e lettori di schermo non
 cambiano), nessun input lo manda in errore o in ciclo (un blocco ancora in streaming, con la stringa non chiusa, arriva fino alla fine),
-nessuna regola va in backtracking sull'intero blocco (prove con input costruiti apposta) e oltre 30 000 caratteri resta in chiaro. Le
+nessuna regola viene riprovata a ogni posizione di una sequenza lunga, che era il difetto della prima versione (prove con input costruiti apposta, con un limite di tempo per ciascuno) e oltre 30 000 caratteri resta in chiaro. Le
 grammatiche sono un **chunk a parte** (`useHighlight` lo importa alla prima occorrenza): il blocco compare in chiaro e poi colorato, con lo
 stesso testo e quindi senza spostamenti. I colori sono `--tok-*` in `tokens.css` (chiaro, scuro e OLED), con prova di contrasto ≥ 4,5:1
 sullo sfondo del blocco e della sua intestazione.
 
-**Conversazioni lunghe.** Le risposte lontane dalla fine (oltre 40 righe: `.ws-log-inner > .ws-msg:nth-last-child(n + 41) > .ws-bubble`) hanno
-`content-visibility: auto` (`chat.css`): il browser non le impagina né le dipinge finché non si avvicinano allo schermo. **Restano nel
-documento**, e per questo ricerca nella pagina, selezione, tastiera e lettori di schermo le vedono (con la perdita misurata più sotto); una conversazione di meno
-di 40 righe e la parte viva della lunga (conferme, domande, risposta in corso) non cambiano, e un browser senza la proprietà mostra tutto
-come ha sempre fatto. Non si è usato un elenco virtualizzato che toglie le righe dal documento (react-window e simili) perché rompe
-proprio quelle cinque cose: la ricerca nella pagina non trova ciò che non c'è, e una selezione non attraversa righe assenti. Misurato in
-Chromium con il CSS che c'è (confronto con `content-visibility: visible`, mediana di 3 prove da 10 ridimensionamenti, grammatiche già caricate,
-Playwright headless su un Mac): l'impaginazione per ridimensionamento passa da 6,6 a 2,7 ms con 360 righe e da 89 a 44 ms con 3600 (clonando le righe):
-un fattore 2, non di più. Quello che non riduce: nodi in memoria e costo di React per montare la lista (le righe sono già `memo`). Il pulsante «Nuovi messaggi» non segue più
-l'altezza della lista (cambia mentre si scorre la storia, quando le righe prendono l'altezza vera) ma la **coda** della conversazione
-(`tailSignature`: riga aggiunta, ultima riga che cresce, nota o proposta sotto la lista). Provato in `e2e/flows/long-chat.spec.ts`
-(apertura in fondo, `window.find`, selezione di tutto il log, scorrimento senza falso avviso, risposta mentre si legge altrove,
-Maiusc+Tab per 180 passi senza salti) e in `e2e/a11y/long-chat.spec.ts` (albero di accessibilità di Chromium con l'accessibilità
-attiva, con e senza il contenimento: stesso testo e stesso numero di intestazioni, paragrafi, elenchi, tabelle, codice e pulsanti). **Una perdita misurata**:
-nelle risposte non impaginate Chromium non espone i simboli degli elenchi (i puntini, disegnati dall'impaginazione: `ListMarker` da 39 a 6 nell'albero), mentre
-i `listitem` restano. Anche il ruolo `paragraph` spariva (da 240 a 28) finché il Markdown non l'ha scritto esplicitamente su ogni `<p>`: ora resta. **Non provato**: un lettore di
-schermo vero (NVDA, JAWS, VoiceOver, Orca), WebKit (WKWebView, WebKitGTK) e WebView2.
+**Conversazioni lunghe.** Le risposte lontane dalla fine (`.ws-bubble[data-cold]`: più di 40 righe dalla fine **nel momento in cui la
+conversazione si apre**, lo decide `ConversationLog` con `coldBefore`) hanno `content-visibility: auto` (`chat.css`): il browser non le
+impagina né le dipinge finché non si avvicinano allo schermo. **Restano nel documento**, e per questo ricerca nella pagina, selezione,
+tastiera e lettori di schermo le vedono (con la perdita misurata più sotto); una conversazione di meno di 40 righe, le righe che arrivano
+durante la sessione (conferme, domande, risposta in corso) e un browser senza la proprietà non cambiano. Il confine resta dov'era mentre
+arrivano righe: una riga che diventasse fredda mentre chi legge è in fondo cambierebbe altezza sopra lo schermo (la sua misura vera diventa
+la stima, 8rem), il browser sposterebbe lo scorrimento per compensare e la vista smetterebbe di seguire la fine (è successo nella prima
+versione, che usava `nth-last-child`: la prova «risposta mentre si legge altrove» lo vede). Non si è usato un elenco virtualizzato che toglie
+le righe dal documento (react-window e simili) perché rompe proprio quelle cinque cose: la ricerca nella pagina non trova ciò che non c'è, e
+una selezione non attraversa righe assenti. Misurato in Chromium con il CSS che c'è (confronto con `content-visibility: visible`, mediana
+di 3 prove da 10 ridimensionamenti, grammatiche già caricate, Playwright headless su un Mac): l'impaginazione per ridimensionamento passa da
+92 a 48 ms con 3600 righe (clonando le righe), da 4,8 a 3,4 ms con 360 (un guadagno piccolo, vicino al rumore): un fattore 2 in grande, non di
+più. Quello che non riduce: nodi in memoria e costo di React per montare la lista (le righe sono già `memo`). Il pulsante «Nuovi messaggi» non
+segue più l'altezza della lista (cambia mentre si scorre la storia, quando le righe prendono l'altezza vera) ma la **coda** della conversazione
+(`tailSignature`: riga aggiunta, ultima riga che cresce o cambia stato, nota o proposta sotto la lista). Provato in
+`e2e/flows/long-chat.spec.ts` (apertura in fondo, `window.find`, selezione di tutto il log, larghezza uguale dentro e fuori dalle righe fredde, scorrimento senza falso avviso,
+risposta che arriva mentre si legge altrove e vista che segue la fine, Maiusc+Tab per 180 passi senza salti), in `ConversationLog.test.tsx`
+(quali righe sono fredde) e in `e2e/a11y/long-chat.spec.ts` (albero di accessibilità di Chromium con l'accessibilità attiva, con e senza il
+contenimento, sullo scenario che ha ogni tipo di blocco Markdown: l'intero istogramma dei ruoli è lo stesso salvo `InlineTextBox` e
+`ListMarker`). **Una perdita misurata**: nelle risposte non impaginate Chromium non espone i simboli degli elenchi (i puntini, disegnati
+dall'impaginazione), mentre i `listitem` restano. Anche il ruolo `paragraph` spariva (da 240 a 28) finché il Markdown non l'ha scritto
+esplicitamente su ogni `<p>`: ora resta. **Non provato**: un lettore di schermo vero (NVDA, JAWS, VoiceOver, Orca), WebKit (WKWebView,
+WebKitGTK) e WebView2.

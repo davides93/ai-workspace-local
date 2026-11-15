@@ -21,7 +21,7 @@ test.describe("connection", () => {
     await expect(page.getByRole("textbox", { name: "Messaggio" })).toBeVisible();
   });
 
-  test("offline: a banner says so, the page around stays up and the retry button asks again", async ({ page }) => {
+  test("offline: a banner says so, the page around stays up and the retry button is there again after a failed try", async ({ page }) => {
     await openApp(page, "/chat", { scenario: "offline" });
     const banner = page.getByRole("alert").filter({ hasText: "Connessione al workspace persa" });
     await expect(banner).toBeVisible();

@@ -2,7 +2,7 @@ import type { ChatMessage } from "../types";
 
 /** The session of the `long-chat` scenario. */
 export const LONG_CHAT_ID = "ses_long";
-/** How many question-and-answer turns it holds: about four hundred rows once the tool cards are counted. */
+/** How many question-and-answer turns it holds: about 360 rows once the tool cards are counted. */
 export const LONG_CHAT_TURNS = 120;
 /** Words that appear once, in a known turn: the end-to-end tests look for them (find in page, selection). */
 export const LONG_CHAT_FIRST = "Domanda numero 1";
@@ -37,7 +37,7 @@ const TOOLS = [
 
 /**
  * A long conversation, built the same way every time: question, a tool call with its result, answer with a code block (every
- * ninth also a table and a list). Used to look at what a conversation of hundreds of rows costs and how it behaves (scrolling,
+ * ninth also a table and a list, every seventh a quote, an ordered list, a rule, a link and some emphasis). Used to look at what a conversation of hundreds of rows costs and how it behaves (scrolling,
  * find in page, selection, keyboard); the first and the last turn and one in the middle carry known words.
  */
 export function longChatMessages(turns = LONG_CHAT_TURNS, at = () => new Date().toISOString()): ChatMessage[] {
@@ -53,6 +53,8 @@ export function longChatMessages(turns = LONG_CHAT_TURNS, at = () => new Date().
     out.push({ id: `l${n}t`, role: "tool", tool_call_id: callId, name: tool.name, content: tool.result(n), created_at: at() });
     let answer = `Ecco ${s.topic}:\n\n\`\`\`${s.lang}\n${s.code(n)}\n\`\`\`\n\nLa risposta al turno ${n} usa **${s.lang}**; il comando \`${tool.name}\` ha confermato il resto.${needle}${last}`;
     if (n % 9 === 0) answer += `\n\n| Voce | Valore |\n|---|---|\n| turno | ${n} |\n| linguaggio | ${s.lang} |\n\n- primo punto\n- secondo punto\n- terzo punto`;
+    // Every kind of block the Markdown has, so that the tests of the screen reader's view do not only look at the ones that were there.
+    if (n % 7 === 0) answer += `\n\n> Una citazione del turno ${n}.\n\n1. primo passo\n2. secondo passo\n\n---\n\nLa [guida](https://example.org/guida) spiega *tutto* e ~~niente~~ altro.`;
     out.push({ id: `l${n}r`, role: "assistant", content: answer, created_at: at() });
   }
   return out;

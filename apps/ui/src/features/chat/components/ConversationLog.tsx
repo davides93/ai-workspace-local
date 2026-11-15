@@ -3,7 +3,7 @@ import { ErrorState, Icon, SkeletonLines } from "../../../shared/ui";
 import type { A2uiAction } from "../a2ui";
 import type { ApprovalRequest } from "../../../shared/api/types";
 import { itemKey, type Item } from "../model/items";
-import { tailSignature } from "../model/scroll";
+import { coldBefore, tailSignature } from "../model/scroll";
 import type { RunNoticeInfo } from "../model/runNotice";
 import type { FeedbackController } from "../useFeedback";
 import { ItemView } from "./ItemView";
@@ -47,6 +47,11 @@ export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  // The rows that are far from the end when the conversation opens (see `coldBefore`); the boundary stays where it was while rows arrive.
+  const opened = useRef<{ key: string | null; count: number } | null>(null);
+  if (state.status !== "ready") opened.current = null;
+  else if (!opened.current || opened.current.key !== sessionKey) opened.current = { key: sessionKey, count: items.length };
+  const cold = opened.current ? coldBefore(opened.current.count) : 0;
   const { unseen, scrollToBottom } = useStickToBottom(scrollRef, contentRef, sessionKey, tailSignature(items, { notice: !!notice, footer: !!footer }));
   useImperativeHandle(ref, () => ({ scrollToBottom }), [scrollToBottom]);
 
@@ -59,7 +64,7 @@ export const ConversationLog = forwardRef<ConversationLogHandle, Props>(function
           {state.status === "ready" && items.length === 0 && empty}
           {state.status === "ready" && items.map((it, i) => (
             <ItemView
-              key={itemKey(it, i)} it={it} sessionId={sessionKey ?? undefined} onRespond={onRespond} onAction={onAction} busy={busy} respondingId={respondingId}
+              key={itemKey(it, i)} it={it} cold={i < cold} sessionId={sessionKey ?? undefined} onRespond={onRespond} onAction={onAction} busy={busy} respondingId={respondingId}
               {...(it.kind === "text" && feedback
                 ? {
                     rateable: feedback.rateable.has(it.id), rating: feedback.ratings.get(it.id), ratePending: feedback.pendingId === it.id,

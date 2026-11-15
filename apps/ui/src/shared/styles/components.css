@@ -265,7 +265,7 @@ textarea.input { resize: vertical; min-height: 84px; font-family: var(--font-mon
 .codeblock-title { font-size: var(--fs-xs); color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
 .codeblock pre { margin: 0; padding: 10px 12px; overflow-x: auto; font-size: 0.78rem; line-height: 1.5; }
 /* Syntax colors (shared/ui/highlight): colour only, never the sole carrier of meaning (a diff line also starts with its + or -). */
-.codeblock .tok-com { color: var(--tok-com); font-style: italic; }
+.codeblock .tok-com { color: var(--tok-com); }
 .codeblock .tok-str { color: var(--tok-str); }
 .codeblock .tok-num { color: var(--tok-num); }
 .codeblock .tok-kw { color: var(--tok-kw); }

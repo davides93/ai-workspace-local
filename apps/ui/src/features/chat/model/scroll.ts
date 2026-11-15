@@ -1,5 +1,16 @@
 import type { Item } from "./items";
 
+/** The replies in this many rows at the end of a conversation, as it was when it opened, are never skipped (`.ws-bubble[data-cold]`). */
+export const COLD_TAIL = 40;
+
+/**
+ * Rows before this index are «cold»: far from the end of the conversation **as it was when it opened**. The boundary is fixed at that
+ * moment, not moved as rows arrive: a row that turned cold while the reader was at the end would change height (its real size becomes
+ * the estimate of the skipped box) above the screen, the browser would move the scroll position to compensate, and the view would stop
+ * following the end. The rows that arrive in the session stay as they are until the conversation is opened again.
+ */
+export const coldBefore = (loadedCount: number, tail = COLD_TAIL): number => Math.max(0, loadedCount - tail);
+
 export interface ScrollMetrics {
   scrollTop: number;
   scrollHeight: number;
@@ -36,6 +47,20 @@ export function tailSignature(items: readonly Item[], below: { notice?: boolean;
       case "question":
       case "secret":
         tail = last.outcome ?? "w";
+        break;
+      case "subagent":
+        tail = `${last.result?.length ?? 0}${last.interrupted ? "i" : ""}`;
+        break;
+      case "surface":
+        // `rev` is bumped when the server sends a new data model; the number of components changes when it adds or removes some.
+        tail = `${last.surface.rev}.${Object.keys(last.surface.components).length}${last.surface.deleted ? "d" : ""}`;
+        break;
+      case "note":
+      case "warning":
+        tail = String(last.text.length);
+        break;
+      case "error":
+        tail = String(last.message.length);
         break;
       default:
         tail = "";

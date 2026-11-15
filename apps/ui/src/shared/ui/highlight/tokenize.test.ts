@@ -176,15 +176,33 @@ describe("tokenize", () => {
     }
   });
 
-  it("does not blow up on inputs built to make a regex backtrack", () => {
-    const n = 12_000;
-    const nasty = ["<a ".repeat(n), '"'.repeat(n * 2), "/*".repeat(n), "'\\".repeat(n), "<a b=".repeat(n), "[".repeat(n * 2), "a:".repeat(n), "\n#".repeat(n), "@@".repeat(n), "0".repeat(n * 2) + "x"];
-    const t0 = performance.now();
-    for (const s of nasty) {
-      for (const g of GRAMMARS) expect(join(s.slice(0, MAX_HIGHLIGHT_CHARS), g).length).toBe(Math.min(s.length, MAX_HIGHLIGHT_CHARS));
+  it("does not blow up on inputs built to make a regex backtrack: each one, in every grammar, takes a fraction of a second", () => {
+    // A greedy run followed by a lookahead is quadratic when it is tried at every position of the run; these are the runs the rules
+    // of every grammar have (words with `.`, `-`, `/`, `@`, `=`; tags; strings and comments that never close), at the size of the cap.
+    const cap = MAX_HIGHLIGHT_CHARS;
+    const nasty: [string, string][] = [
+      ["<a ", "<a ".repeat(cap / 3)], ["quotes", '"'.repeat(cap)], ["comments", "/*".repeat(cap / 2)], ["escapes", "'\\".repeat(cap / 2)],
+      ["attributes", "<a b=".repeat(cap / 5)], ["brackets", "[".repeat(cap)], ["keys", "a:".repeat(cap / 2)], ["hashes", "\n#".repeat(cap / 2)],
+      ["hunks", "@@".repeat(cap / 2)], ["zeros", `${"0".repeat(cap - 1)}x`],
+      ["a.", "a.".repeat(cap / 2)], ["a-", "a-".repeat(cap / 2)], ["a/", "a/".repeat(cap / 2)], ["a@", "a@".repeat(cap / 2)], ["x=", "x=".repeat(cap / 2)],
+      ["dashes", "-".repeat(cap)], ["slashes", "/".repeat(cap)], ["dots", ".".repeat(cap)],
+      ["long attribute name", `<a ${"x".repeat(cap - 3)}`], ["attribute names with dashes", `<a ${"x-".repeat(cap / 2 - 2)}`], ["values", `<a b=${"c=".repeat(cap / 2 - 3)}`],
+      ["css words", `${"a-".repeat(cap / 2 - 1)}:`], ["css functions", `${"a-".repeat(cap / 2 - 1)}(`], ["yaml key", `${"a.".repeat(cap / 2 - 1)}:`], ["toml key", `${"a.".repeat(cap / 2 - 1)} =`],
+      ["many short lines", "k: v\n".repeat(cap / 5)],
+    ];
+    const slow: string[] = [];
+    for (const [name, text] of nasty) {
+      const input = text.slice(0, cap);
+      for (const g of GRAMMARS) {
+        const t0 = performance.now();
+        const out = join(input, g);
+        const ms = performance.now() - t0;
+        expect(out.length, `${g} ${name}`).toBe(input.length);
+        // Linear, the slowest of these takes some tens of milliseconds; the quadratic ones took one to three seconds.
+        if (ms > 600) slow.push(`${g} · ${name}: ${Math.round(ms)} ms`);
+      }
     }
-    // 10 inputs x 16 grammars of up to 30 000 characters; a quadratic rule would take minutes.
-    expect(performance.now() - t0).toBeLessThan(15_000);
+    expect(slow).toEqual([]);
   });
 });
 

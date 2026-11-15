@@ -55,10 +55,15 @@ test.describe("long conversation and the accessibility tree", () => {
     expect(shipped.text.length).toBe(full.text.length);
     expect(shipped.text).toContain("La risposta al turno 1 usa");
     expect(shipped.text).toContain("def top_words");
-    // The same structure and the same controls: every role that carries meaning is as frequent as with everything laid out (the paragraph
-    // role only because Markdown spells it out; list markers, the bullets, are drawn by the layout and are not in a skipped reply).
-    for (const role of ["heading", "paragraph", "list", "listitem", "table", "row", "cell", "columnheader", "code", "strong", "button", "log", "main", "navigation"]) {
-      expect(shipped.roles.get(role) ?? 0, role).toBe(full.roles.get(role) ?? 0);
+    // The same structure and the same controls: the whole histogram of roles, not a list picked in advance. What is allowed to differ is
+    // named: the text boxes and list markers are drawn by the layout, so a reply that was not laid out has none (the bullets are lost).
+    const LAYOUT_ONLY = new Set(["InlineTextBox", "ListMarker"]);
+    const all = new Set([...full.roles.keys(), ...shipped.roles.keys()]);
+    const differing = [...all].filter((r) => !LAYOUT_ONLY.has(r) && (full.roles.get(r) ?? 0) !== (shipped.roles.get(r) ?? 0)).map((r) => `${r}: ${full.roles.get(r) ?? 0} → ${shipped.roles.get(r) ?? 0}`);
+    expect(differing, "roles that are not the same when the replies are not laid out").toEqual([]);
+    // The scenario has every kind of block, so these roles are really in the comparison.
+    for (const role of ["heading", "paragraph", "list", "listitem", "table", "code", "strong", "emphasis", "blockquote", "link", "separator", "button"]) {
+      expect(full.roles.get(role) ?? 0, `${role} is in the scenario`).toBeGreaterThan(0);
     }
     expect(shipped.names.filter((n) => /^Copia/.test(n)).length).toBe(full.names.filter((n) => /^Copia/.test(n)).length);
   });
