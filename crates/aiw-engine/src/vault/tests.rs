@@ -558,3 +558,115 @@ fn the_reader_of_the_command_line_opens_what_the_engine_sealed_and_changes_nothi
     let fresh = Home::new();
     assert_eq!(Vault::reader(&DataDirs::at(fresh.root.clone()), MemoryKeyStore::new()).phase(), Phase::Off);
 }
+
+// ---------------------------------------------------------------------------------------------------- backup
+
+mod backup_with_sealed_secrets {
+    use super::*;
+    use crate::backup::{self, BackupOptions};
+
+    fn sealed_home() -> (Home, Arc<MemoryKeyStore>) {
+        let home = Home::new();
+        let ks = MemoryKeyStore::new();
+        {
+            let (store, config, _) = started(&home, &ks);
+            write_secrets(&store, &config);
+        }
+        (home, ks)
+    }
+
+    /// Where a restore puts the archive: a data folder of another computer.
+    fn restore_elsewhere(archive: &std::path::Path) -> Home {
+        let other = Home::new();
+        backup::restore(&DataDirs::at(other.root.clone()), archive).unwrap();
+        other
+    }
+
+    #[test]
+    fn the_default_backup_holds_no_secret_plain_or_sealed_and_no_trace_of_the_vault() {
+        let (home, _ks) = sealed_home();
+        let out = home.root.parent().unwrap().join("default.tar.gz");
+        let m = backup::create(&DataDirs::at(home.root.clone()), &BackupOptions::default(), &out).unwrap();
+        assert!(!m.sensitive);
+        let other = restore_elsewhere(&out);
+        let bytes = disk_text(&other);
+        for (name, b) in &bytes {
+            for s in ALL {
+                assert!(!contains(b, s), "{s} in the restored {name}");
+            }
+            assert!(!contains(b, "aiwenc1:"), "a sealed value travelled in {name}");
+        }
+        let c = rusqlite::Connection::open(other.db()).unwrap();
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM documents WHERE kind='vault'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        // The configuration that is not secret stays.
+        let model: Value = serde_json::from_str(&raw_doc(&other, "model_provider", "hf")).unwrap();
+        assert_eq!(model["token"], "");
+        assert_eq!(model["id"], "hf");
+    }
+
+    #[test]
+    fn a_backup_with_secrets_is_portable_it_holds_them_plain_and_the_new_computer_seals_them() {
+        let (home, ks) = sealed_home();
+        let out = home.root.parent().unwrap().join("secrets.tar.gz");
+        let codec: Arc<dyn SecretCodec> = Vault::reader(&DataDirs::at(home.root.clone()), ks.clone());
+        let m =
+            backup::create(&DataDirs::at(home.root.clone()), &BackupOptions { include_secrets: true, codec: Some(codec) }, &out).unwrap();
+        assert!(m.sensitive);
+        assert!(m.notes.iter().any(|n| n.contains("in chiaro")), "{:?}", m.notes);
+        assert!(m.skipped.is_empty(), "{:?}", m.skipped);
+
+        // On another computer (another keychain): what comes out of the archive is plain and complete...
+        let other = restore_elsewhere(&out);
+        for s in ALL {
+            assert_plain_on_disk(&other, s);
+        }
+        let c = rusqlite::Connection::open(other.db()).unwrap();
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM documents WHERE kind='vault'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        drop(c);
+        // ...and the first start there seals it with that computer's key, losing nothing.
+        let ks2 = MemoryKeyStore::new();
+        let (store, config, vault) = started(&other, &ks2);
+        assert_eq!(vault.phase(), Phase::Active);
+        assert_ne!(ks.accounts(), ks2.accounts());
+        read_back(&store, &config);
+        drop(store);
+        assert_no_plain_on_disk(&other);
+    }
+
+    #[test]
+    fn a_backup_with_secrets_whose_key_is_gone_says_which_could_not_be_saved() {
+        let (home, ks) = sealed_home();
+        ks.wipe();
+        let out = home.root.parent().unwrap().join("lost.tar.gz");
+        let codec: Arc<dyn SecretCodec> = Vault::reader(&DataDirs::at(home.root.clone()), ks.clone());
+        let m =
+            backup::create(&DataDirs::at(home.root.clone()), &BackupOptions { include_secrets: true, codec: Some(codec) }, &out).unwrap();
+        assert!(m.skipped.iter().any(|s| s.contains(&format!("{N} segreti cifrati"))), "{:?}", m.skipped);
+        let other = restore_elsewhere(&out);
+        for (name, b) in disk_text(&other) {
+            assert!(!contains(&b, "aiwenc1:"), "a sealed value that nobody can open travelled in {name}");
+        }
+    }
+
+    #[test]
+    fn the_safety_copy_before_a_restore_keeps_the_secrets_sealed_so_it_is_never_plain_on_disk() {
+        let (home, ks) = sealed_home();
+        let dirs = DataDirs::at(home.root.clone());
+        // What `restore` saves first: everything as stored.
+        let out = home.root.parent().unwrap().join("safety.tar.gz");
+        backup::create(&dirs, &BackupOptions { include_secrets: true, codec: None }, &out).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        // The archive is gzip: read it back through a restore on the same computer and look at what it holds.
+        let again = restore_elsewhere(&out);
+        for (name, b) in disk_text(&again) {
+            for s in ALL {
+                assert!(!contains(&b, s), "{s} is plain in the safety copy ({name})");
+            }
+        }
+        // With the same key it still opens: the vault row travelled with it.
+        let (store, config, vault) = started(&again, &ks);
+        assert_eq!(vault.phase(), Phase::Active);
+        read_back(&store, &config);
+        assert!(!bytes.is_empty());
+    }
+}

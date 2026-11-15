@@ -495,6 +495,8 @@ pub enum Keychain {
     None,
     /// The keychain of the operating system (the app and the daemon ask for this).
     System,
+    /// None, for a reason the state reports (the build that was never tried with a keychain).
+    Without(String),
     /// A given one (tests).
     Custom(Arc<dyn KeyStore>),
 }
@@ -504,6 +506,7 @@ impl std::fmt::Debug for Keychain {
         match self {
             Keychain::None => write!(f, "Keychain::None"),
             Keychain::System => write!(f, "Keychain::System"),
+            Keychain::Without(why) => write!(f, "Keychain::Without({why})"),
             Keychain::Custom(k) => write!(f, "Keychain::Custom({k:?})"),
         }
     }
@@ -514,6 +517,7 @@ impl Keychain {
         match self {
             Keychain::None => Arc::new(NoKeyStore::new("questa copia di AIW non usa il portachiavi del sistema")),
             Keychain::System => os_keystore(),
+            Keychain::Without(why) => Arc::new(NoKeyStore::new(why.clone())),
             Keychain::Custom(k) => k.clone(),
         }
     }

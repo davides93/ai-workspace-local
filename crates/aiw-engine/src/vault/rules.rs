@@ -6,8 +6,9 @@
 //!
 //! * [`WHOLE_KINDS`]: the document is made of secrets. Every string in it is sealed, and a backup leaves the kind out.
 //! * [`BY_NAME_KINDS`]: the document holds a secret among other things. The strings whose key names a secret
-//!   ([`is_secret_name`](crate::secrets::is_secret_name): `Authorization`, `token`, `api_key`, `GITHUB_TOKEN`…) and every
-//!   value of a `secrets` map (the channels) are sealed; a backup keeps the document with those emptied.
+//!   ([`is_secret_name`](crate::secrets::is_secret_name): `Authorization`, `token`, `api_key`, `GITHUB_TOKEN`…), every
+//!   value of a `secrets` map (the channels) and every address that carries credentials (`https://user:password@host`,
+//!   `?api_key=…`) are sealed; a backup keeps the document with those emptied.
 
 use crate::secrets::is_secret_name;
 use serde_json::Value;
@@ -63,8 +64,9 @@ fn visit_all(v: &mut Value, f: &mut dyn FnMut(&mut String)) {
     }
 }
 
-/// The same picks as the backup's scrubbing has always made: a string under a secret-looking key, anywhere in the document, and
-/// every value of a `secrets` map.
+/// The same picks as the backup's scrubbing has always made: a string under a secret-looking key, anywhere in the document,
+/// every value of a `secrets` map, and an address with credentials in it (sealed whole: the backup strips them, the vault
+/// cannot seal a part of a string).
 fn visit_by_name(v: &mut Value, f: &mut dyn FnMut(&mut String)) {
     match v {
         Value::Object(m) => {
@@ -81,6 +83,9 @@ fn visit_by_name(v: &mut Value, f: &mut dyn FnMut(&mut String)) {
                 }
                 match x {
                     Value::String(s) if is_secret_name(k) => f(s),
+                    // The two cases below are what makes sealing and opening agree: an address that carries credentials is
+                    // picked while it is plain, and once sealed it no longer looks like one, so a sealed string is picked too.
+                    Value::String(s) if has_credentials(s) || aiw_core::sealed::is_sealed(s) => f(s),
                     Value::String(_) => {}
                     other => visit_by_name(other, f),
                 }
@@ -89,6 +94,11 @@ fn visit_by_name(v: &mut Value, f: &mut dyn FnMut(&mut String)) {
         Value::Array(a) => a.iter_mut().for_each(|x| visit_by_name(x, f)),
         _ => {}
     }
+}
+
+/// Does this address carry credentials (a password in the user part, a key or token in the query)?
+fn has_credentials(s: &str) -> bool {
+    s.contains("://") && crate::backup::scrub_url(s) != s
 }
 
 #[cfg(test)]
@@ -123,6 +133,27 @@ mod tests {
         assert_eq!(got, ["A1", "Bearer X1", "K1", "T1", "ghp_x"]);
         // What is not a kind with secrets gives nothing.
         assert!(picked("agent", doc).is_empty());
+    }
+
+    #[test]
+    fn an_address_with_credentials_is_a_secret_and_a_plain_one_is_not() {
+        let doc = json!({
+            "url": "https://utente:PASSWORD@mcp.example.org:8443/mcp?q=ciao",
+            "endpoint": "https://api.example.org/v1?api_key=K9",
+            "other": "https://mcp.example.org/mcp?q=ciao#frag",
+            "name": "https://not-a-secret.example.org",
+        });
+        let mut got = picked("remote_agent", doc);
+        got.sort();
+        assert_eq!(got, ["https://api.example.org/v1?api_key=K9", "https://utente:PASSWORD@mcp.example.org:8443/mcp?q=ciao"]);
+    }
+
+    #[test]
+    fn a_sealed_string_is_picked_wherever_it_sits_so_that_what_was_sealed_by_content_opens_again() {
+        let doc = json!({"url": "aiwenc1:ab12cd34:AAAA", "name": "plain", "nested": {"endpoint": "aiwenc1:ab12cd34:BBBB"}});
+        let mut got = picked("mcp", doc);
+        got.sort();
+        assert_eq!(got, ["aiwenc1:ab12cd34:AAAA", "aiwenc1:ab12cd34:BBBB"]);
     }
 
     #[test]

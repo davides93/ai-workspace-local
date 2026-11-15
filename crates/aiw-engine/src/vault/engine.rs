@@ -1,7 +1,7 @@
 //! What the engine offers about the secrets at rest: the status, the codec the backup uses, and the two actions a person can
 //! ask for (`aiw secrets`).
 
-use super::{Migration, Phase};
+use super::Migration;
 use crate::Engine;
 use aiw_core::api::SecretsAtRest;
 use aiw_core::sealed::SecretCodec;
@@ -12,15 +12,6 @@ impl Engine {
     /// and the Security view.
     pub fn secrets_at_rest(&self) -> SecretsAtRest {
         self.0.vault.status(&self.0.store, &self.0.config)
-    }
-
-    /// `encrypted` when the secrets the person gives now are sealed on this computer, `plain` when they are stored as they are.
-    pub(crate) fn secrets_at_rest_word(&self) -> &'static str {
-        if self.0.vault.phase() == Phase::Active {
-            "encrypted"
-        } else {
-            "plain"
-        }
     }
 
     /// The vault as a codec, for what writes a copy of the data (the backup with secrets).

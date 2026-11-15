@@ -102,6 +102,16 @@ pub fn run() {
                 workspace_root,
                 mode: "embedded".into(),
                 sandboxed,
+                // The key of the secrets at rest lives in the system keychain. Not in the Mac App Store build: the keychain
+                // under the App Sandbox (entitlements, access groups) was never tried, so there the secrets stay as they are
+                // and the state says so. On a phone `Keychain::System` itself answers "not used" (no store is built there).
+                keychain: if sandboxed {
+                    aiw_engine::vault::Keychain::Without(
+                        "la versione dell'App Store (sandbox) non usa il portachiavi: non è mai stato provato".into(),
+                    )
+                } else {
+                    aiw_engine::vault::Keychain::System
+                },
                 ..Default::default()
             }))
             .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;

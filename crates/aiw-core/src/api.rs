@@ -2212,16 +2212,8 @@ pub struct SecretRequest {
     pub reason: Option<String>,
     /// Where the engine will write it, in words. Computed by the engine, never by the model.
     pub destination: String,
-    /// How the value will be kept on this computer: `encrypted` (sealed with a key in the system keychain) or `plain` (stored as
-    /// it is: no keychain here, or it is switched off). Computed by the engine when the request is made.
-    #[serde(default = "plain_at_rest")]
-    pub at_rest: String,
     #[serde(default)]
     pub expires_at: Option<String>,
-}
-
-fn plain_at_rest() -> String {
-    "plain".into()
 }
 
 /// Whether the secrets are encrypted on disk and what is known about it (`GET /api/security/secrets`, the `secrets` part of
