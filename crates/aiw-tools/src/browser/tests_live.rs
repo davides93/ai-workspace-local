@@ -157,11 +157,30 @@ async fn references_go_stale_after_a_human_turn_until_the_agent_looks_again() {
 }
 
 #[tokio::test]
-async fn addresses_lose_query_and_fragment_after_a_handback_until_the_agent_navigates() {
-    // A login that lands on an address with a code in it.
-    let lv = Live::new(page("https://e.example/cb?code=CODICE-DI-PROVA#access_token=TOKEN-DI-PROVA")).await;
+async fn addresses_lose_query_and_fragment_after_a_handback_tab_by_tab_until_the_agent_navigates_that_tab() {
+    // A login that lands on an address with a code in it, and a popup of the login on another tab.
+    let base = page("https://e.example/cb?code=CODICE-DI-PROVA#access_token=TOKEN-DI-PROVA");
+    let lv = Live::new(move |req, st| {
+        if req.method == "Target.getTargets" {
+            // What the browser says the two tabs are on (until the agent navigates one).
+            for t in st.targets.iter_mut().filter(|t| t.url == "about:blank") {
+                t.url = if t.id == "T1" {
+                    "https://e.example/cb?code=CODICE-DI-PROVA#access_token=TOKEN-DI-PROVA"
+                } else {
+                    "https://login.example/popup?code=CODICE-DEL-POPUP"
+                }
+                .into();
+            }
+            return None;
+        }
+        base(req, st)
+    })
+    .await;
     let first = lv.run("browser_snapshot", json!({})).await;
     assert!(first.content.contains("code=CODICE-DI-PROVA"), "before a human turn the agent sees what it opened: {}", first.content);
+    lv.run("browser_tab_new", json!({})).await;
+    let tabs = lv.run("browser_tabs", json!({})).await;
+    assert!(tabs.content.contains("code=CODICE-DEL-POPUP"), "before a human turn tabs show what they are on: {}", tabs.content);
     let control = lv.mgr.control();
     control.take();
     control.give_back();
@@ -171,11 +190,56 @@ async fn addresses_lose_query_and_fragment_after_a_handback_until_the_agent_navi
         assert!(!out.content.contains("CODICE-DI-PROVA") && !out.content.contains("TOKEN-DI-PROVA"), "{format}: {}", out.content);
     }
     let tabs = lv.run("browser_tabs", json!({})).await;
-    assert!(!tabs.content.contains("CODICE-DI-PROVA"), "{}", tabs.content);
-    // The agent goes to an address of its own: it sees addresses as they are again.
-    let nav = lv.run("browser_navigate", json!({"url": "http://8.8.8.8/x"})).await;
+    assert!(tabs.content.contains("https://e.example/cb") && tabs.content.contains("https://login.example/popup"), "{}", tabs.content);
+    assert!(!tabs.content.contains("CODICE") && !tabs.content.contains("TOKEN"), "{}", tabs.content);
+    // The agent takes the tab in front (the popup) to an address of its own: that tab's address is its own again, but the other
+    // tab, which it did not navigate, stays hidden: one navigation does not give back the addresses of all.
+    let nav = lv.run("browser_navigate", json!({"url": "http://8.8.8.8/x?y=ok"})).await;
     assert!(!nav.is_error, "{}", nav.content);
-    assert!(!lv.mgr.control().redacting());
+    let tabs = lv.run("browser_tabs", json!({})).await;
+    assert!(tabs.content.contains("http://8.8.8.8/x?y=ok"), "{}", tabs.content);
+    assert!(!tabs.content.contains("CODICE") && !tabs.content.contains("TOKEN"), "{}", tabs.content);
+    // A navigation that fails does not give the address back either.
+    control.take();
+    control.give_back();
+    let refused = lv.run("browser_navigate", json!({"url": "http://127.0.0.1:9/x?q=1"})).await;
+    assert!(refused.is_error, "{}", refused.content);
+    assert!(!lv.run("browser_tabs", json!({})).await.content.contains("CODICE"));
+}
+
+#[tokio::test]
+async fn an_action_that_waited_for_the_browser_does_not_run_after_the_person_took_it() {
+    let lv = Live::new(page("http://e.example/")).await;
+    lv.run("browser_snapshot", json!({})).await;
+    lv.mgr.control().set_limits(Limits { op_wait: Duration::from_secs(10) });
+    // `browser_wait` holds the browser for a second and a half; the click passes the gate meanwhile and waits for the lock.
+    let long = lv.spawn("browser_wait", json!({"ms": 1500}));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let click = lv.spawn("browser_click", json!({"ref": "1"}));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let before = lv.fake.commands("Runtime.callFunctionOn").len();
+    lv.mgr.take_control().await.unwrap();
+    long.await.unwrap();
+    let out = click.await.unwrap();
+    assert!(out.is_error && out.content.contains("preso il browser") && out.content.contains("non è stata eseguita"), "{}", out.content);
+    assert_eq!(lv.fake.commands("Runtime.callFunctionOn").len(), before, "the click never reached the page");
+}
+
+#[tokio::test]
+async fn a_key_for_the_page_needs_a_fresh_snapshot_after_the_person_drove_and_a_window_notice_is_not_one() {
+    let lv = Live::new(page_with_confirm_on_click()).await;
+    lv.run("browser_snapshot", json!({})).await;
+    lv.mgr.take_control().await.unwrap();
+    lv.mgr.give_back();
+    // `browser_press` with no element goes to whatever has the focus, which is the person's now.
+    let press = lv.run("browser_press", json!({"key": "Enter"})).await;
+    assert!(press.is_error && press.content.contains("Rifai browser_snapshot"), "{}", press.content);
+    // A result that only says a window of the site blocks the page is not a snapshot: the numbers are still not trusted.
+    lv.fake.push(confirm_event("Sicuro?"));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let blocked = lv.run("browser_wait", json!({"ms": 100})).await;
+    assert!(blocked.content.contains("browser_dialog"), "{}", blocked.content);
+    assert!(lv.mgr.control().is_stale());
 }
 
 // ---------------------------------------------------------------------- interactive dialogs
@@ -275,7 +339,8 @@ async fn the_person_answers_a_dialog_only_while_they_drive() {
     lv.mgr.answer_dialog(true, None).await.unwrap();
     assert_eq!(lv.fake.commands("Page.handleJavaScriptDialog")[0].params["accept"], true);
     assert!(lv.mgr.live_state().dialog.is_none());
-    assert!(lv.mgr.answer_dialog(true, None).await.is_err(), "nothing waits any more");
+    // Nothing waits any more: a conflict (409), never a «not found» (404), which a client reads as «this backend has no such route».
+    assert!(matches!(lv.mgr.answer_dialog(true, None).await, Err(aiw_core::Error::Conflict(_))));
 }
 
 // ---------------------------------------------------------------------- the live view
@@ -551,4 +616,79 @@ async fn two_tabs_with_a_confirm_each_do_not_take_each_others_place() {
     let dismissed = lv.fake.wait_for(|r| r.method == "Page.handleJavaScriptDialog" && r.session.as_deref() == Some("S1")).await;
     assert_eq!(dismissed.params["accept"], false);
     assert!(lv.mgr.live_state().dialog.is_none());
+}
+
+// ---------------------------------------------------------------------- what the model is shown of a login
+
+#[tokio::test]
+async fn a_screenshot_for_the_model_draws_the_code_and_card_fields_as_dots_and_takes_the_mask_off() {
+    let lv = Live::new(|req, st| match req.method.as_str() {
+        "Page.captureScreenshot" => Some(Reply::ok(json!({"data": "SlBFRy1EQVRJ"}))),
+        _ => page("http://e.example/")(req, st),
+    })
+    .await;
+    let out = lv.run("browser_screenshot", json!({})).await;
+    assert!(!out.is_error && out.images.len() == 1, "{}", out.content);
+    let log = lv.fake.log.lock().unwrap().clone();
+    let position = |pred: &dyn Fn(&Req) -> bool| log.iter().position(|r| pred(r)).unwrap_or_else(|| panic!("command not sent"));
+    let mask = position(&|r| {
+        r.method == "Runtime.evaluate"
+            && r.params["expression"].as_str().is_some_and(|e| e.contains("aiw-secret-mask") && e.contains("createElement"))
+    });
+    let shot = position(&|r| r.method == "Page.captureScreenshot");
+    let unmask = position(&|r| {
+        r.method == "Runtime.evaluate"
+            && r.params["expression"].as_str().is_some_and(|e| e.contains("aiw-secret-mask") && e.contains("remove()"))
+    });
+    assert!(mask < shot && shot < unmask, "mask, capture, unmask: {mask} {shot} {unmask}");
+    let style = log[mask].params["expression"].as_str().unwrap();
+    for field in ["one-time-code", "cc-", "current-password", "new-password", "type=password"] {
+        assert!(style.contains(field), "{field} is masked: {style}");
+    }
+}
+
+#[tokio::test]
+async fn when_the_page_cannot_say_which_fields_are_secret_no_value_is_written_in_the_tree() {
+    let lv = Live::new(|req, st| match req.method.as_str() {
+        "Accessibility.getFullAXTree" => Some(Reply::ok(json!({"nodes": [
+            {"nodeId": "1", "role": {"value": "RootWebArea"}, "name": {"value": "P"}, "childIds": ["2"], "properties": []},
+            {"nodeId": "2", "parentId": "1", "role": {"value": "textbox"}, "name": {"value": "Codice"}, "value": {"value": "123456-DI-PROVA"},
+             "backendDOMNodeId": 7, "childIds": [], "properties": []}]}))),
+        "Runtime.evaluate" if req.params["expression"].as_str().unwrap_or_default().contains("querySelectorAll('input,textarea')") => {
+            Some(Reply::ok(json!({"exceptionDetails": {"exception": {"description": "TypeError: la pagina ha cambiato Array"}}})))
+        }
+        "Runtime.evaluate" if req.params["expression"].as_str().unwrap_or_default().contains("document.title") => {
+            Some(Reply::ok(json!({"result": {"type": "object", "value": {"t": "P", "u": "http://e.example/"}}})))
+        }
+        _ => page("http://e.example/")(req, st),
+    })
+    .await;
+    let out = lv.run("browser_snapshot", json!({"format": "ax"})).await;
+    assert!(!out.is_error, "{}", out.content);
+    assert!(!out.content.contains("123456-DI-PROVA") && out.content.contains("value=\"(nascosto)\""), "{}", out.content);
+}
+
+#[tokio::test]
+async fn a_tab_the_person_opens_while_ours_is_being_made_is_not_taken_for_ours() {
+    // The person presses Ctrl+T at the very moment the agent's tab is created: their tab (`chrome://newtab/`) attaches first.
+    let fake = fake::FakeCdp::start(|req, st| match req.method.as_str() {
+        "Target.createTarget" => {
+            let n = st.next;
+            st.next += 1;
+            let (id, session) = (format!("T{n}"), format!("S{n}"));
+            st.targets.push(fake::Target { id: id.clone(), session: session.clone(), url: "about:blank".into(), title: "".into() });
+            Some(Reply::with(
+                json!({"targetId": id}),
+                vec![fake::attached(None, "TU", "SU", "chrome://newtab/", None), fake::attached(None, &id, &session, "about:blank", None)],
+            ))
+        }
+        _ => page("http://e.example/")(req, st),
+    })
+    .await;
+    let port = version_server(fake.url.clone()).await;
+    let (_mgr, t, ctx, _dir) = attached_to(format!("http://127.0.0.1:{port}"));
+    let out = call(&t, &ctx, "browser_tabs", json!({})).await;
+    assert!(!out.is_error && out.content.contains("1 su 8"), "{}", out.content);
+    fake.wait_for(|r| r.method == "Target.detachFromTarget" && r.params["sessionId"] == "SU").await;
+    assert!(fake.commands("Fetch.enable").iter().all(|r| r.session.as_deref() != Some("SU")), "the person's tab was not intercepted");
 }

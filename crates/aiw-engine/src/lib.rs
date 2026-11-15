@@ -442,6 +442,12 @@ impl Engine {
                 s.put_doc("agent", &a.id, &a)?;
             }
         }
+        // The Navigatore stored before the live view gets its two new tools if nobody had edited its list.
+        if let Some(mut b) = s.get_doc::<AgentProfile>("agent", "browser")? {
+            if defaults::upgrade_browser_agent(&mut b) {
+                s.put_doc("agent", &b.id, &b)?;
+            }
+        }
         if s.get_doc::<InferenceProfile>("profile", "default")?.is_none() {
             // Runtime and model are chosen for this device: what is installed/registered (phones
             // have no sidecars, so the in-process engine wins there) and what fits in memory.

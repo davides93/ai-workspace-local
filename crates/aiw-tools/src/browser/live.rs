@@ -9,7 +9,7 @@
 //! **Nothing of what goes through here is kept.** A frame is returned to the caller and forgotten; the keys and
 //! the text the person types go to the page and nowhere else (no log, no event, no audit row: the callers
 //! write the transitions of the mode, never the content). Input is accepted only while the person drives and
-//! no action of the agent is in flight (`Control::human_may_act`).
+//! no action of the agent is in flight (`Control::human_begin`).
 
 use super::control::ControlState;
 use super::BrowserManager;
@@ -238,7 +238,7 @@ impl BrowserManager {
 
     /// The person clicks, scrolls or types in the page (only while they drive and the agent is not mid-action).
     pub async fn human_input(&self, input: HumanInput) -> Result<()> {
-        self.control.human_may_act().map_err(|m| Error::Conflict(m.into()))?;
+        let _turn = self.control.human_begin().map_err(|m| Error::Conflict(m.into()))?;
         let cdp = self.live_cdp().ok_or_else(|| Error::Conflict("il browser non è attivo".into()))?;
         if cdp.pending_dialog().is_some() {
             return Err(Error::Conflict("una finestra del sito aspetta una risposta: rispondi prima a quella".into()));
@@ -248,7 +248,7 @@ impl BrowserManager {
 
     /// The person answers the window of the site (they drive).
     pub async fn answer_dialog(&self, accept: bool, text: Option<String>) -> Result<()> {
-        self.control.human_may_act().map_err(|m| Error::Conflict(m.into()))?;
+        let _turn = self.control.human_begin().map_err(|m| Error::Conflict(m.into()))?;
         let cdp = self.live_cdp().ok_or_else(|| Error::Conflict("il browser non è attivo".into()))?;
         tokio::time::timeout(LIVE_TIMEOUT, cdp.answer_dialog(accept, text)).await.map_err(live_err)?
     }

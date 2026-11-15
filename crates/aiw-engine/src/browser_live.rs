@@ -102,8 +102,9 @@ impl Tool for BrowserHandover {
             ));
         }
         let wait = handover_wait(engine.interaction_wait());
+        let question_id = new_id("ask");
         let question = Question {
-            id: new_id("ask"),
+            id: question_id.clone(),
             run_id: top.clone(),
             kind: "handover".into(),
             title: Some("Serve il tuo intervento nel browser".into()),
@@ -116,13 +117,23 @@ impl Tool for BrowserHandover {
             deny_label: Some("Non posso ora".into()),
             expires_at: None,
         };
-        browser.control().begin_handover(Handover { question_id: question.id.clone(), run_id: top.clone(), reason: reason.to_string() });
+        if let Err(mode) =
+            browser.control().begin_handover(Handover { question_id: question.id.clone(), run_id: top.clone(), reason: reason.to_string() })
+        {
+            // The person already has the browser (paused it, or drives it): nothing to ask, and nothing of theirs to take back.
+            let who = if mode == Mode::Paused { "ha messo in pausa il browser" } else { "sta già usando il browser" };
+            return Ok(answer(json!({
+                "outcome": "busy",
+                "hint": format!("L'utente {who}: aspetta che lo restituisca (o scrivigli in chat cosa serve) invece di chiedergli un intervento.")
+            })));
+        }
         let host = engine.browser_host();
         engine.audit_system("browser.handover", &format!("l'agente chiede all'utente di intervenire nel browser{host}"));
         engine.emit_browser(Some(&top));
         let (outcome, reply) = engine.ask_for(ctx, question, wait, "browser_handover", &top).await;
-        // Whatever ended the wait, the browser goes back to the agent (idempotent if the person already gave it back).
-        browser.control().give_back();
+        // Whatever ended the wait, the browser goes back to the agent, unless it is no longer this handover that holds it: the
+        // person may have given it back already, or taken it again since.
+        browser.control().end_handover(&question_id);
         engine.audit_system("browser.handover_end", &format!("esito: {}{}", outcome.as_str(), engine.browser_host()));
         engine.emit_browser(Some(&top));
         let confirmed = reply.as_ref().and_then(|a| a.confirmed).unwrap_or(false);
@@ -450,6 +461,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_handover_is_not_asked_when_the_person_paused_or_drives_and_never_takes_their_turn_back() {
+        let (e, _fake, ctx, _a, _b) = with_browser().await;
+        for (action, mode) in [("pause", Mode::Paused), ("take", Mode::Human)] {
+            e.browser_control(action).await.unwrap();
+            let v = finished(handover(&e, &ctx)).await;
+            assert_eq!(v["outcome"], "busy", "{action}: {v}");
+            assert!(e.questions().is_empty(), "{action}: no card");
+            assert_eq!(e.browser_state().await.control.mode, mode, "{action}: the browser stays as the person left it");
+            e.browser_control("give_back").await.unwrap();
+        }
+        // Two handovers at once: the second is refused and its end does not take the browser from the first.
+        let first = handover(&e, &ctx);
+        let q = next_question(&e).await;
+        let second = finished(handover(&e, &ctx)).await;
+        assert_eq!(second["outcome"], "busy");
+        assert_eq!(e.browser_state().await.control.mode, Mode::Human);
+        assert_eq!(e.browser_state().await.control.handover.map(|h| h.question_id), Some(q.id.clone()));
+        e.respond_question(&q.id, QuestionReply { action: "decline".into(), answer: QuestionAnswer::default() }).unwrap();
+        assert_eq!(finished(first).await["outcome"], "declined");
+        assert_eq!(e.browser_state().await.control.mode, Mode::Agent);
+    }
+
+    #[tokio::test]
     async fn the_person_can_answer_the_card_instead_and_can_decline() {
         let (e, _fake, ctx, _a, _b) = with_browser().await;
         let task = handover(&e, &ctx);
@@ -524,6 +558,24 @@ mod tests {
         for a in e.audit() {
             assert!(!a.detail.contains(typed), "{a:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_installation_that_stored_the_browser_agent_before_gets_the_new_tools_at_start() {
+        let (e, _a, _b) = engine(vec![]).await;
+        let mut old = e.agent("browser").unwrap();
+        old.tools.retain(|t| t != "browser_dialog" && t != "browser_handover");
+        e.0.store.put_doc("agent", "browser", &old).unwrap();
+        assert!(!e.agent("browser").unwrap().tools.iter().any(|t| t == "browser_handover"));
+        e.seed().unwrap();
+        let now = e.agent("browser").unwrap();
+        assert!(now.tools.iter().any(|t| t == "browser_dialog") && now.tools.iter().any(|t| t == "browser_handover"), "{:?}", now.tools);
+        // One the person edited is not touched.
+        let mut tuned = e.agent("browser").unwrap();
+        tuned.tools.retain(|t| t != "browser_dialog" && t != "browser_handover" && t != "browser_hover");
+        e.0.store.put_doc("agent", "browser", &tuned).unwrap();
+        e.seed().unwrap();
+        assert_eq!(e.agent("browser").unwrap().tools, tuned.tools);
     }
 
     #[tokio::test]

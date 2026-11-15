@@ -24,9 +24,9 @@ const MAX_LINK_HOPS: usize = 40;
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let target = final_target(path)?;
     let existing = check_writable(&target)?;
-    let mut tmp = TempFile::create(&target)?;
+    let mut tmp = TempFile::create(&target, existing.as_ref())?;
     tmp.file().write_all(bytes)?;
-    tmp.commit(&target, existing.as_ref())
+    tmp.commit(&target)
 }
 
 /// Copies the file `from` to `to` all at once and returns the bytes copied. An existing destination is
@@ -39,9 +39,9 @@ pub fn copy_atomic(from: &Path, to: &Path) -> io::Result<u64> {
     }
     let target = final_target(to)?;
     let existing = check_writable(&target)?;
-    let mut tmp = TempFile::create(&target)?;
+    let mut tmp = TempFile::create(&target, Some(existing.as_ref().unwrap_or(&src_meta)))?;
     let copied = io::copy(&mut src, tmp.file())?;
-    tmp.commit(&target, Some(existing.as_ref().unwrap_or(&src_meta)))?;
+    tmp.commit(&target)?;
     Ok(copied)
 }
 
@@ -95,7 +95,9 @@ struct TempFile {
 }
 
 impl TempFile {
-    fn create(target: &Path) -> io::Result<Self> {
+    /// `like`: the metadata whose permission bits the file gets (Unix) *before* anything is written to it: a `0600` file's new
+    /// content is never readable by others, not even for a moment, and neither is a temporary left behind by a crash.
+    fn create(target: &Path, like: Option<&Metadata>) -> io::Result<Self> {
         let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "percorso senza nome di file");
         let dir = target.parent().ok_or_else(invalid)?;
         let name = target.file_name().ok_or_else(invalid)?.to_string_lossy();
@@ -105,7 +107,17 @@ impl TempFile {
             let path = dir.join(format!(".{name}{TMP_MARKER}{}", &random[..16]));
             // `create_new`: never open (and so never clobber) a file that is already there.
             match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(file) => return Ok(Self { path, file: Some(file), kept: false }),
+                Ok(file) => {
+                    let mut tmp = Self { path, file: Some(file), kept: false };
+                    #[cfg(unix)]
+                    if let Some(meta) = like {
+                        // (On failure `tmp` is dropped and removes the file.)
+                        tmp.file().set_permissions(meta.permissions())?;
+                    }
+                    #[cfg(not(unix))]
+                    let _ = like;
+                    return Ok(tmp);
+                }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e),
             }
@@ -117,16 +129,9 @@ impl TempFile {
         self.file.as_mut().expect("the file is open until commit")
     }
 
-    /// Carries the permission bits of `like` over (Unix), flushes the data to disk, closes the file and
-    /// renames it over `target` (which `std::fs::rename` replaces on every platform).
-    fn commit(mut self, target: &Path, like: Option<&Metadata>) -> io::Result<()> {
+    /// Flushes the data to disk, closes the file and renames it over `target` (which `std::fs::rename` replaces on every platform).
+    fn commit(mut self, target: &Path) -> io::Result<()> {
         let file = self.file.take().expect("the file is open until commit");
-        #[cfg(unix)]
-        if let Some(meta) = like {
-            file.set_permissions(meta.permissions())?;
-        }
-        #[cfg(not(unix))]
-        let _ = like;
         file.sync_all()?;
         // Closed before the rename and before any cleanup: an open handle blocks both on Windows.
         drop(file);
@@ -247,11 +252,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let blocked = dir.path().join("occupato");
         std::fs::create_dir(&blocked).unwrap();
-        let mut tmp = TempFile::create(&blocked).unwrap();
+        let mut tmp = TempFile::create(&blocked, None).unwrap();
         tmp.file().write_all(b"dati").unwrap();
-        assert!(tmp.commit(&blocked, None).is_err());
+        assert!(tmp.commit(&blocked).is_err());
         assert!(blocked.is_dir());
         assert!(leftovers(dir.path()).is_empty(), "{:?}", leftovers(dir.path()));
+    }
+
+    /// The temporary of a private file is private from the moment it exists, before any data is in it.
+    #[cfg(unix)]
+    #[test]
+    fn the_temporary_of_a_private_file_is_private_before_any_data_is_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("segreto.txt");
+        std::fs::write(&secret, "vecchio").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let like = std::fs::metadata(&secret).unwrap();
+        let tmp = TempFile::create(&secret, Some(&like)).unwrap();
+        assert_eq!(std::fs::metadata(&tmp.path).unwrap().permissions().mode() & 0o777, 0o600);
+        drop(tmp);
+        assert!(leftovers(dir.path()).is_empty());
     }
 
     #[test]

@@ -59,7 +59,7 @@ pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
     const type = el.getAttribute('type');
     // What a person types to prove who they are (passwords, codes, card numbers) is never written out: not as the
     // value, and not as the label a field without a name would otherwise get from its value.
-    const hide = (tag === 'input' || tag === 'textarea') && (type === 'password' || /(^|\s)(one-time-code|current-password|new-password|cc-[a-z-]+)(\s|$)/i.test(el.getAttribute('autocomplete') || ''));
+    const hide = (tag === 'input' || tag === 'textarea') && (el.type === 'password' || /(^|\s)(one-time-code|current-password|new-password|cc-[a-z-]+)(\s|$)/i.test(el.getAttribute('autocomplete') || ''));
     const label = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (hide ? '' : el.value) || '').trim().replace(/\s+/g, ' ').slice(0, 80);
     let extra = '';
     if (tag === 'input' || tag === 'textarea') extra = hide ? (el.value ? ' value="(nascosto)"' : ' value=""') : ` value="${String(el.value || '').slice(0, 40)}"`;
@@ -78,8 +78,15 @@ pub(crate) const SNAPSHOT_JS: &str = r#"(() => {
 })()"#;
 
 /// The values of the fields where a person types who they are (passwords, one-time codes, card numbers), as a
-/// JSON array of strings. The accessibility snapshot hides them wherever it would write them (see `ax::render`).
-pub(crate) const SECRET_VALUES_JS: &str = r#"(() => JSON.stringify([...document.querySelectorAll('input,textarea')].filter(el => (el.getAttribute('type') || '').toLowerCase() === 'password' || /(^|\s)(one-time-code|current-password|new-password|cc-[a-z-]+)(\s|$)/i.test(el.getAttribute('autocomplete') || '')).map(el => String(el.value || '')).filter(v => v.length > 0).slice(0, 20)))()"#;
+/// array of strings (by value: not through `JSON.stringify`, which a page may change). The accessibility snapshot hides them wherever it would write them (see `ax::render`).
+pub(crate) const SECRET_VALUES_JS: &str = r#"(() => Array.from(document.querySelectorAll('input,textarea')).filter(el => el.type === 'password' || /(^|\s)(one-time-code|current-password|new-password|cc-[a-z-]+)(\s|$)/i.test(el.getAttribute('autocomplete') || '')).map(el => String(el.value || '')).filter(v => v.length > 0).slice(0, 20))()"#;
+
+/// Draws the fields where a person types who they are (see `SECRET_VALUES_JS`) as dots, for a screenshot that goes to the model.
+pub(crate) const MASK_SECRETS_JS: &str = r#"(() => { const s = document.createElement('style'); s.id = 'aiw-secret-mask'; s.textContent = "input[type=password], input[autocomplete~='one-time-code'], input[autocomplete~='current-password'], input[autocomplete~='new-password'], input[autocomplete^='cc-'], textarea[autocomplete^='cc-'] { -webkit-text-security: disc !important; }"; (document.head || document.documentElement).appendChild(s); return 'ok'; })()"#;
+
+/// Takes the mask of [`MASK_SECRETS_JS`] off.
+pub(crate) const UNMASK_SECRETS_JS: &str =
+    r#"(() => { const s = document.getElementById('aiw-secret-mask'); if (s) s.remove(); return 'ok'; })()"#;
 
 /// Network policy of the controlled browser: the context of the tool call that is running (it
 /// changes from call to call) and the resolver used to vet names.
@@ -424,6 +431,11 @@ impl BrowserManager {
 
     async fn with<T>(&self, ctx: &ToolContext, f: impl for<'a> FnOnce(&'a Cdp) -> futures::future::BoxFuture<'a, Result<T>>) -> Result<T> {
         let mut guard = self.session.lock().await;
+        // The call passed the gate, then waited for the lock (another action was running): the person may have paused or taken
+        // the browser meanwhile, and the agent still does not act then. (Before the policy below is changed to this call's.)
+        if self.control.mode() != Mode::Agent {
+            return Err(Error::Conflict(TOOK_OVER.into()));
+        }
         // The calls are serialised by the lock above, so the policy in force is always that of
         // the call that is running.
         *self.policy.ctx.lock().unwrap() = ctx.clone();
@@ -433,7 +445,7 @@ impl BrowserManager {
             *guard = Some(session);
         }
         let cdp = guard.as_ref().unwrap().cdp.clone();
-        cdp.set_redact(self.control.redacting());
+        cdp.sync_redaction(self.control.handbacks());
         if let Some(hold) = *self.dialog_hold.lock().unwrap() {
             cdp.set_dialog_hold(hold);
         }
@@ -965,6 +977,10 @@ async fn do_navigate(
     let dl0 = cdp.downloads_len();
     blocked.lock().unwrap().clear();
     let r = cdp.call("Page.navigate", json!({"url": url})).await?;
+    if r.get("errorText").is_none() {
+        // The agent took this tab to an address of its own: it sees that tab's address as it is again.
+        cdp.stop_redacting_active();
+    }
     if let Some(e) = r.get("errorText").and_then(|e| e.as_str()) {
         // The request policy refused the page itself or one of its redirects.
         let refused = blocked.lock().unwrap().last().cloned();
@@ -1080,7 +1096,7 @@ fn dialog_output(cdp: &Cdp, head: &str) -> ToolOutput {
     ToolOutput::text(with_notes(
         cdp,
         format!(
-            "{head}Il sito ha aperto {what}: «{}».{default} La pagina resta ferma finché qualcuno risponde: usa browser_dialog con action=accept (OK) o dismiss (Annulla); l'utente può rispondere anche dalla vista live. Se nessuno risponde, dopo un paio di minuti viene annullata da sola.",
+            "{head}Il sito ha aperto {what}: «{}».{default} La pagina resta ferma finché qualcuno risponde: usa browser_dialog con action=accept (OK) o dismiss (Annulla) (se non lo hai, di' all'utente di rispondere dalla vista live del browser); l'utente può rispondere anche da lì. Se nessuno risponde, dopo un paio di minuti viene annullata da sola.",
             d.message
         ),
         vec![],
@@ -1148,7 +1164,12 @@ async fn run_op_inner(cdp: &Cdp, op: Op, env: OpEnv) -> Result<ToolOutput> {
         }
         Op::Wait => do_wait(cdp, &WaitSpec::parse(&args)?).await,
         Op::Screenshot => {
-            let r = cdp.call("Page.captureScreenshot", json!({"format": "png"})).await?;
+            // The digits of a one-time code or a card number are not in the picture the model gets: those fields are drawn as
+            // dots for the moment of the capture (password fields already are).
+            let _ = cdp.eval(MASK_SECRETS_JS).await;
+            let shot = cdp.call("Page.captureScreenshot", json!({"format": "png"})).await;
+            let _ = cdp.eval(UNMASK_SECRETS_JS).await;
+            let r = shot?;
             let data = r["data"].as_str().unwrap_or_default();
             Ok(ToolOutput {
                 content: with_notes(cdp, "Screenshot della pagina allegato.".into(), vec![]),
@@ -1340,6 +1361,9 @@ pub(crate) fn select_error(r: &RefArg, option: &str, res: &str) -> Option<String
     }
 }
 
+/// The error of an action that waited for the browser and found the person had taken it (see `BrowserManager::with`).
+const TOOK_OVER: &str = "l'utente ha preso il browser mentre l'azione aspettava";
+
 /// What the agent is told when it asks for the browser while the person has it.
 fn still_theirs(mode: Mode, waited: Duration) -> String {
     let who = match mode {
@@ -1359,17 +1383,23 @@ const STALE_REFS: &str = "L'utente ha usato il browser dopo l'ultimo snapshot: l
 fn needs_fresh_refs(op: Op, args: &Value) -> bool {
     let has_ref = args.get("ref").is_some_and(|v| !v.is_null());
     match op {
-        Op::Click | Op::Type | Op::Select | Op::Hover | Op::Upload => true,
-        Op::Scroll | Op::Press | Op::Wait => has_ref,
+        // (A key goes to whatever has the focus: after the person drove, that is theirs, not what the agent last looked at.)
+        Op::Click | Op::Type | Op::Select | Op::Hover | Op::Upload | Op::Press | Op::Dialog => true,
+        Op::Scroll | Op::Wait => has_ref,
         _ => false,
     }
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
 /// The actions whose result is a snapshot of the page that numbers its elements again.
 fn renews_refs(op: Op, text_format: bool) -> bool {
     match op {
         Op::Snapshot => !text_format,
-        Op::Navigate | Op::TabNew | Op::TabSelect | Op::Back | Op::Scroll | Op::Press | Op::Wait => true,
+        Op::Navigate | Op::TabNew | Op::TabSelect | Op::Back | Op::Scroll | Op::Wait => true,
         _ => false,
     }
 }
@@ -1516,17 +1546,24 @@ impl Tool for BrowserTool {
         };
         let env = OpEnv { args, ctx: ctx.clone(), url, resolve, blocked: self.mgr.policy.blocked.clone() };
         let op = self.op;
-        if op == Op::Navigate || (op == Op::TabNew && env.url.is_some()) {
-            // The agent chose this address itself: it sees addresses as they are again.
-            self.mgr.control.stop_redacting();
-        }
         // A stopped run ends the call, wherever it is waiting.
         let out = tokio::select! {
             r = self.mgr.with(ctx, move |cdp| Box::pin(run_op(cdp, op, env))) => r,
             _ = ctx.cancel.cancelled() => Ok(ToolOutput::error("Annullato: il run è stato fermato.")),
-        }?;
-        // These end with a snapshot that numbers the elements again: the agent can trust its references.
-        if !out.is_error && renews_refs(op, text_format) {
+        };
+        let out = match out {
+            Err(Error::Conflict(m)) if m == TOOK_OVER => {
+                return Ok(ToolOutput::error(format!(
+                    "{}: l'azione non è stata eseguita. Riprova quando te lo restituisce.",
+                    capitalise(TOOK_OVER)
+                )))
+            }
+            other => other?,
+        };
+        // These end with a snapshot that numbers the elements again: the agent can trust its references. (Not a result that only
+        // says a window of the site blocks the page.)
+        let blocked = self.mgr.live_cdp().is_some_and(|c| c.pending_dialog().is_some());
+        if !out.is_error && !blocked && renews_refs(op, text_format) {
             self.mgr.control.clear_stale();
         }
         Ok(out)

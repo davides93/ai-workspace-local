@@ -103,9 +103,11 @@ pub(crate) struct State {
     pub notes: Vec<Note>,
     /// `session:requestId` of the requests still running.
     pub inflight: HashSet<String>,
-    /// The person drove the browser and gave it back: addresses lose their query and fragment (they may
-    /// carry a code or a token) until the agent navigates by itself. See `control.rs`.
-    pub redact: bool,
+    /// The tabs whose address is hidden from the model (query and fragment: they may carry a code or a token): the ones that were
+    /// open when the person gave the browser back, until the agent navigates that tab itself. See `control.rs`.
+    pub redact_tabs: HashSet<String>,
+    /// The count of handbacks these tabs were last taken at.
+    pub redact_seen: u64,
     /// The `confirm` and `prompt` that wait for an answer (see [`DIALOG_HOLD`]), by session: a tab has at most one open, and two
     /// tabs do not take each other's place.
     pub dialogs: HashMap<String, PendingDialog>,
@@ -353,7 +355,7 @@ impl Cdp {
             .lock()
             .unwrap()
             .current_dialog()
-            .ok_or_else(|| Error::NotFound("nessuna finestra del sito aspetta una risposta".into()))?;
+            .ok_or_else(|| Error::Conflict("nessuna finestra del sito aspetta una risposta (forse è già stata chiusa)".into()))?;
         let mut params = json!({"accept": accept});
         if let (true, Some(t)) = (accept && d.kind == "prompt", text) {
             params["promptText"] = json!(t);
@@ -378,22 +380,41 @@ impl Cdp {
         self.st.lock().unwrap().dialog_hold = Some(hold);
     }
 
-    pub(crate) fn set_redact(&self, on: bool) {
-        self.st.lock().unwrap().redact = on;
+    /// The browser came back from the person (`handbacks` is the count so far): the pages open now get their addresses hidden.
+    pub(crate) fn sync_redaction(&self, handbacks: u64) {
+        let mut st = self.st.lock().unwrap();
+        if st.redact_seen != handbacks {
+            st.redact_seen = handbacks;
+            let open: Vec<String> = st.tabs.iter().map(|t| t.target_id.clone()).collect();
+            st.redact_tabs.extend(open);
+        }
     }
 
-    /// An address as the model may see it (see `State::redact`).
+    /// The agent navigated the tab in front by itself: its address is its own again.
+    pub(crate) fn stop_redacting_active(&self) {
+        let mut st = self.st.lock().unwrap();
+        if let Some(id) = st.active.clone() {
+            st.redact_tabs.remove(&id);
+        }
+    }
+
+    fn active_redacted(&self) -> bool {
+        let st = self.st.lock().unwrap();
+        st.active.as_ref().is_some_and(|id| st.redact_tabs.contains(id))
+    }
+
+    /// The address of the tab in front as the model may see it (see `State::redact_tabs`).
     pub(crate) fn shown_url(&self, url: &str) -> String {
-        if self.st.lock().unwrap().redact {
+        if self.active_redacted() {
             super::without_query(url)
         } else {
             url.to_string()
         }
     }
 
-    /// A snapshot as the model may read it: the address lines without query and fragment when they are hidden.
+    /// A snapshot as the model may read it: the address lines without query and fragment when the tab's are hidden.
     pub(crate) fn scrub(&self, text: &str) -> String {
-        if self.st.lock().unwrap().redact {
+        if self.active_redacted() {
             super::control::scrub_url_lines(text)
         } else {
             text.to_string()
@@ -566,7 +587,7 @@ impl Cdp {
             .map(|(i, t)| TabInfo {
                 index: i + 1,
                 title: t.title.clone(),
-                url: t.url.clone(),
+                url: if st.redact_tabs.contains(&t.target_id) { super::without_query(&t.url) } else { t.url.clone() },
                 active: st.active.as_deref() == Some(&t.target_id),
                 by_site: t.by_site,
             })
@@ -616,7 +637,7 @@ impl Cdp {
     pub(crate) fn take_notes(&self) -> Vec<String> {
         let mut st = self.st.lock().unwrap();
         let notes = std::mem::take(&mut st.notes);
-        let redact = st.redact;
+        let hidden = st.redact_tabs.clone();
         notes
             .into_iter()
             .filter_map(|n| match n {
@@ -629,7 +650,7 @@ impl Cdp {
                         "Il sito ha aperto una nuova scheda [{}] «{}» ({}){}.",
                         i + 1,
                         clip(&t.title, 60),
-                        clip(&if redact { super::without_query(&t.url) } else { t.url.clone() }, 90),
+                        clip(&if hidden.contains(&id) { super::without_query(&t.url) } else { t.url.clone() }, 90),
                         if active { ": ora è quella attiva, torna alla precedente con browser_tab_select" } else { "" }
                     ))
                 }
@@ -725,19 +746,16 @@ impl Cdp {
     pub(crate) async fn ax_snapshot(&self) -> Result<String> {
         let tree = self.call("Accessibility.getFullAXTree", json!({})).await?;
         let nodes = tree["nodes"].as_array().cloned().unwrap_or_default();
-        // The values of the fields a person types who they are in: never written out (see `ax::render`).
-        let secrets: Vec<String> = self
-            .eval(super::SECRET_VALUES_JS)
-            .await
-            .ok()
-            .and_then(|v| v.as_str().and_then(|t| serde_json::from_str(t).ok()))
-            .unwrap_or_default();
+        // The values of the fields a person types who they are in: never written out (see `ax::render`). When the page cannot
+        // say which they are (a library that changes how arrays are read, a script that fails), no value is written at all.
+        let secrets: Option<Vec<String>> =
+            self.eval(super::SECRET_VALUES_JS).await.ok().and_then(|v| serde_json::from_value::<Vec<String>>(v).ok());
         let head = self.eval("({t: document.title, u: location.href})").await.unwrap_or(Value::Null);
         let body = {
             let mut st = self.st.lock().unwrap();
             let tab = st.active_tab().ok_or_else(|| Error::Runtime("nessuna scheda attiva nel browser".into()))?;
             tab.fmt = SnapFmt::Ax;
-            ax::render(&nodes, &mut tab.refs, &secrets)
+            ax::render(&nodes, &mut tab.refs, secrets.as_deref())
         };
         Ok(format!(
             "Titolo: {}\nURL: {}\n\nAlbero di accessibilità (usa [eN] come ref; i ref restano validi finché la pagina non cambia):\n{body}",
@@ -961,7 +979,12 @@ fn on_event(h: &Hub, v: &Value) {
                 Some("warning") => "avviso",
                 _ => return,
             };
-            let url = e["url"].as_str().filter(|u| !u.is_empty()).map(|u| format!(" ({})", clip(u, 80))).unwrap_or_default();
+            // (An address of the console without its query: a login page can log the one it was sent to.)
+            let url = e["url"]
+                .as_str()
+                .filter(|u| !u.is_empty())
+                .map(|u| format!(" ({})", clip(&super::without_query(u), 80)))
+                .unwrap_or_default();
             console_push(h, session, format!("{level}: {}{url}", e["text"].as_str().unwrap_or_default()));
         }
         "Page.frameNavigated" => {
@@ -1055,7 +1078,9 @@ fn on_attached(h: &Hub, parent: Option<&str>, p: &Value) {
             let mut st = h.st.lock().unwrap();
             let opener = info["openerId"].as_str().unwrap_or_default();
             let known = st.own.contains(&target_id) || (!opener.is_empty() && st.own.contains(opener));
-            let fresh = !known && opener.is_empty() && st.expecting_own;
+            // Our own tab is created blank: a tab the person opens at that very moment (`chrome://newtab/`, a link) is not it.
+            let blank = matches!(info["url"].as_str().unwrap_or_default(), "" | "about:blank");
+            let fresh = !known && opener.is_empty() && st.expecting_own && blank;
             if fresh {
                 st.expecting_own = false;
             }

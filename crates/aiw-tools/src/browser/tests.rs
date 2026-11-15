@@ -1399,19 +1399,36 @@ async fn real_secret_fields_never_reach_the_model() {
       <input type=password value="SENZA-NOME-DI-PROVA">
       <label>Codice <input autocomplete="one-time-code" value="123456-DI-PROVA"></label>
       <input autocomplete="cc-number" value="4111-DI-PROVA">
+      <input type="Password" value="MAIUSCOLO-DI-PROVA">
+      <INPUT TYPE=PASSWORD value="TUTTO-MAIUSCOLO-DI-PROVA">
       <input type=submit value="Accedi"></body></html>"#;
     let Some(r) = Real::start(move |_| html(page)).await else { return };
     r.go("/").await;
     let elements = r.run("browser_snapshot", json!({})).await.content;
     let ax = r.run("browser_snapshot", json!({"format": "ax"})).await.content;
     for (format, snap) in [("elements", &elements), ("ax", &ax)] {
-        for secret in ["PASSWORD-DI-PROVA", "SENZA-NOME-DI-PROVA", "123456-DI-PROVA", "4111-DI-PROVA"] {
+        for secret in ["PASSWORD-DI-PROVA", "SENZA-NOME-DI-PROVA", "123456-DI-PROVA", "4111-DI-PROVA", "MAIUSCOLO-DI-PROVA"] {
             assert!(!snap.contains(secret), "{format}: {secret} reached the model:\n{snap}");
         }
         assert!(snap.contains("Mario"), "{format}: a normal field keeps its value:\n{snap}");
         assert!(snap.contains("Accedi"), "{format}: the label of a submit button is its value:\n{snap}");
     }
     assert!(elements.contains("(nascosto)"), "{elements}");
+    // A screenshot for the model draws the code and card fields as dots for the capture, and leaves the page as it was.
+    let cdp = r.mgr.live_cdp().expect("running");
+    let eval = |expr: &'static str| {
+        let cdp = cdp.clone();
+        async move { cdp.call("Runtime.evaluate", json!({"expression": expr, "returnByValue": true})).await.unwrap()["result"]["value"].clone() }
+    };
+    let otp = "getComputedStyle(document.querySelector('[autocomplete=one-time-code]')).webkitTextSecurity";
+    assert_eq!(eval(otp).await, "none", "plain text before the mask");
+    eval(MASK_SECRETS_JS).await;
+    assert_eq!(eval(otp).await, "disc", "dots while the mask is on");
+    eval(UNMASK_SECRETS_JS).await;
+    assert_eq!(eval(otp).await, "none");
+    let shot = r.run("browser_screenshot", json!({})).await;
+    assert!(!shot.is_error && shot.images.len() == 1, "{}", shot.content);
+    assert_eq!(eval("document.getElementById('aiw-secret-mask') === null").await, true, "the mask is off again after the capture");
     assert!(r.mgr.close().await);
 }
 
