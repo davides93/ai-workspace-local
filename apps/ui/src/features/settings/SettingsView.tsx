@@ -12,6 +12,7 @@ import { BackgroundBlock } from "./components/BackgroundBlock";
 import { LayerBar } from "./components/LayerBar";
 import { MailAccountsEditor } from "../channels/components/MailAccountsEditor";
 import { BackupPanel } from "./components/BackupPanel";
+import { FoldersPanel } from "./components/FoldersPanel";
 import { UpdatePanel } from "./components/UpdatePanel";
 import { SettingRow } from "./components/SettingRow";
 import { changesSchedule, isPhoneOs, shouldAskNotifications } from "./model/background";
@@ -29,6 +30,8 @@ export function SettingsView() {
   const system = useSystem();
   const bg = useBackgroundActions();
   const os = system.data?.device.os;
+  // The Mac App Store build works in the app's own folder, and the person grants more folders below: the workspace setting does nothing there.
+  const sandboxed = system.data?.sandboxed === true;
 
   const commit = (key: string, title: string, value: unknown) => {
     const before = cfg.data?.effective["proactive.level"];
@@ -87,12 +90,13 @@ export function SettingsView() {
       </div>
 
       <UpdatePanel />
+      {system.data?.folder_access && <FoldersPanel workspace={system.data.workspace_root} />}
       <BackupPanel />
 
       <QueryState query={cfg}>
         {(view) => {
           const groups = groupSettings(view.schema, query)
-            .map((group) => ({ ...group, entries: group.entries.filter((entry) => entry.key !== "update.channel" && entry.key !== "voice.tts.voice" && entry.key !== "connectors.mail.imap" && (uiMode === "developer" || !DEVELOPER_ONLY.includes(entry.key))) }))
+            .map((group) => ({ ...group, entries: group.entries.filter((entry) => entry.key !== "update.channel" && entry.key !== "voice.tts.voice" && entry.key !== "connectors.mail.imap" && !(sandboxed && entry.key === "workspace.root") && (uiMode === "developer" || !DEVELOPER_ONLY.includes(entry.key))) }))
             .filter((group) => group.entries.length > 0);
           return (
             <>

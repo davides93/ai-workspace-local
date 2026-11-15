@@ -20,6 +20,24 @@ for (const size of SIZES) {
         await expectNoPlaceholderLeaks(page);
       });
 
+      test("settings of the Mac App Store build: allowed folders", async ({ page }, info) => {
+        await openApp(page, "/settings", { theme, scenario: "mas" });
+        await expect(page.getByTestId("folders-panel")).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+        // The empty state of the list too.
+        await page.getByRole("button", { name: "Togli «Download»" }).click();
+        await expect(page.getByTestId("folders-empty")).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+      });
+
+      test("a refused folder in the chat of the Mac App Store build, with its hint", async ({ page }, info) => {
+        await openApp(page, "/chat/ses_mas", { theme, scenario: "mas" });
+        await expect(page.getByRole("note").filter({ hasText: "fuori dal workspace" })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+      });
+
       test("first run while the model downloads", async ({ page }, info) => {
         await openApp(page, "/", { theme, scenario: "first-run" });
         await page.getByRole("button", { name: "Prepara tutto" }).click();

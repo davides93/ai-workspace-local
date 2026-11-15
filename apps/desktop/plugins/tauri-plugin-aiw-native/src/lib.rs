@@ -21,11 +21,16 @@ use tokio_util::sync::CancellationToken;
 
 #[cfg(desktop)]
 mod desktop;
+pub mod folder_rules;
 pub mod helper;
 #[cfg(all(target_os = "macos", feature = "macos-browser"))]
 mod macos_browser;
+#[cfg(all(target_os = "macos", feature = "macos-folders"))]
+pub mod macos_folders;
 #[cfg(mobile)]
 mod mobile;
+#[cfg(all(target_os = "macos", any(feature = "macos-browser", feature = "macos-folders")))]
+mod native_call;
 pub mod native_tools;
 
 #[cfg(desktop)]

@@ -294,4 +294,6 @@ export const chatIt = {
   "chat.risposta_in_corso": "Risposta in corso",
   "chat.codice_omesso": "(codice omesso)",
   "chat.budget_exhausted_reason": "Budget del run esaurito: {reason}. L'agente si è fermato.",
+  "chat.cartella_fuori_workspace": "Quella cartella è fuori dal workspace. Se vuoi che l'agente ci lavori, consentila tu:",
+  "chat.cartella_fuori_workspace_link": "Impostazioni → Cartelle consentite",
 } as const;

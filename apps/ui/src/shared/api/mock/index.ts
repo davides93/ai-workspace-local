@@ -11,11 +11,11 @@ import type {
   AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer,
   ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, SessionImage, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  ChannelCreate, ChannelPatch, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
+  ChannelCreate, ChannelPatch, FoldersAdded, FoldersInfo, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, maskConfigSecrets, mcp, models, nid, now, policyRules, profiles,
-  remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
+  folderGrants, remoteAgents, runtimes, sessionMessages, sessions, sleep, system, teams, tools, workflowRuns, workflows, MOCK_DIFF, GB, fitFor,
 } from "./fixtures";
 import { demoLesson, lessonProblem, lessons } from "./lessons";
 import * as mem from "./memories";
@@ -126,6 +126,12 @@ const VOICE_DEMO_SENTENCES = ["Quali file ho modificato oggi nel workspace?", "R
 /** Demo statistics of the router, by `agent|profile`. */
 const routingStats = new Map<string, RoutingCandidate>([["operator|balanced", { profile: "balanced", n: 12, reward_sum: 9, mean: 0.75 }]]);
 
+/** What the demo of the macOS panel offers, in order. */
+const DEMO_FOLDERS = [
+  { name: "Documenti", path: "/Users/demo/Documents" },
+  { name: "Progetti", path: "/Users/demo/Progetti" },
+];
+
 export class MockTransport implements Transport {
   readonly kind = "mock" as const;
   readonly capabilities: TransportCapabilities = { demo: true, native: false, pairing: false };
@@ -145,6 +151,21 @@ export class MockTransport implements Transport {
   }
 
   async system() { return structuredClone(system); }
+  async folders(): Promise<FoldersInfo> { return { supported: system.folder_access === true, folders: structuredClone(folderGrants) }; }
+  /** Demo of the macOS panel: the next of a few folders of the demo user, never the same twice. */
+  async addFolders(_message: string, _prompt: string): Promise<FoldersAdded> {
+    if (!system.folder_access) throw new ApiError(422, "questa versione lavora in una cartella sola: si sceglie in Impostazioni");
+    await sleep(250);
+    const next = DEMO_FOLDERS.find((f) => !folderGrants.some((g) => g.path === f.path));
+    if (next) folderGrants.push({ id: nid("fld"), name: next.name, path: next.path, available: true, added: now() });
+    return { supported: true, folders: structuredClone(folderGrants), added: next ? 1 : 0, refused: [] };
+  }
+  async removeFolder(id: string): Promise<FoldersInfo> {
+    const i = folderGrants.findIndex((g) => g.id === id);
+    if (i < 0) throw new ApiError(404, `cartella ${id} non trovata`);
+    folderGrants.splice(i, 1);
+    return { supported: system.folder_access === true, folders: structuredClone(folderGrants) };
+  }
   async kill() {
     for (const [, p] of this.pendingApprovals) p.resolve(false);
     audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "kill", detail: "Kill switch premuto dalla UI" });
