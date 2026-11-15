@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { copyText } from "../lib/clipboard";
 import { cx } from "../lib/cx";
 import { Icon } from "./Icon";
+import { grammarFor } from "./highlight/languages";
+import { useHighlight } from "./highlight/useHighlight";
 
 import { t, t as tr } from "../i18n";
 /** Copy button with a short "Copiato" confirmation. */
@@ -26,15 +28,25 @@ export function CopyButton({ text, label = tr("ui.copia"), className }: { text: 
   );
 }
 
-/** Code or command snippet with a copy button. */
-export function CodeBlock({ code, title }: { code: string; title?: string }) {
+/**
+ * Code or command snippet with a copy button. `lang` (the language of a Markdown fence, or given by the caller) colours it
+ * when there is a grammar for it; the grammars load on demand, and the text is the same plain or coloured (what is copied and
+ * what a screen reader reads never changes).
+ */
+export function CodeBlock({ code, title, lang }: { code: string; title?: string; lang?: string }) {
+  const tokens = useHighlight(code, lang);
+  const grammar = grammarFor(lang);
   return (
     <div className="codeblock">
       <div className="codeblock-head">
         <span className="codeblock-title">{title}</span>
         <CopyButton text={code} />
       </div>
-      <pre tabIndex={0}><code>{code}</code></pre>
+      <pre tabIndex={0}>
+        <code className={grammar ? `language-${grammar}` : undefined}>
+          {tokens ? tokens.map((tk, i) => (tk.k ? <span key={i} className={`tok-${tk.k}`}>{tk.v}</span> : tk.v)) : code}
+        </code>
+      </pre>
     </div>
   );
 }

@@ -264,6 +264,17 @@ textarea.input { resize: vertical; min-height: 84px; font-family: var(--font-mon
 .codeblock-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .codeblock-title { font-size: var(--fs-xs); color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
 .codeblock pre { margin: 0; padding: 10px 12px; overflow-x: auto; font-size: 0.78rem; line-height: 1.5; }
+/* Syntax colors (shared/ui/highlight): colour only, never the sole carrier of meaning (a diff line also starts with its + or -). */
+.codeblock .tok-com { color: var(--tok-com); font-style: italic; }
+.codeblock .tok-str { color: var(--tok-str); }
+.codeblock .tok-num { color: var(--tok-num); }
+.codeblock .tok-kw { color: var(--tok-kw); }
+.codeblock .tok-lit { color: var(--tok-lit); }
+.codeblock .tok-fn { color: var(--tok-fn); }
+.codeblock .tok-ty { color: var(--tok-ty); }
+.codeblock .tok-attr { color: var(--tok-attr); }
+.codeblock .tok-ins { color: var(--tok-ins); }
+.codeblock .tok-del { color: var(--tok-del); }
 
 /* ---------- Overlays: dialog, drawer, sheet, palette ---------- */
 .overlay { position: fixed; inset: 0; z-index: var(--z-overlay); }

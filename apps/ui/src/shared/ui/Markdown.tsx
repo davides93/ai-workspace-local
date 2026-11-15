@@ -48,7 +48,7 @@ const BlockView = memo(function BlockView({ block }: { block: Block }) {
       // Messages sit under the page's h1/h2: their headings start at h3.
       return createElement(`h${block.level + 2}`, { className: `md-h md-h${block.level}` }, renderInline(block.c));
     case "code":
-      return <CodeBlock code={block.v} title={block.lang || undefined} />;
+      return <CodeBlock code={block.v} title={block.lang || undefined} lang={block.lang} />;
     case "list": {
       const items = block.items.map((it, i) => <ListItemView key={i} item={it} tight={block.tight} />);
       return block.ordered ? <ol start={block.start}>{items}</ol> : <ul>{items}</ul>;

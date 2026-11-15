@@ -90,7 +90,7 @@ export function AccessPanel() {
         <Dialog title={tr("security.copia_il_token_adesso")} size="md" onClose={() => setShown(null)} footer={<Button variant="primary" onClick={() => setShown(null)}>{tr("security.fatto")}</Button>}>
           <p>{tr("security.token_shown_once")}</p>
           <CopyField label={shown.name} value={shown.token} />
-          {shown.kind === "gateway" && <CodeBlock code={exampleFor(shown.token)} />}
+          {shown.kind === "gateway" && <CodeBlock code={exampleFor(shown.token)} lang="shell" />}
         </Dialog>
       )}
     </div>
