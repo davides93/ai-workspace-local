@@ -114,6 +114,10 @@ const RULES: &[(&str, &str, Required)] = &[
     ("POST", "/api/secret-requests/*", FULL),
     ("*", "/api/proposals", DEVICE),
     ("*", "/api/proposals/**", DEVICE),
+    // Background tasks: a paired phone watches them, pauses them, talks to them and resumes them, like the proposals
+    // that start them. What they may do is bounded by the same confirmations as any run.
+    ("*", "/api/tasks", DEVICE),
+    ("*", "/api/tasks/**", DEVICE),
     // Learning, memory, knowledge base (the handlers refuse path imports to anyone who is not local).
     ("*", "/api/lessons", DEVICE),
     ("*", "/api/lessons/**", DEVICE),

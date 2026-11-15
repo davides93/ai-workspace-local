@@ -22,7 +22,7 @@ pub use hooks::HookConfig;
 pub use internal::{internal_tools, InternalTool};
 pub use narrow::{narrow_sandbox, narrow_tools, narrow_tools_delegating};
 pub use policy::{Decision, Policy, PolicyRule};
-pub use runner::{to_msgs, user_msg, AgentRunner, RunHost, RunInput, RunOutcome, UserExtra};
+pub use runner::{to_msgs, user_msg, AgentRunner, Checkpoint, RunEnd, RunHost, RunInput, RunOutcome, UserExtra, INSTRUCTION_NAME};
 pub use skills::Skill;
 
 #[cfg(test)]

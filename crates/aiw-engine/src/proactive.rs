@@ -154,7 +154,7 @@ pub fn parse_filter(answer: &str, items: usize) -> Option<usize> {
     (1..=items).contains(&n).then_some(n)
 }
 
-fn short(s: &str, n: usize) -> String {
+pub(crate) fn short(s: &str, n: usize) -> String {
     let one: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if one.chars().count() <= n {
         one
@@ -312,10 +312,10 @@ impl ConnectorCtx {
 // ------------------------------------------------------------------------------------ the engine
 
 impl Engine {
-    fn cfg_str(&self, key: &str, default: &str) -> String {
+    pub(crate) fn cfg_str(&self, key: &str, default: &str) -> String {
         self.0.config.get(key).and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| default.to_string())
     }
-    fn cfg_u64(&self, key: &str, default: u64) -> u64 {
+    pub(crate) fn cfg_u64(&self, key: &str, default: u64) -> u64 {
         self.0.config.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
     }
     pub fn proactive_level(&self) -> String {
@@ -329,6 +329,15 @@ impl Engine {
     }
     fn state(&self) -> State {
         self.0.store.get_doc(STATE_KIND, STATE_ID).ok().flatten().unwrap_or_default()
+    }
+    /// Seconds the heartbeat itself used today (the time of the background tasks is counted apart).
+    pub(crate) fn proactive_spent_s(&self, now: DateTime<Local>) -> f64 {
+        let st = self.state();
+        if st.spent_day == now.format("%Y-%m-%d").to_string() {
+            st.spent_s
+        } else {
+            0.0
+        }
     }
     fn save_state(&self, s: &State) {
         let _ = self.0.store.put_doc(STATE_KIND, STATE_ID, s);
@@ -396,7 +405,7 @@ impl Engine {
         let st = self.state();
         let level = self.proactive_level();
         let today = now.format("%Y-%m-%d").to_string();
-        let spent = if st.spent_day == today { st.spent_s } else { 0.0 };
+        let spent = if st.spent_day == today { st.spent_s } else { 0.0 } + self.tasks_seconds_today(now);
         let next_wake = (level != "off").then(|| self.next_wake(&st, now).to_rfc3339());
         ProactiveStatus {
             level,
@@ -454,7 +463,12 @@ impl Engine {
     fn refresh_proposals(&self, now: DateTime<Local>) {
         let _ = self.0.store.proposal_expire(&now.to_rfc3339());
         for p in self.0.store.proposal_list(Some("approved"), 100).unwrap_or_default() {
-            if p.run_id.as_deref().is_some_and(|r| self.run_done(r)) {
+            // A proposal that became a task is done when the task is; one approved before tasks existed, when its run is.
+            let finished = match self.proposal_task_finished(&p.id) {
+                Some(done) => done,
+                None => p.run_id.as_deref().is_some_and(|r| self.run_done(r)),
+            };
+            if finished {
                 let _ = self.0.store.proposal_transition(&p.id, &["approved"], "done", None, None, None);
             }
         }
@@ -483,24 +497,20 @@ impl Engine {
         if text.is_empty() {
             return Err(Error::Invalid("la proposta non ha istruzioni da eseguire".into()));
         }
-        let agent = self
-            .agent(&p.agent_id)
+        self.agent(&p.agent_id)
             .map_err(|_| Error::Conflict(format!("l'assistente «{}» non esiste più: scegline un altro nelle impostazioni", p.agent_id)))?;
         // Claim it first: a double click must not start two runs.
         let edited = instruction.map(str::trim).filter(|t| !t.is_empty() && *t != p.instruction.trim());
         if !self.0.store.proposal_transition(id, &["open"], "approved", Some(&now_rfc3339()), None, edited)? {
             return Err(Error::Conflict("la proposta è già stata decisa".into()));
         }
-        let started = async {
-            let session = self.create_session(&agent.id, Some(format!("Proposta: {}", short(&p.title, 50))))?;
-            let run = self.start_run(&session.id, text).await?;
-            Ok::<_, Error>((run, session.id))
-        }
-        .await;
-        match started {
-            Ok((run, session)) => {
-                self.0.store.proposal_transition(id, &["approved"], "approved", None, Some((&run, &session)), None)?;
-                self.audit_user("proposal.approve", &format!("{} → run {run}", p.title));
+        // The approval makes a background task of it: it starts like a run of the agent's usual policy (never freer than
+        // «ask»), and the person can watch it, pause it, talk to it and resume it (see `bgtasks`).
+        match self.task_from_proposal(&p, &text).await {
+            Ok(task) => {
+                // The first run, when it has started (a rule such as quiet hours may hold the task back).
+                self.0.store.proposal_link(id, task.run_ids.first().map(String::as_str), &task.session_id)?;
+                self.audit_user("proposal.approve", &format!("{} → lavoro {}", p.title, task.id));
                 self.proposal(id)
             }
             Err(e) => {
@@ -648,7 +658,7 @@ impl Engine {
             return Some("Il computer è a batteria: aspetto che sia collegato.".into());
         }
         let budget_min = self.cfg_u64("proactive.daily_budget_minutes", 15);
-        if state.spent_s >= (budget_min * 60) as f64 {
+        if state.spent_s + self.tasks_seconds_today(now) >= (budget_min * 60) as f64 {
             return Some(format!("Il tempo di oggi è finito ({budget_min} minuti): riprovo domani."));
         }
         if self.0.runs.lock().unwrap().values().any(|h| !h.done) {

@@ -344,6 +344,12 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/proposals/{id}", get(proposal))
         .route("/api/proposals/{id}/approve", post(approve_proposal))
         .route("/api/proposals/{id}/dismiss", post(dismiss_proposal))
+        .route("/api/tasks", get(tasks).post(start_task))
+        .route("/api/tasks/{id}", get(task))
+        .route("/api/tasks/{id}/pause", post(pause_task))
+        .route("/api/tasks/{id}/resume", post(resume_task))
+        .route("/api/tasks/{id}/instructions", post(instruct_task))
+        .route("/api/tasks/{id}/cancel", post(cancel_task))
         .route("/api/channels", get(channels).post(create_channel))
         .route("/api/channels/{id}", patch(patch_channel).delete(delete_channel))
         .route("/api/channels/{id}/test", post(test_channel))
@@ -909,6 +915,40 @@ async fn approve_proposal(State(s): State<AppState>, Path(id): Path<String>, bod
 }
 async fn dismiss_proposal(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Proposal> {
     ok(s.engine.proposal_dismiss(&id)?)
+}
+// ---- background tasks: what the assistant does while the person is elsewhere
+#[derive(Deserialize)]
+struct TasksQuery {
+    /// queued | running | paused | succeeded | failed | cancelled; absent = all.
+    status: Option<String>,
+}
+async fn tasks(State(s): State<AppState>, Query(q): Query<TasksQuery>) -> ApiResult<Vec<BackgroundTask>> {
+    ok(s.engine.tasks(q.status.as_deref())?)
+}
+async fn task(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task(&id)?)
+}
+async fn start_task(State(s): State<AppState>, Json(body): Json<TaskStart>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_start(body).await?)
+}
+/// Asks a running task to stop at its next step (a task waiting for a confirmation stops at once).
+async fn pause_task(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_pause(&id)?)
+}
+/// The body is optional: `{"force": true}` goes on in quiet hours, on battery or with the day's time used up;
+/// `{"extend": {"max_seconds": 600}}` adds room to a task that used up its limits.
+async fn resume_task(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<TaskResume>>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_resume(&id, body.map(|b| b.0).unwrap_or_default()).await?)
+}
+async fn instruct_task(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<TaskInstructionNew>,
+) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_instruct(&id, &body.text, body.source.as_deref())?)
+}
+async fn cancel_task(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_cancel(&id)?)
 }
 // ---- channels (Telegram, Slack, email) and the IMAP accounts of the mail connector
 async fn channels(State(s): State<AppState>) -> ApiResult<Vec<ChannelInfo>> {
@@ -1883,6 +1923,8 @@ mod tests_recommend;
 mod tests_remote;
 #[cfg(test)]
 mod tests_security;
+#[cfg(test)]
+mod tests_tasks;
 #[cfg(test)]
 mod tests_tls;
 #[cfg(test)]
