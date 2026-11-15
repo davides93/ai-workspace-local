@@ -1,6 +1,6 @@
 # Stato dell'app e come procedere
 
-> Aggiornamento 14 novembre 2026 · release v0.5.0-beta.10, build store 5012. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
+> Aggiornamento 15 novembre 2026 · release v0.5.0-beta.11, build store 5013. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
 
 ## Aggiornamento: cartelle consentite nella build Mac App Store
 
