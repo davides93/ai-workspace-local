@@ -517,7 +517,7 @@ mod tests {
         let tool_result = e.messages(&s.id).unwrap().into_iter().find(|m| m.role == "tool").unwrap().content;
         assert!(tool_result.contains(NOT_IN_A_CHAT), "{tool_result}");
         assert_eq!(audited(&e, "aiw_setting_set"), [("deny".to_string(), NOT_IN_A_CHAT.to_string())]);
-        // The run ended by itself, with the one tool message of the refused call (the agent loop's self-check may add a model turn after it).
+        // The run ended by itself, with the one tool message of the refused call (a refusal is final: the self-check adds no model turn).
         let status = e.sessions().unwrap().into_iter().find(|x| x.id == s.id).unwrap().last_status;
         assert_eq!(status.as_deref(), Some("succeeded"));
         assert_eq!(e.messages(&s.id).unwrap().iter().filter(|m| m.role == "tool").count(), 1);

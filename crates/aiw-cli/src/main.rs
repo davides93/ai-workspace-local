@@ -63,7 +63,7 @@ enum Cmd {
     },
     /// Esegue un compito con un agente e mostra la risposta in streaming
     ///
-    /// Gli strumenti di gestione dell'Assistente (modelli, impostazioni, connettori, segreti) funzionano solo dalla chat dell'app: da terminale usa i comandi `aiw models`, `aiw runtimes`, `aiw profile`.
+    /// Gli strumenti di gestione dell'Assistente (modelli, motori, impostazioni, connettori, segreti) funzionano solo dalla chat dell'app: da terminale restano i comandi `aiw models`, `aiw runtimes` e `aiw profile` per modelli e motori; il resto si gestisce dall'app.
     Run {
         prompt: String,
         #[arg(long, default_value = "operator")]
