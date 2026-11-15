@@ -26,10 +26,13 @@ import { useTeams } from "../teams/api";
 import { teamAsAgent, teamIdOf } from "../teams/model/teams";
 import { useConfig } from "../settings/api";
 import { canRequestSecret } from "../ask/model";
+import { useBrowserState } from "../browser/api";
+import { BrowserUiContext } from "../browser/context";
+import { shortStatus, showsBrowser } from "../browser/model";
 import { useCreateSession, useSessions } from "./api";
 import { ChatActionsContext, type ChatActions } from "./ChatActions";
 import { ChatEmpty } from "./components/ChatEmpty";
-import { ChatHeader } from "./components/ChatHeader";
+import { BROWSER_BUTTON_ID, ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { DownloadsStrip } from "./components/DownloadsStrip";
 import { SecretWarning } from "./components/SecretWarning";
@@ -54,6 +57,8 @@ import { t as tr, t } from "../../shared/i18n";
 const chatPath = (id: string) => `/chat/${encodeURIComponent(id)}`;
 // The lessons panel is only opened from the note about a proposed lesson, in the simple interface.
 const LessonsPanel = lazy(() => import("../learning/components/LessonsPanel").then((m) => ({ default: m.LessonsPanel })));
+// The live view of the controlled browser (image, keyboard, controls) is only loaded when the panel is opened, or a request for help shows its card.
+const BrowserPanel = lazy(() => import("../browser/BrowserPanel").then((m) => ({ default: m.BrowserPanel })));
 
 /**
  * Workspace: sessions on the left, the conversation in the middle, the run panel on the right.
@@ -146,6 +151,37 @@ export function ChatView() {
   const mode = useInspectorMode();
   const panel = useInspectorOpen(mode);
   const log = useRef<ConversationLogHandle>(null);
+
+  // The controlled browser: the «Browser» button shows while one runs (or the agent asks for help), the panel is opened from it. A 403 (a paired
+  // device) or a 404 (an older backend) hide it all, quietly. Whether the panel is open is not remembered: it shows a page.
+  const browserState = useBrowserState();
+  const browser = showsBrowser(browserState.data) ? browserState.data : null;
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const browserShown = browserOpen && !!browserState.data;
+  const closeBrowser = useCallback(() => {
+    setBrowserOpen(false);
+    // The panel took the focus with it: back to the button (a dialog does that by itself), or to the message box when the button is gone
+    // (the browser closed while the panel was open).
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body) (document.getElementById(BROWSER_BUTTON_ID) ?? document.getElementById("composer"))?.focus({ preventScroll: true });
+    });
+  }, []);
+  useEffect(() => setBrowserOpen(false), [mode]);
+  const toggleBrowser = () => {
+    if (browserShown) return closeBrowser();
+    if (mode !== "inline") panel.close();
+    setBrowserOpen(true);
+  };
+  const browserUi = useMemo(() => ({ panelOpen: browserShown, openPanel: () => setBrowserOpen(true) }), [browserShown]);
+  // One side panel at a time: the browser takes the place of the run panel while it is open, and the run panel's button brings it back.
+  const inspectorVisible = panel.open && !(browserShown && mode === "inline");
+  const toggleInspector = () => {
+    if (browserShown) {
+      setBrowserOpen(false);
+      panel.show();
+    } else panel.toggle();
+  };
 
   // Say in a polite live region when a reply starts and ends; the log itself stays silent while it streams.
   const [announce, setAnnounce] = useState("");
@@ -264,6 +300,7 @@ export function ChatView() {
 
   return (
     <ChatActionsContext.Provider value={actions}>
+    <BrowserUiContext.Provider value={browserUi}>
     <div className="ws">
       <h1 className="sr-only">{tr("chat.workspace")}</h1>
       {!compactSessions && <aside className="ws-sessions" aria-label={tr("chat.sessioni")}>{sessionList()}</aside>}
@@ -272,7 +309,8 @@ export function ChatView() {
         <ChatHeader
           session={active} agent={agent} profile={profile} running={conv.running} simple={simple}
           onOpenMenu={simple ? openMenu : undefined} sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
-          inspectorOpen={panel.open} onToggleInspector={panel.toggle} onOpenWorktree={panel.show} onOpenBrowser={browserButton}
+          inspectorOpen={inspectorVisible} onToggleInspector={toggleInspector} onOpenWorktree={panel.show} onOpenBrowser={browserButton}
+          browserLive={browser ? { open: browserShown, onToggle: toggleBrowser, status: shortStatus(browser), attention: browser.handover !== null && !browserShown, overlay: mode !== "inline" } : undefined}
         />
         {noSessions ? (
           <div className="ws-nosession">
@@ -334,9 +372,14 @@ export function ChatView() {
         <p className="sr-only" role="status" aria-live="polite">{announce}</p>
       </section>
 
-      {mode === "inline" && panel.open && <aside className="ws-inspector" aria-label={tr("chat.pannello_del_run")}>{inspector}</aside>}
-      {mode === "drawer" && panel.open && <Drawer title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Drawer>}
-      {mode === "sheet" && panel.open && <Sheet title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Sheet>}
+      {mode === "inline" && inspectorVisible && <aside className="ws-inspector" aria-label={tr("chat.pannello_del_run")}>{inspector}</aside>}
+      {browserShown && (
+        <Suspense fallback={mode === "inline" ? <aside className="ws-browser" aria-busy="true" /> : null}>
+          <BrowserPanel mode={mode} onClose={closeBrowser} />
+        </Suspense>
+      )}
+      {mode === "drawer" && panel.open && !browserShown && <Drawer title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Drawer>}
+      {mode === "sheet" && panel.open && !browserShown && <Sheet title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Sheet>}
       {compactSessions && showSessions && (
         <ModalShell variant="drawer" title={tr("chat.sessioni")} className="ws-drawer-left" onClose={() => setShowSessions(false)}>
           {sessionList(() => setShowSessions(false))}
@@ -350,6 +393,7 @@ export function ChatView() {
         </Drawer>
       )}
     </div>
+    </BrowserUiContext.Provider>
     </ChatActionsContext.Provider>
   );
 }

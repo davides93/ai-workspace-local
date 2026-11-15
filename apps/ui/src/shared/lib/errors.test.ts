@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../api/http";
-import { errorMessage, errorStatus, ignoreNotFound, isNotFound, isUnauthorized } from "./errors";
+import { errorMessage, errorStatus, ignoreNotFound, isForbidden, isNotFound, isUnauthorized } from "./errors";
 
 describe("errors", () => {
   it("reads the message and the HTTP status of whatever was thrown", () => {
@@ -16,6 +16,12 @@ describe("errors", () => {
     expect(isNotFound(new ApiError(400, "x"))).toBe(false);
     expect(isNotFound(new Error("404"))).toBe(false);
     expect(isUnauthorized(new ApiError(401, "x"))).toBe(true);
+  });
+  it("tells a 403 (this device may not) from the other refusals", () => {
+    expect(isForbidden(new ApiError(403, "x"))).toBe(true);
+    expect(isForbidden(new ApiError(401, "x"))).toBe(false);
+    expect(isForbidden(new ApiError(409, "x"))).toBe(false);
+    expect(isForbidden(new Error("403"))).toBe(false);
   });
   it("treats deleting something that is already gone as done, and rethrows anything else", async () => {
     await expect(ignoreNotFound(Promise.reject(new ApiError(404, "gone")))).resolves.toBeUndefined();

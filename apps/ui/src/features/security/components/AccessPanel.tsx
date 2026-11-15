@@ -3,6 +3,7 @@ import { useStoredUiMode } from "../../../shared/lib/uiMode";
 import type { ApiTokenCreated, ApiTokenInfo } from "../../../shared/api/types";
 import { Button, CopyField, CodeBlock, Dialog, Field, Input, Panel, Select } from "../../../shared/ui";
 import { useApiTokens, useCreateToken, useRevokeToken, useRotateToken } from "../api";
+import { SecretsPanel } from "./SecretsPanel";
 import { describeExpiry, describeLastUse, EXPIRY_CHOICES, exampleFor, tokenState } from "../model/tokens";
 
 import { t as tr, tNode as trNode } from "../../../shared/i18n";
@@ -65,6 +66,7 @@ export function AccessPanel() {
           )}
         </Panel>
       )}
+      <SecretsPanel />
       {confirm && (
         <Dialog
           title={confirm.action === "revoke" ? (confirm.token.kind === "device" ? tr("security.scollega_il_dispositivo") : tr("security.revoca_il_token")) : tr("security.ruota_il_token")} size="sm" onClose={() => setConfirm(null)}

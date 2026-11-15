@@ -6,6 +6,8 @@ pub mod adviser;
 pub mod attachments;
 pub mod background;
 pub mod backup;
+mod browser_live;
+pub use browser_live::{Frame as BrowserFrame, HumanInput as BrowserInput, LiveState as BrowserState};
 pub mod channels;
 mod dataset;
 pub mod defaults;
@@ -39,6 +41,7 @@ pub mod train_jobs;
 mod training_tool;
 pub mod tts;
 pub mod update;
+pub mod vault;
 pub mod voice;
 pub mod webhook;
 pub mod worktree;
@@ -85,6 +88,13 @@ pub struct EngineOptions {
     /// Mac App Store build (App Sandbox): no external programs are installed or launched, and the
     /// agents' folder is the one the shell passes (the `workspace.root` setting is ignored).
     pub sandboxed: bool,
+    /// Which keychain holds the key of the secrets at rest (see [`vault`]). The default is none: secrets stay as they are
+    /// and the state says so, which is what the tests and the short-lived background worker want. The app and the daemon
+    /// ask for [`vault::Keychain::System`].
+    pub keychain: vault::Keychain,
+    /// The vault is only read, never made, migrated or changed (see [`vault::start`]): for a one-shot command that may run while
+    /// the app or the daemon has the same data open. The app and the daemon leave it false.
+    pub secrets_read_only: bool,
 }
 
 /// One event on the global bus (Tauri forwards these as `aiw://run-event`).
@@ -194,11 +204,15 @@ pub(crate) struct Inner {
     pub elicitations: Mutex<HashMap<String, (McpElicitation, oneshot::Sender<aiw_tools::mcp::Elicited>)>>,
     /// Questions of `ask_user` waiting for the person, by id.
     pub questions: Mutex<HashMap<String, PendingQuestion>>,
+    /// The running sub-agents: sub-run id → the run that delegated to it (see [`Engine::root_run`]).
+    pub run_parents: Mutex<HashMap<String, String>>,
     /// Requests for a secret of `aiw_secret_request` waiting for the person, by id.
     pub secret_requests: Mutex<HashMap<String, PendingSecret>>,
     /// OAuth sign-ins in progress, by `state` (see `mcp_oauth`).
     pub oauth_pending: Mutex<HashMap<String, mcp_oauth::PendingAuth>>,
     pub store: Store,
+    /// The key of the secrets at rest and what it says about them (see [`vault`]).
+    pub vault: Arc<vault::Vault>,
     pub runs: Mutex<HashMap<String, RunHandle>>,
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
     pub session_allow: Mutex<HashMap<String, Arc<Mutex<HashSet<String>>>>>,
@@ -285,6 +299,9 @@ impl Engine {
         runtimes.set_sandboxed(opts.sandboxed);
         runtimes.set_pyenv_dir(dirs.root.join("pyenv")); // pip-installed runtimes (MLX…) live here
         let store = Store::open(&dirs.db_file())?;
+        // Before anything reads a secret: documents and settings are sealed and opened from here on, and what was stored plain
+        // is migrated (or, where there is no keychain, left as it is with the state declared). It never fails the start.
+        let vault = vault::start(&store, &config, &opts.keychain, !opts.secrets_read_only);
         mcp_host::migrate_mcp_approvals(&store);
         let overrides: Vec<Value> = store.list_docs("runtime_settings")?;
         runtimes.load_overrides(
@@ -361,9 +378,11 @@ impl Engine {
             mcp: Default::default(),
             elicitations: Default::default(),
             questions: Default::default(),
+            run_parents: Default::default(),
             secret_requests: Default::default(),
             oauth_pending: Default::default(),
             store,
+            vault,
             runs: Default::default(),
             approvals: Default::default(),
             session_allow: Default::default(),
@@ -396,9 +415,11 @@ impl Engine {
         engine.register_peer_pins();
         engine.sync_connectors();
         engine.sync_search();
+        engine.sync_browser();
         training_tool::register(&engine);
         engine.register_channel_tool();
         management::register(&engine);
+        browser_live::register(&engine);
         engine.seed()?;
         engine.resume_workflows();
         if !opts.offline {
@@ -433,6 +454,12 @@ impl Engine {
         for a in defaults::agents().into_iter().filter(|a| defaults::LATE_AGENTS.contains(&a.id.as_str())) {
             if s.get_doc::<AgentProfile>("agent", &a.id)?.is_none() {
                 s.put_doc("agent", &a.id, &a)?;
+            }
+        }
+        // The Navigatore stored before the live view gets its two new tools if nobody had edited its list.
+        if let Some(mut b) = s.get_doc::<AgentProfile>("agent", "browser")? {
+            if defaults::upgrade_browser_agent(&mut b) {
+                s.put_doc("agent", &b.id, &b)?;
             }
         }
         if s.get_doc::<InferenceProfile>("profile", "default")?.is_none() {
@@ -2067,6 +2094,19 @@ impl Engine {
 
     /// Who started a run that is still going, when the server started it for a person. `None` for
     /// every other run (and for one that has finished): see [`RunOrigin`].
+    /// The run a person started that this run belongs to: itself, or, for a sub-agent, the run that delegated to it (and so on up).
+    pub fn root_run(&self, run_id: &str) -> String {
+        let parents = self.0.run_parents.lock().unwrap();
+        let mut id = run_id;
+        for _ in 0..16 {
+            match parents.get(id) {
+                Some(p) => id = p,
+                None => break,
+            }
+        }
+        id.to_string()
+    }
+
     pub fn run_origin(&self, run_id: &str) -> Option<RunOrigin> {
         self.0.runs.lock().unwrap().get(run_id).filter(|h| !h.done).and_then(|h| h.origin)
     }
@@ -2499,6 +2539,9 @@ impl Engine {
         if key.starts_with("search.") {
             self.sync_search();
         }
+        if key.starts_with("browser.") {
+            self.sync_browser();
+        }
         if key == "workspace.root" {
             if let Some(p) = self.0.config.get_str("workspace.root") {
                 let root = aiw_core::paths::expand_home(&p);
@@ -2890,6 +2933,8 @@ mod tests_backup;
 mod tests_channels;
 #[cfg(test)]
 mod tests_eval;
+#[cfg(test)]
+mod tests_vault;
 // The folders of the person exist on macOS only; the tests use canonicalised temp dirs (verbatim paths on Windows).
 #[cfg(all(test, unix))]
 mod tests_folders;

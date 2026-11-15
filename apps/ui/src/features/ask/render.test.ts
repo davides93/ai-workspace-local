@@ -4,7 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { ApiProvider } from "../../shared/api/context";
 import { MockTransport } from "../../shared/api/mock";
-import type { Question, SecretRequest } from "../../shared/api/types";
+import type { Question, SecretRequest, SecretsAtRest } from "../../shared/api/types";
+import { qk } from "../../shared/query/keys";
 import type { QuestionItem, SecretItem } from "../chat/model/items";
 import { QuestionCard } from "./QuestionCard";
 import { SecretPrompt } from "./SecretPrompt";
@@ -93,7 +94,15 @@ const secretReq: SecretRequest = {
   id: "sec_1", run_id: "run_1", target: "provider_token:hf", label: "Token di Hugging Face", reason: "Serve per scaricare modelli riservati",
   destination: "Hugging Face (huggingface.co)",
 };
-const secret = (extra: Partial<SecretItem> = {}): string => render(createElement(SecretPrompt, { it: { kind: "secret", id: "sec_1", req: secretReq, ...extra } }));
+/** The card with what the app already knows about how secrets are kept on this computer (nothing yet, when `status` is absent). */
+const secret = (extra: Partial<SecretItem> = {}, status?: SecretsAtRest): string => {
+  const client = new QueryClient();
+  if (status) client.setQueryData(qk.secretsAtRest(), status);
+  const card = createElement(SecretPrompt, { it: { kind: "secret", id: "sec_1", req: secretReq, ...extra } });
+  return renderToStaticMarkup(createElement(QueryClientProvider, { client }, createElement(ApiProvider, { api: new MockTransport(), children: card })));
+};
+const keptEncrypted: SecretsAtRest = { state: "active", backend: "Portachiavi di macOS (Keychain)", encrypted: 3, plain: 0, unreadable: 0 };
+const keptPlain = (state: SecretsAtRest["state"]): SecretsAtRest => ({ state, detail: "nessun servizio dei segreti", encrypted: 0, plain: 3, unreadable: 0 });
 
 describe("SecretPrompt markup", () => {
   it("shows what is asked, why, and where the value will be written", () => {
@@ -103,10 +112,26 @@ describe("SecretPrompt markup", () => {
     expect(html).toContain("Sarà salvato in: Hugging Face (huggingface.co)");
   });
 
-  it("says plainly that the value is kept on this computer without encryption (the box must not suggest more than that)", () => {
-    const html = secret();
+  it("says how the value is kept on this computer only once it knows: it never claims more than that", () => {
+    const unknown = secret();
+    expect(unknown).toContain("l&#x27;assistente non lo vede mai");
+    expect(unknown).not.toContain("cifrat");
+    expect(unknown).not.toContain("senza cifratura");
+  });
+
+  it("says it is encrypted, with a key in the system keychain, when it is", () => {
+    const html = secret({}, keptEncrypted);
     expect(html).toContain("l&#x27;assistente non lo vede mai");
-    expect(html).toContain("Su questo computer è salvato senza cifratura.");
+    expect(html).toContain("Su questo computer è cifrato, con una chiave custodita nel portachiavi del sistema.");
+    expect(html).not.toContain("senza cifratura");
+  });
+
+  it("says plainly that it is kept without encryption when there is no keychain, or encryption is off", () => {
+    for (const state of ["unavailable", "not_used", "off", "key_lost"] as const) {
+      const html = secret({}, keptPlain(state));
+      expect(html).toContain("Su questo computer è salvato senza cifratura");
+      expect(html).not.toContain("è cifrato, con una chiave");
+    }
   });
 
   it("the field is protected: password, no autofill, no spellcheck, no capitalisation, empty", () => {
