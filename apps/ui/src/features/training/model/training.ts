@@ -1,5 +1,6 @@
 import { labelMap, t as tr } from "../../../shared/i18n";
 import type { AdapterInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest, TrainMethod, TrainerInfo } from "../../../shared/api/types";
+import { formatFixed } from "../../../shared/lib/format";
 
 /** Poll interval of jobs and log, used only while a job is going. */
 export const TRAIN_POLL_MS = 2_000;
@@ -62,7 +63,7 @@ export function methodBlocker(doctor: TrainDoctor | undefined, method: TrainMeth
 
 /** `0.84` → "0,84"; text and other values are shown as they are. */
 export function metricText(v: unknown): string {
-  return typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toFixed(2).replace(".", ",")) : String(v);
+  return typeof v === "number" ? (Number.isInteger(v) ? String(v) : formatFixed(v, 2)) : String(v);
 }
 
 const METRIC_LABEL: Record<string, string> = labelMap({ train_loss: "training.metric_train_loss", val_loss: "training.metric_val_loss", steps: "training.metric_steps", duration_s: "training.metric_seconds" });

@@ -95,7 +95,7 @@ async function visit(page, routePath, size, theme, lang, problems, errors, simpl
       docOverflow: document.documentElement.scrollWidth - window.innerWidth,
       pageOverflow: over(page),
       lang: document.documentElement.lang,
-      crashed: /Questa pagina non si è caricata|This page did not load/.test(document.body.innerText),
+      crashed: /Questa pagina non si è caricata|This page didn['’]t load/.test(document.body.innerText),
       empty: !document.querySelector(".page, .ws, .th, .kb, .chat, .boot"),
     };
   });
