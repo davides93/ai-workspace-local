@@ -2,7 +2,7 @@ import { t } from "../i18n";
 import { isUiMode } from "../lib/uiMode";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, SecretsAtRest, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -319,6 +319,8 @@ export interface Transport {
   revokeApiToken(id: string): Promise<void>;
   rotateApiToken(id: string): Promise<ApiTokenCreated>;
   tlsStatus(): Promise<TlsStatus>;
+  /** Whether the secrets are encrypted on disk, with counts (full access only). */
+  secretsAtRest(): Promise<SecretsAtRest>;
   /** The authority certificate (self-signed TLS), to install in a browser on another device. */
   tlsCa(): Promise<{ pem: string }>;
 

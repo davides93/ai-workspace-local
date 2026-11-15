@@ -670,3 +670,106 @@ mod backup_with_sealed_secrets {
         assert!(!bytes.is_empty());
     }
 }
+
+// ---------------------------------------------------------------------------------------------------- the real keychain
+
+/// These talk to the keychain of the machine they run on (macOS Keychain, Windows Credential Manager, the Secret Service of a
+/// Linux session), with a service name of their own that is never the app's, and remove what they made. They are `#[ignore]`
+/// because a headless runner has none: run them on purpose with
+/// `cargo test -p aiw-engine --lib vault::tests::real_keychain -- --ignored --test-threads=1`.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod real_keychain {
+    use super::*;
+    use crate::vault::keystore::OsKeyStore;
+
+    const SERVICE: &str = "AIW prova automatica - chiave dei segreti (si può cancellare)";
+
+    /// Removes the item a test made, even when an assertion fails.
+    struct Cleanup(Arc<OsKeyStore>, String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = self.0.remove(&self.1);
+        }
+    }
+
+    #[test]
+    #[ignore = "uses the real system keychain of this machine"]
+    fn the_system_keychain_stores_reads_and_removes_an_item() {
+        let ks = Arc::new(OsKeyStore::with_service(SERVICE));
+        println!("keychain: {}", ks.backend());
+        let account = format!("test-{}", super::super::hex(&envelope::random_bytes(8).unwrap()));
+        let _cleanup = Cleanup(ks.clone(), account.clone());
+        assert_eq!(ks.read(&account), KeyRead::Missing, "an item that was never written is missing, not an error");
+        let key = envelope::random_bytes(envelope::KEY_LEN).unwrap();
+        ks.write(&account, &key).unwrap();
+        assert_eq!(ks.read(&account), KeyRead::Found(key.clone()));
+        let other = envelope::random_bytes(envelope::KEY_LEN).unwrap();
+        ks.write(&account, &other).unwrap();
+        assert_eq!(ks.read(&account), KeyRead::Found(other), "writing again replaces the item");
+        ks.remove(&account).unwrap();
+        assert_eq!(ks.read(&account), KeyRead::Missing);
+        ks.remove(&account).unwrap(); // removing what is not there is not an error
+    }
+
+    /// The other half of "Linux with and without a Secret Service": in a session that has none (a bare container, an SSH login,
+    /// a headless server) the keychain is reported as unavailable, the secrets stay plain and everything keeps working.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs a Linux session WITHOUT a Secret Service on the session bus (a bare container)"]
+    fn without_a_secret_service_the_state_is_declared_and_nothing_fails() {
+        let ks = Arc::new(OsKeyStore::with_service(SERVICE));
+        match ks.read("account") {
+            KeyRead::Inaccessible(why) => println!("declared: {why}"),
+            other => panic!("expected an unreachable keychain, got {other:?}"),
+        }
+        assert!(ks.write("account", &[1; 32]).is_err());
+        let home = Home::new();
+        let (store, config) = home.open();
+        let vault = start(&store, &config, &Keychain::Custom(ks));
+        let Phase::Unavailable(why) = vault.phase() else { panic!("{:?}", vault.phase()) };
+        assert!(!why.is_empty());
+        write_secrets(&store, &config);
+        read_back(&store, &config);
+        let st = vault.status(&store, &config);
+        assert_eq!((st.state.as_str(), st.encrypted, st.plain), ("unavailable", 0, N), "{st:?}");
+        drop(store);
+        assert_plain_on_disk(&home, HF);
+    }
+
+    #[test]
+    #[ignore = "uses the real system keychain of this machine"]
+    fn the_whole_life_of_the_vault_on_the_system_keychain() {
+        let home = Home::new();
+        let ks = Arc::new(OsKeyStore::with_service(SERVICE));
+        let (store, config) = home.open();
+        let vault = start(&store, &config, &Keychain::Custom(ks.clone()));
+        let account = store.get_doc::<VaultRow>(VAULT_KIND, VAULT_ID).unwrap().map(|r| r.account);
+        let _cleanup = account.clone().map(|a| Cleanup(ks.clone(), a));
+        assert_eq!(vault.phase(), Phase::Active, "the real keychain was not usable here: {:?}", vault.phase());
+        write_secrets(&store, &config);
+        read_back(&store, &config);
+        drop(store);
+        assert_no_plain_on_disk(&home);
+
+        // A new process (a restart) finds the same key in the same keychain.
+        let (store, config) = home.open();
+        let vault = start(&store, &config, &Keychain::Custom(Arc::new(OsKeyStore::with_service(SERVICE))));
+        assert_eq!(vault.phase(), Phase::Active);
+        read_back(&store, &config);
+
+        // The person deletes the item in the keychain app: the state says so, nothing is touched or remade.
+        ks.remove(account.as_deref().unwrap()).unwrap();
+        let (store2, config2) = Home::open_again(&home);
+        let vault2 = start(&store2, &config2, &Keychain::Custom(Arc::new(OsKeyStore::with_service(SERVICE))));
+        assert_eq!(vault2.phase(), Phase::KeyLost);
+        assert_eq!(ks.read(account.as_deref().unwrap()), KeyRead::Missing, "no new key over a vault that has sealed values");
+        drop((store, config));
+    }
+}
+
+impl Home {
+    /// A second pair of handles on the same folder, as another process would have.
+    fn open_again(home: &Home) -> (Store, LayeredConfig) {
+        home.open()
+    }
+}

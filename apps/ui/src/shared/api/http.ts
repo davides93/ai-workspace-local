@@ -1,7 +1,7 @@
 import { safeStorage, serverOrigin, storeToken } from "./tokens";
 import type { Transport, TransportCapabilities } from "./transport";
 import type {
-  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, SecretsAtRest, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, FoldersInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -160,6 +160,7 @@ export class HttpTransport implements Transport {
   revokeApiToken = (id: string) => this.req<void>("DELETE", `/tokens/${enc(id)}`);
   rotateApiToken = (id: string) => this.req<ApiTokenCreated>("POST", `/tokens/${enc(id)}/rotate`, {});
   tlsStatus = () => this.req<TlsStatus>("GET", "/tls");
+  secretsAtRest = () => this.req<SecretsAtRest>("GET", "/security/secrets");
   tlsCa = () => this.req<{ pem: string }>("GET", "/tls/ca");
 
   voice = () => this.req<VoiceStatus>("GET", "/voice");

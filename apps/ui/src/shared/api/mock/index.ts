@@ -9,7 +9,7 @@ import { mockSpeak, mockTtsStatus } from "./voice";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest,
-  ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
+  ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, SecretsAtRest, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, SessionImage, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
   ChannelCreate, ChannelPatch, FoldersAdded, FoldersInfo, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
 } from "../types";
@@ -1666,6 +1666,9 @@ export class MockTransport implements Transport {
       fingerprint: on ? "3A:9F:C2:11:7B:E4:05:6D:88:AA:10:F3:42:9C:7E:21:B0:5D:E9:34:6A:C7:18:FF:0D:92:41:B6:73:2E:AD:60" : undefined,
       fingerprint_of: on ? "ca" : undefined, expires_at: on ? "2027-06-20T00:00:00Z" : undefined, ca_available: this.tlsMode === "self_signed", warning: !on,
     };
+  }
+  async secretsAtRest(): Promise<SecretsAtRest> {
+    return { state: "active", backend: "Portachiavi di macOS (Keychain)", encrypted: 6, plain: 0, unreadable: 0 };
   }
   async tlsCa(): Promise<{ pem: string }> {
     return { pem: "-----BEGIN CERTIFICATE-----\n(demo)\n-----END CERTIFICATE-----\n" };
