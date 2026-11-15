@@ -2893,6 +2893,10 @@ pub struct EmailDraftPatch {
     /// Hashes (`sha256`) of the attachments to remove.
     #[serde(default)]
     pub remove_attachments: Vec<String>,
+    /// The revision the editor was showing: a draft that changed since (the assistant revised it) is refused with a 409
+    /// instead of being overwritten.
+    #[serde(default)]
+    pub expected_revision: Option<u32>,
 }
 
 /// Body of `POST /api/email-drafts/{id}/send`: the owner's approval of the content they saw.

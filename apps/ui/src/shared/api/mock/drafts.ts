@@ -30,6 +30,11 @@ export function digest(text: string): string {
   return out;
 }
 
+/** Characters that print as nothing or turn the text around (same set as the engine): they never get into a draft. */
+// eslint-disable-next-line no-misleading-character-class
+const INVISIBLE = /[\u00AD\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+const visible = (s: string) => s.replace(INVISIBLE, "");
+
 const store: EmailDraft[] = [];
 /** Messages the demo pretends to have sent (the tests read it: a refused draft must never be here). */
 export const outbox: { id: string; to: string[]; subject: string }[] = [];
@@ -61,7 +66,7 @@ function find(id: string): EmailDraft {
 function addresses(list: string[] | undefined, what: string): string[] {
   const out: string[] = [];
   for (const raw of list ?? []) {
-    const a = raw.trim();
+    const a = visible(raw).trim();
     if (!a) continue;
     if (!/^[^@\s<>",;]+@[^@\s<>",;]+$/.test(a)) throw new ApiError(400, `«${a.slice(0, 60)}» non è un indirizzo email valido (${what})`);
     if (!out.some((x) => x.toLowerCase() === a.toLowerCase())) out.push(a);
@@ -82,7 +87,7 @@ function attach(paths: string[], files: DraftAttachment[]): void {
     const p = raw.trim();
     if (!p) continue;
     if (p.startsWith("/") || p.startsWith("~") || p.split("/").includes("..") || /^[a-z]:/i.test(p)) throw new ApiError(403, `${p} è fuori dal workspace`);
-    const name = p.split("/").pop() ?? p;
+    const name = visible(p.split("/").pop() ?? p) || "allegato";
     const sha = digest(`file:${p}`);
     if (files.some((f) => f.sha256 === sha)) continue;
     if (files.length >= MAX_ATTACHMENTS) throw new ApiError(400, `al massimo ${MAX_ATTACHMENTS} allegati`);
@@ -93,10 +98,10 @@ function attach(paths: string[], files: DraftAttachment[]): void {
 }
 
 function text(subject: string, body: string): [string, string] {
-  const s = subject.split(/\s+/).filter(Boolean).join(" ");
+  const s = visible(subject).split(/\s+/).filter(Boolean).join(" ");
   if (s.length > 300) throw new ApiError(400, "l'oggetto è troppo lungo (al massimo 300 caratteri)");
   if (body.length > 100_000) throw new ApiError(400, "il testo è troppo lungo (al massimo 100000 caratteri)");
-  return [s, body.replace(/\r\n/g, "\n")];
+  return [s, visible(body).replace(/\r\n/g, "\n")];
 }
 
 export function listDrafts(status?: DraftStatus): EmailDraft[] {
@@ -126,6 +131,9 @@ export function createDraft(c: EmailDraftCreate, by: "user" | "assistant" = "use
 export function updateDraft(id: string, p: EmailDraftPatch): EmailDraft {
   const d = find(id);
   if (d.status !== "draft" && d.status !== "failed") throw new ApiError(409, `la bozza è «${label[d.status]}»: non si può più modificare`);
+  if (p.expected_revision !== undefined && p.expected_revision !== d.revision) {
+    throw new ApiError(409, `la bozza è cambiata mentre la modificavi (revisione ${d.revision} invece di ${p.expected_revision}): riguardala prima di salvare`);
+  }
   if (p.channel_id) d.channel_id = emailChannel(p.channel_id).id;
   if (p.to) d.to = addresses(p.to, "a");
   if (p.cc) d.cc = addresses(p.cc, "cc");

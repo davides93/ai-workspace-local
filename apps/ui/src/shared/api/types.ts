@@ -2000,6 +2000,8 @@ export interface EmailDraftPatch {
   add_attachments?: string[];
   /** `sha256` of the attachments to remove. */
   remove_attachments?: string[];
+  /** The revision the editor was showing: a draft that changed since (the assistant revised it) is a 409, not overwritten. */
+  expected_revision?: number;
 }
 
 export interface EmailDraftSend {

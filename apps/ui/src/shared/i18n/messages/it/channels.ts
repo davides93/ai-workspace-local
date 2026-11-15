@@ -181,7 +181,7 @@ export const channelsIt = {
   "channels.bozza_inviata_il": "Inviata il {date}",
   "channels.bozza_canale": "Invia da",
   "channels.bozza_allegato_percorso": "Aggiungi un allegato dal workspace",
-  "channels.bozza_allegato_hint": "Percorso di un file nel workspace, per esempio docs/preventivo.pdf. Il file viene copiato adesso: se cambia dopo, la bozza resta com'era. Fuori dal workspace non si allega.",
+  "channels.bozza_allegato_hint": "Percorso di un file nel workspace (o in una cartella consentita), per esempio docs/preventivo.pdf. Il file viene copiato adesso: se cambia dopo, la bozza resta com'era. Valgono le regole degli strumenti di file: i dati dell'app e le credenziali non si allegano.",
   "channels.bozza_aggiungi": "Aggiungi",
   "channels.bozza_rimuovi_allegato": "Rimuovi l'allegato {name}",
   "channels.bozza_salva": "Salva le modifiche",
@@ -193,4 +193,8 @@ export const channelsIt = {
   "channels.bozza_rifiutata_msg": "Bozza rifiutata: non parte",
   "channels.bozza_annullata_msg": "Bozza annullata: non parte",
   "channels.bozza_a_hint": "Indirizzi email: scrivi e premi Invio.",
+  "channels.bozza_cambiata": "La bozza è cambiata mentre decidevi: riguardala e approva di nuovo il contenuto che vedi ora.",
+  "channels.bozza_elimina_titolo": "Elimino la bozza dall'elenco?",
+  "channels.bozza_elimina_testo": "Sparisce dall'elenco con i suoi allegati. Il registro delle attività resta.",
+  "channels.bozza_si_elimina": "Sì, elimina",
 } as const;

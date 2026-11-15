@@ -158,18 +158,24 @@ enum Answer {
 struct TurnGuard<'a> {
     engine: &'a Engine,
     session_id: String,
+    token: String,
 }
 
 impl<'a> TurnGuard<'a> {
     fn set(engine: &'a Engine, session_id: &str, origin: TurnOrigin) -> Self {
+        let token = origin.token.clone();
         engine.0.channels.turns.lock().unwrap().insert(session_id.to_string(), origin);
-        Self { engine, session_id: session_id.to_string() }
+        Self { engine, session_id: session_id.to_string(), token }
     }
 }
 
 impl Drop for TurnGuard<'_> {
+    /// Takes away its own record only: a later turn of the same session has set its own.
     fn drop(&mut self) {
-        self.engine.0.channels.turns.lock().unwrap().remove(&self.session_id);
+        let mut turns = self.engine.0.channels.turns.lock().unwrap();
+        if turns.get(&self.session_id).is_some_and(|o| o.token == self.token) {
+            turns.remove(&self.session_id);
+        }
     }
 }
 
@@ -182,6 +188,8 @@ pub(crate) struct TurnOrigin {
     pub(crate) conv: String,
     /// The account that wrote (the first of the ids the connector gave), as written on the channel's list.
     pub(crate) sender: String,
+    /// Tells this turn from the next one of the same session, so that each takes away only its own record.
+    pub(crate) token: String,
 }
 
 pub(crate) struct Pair {
@@ -1105,7 +1113,7 @@ impl Engine {
                 let name = self.channel_doc(&o.channel_id).map(|c| format!("«{}»", c.name)).unwrap_or_else(|_| "un altro canale".into());
                 Answer::Elsewhere(format!("su {name}"))
             }
-            Some(_) => Answer::Elsewhere("in un'altra conversazione di questo canale".into()),
+            Some(_) => Answer::Elsewhere("per un altro account o in un'altra conversazione di questo canale".into()),
             None => Answer::Elsewhere("nell'app".into()),
         }
     }
@@ -1118,11 +1126,14 @@ impl Engine {
             return String::new();
         }
         // Only a confirmation of the run this channel's account started can be answered from here.
-        let session = self.0.approvals.lock().unwrap().get(approval_id).and_then(|p| p.session_id.clone());
-        let origin = session.and_then(|s| self.0.channels.turns.lock().unwrap().get(&s).cloned());
-        let mine = origin.is_some_and(|o| o.channel_id == channel_id && Self::is_turn_sender(&ch.kind, &o, senders));
-        if !mine {
+        let Some(session) = self.0.approvals.lock().unwrap().get(approval_id).map(|p| p.session_id.clone()) else {
             return "Questa richiesta non c'è più.".into();
+        };
+        let origin = session.and_then(|s| self.0.channels.turns.lock().unwrap().get(&s).cloned());
+        match origin {
+            Some(o) if o.channel_id == channel_id && Self::is_turn_sender(&ch.kind, &o, senders) => {}
+            Some(_) => return "Questa richiesta è stata fatta altrove: rispondi dove è stata chiesta, oppure nell'app.".into(),
+            None => return "Questa richiesta è nell'app: decidila lì.".into(),
         }
         match self.respond_approval(approval_id, allow, false) {
             Ok(()) => {
@@ -1176,8 +1187,17 @@ impl Engine {
     }
 
     /// One message: a run in the session of the conversation, and the answer back to the channel it came from.
-    async fn channel_turn(&self, channel_id: &str, tr: &Arc<dyn Transport>, msg: Inbound, context_id: Option<String>) {
+    async fn channel_turn(&self, channel_id: &str, tr: &Arc<dyn Transport>, mut msg: Inbound, context_id: Option<String>) {
         let Ok(ch) = self.channel_doc(channel_id) else { return };
+        // The message may have waited in the queue: a channel turned off, or a sender taken off its list, meanwhile is not served.
+        if !ch.enabled || !self.channel_is_allowed(channel_id, &msg.senders) {
+            self.channel_audit(
+                &ch,
+                "channel.skipped",
+                "messaggio in coda non trattato: il canale è spento o il mittente non è più nella lista".into(),
+            );
+            return;
+        }
         let target = Target { conv: msg.conv.clone(), reply: msg.reply.clone() };
         // The context may have changed while the message waited: it is looked up again, and a message whose account
         // left it goes to its own conversation.
@@ -1189,7 +1209,7 @@ impl Engine {
         // Attachments: the ones that pass the app's own limits go through the same pipeline; the others get a short refusal.
         let mut uploads = Vec::new();
         let mut refused = Vec::new();
-        for f in msg.files {
+        for f in std::mem::take(&mut msg.files) {
             match attachments::prepare(vec![f.clone()]) {
                 Ok(_) => uploads.push(f),
                 Err(e) => refused.push(format!("«{}»: {e}", text::excerpt(&f.name, 40))),
@@ -1208,14 +1228,26 @@ impl Engine {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        if self.active_run(&session_id).is_some() {
+            return self
+                .channel_reply(&ch, tr, &target, "In questa conversazione c'è un lavoro in corso nell'app: riscrivimi quando finisce.")
+                .await;
+        }
+        // The restrictions are the ones of this moment, not of before the wait: a channel made read-only meanwhile counts.
+        let context = context.and_then(|c| self.context_for_message(&ch, &msg).filter(|n| n.id == c.id));
+        let session_id = match self.channel_session(&ch, &msg, context.as_ref()) {
+            Ok(s) => s,
+            Err(e) => return self.channel_reply(&ch, tr, &target, &format!("Non riesco ad aprire la conversazione: {e}")).await,
+        };
         // From here to the end of the run, the confirmations it opens belong to this account of this conversation.
-        let _origin = TurnGuard::set(
+        let origin = TurnGuard::set(
             self,
             &session_id,
             TurnOrigin {
                 channel_id: ch.id.clone(),
                 conv: msg.conv.clone(),
                 sender: msg.senders.first().map(|s| norm(&ch.kind, s)).unwrap_or_default(),
+                token: new_id("trn"),
             },
         );
         let run_id = match self.start_run_attach(&session_id, msg.text.clone(), None, None, uploads).await {
@@ -1249,6 +1281,8 @@ impl Engine {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        // The run is over: from here on a run started elsewhere in this session is not this channel's.
+        drop(origin);
         if self.0.channels.killed.load(Ordering::SeqCst) {
             return;
         }

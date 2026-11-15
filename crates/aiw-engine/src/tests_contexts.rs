@@ -298,9 +298,18 @@ async fn messages_of_two_channels_wait_their_turn_and_a_yes_from_the_other_chann
     // A mail arrives while the run waits for the answer: it waits in line, nobody gets an error.
     r.mail_say(2, "<m1@example.it>", "Che ore sono?");
     // «sì» from the mail is not an answer to a question that was asked on Telegram.
-    r.mail_say(3, "<m2@example.it>", "sì");
+    // A real mail client answers with its own quote under the word: «Il giorno … ha scritto:».
+    r.mail_say(
+        3,
+        "<m2@example.it>",
+        "sì\n\nIl giorno dom 15 nov 2026 alle ore 10:00 Assistente <assistente@casa.example> ha scritto:\n> Mi serve il tuo permesso",
+    );
     until("the notice in the mail", || r.mail_bodies().iter().any(|b| b.contains("in attesa su «Il mio bot»"))).await;
     assert_eq!(r.e.approvals().len(), 1, "still waiting");
+    // The buttons follow the same rule: a tap from the other channel is told where to answer, and decides nothing.
+    let pending = r.e.approvals()[0].id.clone();
+    assert!(r.e.channel_callback(&r.email, &["mario@example.it".to_string()], &pending, true).contains("fatta altrove"));
+    assert_eq!(r.e.approvals().len(), 1);
     assert!(!r.ws.path().join("nota.md").exists(), "nothing was written");
     assert_eq!(r.requests(), 1, "the mail message waits behind the running turn");
     let keys = r.e.channel_queue_keys();
@@ -334,6 +343,8 @@ async fn a_confirmation_of_a_run_started_in_the_app_is_not_answered_from_a_chann
     until("the confirmation", || r.e.approvals().len() == 1).await;
     r.tg_say(1, "sì");
     until("told where to answer", || r.tg_texts().iter().any(|t| t.contains("nell'app"))).await;
+    let id = r.e.approvals()[0].id.clone();
+    assert!(r.e.channel_callback(&r.telegram, &["111".to_string()], &id, true).contains("è nell'app"));
     assert_eq!(r.e.approvals().len(), 1, "a channel did not approve it");
     assert!(!r.ws.path().join("app.md").exists());
     // The owner does, from the app.

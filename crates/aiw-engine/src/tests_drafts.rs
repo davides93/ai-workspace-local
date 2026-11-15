@@ -271,6 +271,13 @@ async fn a_failure_is_told_apart_from_a_message_that_may_have_gone_and_is_never_
     assert_eq!(r.mails().len(), 2, "the fake server did take it");
     *r.smtp.fault.lock().unwrap() = SmtpFault::None;
     // It is not sent again by itself, and not by an ordinary «send»: only when the owner says so.
+    // A repeat that the server refuses cleanly does not make the first attempt «not sent»: it stays unknown.
+    *r.smtp.fault.lock().unwrap() = SmtpFault::RejectRecipient("luca@cliente.it".into());
+    let e = r.e.email_draft_send(&u.id, EmailDraftSend { approved_hash: u.content_hash.clone(), resend: true }).await.unwrap_err();
+    assert!(e.to_string().contains("primo tentativo potrebbe essere arrivato"), "{e}");
+    assert_eq!(r.e.email_draft(&u.id).unwrap().status, "uncertain");
+    assert_eq!(r.mails().len(), 2);
+    *r.smtp.fault.lock().unwrap() = SmtpFault::None;
     let e = r.e.email_draft_send(&u.id, send_req(&u)).await.unwrap_err();
     assert!(matches!(e, Error::Conflict(_)) && e.to_string().contains("non so se il messaggio è partito"), "{e}");
     assert_eq!(r.mails().len(), 2);
@@ -518,4 +525,113 @@ async fn a_proactive_suggestion_becomes_a_draft_only_through_the_owner_twice() {
     let sent = r.e.email_draft_send(&drafts[0].id, send_req(&drafts[0])).await.unwrap();
     assert_eq!(sent.status, "sent");
     assert_eq!(r.mails().len(), 1);
+}
+
+#[tokio::test]
+async fn invisible_and_direction_characters_never_get_into_a_draft() {
+    let r = rig(vec![]).await;
+    // Zero-width and «tag» characters can carry text the owner cannot read on the card; a right-to-left override makes a file
+    // name read as another one.
+    let tag = |s: &str| s.chars().map(|c| char::from_u32(0xE0000 + c as u32).unwrap()).collect::<String>();
+    r.write("rapporto\u{202E}fdp.exe", b"x");
+    let d =
+        r.e.email_draft_create(EmailDraftCreate {
+            subject: format!("Ci\u{200B}ao\u{202E} {}", tag("segreto")),
+            body: format!("Testo{}\u{FEFF} visibile\u{2066}", tag("password=hunter2")),
+            attachments: vec!["rapporto\u{202E}fdp.exe".into()],
+            ..draft("anna\u{200B}@cliente.it", "", "")
+        })
+        .unwrap();
+    assert_eq!((d.subject.as_str(), d.body.as_str()), ("Ciao", "Testo visibile"));
+    assert_eq!(d.to, vec!["anna@cliente.it"]);
+    assert_eq!(d.attachments[0].name, "rapportofdp.exe");
+    let edited = r.e.email_draft_patch(&d.id, EmailDraftPatch { body: Some(format!("a{}b", tag("x"))), ..Default::default() }).unwrap();
+    assert_eq!(edited.body, "ab");
+}
+
+#[tokio::test]
+async fn an_edit_made_on_a_draft_that_changed_meanwhile_is_refused_instead_of_overwriting_it() {
+    let r = rig(vec![]).await;
+    let d = r.e.email_draft_create(draft("anna@cliente.it", "Ciao", "Testo uno")).unwrap();
+    // The assistant revises it while the owner has the editor open on revision 1.
+    let tool = r.e.tool_registry().get("email_draft").unwrap();
+    let ctx = aiw_tools::ToolContext::new("run_x", r.ws.path().to_path_buf());
+    // (a draft the owner wrote cannot be revised by the assistant: make it the assistant's)
+    let a = tool.call(json!({"to": ["anna@cliente.it"], "subject": "Altro", "body": "Primo"}), &ctx).await.unwrap();
+    assert!(a.content.contains("creata"));
+    let theirs = r.e.email_drafts(None).unwrap().into_iter().find(|x| x.created_by == "assistant").unwrap();
+    tool.call(json!({"draft_id": theirs.id, "body": "Rivisto dall'assistente"}), &ctx).await.unwrap();
+    let e =
+        r.e.email_draft_patch(
+            &theirs.id,
+            EmailDraftPatch { body: Some("Il mio testo".into()), expected_revision: Some(theirs.revision), ..Default::default() },
+        )
+        .unwrap_err();
+    assert!(matches!(e, Error::Conflict(_)) && e.to_string().contains("è cambiata mentre la modificavi"), "{e}");
+    assert_eq!(r.e.email_draft(&theirs.id).unwrap().body, "Rivisto dall'assistente", "nothing was overwritten");
+    // With the revision they are looking at, the edit goes through.
+    let now = r.e.email_draft(&theirs.id).unwrap();
+    let ok =
+        r.e.email_draft_patch(
+            &theirs.id,
+            EmailDraftPatch { body: Some("Il mio testo".into()), expected_revision: Some(now.revision), ..Default::default() },
+        )
+        .unwrap();
+    assert_eq!((ok.body.as_str(), ok.revision), ("Il mio testo", now.revision + 1));
+    let _ = d;
+}
+
+#[tokio::test]
+async fn a_draft_whose_attachment_bytes_no_longer_match_what_was_approved_is_not_sent() {
+    let r = rig(vec![]).await;
+    r.write("a.txt", b"originale");
+    let d =
+        r.e.email_draft_create(EmailDraftCreate { attachments: vec!["a.txt".into()], ..draft("anna@cliente.it", "Allegato", "Testo") })
+            .unwrap();
+    // The stored copy is damaged (or swapped) after the review.
+    let mut files: Vec<serde_json::Value> = r.e.0.store.get_doc("email_draft_files", &d.id).unwrap().unwrap();
+    {
+        use base64::Engine as _;
+        files[0]["data"] = json!(base64::engine::general_purpose::STANDARD.encode(b"altro contenuto"));
+    }
+    r.e.0.store.put_doc("email_draft_files", &d.id, &files).unwrap();
+    let e = r.e.email_draft_send(&d.id, send_req(&d)).await.unwrap_err();
+    assert!(matches!(e, Error::Conflict(_)) && e.to_string().contains("non corrispondono"), "{e}");
+    assert_eq!(r.e.email_draft(&d.id).unwrap().status, "draft", "refused before anything was claimed");
+    assert!(r.mails().is_empty());
+    // A corrupt copy is refused too, never sent as an empty file.
+    files[0]["data"] = json!("!!non-base64!!");
+    r.e.0.store.put_doc("email_draft_files", &d.id, &files).unwrap();
+    assert!(r.e.email_draft_send(&d.id, send_req(&d)).await.is_err());
+    assert!(r.mails().is_empty());
+}
+
+#[tokio::test]
+async fn a_policy_rule_on_the_recipient_sees_every_recipient() {
+    let r = rig(vec![]).await;
+    let tool = r.e.tool_registry().get("email_draft").unwrap();
+    let subject = tool.subject(&json!({"to": ["a@x.it"], "cc": ["b@y.it"], "bcc": ["c@z.it"]}));
+    assert_eq!(subject.as_deref(), Some("a@x.it, b@y.it, c@z.it"));
+    assert_eq!(tool.subject(&json!({"to": "solo@x.it"})).as_deref(), Some("solo@x.it"));
+    assert_eq!(tool.subject(&json!({})), None);
+}
+
+#[tokio::test]
+async fn a_message_with_a_long_subject_and_many_recipients_goes_out_as_plain_ascii_with_short_lines() {
+    let r = rig(vec![]).await;
+    r.write("è.txt", b"allegato");
+    let d =
+        r.e.email_draft_create(EmailDraftCreate {
+            to: (0..12).map(|i| format!("destinatario.numero.{i}@un-dominio-molto-lungo.example.org")).collect(),
+            subject: "Perché è così? ".repeat(20),
+            body: "Testo con è e ü".into(),
+            attachments: vec!["è.txt".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    r.e.email_draft_send(&d.id, send_req(&d)).await.unwrap();
+    let data = r.mails()[0].2.clone();
+    assert!(data.is_ascii(), "nothing 8-bit goes to a server that did not offer 8BITMIME");
+    assert!(data.split("\r\n").all(|l| l.len() <= 78), "{:?}", data.split("\r\n").find(|l| l.len() > 78));
+    assert_eq!(r.mails()[0].1.len(), 12);
 }

@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { errorMessage } from "../../../shared/lib/errors";
 import { toast } from "../../../shared/lib/toast";
 import { formatBytes } from "../../../shared/lib/format";
@@ -28,7 +28,13 @@ export function DraftEditor({ draft, channels, onDone }: { draft?: EmailDraft; c
   const [added, setAdded] = useState<string[]>([]);
   const [path, setPath] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The revision the editor opened on: a save over a draft that changed since (the assistant revised it) is refused, not merged.
+  const [openedOn] = useState(draft?.revision);
+  const form = useRef<HTMLFormElement>(null);
   const uid = useId();
+  useEffect(() => {
+    form.current?.querySelector<HTMLElement>("input, textarea, select")?.focus();
+  }, []);
   const kept = (draft?.attachments ?? []).filter((a) => !removed.includes(a.sha256));
   const busy = create.isPending || update.isPending;
 
@@ -56,12 +62,13 @@ export function DraftEditor({ draft, channels, onDone }: { draft?: EmailDraft; c
         body: body !== draft.body ? body : undefined,
         add_attachments: added,
         remove_attachments: removed,
+        expected_revision: openedOn,
       },
     }, { onSuccess: done, onError });
   };
 
   return (
-    <form className="draft-edit" onSubmit={(e) => { e.preventDefault(); save(); }} aria-label={draft ? t("channels.bozza_modifica") : t("channels.bozza_nuova")}>
+    <form className="draft-edit" ref={form} onSubmit={(e) => { e.preventDefault(); save(); }} aria-label={draft ? t("channels.bozza_modifica") : t("channels.bozza_nuova")}>
       {channels.length > 1 && (
         <Field label={t("channels.bozza_canale")} htmlFor={`${uid}-ch`}>
           <Select id={`${uid}-ch`} value={channelId} onChange={(e) => setChannelId(e.target.value)}>

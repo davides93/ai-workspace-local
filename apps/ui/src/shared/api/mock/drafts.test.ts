@@ -87,4 +87,16 @@ describe("email drafts in the demo", () => {
     expect((await t.sendEmailDraft(u.id, { approved_hash: u.content_hash, resend: true })).status).toBe("sent");
     expect(outbox).toHaveLength(1);
   });
+
+  it("keeps invisible and direction characters out, and refuses a save over a draft that changed meanwhile", async () => {
+    const t = new MockTransport();
+    await withChannel(t);
+    const tag = (x: string) => [...x].map((c) => String.fromCodePoint(0xe0000 + c.charCodeAt(0))).join("");
+    const d = await t.createEmailDraft({ to: ["anna\u200b@cliente.it"], subject: `Ci\u202eao ${tag("segreto")}`, body: `Testo${tag("x")}\ufeff visibile`, attachments: ["docs/a\u202eb.pdf"] });
+    expect([d.to[0], d.subject, d.body, d.attachments[0].name]).toEqual(["anna@cliente.it", "Ciao", "Testo visibile", "ab.pdf"]);
+    const next = await t.updateEmailDraft(d.id, { body: "Altro", expected_revision: d.revision });
+    await expect(t.updateEmailDraft(d.id, { body: "Mio", expected_revision: d.revision })).rejects.toMatchObject({ status: 409 });
+    expect((await t.emailDrafts()).find((x) => x.id === d.id)?.body).toBe("Altro");
+    expect((await t.updateEmailDraft(d.id, { body: "Mio", expected_revision: next.revision })).revision).toBe(next.revision + 1);
+  });
 });

@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { errorMessage } from "../../../shared/lib/errors";
 import { formatBytes, formatDateTime } from "../../../shared/lib/format";
 import { toast } from "../../../shared/lib/toast";
@@ -18,27 +18,56 @@ type Panel = "none" | "edit" | "send" | "resend" | "reject";
  * attachments and the fingerprint of what is shown. «Approva e invia» asks again, with the recipients, and sends the
  * fingerprint it showed: if the draft changed in between, nothing goes out.
  */
-export function DraftCard({ draft, channels }: { draft: EmailDraft; channels: ChannelInfo[] }) {
+export function DraftCard({ draft, channels, onGone }: { draft: EmailDraft; channels: ChannelInfo[]; onGone: () => void }) {
   const send = useSendDraft();
   const reject = useRejectDraft();
   const cancel = useCancelDraft();
   const remove = useDeleteDraft();
   const [panel, setPanel] = useState<Panel>("none");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  // What the owner was shown when they opened the confirmation: it is what they approve, whatever the list says a moment later.
+  const [armed, setArmed] = useState<{ hash: string } | null>(null);
+  const card = useRef<HTMLElement>(null);
+  const before = useRef<Panel>("none");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const title = useId();
   const sum = recipientsSummary(draft);
   const fail = (e: unknown) => setError(errorMessage(e));
 
-  const doSend = (resend: boolean) => {
+  const openSend = (kind: "send" | "resend") => {
     setError(null);
-    send.mutate({ id: draft.id, body: { approved_hash: draft.content_hash, resend } }, {
-      onSuccess: () => { setPanel("none"); toast(t("channels.bozza_inviata_msg")); },
+    send.reset();
+    setArmed({ hash: draft.content_hash });
+    setPanel(kind);
+  };
+  const doSend = (resend: boolean) => {
+    if (!armed) return;
+    setError(null);
+    send.mutate({ id: draft.id, body: { approved_hash: armed.hash, resend } }, {
+      onSuccess: () => { setPanel("none"); setArmed(null); toast(t("channels.bozza_inviata_msg")); onGone(); },
     });
   };
 
+  // The draft changed under an open confirmation (the assistant revised it): what was shown is not what would go, so the
+  // confirmation closes and asks to look again.
+  useEffect(() => {
+    if ((panel === "send" || panel === "resend") && armed && draft.content_hash !== armed.hash) {
+      setPanel("none");
+      setArmed(null);
+      setError(t("channels.bozza_cambiata"));
+    }
+  }, [panel, armed, draft.content_hash]);
+
+  // Keyboard focus: a panel that opens takes it, and the card gets it back when the panel closes (the button that opened
+  // it is gone by then).
+  useEffect(() => {
+    if (panel === "none" && (before.current === "edit" || before.current === "reject")) card.current?.focus();
+    before.current = panel;
+  }, [panel]);
+
   return (
-    <article className="panel draft" aria-labelledby={title}>
+    <article className="panel draft" aria-labelledby={title} ref={card} tabIndex={-1}>
       <header className="draft-head">
         <h3 id={title} className="grow">{draftTitle(draft)}</h3>
         <Pill tone={DRAFT_TONE[draft.status]}>{draftStatusLabel(draft.status)}</Pill>
@@ -89,9 +118,9 @@ export function DraftCard({ draft, channels }: { draft: EmailDraft; channels: Ch
       {error && <p className="chn-error" role="alert">{error}</p>}
 
       {panel === "reject" && (
-        <form className="draft-reject" onSubmit={(e) => { e.preventDefault(); reject.mutate({ id: draft.id, reason: reason.trim() || undefined }, { onSuccess: () => { setPanel("none"); toast(t("channels.bozza_rifiutata_msg")); }, onError: fail }); }}>
+        <form className="draft-reject" onSubmit={(e) => { e.preventDefault(); reject.mutate({ id: draft.id, reason: reason.trim() || undefined }, { onSuccess: () => { setPanel("none"); toast(t("channels.bozza_rifiutata_msg")); onGone(); }, onError: fail }); }}>
           <Field label={t("channels.bozza_motivo")} htmlFor={`${title}-reason`}>
-            <Input id={`${title}-reason`} value={reason} maxLength={300} onChange={(e) => setReason(e.target.value)} />
+            <Input id={`${title}-reason`} value={reason} maxLength={300} autoFocus onChange={(e) => setReason(e.target.value)} />
           </Field>
           <div className="row">
             <Button variant="danger" type="submit" disabled={reject.isPending}>{t("channels.bozza_rifiuta_conferma")}</Button>
@@ -103,17 +132,30 @@ export function DraftCard({ draft, channels }: { draft: EmailDraft; channels: Ch
       {/* The buttons stay while the confirmation is open: the dialog gives the focus back to the one that opened it. */}
       {(panel === "none" || panel === "send" || panel === "resend") && (
         <div className="row draft-actions">
-          {canSend(draft) && <Button variant="primary" icon="send" disabled={draft.to.length === 0} onClick={() => { setError(null); send.reset(); setPanel("send"); }}>{t("channels.bozza_invia")}</Button>}
-          {canResend(draft) && <Button variant="danger" onClick={() => { setError(null); send.reset(); setPanel("resend"); }}>{t("channels.bozza_invia_comunque")}</Button>}
+          {canSend(draft) && <Button variant="primary" icon="send" disabled={draft.to.length === 0} onClick={() => openSend("send")}>{t("channels.bozza_invia")}</Button>}
+          {canResend(draft) && <Button variant="danger" onClick={() => openSend("resend")}>{t("channels.bozza_invia_comunque")}</Button>}
           {canEdit(draft) && <Button icon="edit" onClick={() => setPanel("edit")}>{t("channels.bozza_modifica")}</Button>}
           {canStop(draft) && <Button onClick={() => { setError(null); setPanel("reject"); }}>{t("channels.bozza_rifiuta")}</Button>}
-          {canStop(draft) && <Button variant="ghost" disabled={cancel.isPending} onClick={() => cancel.mutate(draft.id, { onSuccess: () => toast(t("channels.bozza_annullata_msg")), onError: fail })}>{t("channels.bozza_annulla")}</Button>}
+          {canStop(draft) && <Button variant="ghost" disabled={cancel.isPending} onClick={() => cancel.mutate(draft.id, { onSuccess: () => { toast(t("channels.bozza_annullata_msg")); onGone(); }, onError: fail })}>{t("channels.bozza_annulla")}</Button>}
           {draft.session_id && <Link to={`/chat/${draft.session_id}`} className="btn ghost">{t("channels.bozza_apri_chat")}</Link>}
           <span className="grow" />
           {(isClosed(draft) || draft.status === "uncertain" || draft.status === "failed") && (
-            <Button variant="ghost" icon="trash" disabled={remove.isPending} onClick={() => remove.mutate(draft.id, { onError: fail })}>{t("channels.bozza_elimina")}</Button>
+            <Button variant="ghost" icon="trash" onClick={() => setConfirmDelete(true)}>{t("channels.bozza_elimina")}</Button>
           )}
         </div>
+      )}
+
+      {confirmDelete && (
+        <DecisionDialog
+          title={t("channels.bozza_elimina_titolo")}
+          confirmLabel={t("channels.bozza_si_elimina")}
+          pending={remove.isPending}
+          error={remove.error ?? undefined}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => remove.mutate(draft.id, { onSuccess: () => { setConfirmDelete(false); onGone(); } })}
+        >
+          <p>{t("channels.bozza_elimina_testo")}</p>
+        </DecisionDialog>
       )}
 
       {(panel === "send" || panel === "resend") && (
@@ -125,7 +167,7 @@ export function DraftCard({ draft, channels }: { draft: EmailDraft; channels: Ch
           cancelLabel={t("channels.bozza_conferma_no")}
           pending={send.isPending}
           error={send.error ?? undefined}
-          onCancel={() => setPanel("none")}
+          onCancel={() => { setPanel("none"); setArmed(null); }}
           onConfirm={() => doSend(panel === "resend")}
         >
           <p>{t("channels.bozza_conferma_testo", { to: sum.to, cc: sum.cc, bcc: sum.bcc, n: draft.attachments.length })}</p>

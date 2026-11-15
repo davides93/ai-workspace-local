@@ -73,9 +73,11 @@ impl Tool for EmailDraft {
         }
     }
 
-    /// The policy sees the first recipient, so a rule such as `email_draft(*@example.com)` can allow or deny by address.
+    /// The policy sees every recipient (to, cc and bcc, joined), so a rule such as `email_draft(*@example.com)` that denies
+    /// matches when any of them is there, and one that allows matches only when all of them end that way.
     fn subject(&self, args: &Value) -> Option<String> {
-        strings(args, "to").into_iter().next()
+        let all: Vec<String> = ["to", "cc", "bcc"].iter().flat_map(|k| strings(args, k)).collect();
+        (!all.is_empty()).then(|| all.join(", "))
     }
 
     async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
@@ -91,6 +93,7 @@ impl Tool for EmailDraft {
                 body: opt_string(&args, "body"),
                 add_attachments: strings(&args, "attachments"),
                 remove_attachments: vec![],
+                expected_revision: None,
             };
             let d = engine.draft_edit(id.trim(), patch, ctx, true)?;
             return Ok(ToolOutput::text(format!(

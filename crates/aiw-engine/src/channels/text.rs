@@ -88,6 +88,39 @@ pub fn parse_answer(text: &str) -> Option<bool> {
     }
 }
 
+/// What a person wrote in the reply to a mail, without what their mail client quoted under it: the text is cut at the line
+/// that introduces the quoted message («Il giorno … ha scritto:», «On … wrote:», «Da: … Inviato: …», «-----Original Message-----»).
+/// The quoted lines themselves (`> …`) are already gone when the mail is read. A «sì» typed above the quote is thus a «sì»;
+/// one typed below it is not seen.
+pub fn reply_text(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let low = |i: usize| lines.get(i).map(|l| l.trim().to_lowercase()).unwrap_or_default();
+    for i in 0..lines.len() {
+        let l = low(i);
+        let intro = l.starts_with("il giorno ") || l.starts_with("on ") || l.starts_with("in data ") || l.starts_with("le ");
+        let attribution = intro && {
+            let two = format!("{l} {}", low(i + 1));
+            [l.as_str(), two.as_str()]
+                .iter()
+                .any(|t| t.trim_end().ends_with("ha scritto:") || t.trim_end().ends_with("wrote:") || t.trim_end().ends_with("a écrit :"))
+        };
+        let header_block = (l.starts_with("da:") || l.starts_with("from:") || l.starts_with("de :"))
+            && (1..=5).any(|k| {
+                let n = low(i + k);
+                n.starts_with("inviato:")
+                    || n.starts_with("sent:")
+                    || n.starts_with("data:")
+                    || n.starts_with("date:")
+                    || n.starts_with("envoyé :")
+            });
+        let original = l.starts_with("-----") && (l.contains("original message") || l.contains("messaggio originale"));
+        if attribution || header_block || original {
+            return lines[..i].join("\n").trim().to_string();
+        }
+    }
+    body.trim().to_string()
+}
+
 /// A short, one-line excerpt for the activity log.
 pub fn excerpt(text: &str, max: usize) -> String {
     let one: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -101,6 +134,24 @@ pub fn excerpt(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_answer_of_a_mail_reply_is_what_is_written_above_the_quote() {
+        let gmail_it =
+            "sì\n\nIl giorno dom 15 nov 2026 alle ore 10:00 Assistente <assistente@casa.example> ha\nscritto:\nMi serve il tuo permesso";
+        let gmail_en = "No\n\nOn Sun, Nov 15, 2026 at 10:00 AM Assistant <a@b.example> wrote:\n";
+        let outlook = "Sì\n\nDa: Assistente <a@b.example>\nInviato: domenica 15 novembre 2026 10:00\nA: Mario\nOggetto: Permesso\n\nMi serve il tuo permesso";
+        let original = "ok\n\n-----Original Message-----\nFrom: x";
+        for (body, want) in [(gmail_it, Some(true)), (gmail_en, Some(false)), (outlook, Some(true)), (original, Some(true))] {
+            assert_eq!(parse_answer(&reply_text(body)), want, "{body}");
+        }
+        assert_eq!(reply_text("sì"), "sì");
+        // A real message that merely starts with such a word, or says more than the word, is not an answer.
+        assert_eq!(parse_answer(&reply_text("Sì, ma prima dimmi che cosa cambia\n\nIl giorno gio alle 10 Mario ha scritto:\n")), None);
+        assert_eq!(reply_text("On the other hand, no.\nDa domani sono via"), "On the other hand, no.\nDa domani sono via");
+        // Typed under the quote: nothing above it, so not seen as an answer.
+        assert_eq!(parse_answer(&reply_text("Il giorno gio alle 10 Mario ha scritto:\nciao\n\nsì")), None);
+    }
 
     #[test]
     fn short_text_is_one_piece() {

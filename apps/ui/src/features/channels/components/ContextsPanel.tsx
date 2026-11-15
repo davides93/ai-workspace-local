@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { errorMessage } from "../../../shared/lib/errors";
 import { toast } from "../../../shared/lib/toast";
 import type { ChannelInfo, ContextInfo } from "../../../shared/api/types";
@@ -71,7 +71,7 @@ function LinkForm({ channels, taken, onDone }: { channels: ChannelInfo[]; taken:
       <h3>{t("channels.ctx_nuovo")}</h3>
       <div className="chn-form">
         <Field label={t("channels.ctx_nome")} htmlFor={`${uid}-name`}>
-          <Input id={`${uid}-name`} value={name} maxLength={60} placeholder={t("channels.ctx_nome_esempio")} onChange={(e) => setName(e.target.value)} />
+          <Input id={`${uid}-name`} value={name} maxLength={60} autoFocus placeholder={t("channels.ctx_nome_esempio")} onChange={(e) => setName(e.target.value)} />
         </Field>
         {channels.map((c) => (
           <Field key={c.id} label={t("channels.ctx_account_su", { channel: c.name })} htmlFor={`${uid}-${c.id}`}>
@@ -101,16 +101,18 @@ export function ContextsPanel({ channels }: { channels: ChannelInfo[] }) {
   const linkable = linkableChannels(channels);
   const list = contexts.data ?? [];
   const titleId = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const opener = `${titleId}-link`;
   return (
     <section className="section" aria-labelledby={titleId}>
       <div className="section-head">
-        <h2 id={titleId}>{t("channels.ctx_titolo")}</h2>
-        {!adding && linkable.length >= 2 && <div className="section-actions"><Button icon="plus" onClick={() => setAdding(true)}>{t("channels.ctx_nuovo")}</Button></div>}
+        <h2 id={titleId} ref={heading} tabIndex={-1}>{t("channels.ctx_titolo")}</h2>
+        {linkable.length >= 2 && <div className="section-actions"><Button id={opener} icon="plus" aria-expanded={adding} onClick={() => setAdding(true)}>{t("channels.ctx_nuovo")}</Button></div>}
       </div>
       <p className="muted text-sm">{t("channels.ctx_intro")}</p>
       <p className="faint text-sm">{t("channels.ctx_regole")}</p>
       {linkable.length < 2 && list.length === 0 && <p className="faint text-sm">{t("channels.ctx_servono_canali")}</p>}
-      {adding && <LinkForm channels={linkable} taken={takenSenders(list)} onDone={() => setAdding(false)} />}
+      {adding && <LinkForm channels={linkable} taken={takenSenders(list)} onDone={() => { setAdding(false); setTimeout(() => document.getElementById(opener)?.focus(), 0); }} />}
       {list.length === 0 && !adding && linkable.length >= 2 && <p className="faint text-sm">{t("channels.ctx_nessuno")}</p>}
       <div className="stack stack-lg">{list.map((c) => <ContextCard key={c.id} ctx={c} />)}</div>
     </section>

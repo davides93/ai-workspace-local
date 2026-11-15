@@ -115,15 +115,32 @@ fn sha_hex(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Characters that print as nothing, or change the direction of the text around them (zero-width and bidirectional
+/// controls, invisible operators and fillers, the byte order mark, the soft hyphen, the Unicode «tag» and extra
+/// variation-selector blocks): they can carry text the owner cannot see on the card, or make a file name read as another,
+/// so they never get into a draft.
+fn is_invisible(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{034F}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}' | '\u{180B}'..='\u{180E}'
+        | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FEFF}'
+        | '\u{FFA0}' | '\u{E0000}'..='\u{E007F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// `s` without the characters of [`is_invisible`].
+fn visible(s: &str) -> String {
+    s.chars().filter(|c| !is_invisible(*c)).collect()
+}
+
 fn one_line(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    visible(s).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Addresses as the person wrote them, checked, without duplicates (compared lower-case).
 fn clean_addresses(label: &str, list: &[String]) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for raw in list {
-        let a = raw.trim();
+        let cleaned = visible(raw);
+        let a = cleaned.trim();
         if a.is_empty() {
             continue;
         }
@@ -266,7 +283,11 @@ impl Engine {
             if total > MAX_TOTAL_BYTES {
                 return Err(Error::Invalid(format!("gli allegati insieme superano {} MB", MAX_TOTAL_BYTES >> 20)));
             }
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "allegato".into());
+            let name = path
+                .file_name()
+                .map(|n| visible(&n.to_string_lossy()))
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or_else(|| "allegato".into());
             files.push(StoredFile {
                 mime: mime_of(&name).into(),
                 name,
@@ -284,7 +305,7 @@ impl Engine {
         if subject.chars().count() > MAX_SUBJECT_CHARS {
             return Err(Error::Invalid(format!("l'oggetto è troppo lungo (al massimo {MAX_SUBJECT_CHARS} caratteri)")));
         }
-        let body = body.replace("\r\n", "\n");
+        let body = visible(body).replace("\r\n", "\n");
         if body.chars().count() > MAX_BODY_CHARS {
             return Err(Error::Invalid(format!("il testo è troppo lungo (al massimo {MAX_BODY_CHARS} caratteri)")));
         }
@@ -454,6 +475,14 @@ impl Engine {
         if by_assistant && d.created_by != "assistant" {
             return Err(Error::Denied("questa bozza l'hai scritta tu: l'assistente non la modifica".into()));
         }
+        // The person edits what they saw: if the draft changed meanwhile (the assistant revised it), their save would
+        // silently overwrite that revision, so it is refused and they look again.
+        if let Some(seen) = p.expected_revision.filter(|r| *r != d.revision) {
+            return Err(Error::Conflict(format!(
+                "la bozza è cambiata mentre la modificavi (revisione {} invece di {seen}): riguardala prima di salvare",
+                d.revision
+            )));
+        }
         if let Some(c) = p.channel_id.as_deref() {
             d.channel_id = self.draft_channel(Some(c))?.id;
         }
@@ -591,11 +620,21 @@ impl Engine {
         let cfg = super::email::smtp_config(self, &ch).map_err(Error::Invalid)?;
         let files = self.draft_files(id);
         let from = self.draft_from(&ch);
-        // The files and the description of them kept in the draft were written together: if they ever differ, nothing is sent.
+        // The files and the description of them kept in the draft were written together, and the bytes are what was
+        // described: if anything differs (a damaged store), nothing is sent.
+        let mismatch = || Error::Conflict("gli allegati della bozza non corrispondono più ai file salvati: ricrea la bozza".into());
         if files.iter().map(StoredFile::meta).map(|a| (a.name, a.mime, a.size, a.sha256)).collect::<Vec<_>>()
             != d.attachments.iter().map(|a| (a.name.clone(), a.mime.clone(), a.size, a.sha256.clone())).collect::<Vec<_>>()
         {
-            return Err(Error::Conflict("gli allegati della bozza non corrispondono più ai file salvati: ricrea la bozza".into()));
+            return Err(mismatch());
+        }
+        let mut attachments = Vec::with_capacity(files.len());
+        for f in &files {
+            let data = base64::engine::general_purpose::STANDARD.decode(&f.data).map_err(|_| mismatch())?;
+            if data.len() as u64 != f.size || sha_hex(&data) != f.sha256 {
+                return Err(mismatch());
+            }
+            attachments.push(Attach { name: f.name.clone(), mime: f.mime.clone(), data });
         }
         let hash = self.draft_hash(&d, &from);
         if !constant_eq(&hash, req.approved_hash.trim()) {
@@ -623,10 +662,19 @@ impl Engine {
         // The swap that makes it one send: whoever gets here second finds it «sending» or «sent».
         let was = d.status.clone();
         let revision = d.revision;
+        // Known to be in flight before it is «sending», so that a listing in between does not take it for an interrupted send.
+        self.0.channels.drafts.inflight.lock().unwrap().insert(id.to_string());
         let claimed = self.draft_transition(id, &["draft", "failed", "uncertain"], |d| {
             // The content that was approved is the one that is sent: a change in between wins, and the send is refused.
             if d.revision != revision {
                 return Err(Error::Conflict("la bozza è cambiata mentre la inviavi: riguardala e riprova".into()));
+            }
+            // «Send anyway» after an unknown outcome is the owner's explicit say-so: checked here, under the same lock as
+            // the swap, not on the copy read at the start.
+            if d.status == "uncertain" && !req.resend {
+                return Err(Error::Conflict(
+                    "non so se il messaggio è partito: controlla Posta inviata. Se vuoi spedirlo comunque, ripeti l'invio confermando che potrebbe arrivare due volte".into(),
+                ));
             }
             d.status = "sending".into();
             d.decided_at = Some(now_rfc3339());
@@ -636,13 +684,13 @@ impl Engine {
         let claimed = match claimed {
             Ok(c) => c,
             Err(e) => {
+                self.0.channels.drafts.inflight.lock().unwrap().remove(id);
                 return match self.draft_doc(id) {
                     Ok(now) if now.status == "sent" => Ok(self.draft_present(now)),
                     _ => Err(e),
-                }
+                };
             }
         };
-        self.0.channels.drafts.inflight.lock().unwrap().insert(id.to_string());
         self.0.channels.drafts.sent.lock().unwrap().push_back(Instant::now());
         let shown = self.draft_present(claimed.clone());
         self.draft_audit(
@@ -660,19 +708,21 @@ impl Engine {
             body: d.body.clone(),
             in_reply_to: d.in_reply_to.clone(),
             references: d.references.clone(),
-            attachments: files
-                .iter()
-                .map(|f| Attach {
-                    name: f.name.clone(),
-                    mime: f.mime.clone(),
-                    data: base64::engine::general_purpose::STANDARD.decode(&f.data).unwrap_or_default(),
-                })
-                .collect(),
+            attachments,
             message_id: Some(message_id.clone()),
             auto: false,
         };
         let result = smtp::send_message(&cfg, &out).await;
+        // In flight until the outcome is written: a listing in between must not take a send that is finishing for an
+        // interrupted one.
+        let outcome = self.draft_finish(id, &message_id, &was, result);
         self.0.channels.drafts.inflight.lock().unwrap().remove(id);
+        outcome
+    }
+
+    /// Writes how a send ended: `sent`, `failed` (nothing went out) or `uncertain` (it may have). A repeat after an
+    /// unknown outcome that fails cleanly stays unknown: the first attempt may have arrived.
+    fn draft_finish(&self, id: &str, message_id: &str, was: &str, result: std::result::Result<(), smtp::SendError>) -> Result<EmailDraft> {
         match result {
             Ok(()) => {
                 let sent = self.draft_transition(id, &["sending"], |d| {
@@ -686,12 +736,15 @@ impl Engine {
                 Ok(sent)
             }
             Err(e) => {
-                let status = if e.uncertain { "uncertain" } else { "failed" };
+                let unknown = e.uncertain || was == "uncertain";
                 let note = if e.uncertain {
                     format!("{}. Controlla Posta inviata prima di riprovare.", e.message)
+                } else if was == "uncertain" {
+                    format!("{}. Il primo tentativo potrebbe essere arrivato: controlla Posta inviata prima di riprovare.", e.message)
                 } else {
                     format!("{} (non è partito nulla)", e.message)
                 };
+                let status = if unknown { "uncertain" } else { "failed" };
                 let failed = self.draft_transition(id, &["sending"], |d| {
                     d.status = status.into();
                     d.note = Some(note.clone());

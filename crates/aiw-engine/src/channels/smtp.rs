@@ -174,10 +174,39 @@ pub(crate) async fn check(cfg: &SmtpConfig) -> Result<(), String> {
 fn encode_header(s: &str) -> String {
     let s = clean(s);
     if s.is_ascii() {
-        s
-    } else {
-        format!("=?UTF-8?B?{}?=", base64::engine::general_purpose::STANDARD.encode(s))
+        return s;
     }
+    // Encoded words of at most 36 bytes (48 characters of base64, 60 with the frame): RFC 2047 allows 75, and with the name of
+    // the header the line stays under 78. Never cut inside a character.
+    let (mut words, mut cur) = (Vec::new(), String::new());
+    for c in s.chars() {
+        if cur.len() + c.len_utf8() > 36 {
+            words.push(std::mem::take(&mut cur));
+        }
+        cur.push(c);
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words.iter().map(|w| format!("=?UTF-8?B?{}?=", base64::engine::general_purpose::STANDARD.encode(w))).collect::<Vec<_>>().join(" ")
+}
+
+/// A header with its value split over several lines at spaces, so that no line runs much past 76 characters (RFC 5322
+/// recommends 78 and allows 998): a long list of recipients, a long `References` or a long subject is accepted by strict servers.
+fn fold(name: &str, value: &str) -> String {
+    let mut out = String::new();
+    let mut line = format!("{name}:");
+    for word in value.split(' ').filter(|w| !w.is_empty()) {
+        if line.len() + 1 + word.len() > 76 && !line.ends_with(':') {
+            out.push_str(&line);
+            out.push_str("\r\n");
+            line = String::new();
+        }
+        line.push(' ');
+        line.push_str(word);
+    }
+    out.push_str(&line);
+    out
 }
 
 fn wrap_base64(data: &[u8]) -> String {
@@ -223,18 +252,18 @@ pub(crate) fn build(cfg: &SmtpConfig, m: &Outgoing) -> String {
         Some(id) => id.trim_matches(['<', '>']).to_string(),
         None => format!("{}@aiw.local", uuid::Uuid::new_v4().simple()),
     };
-    let mut h = vec![format!("From: {}", clean(&cfg.from)), format!("To: {}", addrs(&m.to))];
+    let mut h = vec![format!("From: {}", clean(&cfg.from)), fold("To", &addrs(&m.to))];
     if !m.cc.is_empty() {
-        h.push(format!("Cc: {}", addrs(&m.cc)));
+        h.push(fold("Cc", &addrs(&m.cc)));
     }
-    h.push(format!("Subject: {}", encode_header(&m.subject)));
+    h.push(fold("Subject", &encode_header(&m.subject)));
     h.push(format!("Date: {}", chrono::Local::now().to_rfc2822()));
     h.push(format!("Message-ID: <{message_id}>"));
     if let Some(r) = m.in_reply_to.as_deref().map(clean).filter(|r| !r.is_empty()) {
-        h.push(format!("In-Reply-To: {r}"));
+        h.push(fold("In-Reply-To", &r));
     }
     if let Some(r) = m.references.as_deref().map(clean).filter(|r| !r.is_empty()) {
-        h.push(format!("References: {r}"));
+        h.push(fold("References", &r));
     }
     if m.auto {
         // Tells other automatic systems not to answer this one: no mail loops.
@@ -257,7 +286,7 @@ pub(crate) fn build(cfg: &SmtpConfig, m: &Outgoing) -> String {
     // The boundary has dashes, which base64 never has: it cannot appear inside a part.
     let boundary = format!("aiw-{}", uuid::Uuid::new_v4().simple());
     h.push(format!("Content-Type: multipart/mixed; boundary=\"{boundary}\""));
-    let mut out = format!("{}\r\n\r\nQuesto messaggio è in formato MIME.\r\n", h.join("\r\n"));
+    let mut out = format!("{}\r\n\r\nThis is a multi-part message in MIME format.\r\n", h.join("\r\n"));
     out.push_str(&format!("--{boundary}\r\n{}\r\n", text_part(true)));
     for a in &m.attachments {
         let name = safe_name(&a.name);
@@ -327,4 +356,71 @@ pub(crate) async fn send_message(cfg: &SmtpConfig, m: &Outgoing) -> Result<(), S
 
 pub(crate) async fn send(cfg: &SmtpConfig, m: &Outgoing) -> Result<(), String> {
     send_message(cfg, m).await.map_err(|e| e.message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg() -> SmtpConfig {
+        SmtpConfig {
+            host: "h".into(),
+            port: 587,
+            user: "u".into(),
+            password: "p".into(),
+            from: "assistente@casa.example".into(),
+            roots: vec![],
+        }
+    }
+
+    fn msg() -> Outgoing {
+        Outgoing {
+            to: (0..20).map(|i| format!("destinatario.numero.{i}@un-dominio-lungo.example.org")).collect(),
+            cc: vec![],
+            bcc: vec![],
+            subject: "Perché è così: ".repeat(20),
+            body: "Testo".into(),
+            in_reply_to: Some("<a@x>".into()),
+            references: Some((0..15).map(|i| format!("<riferimento-{i}@un-dominio-lungo.example.org>")).collect::<Vec<_>>().join(" ")),
+            attachments: vec![Attach { name: "è.pdf".into(), mime: "application/pdf".into(), data: vec![1, 2, 3] }],
+            message_id: Some("draft-1@aiw.local".into()),
+            auto: false,
+        }
+    }
+
+    #[test]
+    fn long_headers_are_folded_and_encoded_words_stay_short_and_the_whole_message_is_ascii() {
+        let text = build(&cfg(), &msg());
+        assert!(text.is_ascii(), "8-bit text needs a server that offers 8BITMIME: nothing here may be 8-bit");
+        for line in text.split("\r\n") {
+            assert!(line.len() <= 78, "{} chars: {line}", line.len());
+        }
+        // Unfolded, the headers say what was meant.
+        let unfolded = text.replace("\r\n ", " ");
+        assert!(unfolded.contains("destinatario.numero.19@un-dominio-lungo.example.org"));
+        assert!(unfolded.contains("<riferimento-14@un-dominio-lungo.example.org>"));
+        assert!(unfolded.matches("=?UTF-8?B?").count() > 3, "the subject is split into several encoded words");
+    }
+
+    #[test]
+    fn every_encoded_word_decodes_back_to_whole_characters() {
+        use base64::Engine as _;
+        let subject = "È così, perché «sì» ✓ ".repeat(30);
+        let encoded = encode_header(&subject);
+        let mut back = String::new();
+        for w in encoded.split(' ') {
+            let b64 = w.strip_prefix("=?UTF-8?B?").and_then(|r| r.strip_suffix("?=")).unwrap();
+            assert!(w.len() <= 75, "{}", w.len());
+            back.push_str(
+                &String::from_utf8(base64::engine::general_purpose::STANDARD.decode(b64).unwrap()).expect("never cut inside a character"),
+            );
+        }
+        assert_eq!(back, subject.trim());
+    }
+
+    #[test]
+    fn short_ascii_headers_are_left_alone() {
+        assert_eq!(fold("Subject", "Ciao Anna"), "Subject: Ciao Anna");
+        assert_eq!(encode_header("Ciao"), "Ciao");
+    }
 }

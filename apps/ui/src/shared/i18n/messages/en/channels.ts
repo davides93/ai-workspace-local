@@ -183,7 +183,7 @@ export const channelsEn: Record<keyof typeof channelsIt, string> = {
   "channels.bozza_inviata_il": "Sent on {date}",
   "channels.bozza_canale": "Send from",
   "channels.bozza_allegato_percorso": "Add an attachment from the workspace",
-  "channels.bozza_allegato_hint": "Path of a file in the workspace, for example docs/quote.pdf. The file is copied now: if it changes later the draft stays as it was. Nothing outside the workspace can be attached.",
+  "channels.bozza_allegato_hint": "Path of a file in the workspace (or in an allowed folder), for example docs/quote.pdf. The file is copied now: if it changes later the draft stays as it was. The rules of the file tools apply: the app's data and credentials cannot be attached.",
   "channels.bozza_aggiungi": "Add",
   "channels.bozza_rimuovi_allegato": "Remove the attachment {name}",
   "channels.bozza_salva": "Save changes",
@@ -195,4 +195,8 @@ export const channelsEn: Record<keyof typeof channelsIt, string> = {
   "channels.bozza_rifiutata_msg": "Draft refused: it does not go out",
   "channels.bozza_annullata_msg": "Draft cancelled: it does not go out",
   "channels.bozza_a_hint": "Email addresses: type and press Enter.",
+  "channels.bozza_cambiata": "The draft changed while you were deciding: look at it again and approve the content you see now.",
+  "channels.bozza_elimina_titolo": "Remove the draft from the list?",
+  "channels.bozza_elimina_testo": "It disappears from the list with its attachments. The activity log stays.",
+  "channels.bozza_si_elimina": "Yes, remove",
 };
