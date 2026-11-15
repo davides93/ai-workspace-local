@@ -1,18 +1,19 @@
-import { useStoredUiMode } from "../../shared/lib/uiMode";
 import { useMcpPrompts } from "../mcp/api";
 import { McpPromptPicker } from "../mcp/McpPromptPicker";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, navigate, useParams } from "../../app/router";
+import { useUiMode } from "../../app/useUiMode";
+import { openMenu } from "../../app/shell/openMenu";
 import { lastChatSession, rememberChatSession } from "../../shared/lib/navMemory";
-import { defaultAgentId } from "../../shared/lib/agents";
+import { newSessionAgentId } from "../../shared/lib/agents";
 import { forgetSessionRuns } from "../../shared/lib/runIndex";
 import { toast } from "../../shared/lib/toast";
 import { qk } from "../../shared/query/keys";
 import { useApi } from "../../shared/api/context";
 import { useSystem } from "../../shared/query/system";
 import type { Session } from "../../shared/api/types";
-import { Button, Drawer, EmptyState, Icon, ModalShell, Sheet } from "../../shared/ui";
+import { Button, Drawer, Icon, ModalShell, Sheet, SkeletonLines } from "../../shared/ui";
 import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
 import { useModels, useRecommend } from "../models/api";
@@ -24,15 +25,21 @@ import { memoryPendingFor, pendingFor } from "../learning/model/lessons";
 import { useTeams } from "../teams/api";
 import { teamAsAgent, teamIdOf } from "../teams/model/teams";
 import { useConfig } from "../settings/api";
+import { canRequestSecret } from "../ask/model";
 import { useCreateSession, useSessions } from "./api";
+import { ChatActionsContext, type ChatActions } from "./ChatActions";
 import { ChatEmpty } from "./components/ChatEmpty";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
+import { DownloadsStrip } from "./components/DownloadsStrip";
+import { SecretWarning } from "./components/SecretWarning";
+import { NoSessionState, SimpleEmpty } from "./components/SimpleEmpty";
 import { useAttachments } from "./useAttachments";
 import { ConversationLog, type ConversationLogHandle } from "./components/ConversationLog";
 import { InspectorBody } from "./components/Inspector";
 import { SessionList, type NewSessionInput } from "./components/SessionList";
-import { setDraft } from "./model/drafts";
+import { onComposerSeed, takeComposerSeed, withSeed } from "./model/composerSeed";
+import { getDraft, setDraft } from "./model/drafts";
 import { forgetThinkingChoice } from "./model/thinkingChoice";
 import { forgetSessionImages } from "./model/imageCache";
 import { describeRunError, lastRunNotice } from "./model/runNotice";
@@ -45,8 +52,14 @@ import "./chat.css";
 
 import { t as tr, t } from "../../shared/i18n";
 const chatPath = (id: string) => `/chat/${encodeURIComponent(id)}`;
+// The lessons panel is only opened from the note about a proposed lesson, in the simple interface.
+const LessonsPanel = lazy(() => import("../learning/components/LessonsPanel").then((m) => ({ default: m.LessonsPanel })));
 
-/** Workspace: sessions on the left, the conversation in the middle, the run panel on the right. */
+/**
+ * Workspace: sessions on the left, the conversation in the middle, the run panel on the right.
+ * In the simple interface this is the whole app: new sessions are with the Assistente (no agent to choose),
+ * the details of the setup are fewer, the first-run panel and the downloads live here, and nothing leads to a hidden section.
+ */
 export function ChatView() {
   const sessions = useSessions();
   const agents = useAgents();
@@ -77,7 +90,9 @@ export function ChatView() {
   const recommend = useRecommend();
   const profile = profiles.data?.find((p) => p.id === agent?.inference_profile)
     ?? (agent ? autoProfileFromAdvice(agent.inference_profile, recommend.data) : null);
-  const defaultAgent = defaultAgentId(agents.data ?? [], config.data?.effective["agent.default"]);
+  const [uiMode, setUiMode] = useUiMode();
+  const simple = uiMode === "simple";
+  const defaultAgent = newSessionAgentId(agents.data ?? [], config.data?.effective["agent.default"], uiMode);
 
   // No session in the URL (or a stale one): open the last used one, else the most recent.
   useEffect(() => {
@@ -120,10 +135,12 @@ export function ChatView() {
   const lessonToReview = memoryToConfirm ? undefined : pendingFor(pendingLessons, openId);
   const [input, setInput] = useDraft(openId);
   // «Prompt MCP»: developer mode, and only when a connected server has prompts.
-  const developer = useStoredUiMode() === "developer";
+  const developer = uiMode === "developer";
   const mcpPrompts = useMcpPrompts(developer);
   const [promptPicker, setPromptPicker] = useState(false);
   const [focusTick, setFocusTick] = useState(0);
+  const [showLessons, setShowLessons] = useState(false);
+  const [seedTick, setSeedTick] = useState(0);
   const [showSessions, setShowSessions] = useState(false);
   const compactSessions = useMediaQuery(COMPACT_SESSIONS_QUERY);
   const mode = useInspectorMode();
@@ -151,6 +168,32 @@ export function ChatView() {
   // Files belong to the conversation they were chosen in.
   const { clear: clearAttachments } = attachments;
   useEffect(() => clearAttachments(), [openId, clearAttachments]);
+
+  // Text asked for from outside (the palette's «Scarica un modello»): into the box of the open conversation, once.
+  useEffect(() => onComposerSeed(() => setSeedTick((n) => n + 1)), []);
+  useEffect(() => {
+    if (!openId) return;
+    const seed = takeComposerSeed();
+    if (seed === null) return;
+    setInput(withSeed(getDraft(openId), seed));
+    setFocusTick((n) => n + 1);
+    // `input` is read from the store, not from this render, which may predate the session's own draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId, seedTick]);
+  // What the notes of the conversation can do in the simple interface (see `NoticeAction`).
+  const actions = useMemo<ChatActions>(
+    () => ({
+      askAssistant: (text) => {
+        setInput(withSeed(getDraft(openId), text));
+        setFocusTick((n) => n + 1);
+      },
+      showAllSections: (to) => {
+        setUiMode("developer");
+        navigate(to);
+      },
+    }),
+    [openId, setInput, setUiMode],
+  );
 
   const send = () => {
     const text = input.trim();
@@ -185,7 +228,7 @@ export function ChatView() {
   };
   const sessionList = (onClose?: () => void) => (
     <SessionList
-      sessions={sessions} agents={agents.data ?? []} teams={teams.data ?? []} defaultAgent={defaultAgent} activeId={openId}
+      sessions={sessions} agents={agents.data ?? []} teams={teams.data ?? []} defaultAgent={defaultAgent} simple={simple} activeId={openId}
       creating={createSession.isPending} onCreate={create} onDeleted={onDeleted} onClose={onClose}
       onSelect={(id) => {
         navigate(chatPath(id));
@@ -209,7 +252,8 @@ export function ChatView() {
     insertText: (text) => setInput(input.trim() ? `${input.trimEnd()} ${text}` : text),
   });
 
-  const notice = lastRunNotice(active?.last_status, conv.items, conv.running);
+  const pick = (text: string) => { setInput(text); setFocusTick((n) => n + 1); };
+  const notice = lastRunNotice(active?.last_status, conv.items, conv.running, simple);
   const compactAt = Number(config.data?.effective["context.compact_at"]) || 0.8;
   const inspector = (
     <InspectorBody
@@ -219,30 +263,34 @@ export function ChatView() {
   );
 
   return (
+    <ChatActionsContext.Provider value={actions}>
     <div className="ws">
       <h1 className="sr-only">{tr("chat.workspace")}</h1>
       {!compactSessions && <aside className="ws-sessions" aria-label={tr("chat.sessioni")}>{sessionList()}</aside>}
 
       <section className="ws-main" aria-label={tr("chat.workspace")}>
         <ChatHeader
-          session={active} agent={agent} profile={profile} running={conv.running}
-          sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
+          session={active} agent={agent} profile={profile} running={conv.running} simple={simple}
+          onOpenMenu={simple ? openMenu : undefined} sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
           inspectorOpen={panel.open} onToggleInspector={panel.toggle} onOpenWorktree={panel.show} onOpenBrowser={browserButton}
         />
         {noSessions ? (
           <div className="ws-nosession">
-            <EmptyState
-              icon="chat" title={tr("chat.nessuna_sessione")}
-              description={tr("chat.crea_la_prima_sessione_per")}
-              action={<Button variant="primary" icon="plus" disabled={!defaultAgent || createSession.isPending} onClick={() => create({ agent_id: defaultAgent, isolation: "none" })}>{tr("chat.nuova_sessione")}</Button>}
-            />
+            {(() => {
+              const first = (
+                <NoSessionState
+                  action={<Button variant="primary" icon="plus" disabled={!defaultAgent || createSession.isPending} onClick={() => create({ agent_id: defaultAgent, isolation: "none" })}>{tr("chat.nuova_sessione")}</Button>}
+                />
+              );
+              return simple ? <SimpleEmpty noSession onPick={pick} fallback={first} /> : first;
+            })()}
           </div>
         ) : (
           <ConversationLog
             ref={log} items={conv.items} state={logState} onRetry={listFailed ? () => void sessions.refetch() : conv.reload} busy={conv.running} respondingId={conv.respondingId}
             onRespond={conv.respond} onAction={conv.sendAction} notice={notice} sessionKey={openId} feedback={feedback}
             footer={memoryToConfirm && !conv.running ? <RememberCard key={memoryToConfirm.id} lesson={memoryToConfirm} /> : undefined}
-            empty={<ChatEmpty onPick={(text) => { setInput(text); setFocusTick((n) => n + 1); }} />}
+            empty={simple ? <SimpleEmpty noSession={false} onPick={pick} /> : <ChatEmpty onPick={pick} />}
           />
         )}
         {lessonToReview && (
@@ -251,9 +299,23 @@ export function ChatView() {
             <div className="ws-note-body">
               <b>{tr("chat.ho_proposto_una_lezione_da")}</b>
               <span className="ws-note-hint">{tr("chat.non_viene_scritta_finche_non", { title: lessonToReview.title })}</span>
-              <Link to="/" className="ws-note-link">{t("chat.rivedila_nella_panoramica")}{" "}<Icon name="forward" size={12} /></Link>
+              {simple ? (
+                <button type="button" className="ws-note-link" aria-haspopup="dialog" onClick={() => setShowLessons(true)}>{t("chat.rivedi_la_lezione")}{" "}<Icon name="forward" size={12} /></button>
+              ) : (
+                <Link to="/" className="ws-note-link">{t("chat.rivedila_nella_panoramica")}{" "}<Icon name="forward" size={12} /></Link>
+              )}
             </div>
           </div>
+        )}
+        {simple && !noSessions && <DownloadsStrip />}
+        {/* Simple interface only. The protected field is a tool (`aiw_secret_request`): the button that asks for it is shown only when the
+            agent of this session has it (an old session of the Coder or the Operatore has not, and the button would ask for something
+            it cannot do); the warning is shown anyway. */}
+        {simple && (
+          <SecretWarning
+            text={input}
+            onAskProtectedField={canRequestSecret(agent) ? () => { setInput(tr("chat.segreto_richiesta_testo")); setFocusTick((n) => n + 1); } : undefined}
+          />
         )}
         <Composer
           attachments={{ items: attachments.files, onAdd: attachments.add, onRemove: attachments.remove }}
@@ -280,6 +342,14 @@ export function ChatView() {
           {sessionList(() => setShowSessions(false))}
         </ModalShell>
       )}
+      {simple && showLessons && (
+        <Drawer title={tr("learning.lezioni_da_rivedere")} onClose={() => setShowLessons(false)}>
+          <Suspense fallback={<SkeletonLines lines={4} />}>
+            <LessonsPanel />
+          </Suspense>
+        </Drawer>
+      )}
     </div>
+    </ChatActionsContext.Provider>
   );
 }

@@ -1,7 +1,7 @@
 import { expect, openApp, test } from "../support/app";
 
 test("documents: add a file to a collection and search for it", async ({ page }) => {
-  await openApp(page, "/documents");
+  await openApp(page, "/documents", { mode: "developer" });
   const list = page.getByRole("region", { name: "Documenti della raccolta" });
   await expect(list.getByText("contratto-affitto.txt")).toBeVisible();
 

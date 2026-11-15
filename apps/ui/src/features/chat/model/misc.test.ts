@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { MODE_INFO, modeInfo, sandboxInfo } from "./labels";
 import { cachedImageChars, forgetSessionImages, imagesFor, rememberImage, rememberSessionImages } from "./imageCache";
 import type { Item } from "./items";
-import { describeRunError, errorDetail, isStandardErrorMessage, lastRunNotice, runErrorCode } from "./runNotice";
+import { attachmentsNotice, describeRunError, errorDetail, isStandardErrorMessage, lastRunNotice, runErrorCode, type RunNoticeInfo } from "./runNotice";
 import { distanceFromBottom, isNearBottom } from "./scroll";
 
 describe("run errors", () => {
@@ -181,5 +181,51 @@ describe("model roles in the conversation", () => {
     items = reduceEvent(items, ev("aiw.roles", { notes: [] }));
     const notes = items.filter((i) => i.kind === "note").map((i) => (i.kind === "note" ? i.text : ""));
     expect(notes).toEqual(["Verifica finale: manca il file. L'agente corregge prima di concludere.", "Un solo modello."]);
+  });
+});
+
+describe("notes in the simple interface: nothing leads to a hidden section", () => {
+  const failed: Item[] = [{ kind: "user", id: "u", text: "ciao" }];
+  /** Every note the chat can show, in the mode asked for. */
+  const notes = (simple: boolean): RunNoticeInfo[] => [
+    describeRunError("cancelled", simple), describeRunError("runtime", simple), describeRunError("hook_blocked", simple), describeRunError(undefined, simple),
+    attachmentsNotice(simple), lastRunNotice("cancelled", failed, false, simple)!, lastRunNotice("failed", failed, false, simple)!,
+  ];
+
+  it("has no link at all in simple mode, only actions", () => {
+    for (const n of notes(true)) expect(n.link, n.title).toBeUndefined();
+  });
+  it("offers an action wherever developer mode offers a link", () => {
+    const dev = notes(false);
+    const simple = notes(true);
+    dev.forEach((n, i) => {
+      if (n.link) expect(simple[i].actions?.length, n.title).toBeGreaterThan(0);
+      else expect(simple[i].actions, n.title).toBeUndefined();
+    });
+  });
+  it("asks the assistant with a sentence, or shows every section and opens the page that helps", () => {
+    expect(describeRunError("runtime", true).actions).toEqual([
+      { kind: "ask", label: "Chiedi all'assistente", text: expect.stringContaining("controlla perché il motore non funziona") },
+      { kind: "developer", label: "Mostra tutte le sezioni", to: "/runtimes" },
+    ]);
+    // A hook is a protection the assistant cannot change: only the developer view can.
+    expect(describeRunError("hook_blocked", true).actions).toEqual([{ kind: "developer", label: "Mostra tutte le sezioni", to: "/security/hooks" }]);
+    expect(attachmentsNotice(true).actions).toEqual([{ kind: "ask", label: "Chiedi all'assistente", text: expect.stringContaining("immagini") }]);
+    expect(lastRunNotice("failed", failed, false, true)?.actions?.map((a) => a.kind)).toEqual(["ask", "developer"]);
+  });
+  it("keeps the links of developer mode exactly as they were, and no actions", () => {
+    expect(describeRunError("runtime")).toMatchObject({ link: { to: "/runtimes", label: "Apri i runtime" } });
+    expect(describeRunError("hook_blocked")).toMatchObject({ link: { to: "/security/hooks", label: "Vedi gli hook" } });
+    expect(attachmentsNotice()).toMatchObject({ link: { to: "/models", label: "Apri Modelli" } });
+    expect(lastRunNotice("failed", failed, false)).toMatchObject({ link: { to: "/runtimes" } });
+    for (const n of notes(false)) expect(n.actions, n.title).toBeUndefined();
+  });
+  it("points every action at an address the simple interface can leave to developer mode, and never a link in the text", () => {
+    for (const n of notes(true)) {
+      for (const a of n.actions ?? []) {
+        if (a.kind === "developer") expect(a.to).toMatch(/^\/(runtimes|security\/hooks)$/);
+        else expect(a.text.length).toBeGreaterThan(10);
+      }
+    }
   });
 });

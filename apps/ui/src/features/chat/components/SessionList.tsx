@@ -17,13 +17,16 @@ export interface NewSessionInput {
 /**
  * The sessions column: new session (agent, optional git worktree), search, and the sessions grouped
  * by day with rename and delete. The search box filters by title and agent name.
+ * In the simple interface «Nuova» starts a session with `defaultAgent` (the Assistente): no agent to choose, no worktree.
  */
-export function SessionList({ sessions, agents, teams = [], defaultAgent, activeId, creating, onCreate, onSelect, onDeleted, onClose }: {
+export function SessionList({ sessions, agents, teams = [], defaultAgent, simple = false, activeId, creating, onCreate, onSelect, onDeleted, onClose }: {
   sessions: UseQueryResult<Session[]>;
   agents: AgentProfile[];
   /** Teams are chosen like agents; their session agent id is `team:<id>`. */
   teams?: TeamDef[];
   defaultAgent: string;
+  /** The simple interface: a single «Nuova» button. */
+  simple?: boolean;
   activeId: string | null;
   creating: boolean;
   onCreate: (input: NewSessionInput) => void;
@@ -63,20 +66,25 @@ export function SessionList({ sessions, agents, teams = [], defaultAgent, active
 
       <div className="ws-new">
         <div className="ws-new-row">
-          <Select aria-label={tr("chat.agente_della_nuova_sessione")} value={agent} onChange={(e) => setAgent(e.target.value)} disabled={agents.length === 0}>
+          {!simple && <Select aria-label={tr("chat.agente_della_nuova_sessione")} value={agent} onChange={(e) => setAgent(e.target.value)} disabled={agents.length === 0}>
             {teams.length > 0 ? (
               <>
                 <optgroup label={tr("chat.agenti")}>{agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</optgroup>
                 <optgroup label={tr("chat.team")}>{teams.map((t) => <option key={t.id} value={teamAgentId(t.id)}>{t.name}</option>)}</optgroup>
               </>
             ) : agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </Select>
-          <Button variant="primary" icon="plus" disabled={!agent || creating} onClick={() => onCreate({ agent_id: agent, isolation: isolated ? "worktree" : "none" })}>
+          </Select>}
+          <Button
+            variant="primary" icon="plus" disabled={!(simple ? defaultAgent : agent) || creating}
+            onClick={() => onCreate(simple ? { agent_id: defaultAgent, isolation: "none" } : { agent_id: agent, isolation: isolated ? "worktree" : "none" })}
+          >
             {tr("chat.nuova")}</Button>
         </div>
-        <label className="ws-check" title={tr("chat.l_agente_lavora_su_un")}>
-          <input type="checkbox" checked={isolated} onChange={(e) => setIsolated(e.target.checked)} />
-          <Icon name="branch" size={14} /> {" "}{t("chat.isola_in_un_worktree_git")}</label>
+        {!simple && (
+          <label className="ws-check" title={tr("chat.l_agente_lavora_su_un")}>
+            <input type="checkbox" checked={isolated} onChange={(e) => setIsolated(e.target.checked)} />
+            <Icon name="branch" size={14} /> {" "}{t("chat.isola_in_un_worktree_git")}</label>
+        )}
       </div>
 
       <div className="ws-search">
@@ -101,7 +109,7 @@ export function SessionList({ sessions, agents, teams = [], defaultAgent, active
         <QueryState
           query={sessions}
           isEmpty={(l) => l.length === 0}
-          empty={<EmptyState className="ws-sessions-empty" icon="chat" title={tr("chat.nessuna_sessione")} description={tr("chat.scegli_un_agente_qui_sopra")} />}
+          empty={<EmptyState className="ws-sessions-empty" icon="chat" title={tr("chat.nessuna_sessione")} description={simple ? tr("chat.crea_la_prima_sessione_per") : tr("chat.scegli_un_agente_qui_sopra")} />}
         >
           {() =>
             groups.length === 0 ? (

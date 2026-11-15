@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import { Icon, Led, Markdown } from "../../../shared/ui";
 import { useStoredUiMode } from "../../../shared/lib/uiMode";
 import { ApprovalCard } from "../../approvals/components/ApprovalCard";
@@ -116,15 +116,23 @@ export const ItemView = memo(function ItemView({ it, sessionId, onRespond, onAct
     case "note":
       return <div className="ws-msg ws-assistant"><div className="ws-loopnote"><Icon name="refresh" size={14} /> {it.text}</div></div>;
     case "warning":
-      return <div className="ws-msg ws-assistant"><RunNote live info={attachmentsNotice()} /></div>;
+      return <NoticeRow><WarningNote /></NoticeRow>;
     case "error":
-      return (
-        <div className="ws-msg ws-assistant">
-          <RunNote live={!it.stored} info={describeRunError(it.code)} message={errorDetail(it.code, it.message)} />
-        </div>
-      );
+      return <NoticeRow><ErrorNote it={it} /></NoticeRow>;
   }
 });
+
+const NoticeRow = ({ children }: { children: ReactNode }) => <div className="ws-msg ws-assistant">{children}</div>;
+
+/** The note under a message whose images the model cannot see (its action depends on the interface mode). */
+function WarningNote() {
+  return <RunNote live info={attachmentsNotice(useStoredUiMode() === "simple")} />;
+}
+
+/** How a run ended badly (its actions depend on the interface mode). */
+function ErrorNote({ it }: { it: Extract<Item, { kind: "error" }> }) {
+  return <RunNote live={!it.stored} info={describeRunError(it.code, useStoredUiMode() === "simple")} message={errorDetail(it.code, it.message)} />;
+}
 
 /** Which runtime the router chose and why: details for Developer mode, nothing in Simple mode. */
 function RouteRow({ it }: { it: Extract<Item, { kind: "route" }> }) {
