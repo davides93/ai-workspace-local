@@ -65,6 +65,10 @@ mod tests {
         pub(crate) unavailable: Mutex<HashSet<String>>,
         /// Tools the host refuses before anything else (`refuse_tool`), with the reason it gives.
         pub(crate) refused: Mutex<std::collections::HashMap<String, String>>,
+        /// What the host answers at the turn boundaries, in order (`checkpoint`); an empty queue answers «nothing».
+        pub(crate) checkpoints: Mutex<std::collections::VecDeque<crate::Checkpoint>>,
+        /// How many messages the run had produced at each boundary it was asked at.
+        pub(crate) boundaries: Mutex<Vec<usize>>,
     }
 
     #[async_trait]
@@ -107,6 +111,10 @@ mod tests {
         fn refuse_tool(&self, _run_id: &str, tool: &str) -> Option<String> {
             self.refused.lock().unwrap().get(tool).cloned()
         }
+        async fn checkpoint(&self, _input: &RunInput, new_messages: &[aiw_core::api::ChatMessage]) -> crate::Checkpoint {
+            self.boundaries.lock().unwrap().push(new_messages.len());
+            self.checkpoints.lock().unwrap().pop_front().unwrap_or_default()
+        }
     }
 
     pub fn setup(turns: Vec<Vec<ChatDelta>>, approve: bool) -> (Arc<TestHost>, tempfile::TempDir) {
@@ -127,6 +135,8 @@ mod tests {
             by_model: Default::default(),
             unavailable: Default::default(),
             refused: Default::default(),
+            checkpoints: Default::default(),
+            boundaries: Default::default(),
         });
         (host, tempfile::tempdir().unwrap())
     }
@@ -188,6 +198,73 @@ mod tests {
 
     fn types(h: &TestHost) -> Vec<String> {
         h.events.lock().unwrap().iter().map(|e| serde_json::to_value(e).unwrap()["type"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn the_host_may_stop_a_run_between_two_turns_and_the_run_ends_clean() {
+        let (host, dir) = setup(
+            vec![
+                ScriptedBackend::tool_turn("c1", "list_dir", json!({"path": "."})),
+                ScriptedBackend::tool_turn("c2", "list_dir", json!({"path": "."})),
+                ScriptedBackend::text_turn("non arriva"),
+            ],
+            true,
+        );
+        // Nothing at the first boundary, a stop at the second.
+        host.checkpoints
+            .lock()
+            .unwrap()
+            .extend([crate::Checkpoint::default(), crate::Checkpoint { stop: Some("pausa".into()), instructions: vec![] }]);
+        let (out, res) = AgentRunner::run_partial(input(dir.path(), "ask"), host.clone()).await;
+        res.unwrap();
+        assert_eq!(out.ended, crate::RunEnd::Stopped);
+        // The first step is whole (its call and its answer), the second never started: no model call after the stop.
+        assert_eq!(out.new_messages.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), ["user", "assistant", "tool"]);
+        assert_eq!(host.backend.requests.lock().unwrap().len(), 1);
+        assert_eq!(*host.boundaries.lock().unwrap(), vec![1, 3], "asked at the start (user message only) and after the first step");
+        let events = host.events.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(e, AgEvent::Custom { name, value } if name == "aiw.stopped" && value["reason"] == "pausa")));
+        assert!(matches!(events.last(), Some(AgEvent::RunFinished { .. })), "it ends as a finished run, not an error");
+    }
+
+    #[tokio::test]
+    async fn what_the_person_said_meanwhile_reaches_the_model_as_a_stored_user_message() {
+        let (host, dir) = setup(
+            vec![ScriptedBackend::tool_turn("c1", "list_dir", json!({"path": "."})), ScriptedBackend::text_turn("Fatto, in tono formale.")],
+            true,
+        );
+        host.checkpoints
+            .lock()
+            .unwrap()
+            .extend([crate::Checkpoint::default(), crate::Checkpoint { stop: None, instructions: vec!["  Sii formale  ".into()] }]);
+        let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        assert_eq!(out.ended, crate::RunEnd::Finished);
+        let note = out.new_messages.iter().find(|m| m.name.as_deref() == Some(crate::INSTRUCTION_NAME)).expect("the instruction is stored");
+        assert_eq!((note.role.as_str(), note.content.as_str()), ("user", "[Istruzione dell'utente, arrivata mentre lavoravi] Sii formale"));
+        let reqs = host.backend.requests.lock().unwrap();
+        let last = reqs[1].messages.last().unwrap().text();
+        assert!(last.contains("Sii formale"), "{last}");
+    }
+
+    #[tokio::test]
+    async fn a_run_asks_the_host_only_at_the_top_level_and_the_ending_says_why() {
+        // A sub-agent run (depth > 0) is never stopped from outside the way a task is.
+        let (host, dir) = setup(vec![ScriptedBackend::text_turn("Ciao.")], true);
+        let mut sub = input(dir.path(), "ask");
+        sub.depth = 1;
+        host.checkpoints.lock().unwrap().push_back(crate::Checkpoint { stop: Some("pausa".into()), instructions: vec![] });
+        let out = AgentRunner::run(sub, host.clone()).await.unwrap();
+        assert_eq!(out.ended, crate::RunEnd::Finished);
+        assert!(host.boundaries.lock().unwrap().is_empty());
+        // The ending that is not a plain answer says so: the turn limit and the budget.
+        let (host, dir) = setup(vec![ScriptedBackend::tool_turn("c1", "list_dir", json!({"path": "."}))], true);
+        let mut limited = input(dir.path(), "ask");
+        limited.agent.max_turns = 1;
+        assert_eq!(AgentRunner::run(limited, host).await.unwrap().ended, crate::RunEnd::TurnLimit);
+        let (host, dir) = setup(vec![ScriptedBackend::text_turn("mai")], true);
+        let mut spent = input(dir.path(), "ask");
+        spent.budget = std::sync::Arc::new(crate::RunBudget::new(None, Some(0), None));
+        assert_eq!(AgentRunner::run(spent, host).await.unwrap().ended, crate::RunEnd::Budget);
     }
 
     #[tokio::test]
