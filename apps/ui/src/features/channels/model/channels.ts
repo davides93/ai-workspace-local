@@ -38,8 +38,9 @@ export const CHANNEL_KINDS: KindInfo[] = [
       t("channels.apri_telegram_e_scrivi_a"),
       t("channels.scegli_un_nome_e_un"),
       t("channels.incolla_qui_sotto_il_token"),
-      t("channels.premi_genera_il_codice_e"),
+      // The code is read by the connector: the channel must be on before it can be answered.
       t("channels.accendi_il_canale"),
+      t("channels.premi_genera_il_codice_e"),
     ]; },
     secrets: [{ key: "bot_token", get label() { return t("channels.token_del_bot"); }, placeholder: "123456:ABC-DEF…" }],
     settings: [],
@@ -135,6 +136,16 @@ export function enableProblem(channel: ChannelInfo): string | null {
     if (!has("smtp_host")) return t("channels.manca_il_server_della_posta");
   }
   if (channel.kind !== "telegram" && channel.allowed.length === 0) return t("channels.scrivi_chi_puo_parlare_con");
+  return null;
+}
+
+/**
+ * Why the pairing code cannot be given yet, in plain words; null when it can. The code is read by the connector, so
+ * the channel has to be on (and available) before anyone can answer it: the engine refuses it otherwise.
+ */
+export function pairProblem(channel: ChannelInfo): string | null {
+  if (!channel.enabled) return t("channels.per_il_codice_accendi_il_canale");
+  if (channel.status.state === "unavailable") return channel.status.detail || STATE_LABEL.unavailable;
   return null;
 }
 
