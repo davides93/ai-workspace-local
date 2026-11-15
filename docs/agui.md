@@ -6,9 +6,10 @@ li legge da `GET /api/runs/{id}/events`. Questo endpoint è l'**ingresso standar
 stream SSE del run nella risposta, senza conoscere l'API REST di AIW. Come puntare modelli e agenti di altri programmi
 su AIW (token, CORS, rete, OpenBot, OpenDots) è nella pagina **Integrazioni** dell'app, che usa questi stessi esempi.
 
-> Stato onesto. **Provato con il client vero**: `tests/agui-client` avvia il vero `aiw serve`, un provider OpenAI finto e
-> `HttpAgent` di `@ag-ui/client` **1.0.4** e **1.0.2** (la versione dentro `@copilotkit/runtime` 1.88.0), 24 scenari
-> (vedi «Provarlo con un client vero»). **Non provato**: CopilotKit stesso (React e runtime con il suo adattatore), OpenBot
+> Stato onesto. **Provato con client veri**: `tests/agui-client` avvia il vero `aiw serve`, un provider OpenAI finto e
+> `HttpAgent` di `@ag-ui/client` **1.0.4** e **1.0.2**, 24 scenari; `tests/agui-copilotkit` mette davanti allo stesso server il
+> **runtime di CopilotKit** 1.88.0 (lato server, senza account) e ne fa passare un messaggio con ragionamento e una conferma con
+> `resume` (vedi «Provarlo con un client vero»). **Non provato**: i componenti React di CopilotKit (la parte nel browser), OpenBot
 > e OpenDots (richiedono un account CopilotKit e CopilotKit Intelligence, licenza a parte), un modello vero, un telefono,
 > Windows. Se un client reale si aspetta qualcosa che qui manca, è un difetto da segnalare. Che cosa **non** c'è (strumenti
 > del client, `STEP_*`, attività) è in «Limiti». Il client vero ha trovato e fatto correggere tre difetti che i test in-process
@@ -425,7 +426,7 @@ cargo build -p aiw-cli                    # il binario che i test avviano (targe
 cd tests/agui-client && npm ci && npm test
 ```
 
-La suite (`tests/agui-client/test/interop.test.mjs`, circa 16 secondi, nessun account né rete) avvia il vero `aiw serve` in una
+La suite (`tests/agui-client/test/interop.test.mjs`, 16-40 secondi, nessun account né rete) avvia il vero `aiw serve` in una
 cartella temporanea, lo punta a un provider OpenAI finto (`lib/fake-provider.mjs`) con le risposte scritte a mano e usa
 `HttpAgent` di `@ag-ui/client`. Ogni avviso del client (campi tolti, patch dello stato non applicabili) fa fallire il test.
 Scenari, per `@ag-ui/client` 1.0.4 e 1.0.2: testo con ragionamento, stato e contesto; strumento e piano; sottoagente; allegati
@@ -434,6 +435,17 @@ rifiuto e annullamento, regole del `resume` (richieste scritte a mano), catena d
 messaggio già eseguito rimandato, client senza cronologia, annullamento con `abortRun()` e pausa che non annulla, segreti fuori
 da stream, messaggi salvati, richieste al modello e log, strumenti del client ignorati, riavvio. I test Rust restano:
 `cargo test -p aiw-server agui`, `cargo test -p aiw-server tests_harness`, `cargo test -p aiw-engine agui_threads`.
+
+Il **runtime di CopilotKit** (`tests/agui-copilotkit`, a parte perché il suo `npm ci` pesa circa 300 MB) si prova così:
+
+```sh
+cd tests/agui-copilotkit && SCARF_ANALYTICS=false npm ci && npm test
+```
+
+Registra gli agenti AIW come nella guida di CopilotKit (`new CopilotRuntime({ agents: { … new HttpAgent({ url }) } })`), li fa girare
+dal suo gestore HTTP (`POST /agent/{agente}/run`, come il frontend) con la telemetria spenta e verifica due cose: un messaggio con
+ragionamento arriva intero, e una conferma esce come interruzione, passa dal runtime e il `resume` arriva ad AIW (il file viene
+scritto solo dopo). Non usa React né l'interfaccia di CopilotKit.
 
 Il modello è finto e il server è il vero: dice che il protocollo regge un client vero, non che un modello locale vero usi bene
 gli strumenti.
@@ -455,7 +467,7 @@ gli strumenti.
   strumenti di gestione hanno la stessa regola: solo il proprietario. Un segreto non passa mai da `resume`.
 - **Pause in memoria**: dopo un riavvio una pausa non c'è più (il thread, la cronologia e i messaggi già eseguiti sì).
 - **Agenti**: niente team (`team:…`) né agenti interni.
-- **Non provato**: CopilotKit (React e runtime), OpenBot, OpenDots; un modello vero; Windows e telefono.
+- **Non provato**: i componenti React di CopilotKit, OpenBot, OpenDots; un modello vero; Windows e telefono.
 
 ## Riferimenti alla specifica
 

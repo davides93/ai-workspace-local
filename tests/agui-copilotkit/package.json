@@ -1,0 +1,14 @@
+{
+  "name": "@aiw/agui-copilotkit-tests",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Prova di interoperabilità: il runtime di CopilotKit (lato server) che parla con il vero `aiw serve` attraverso HttpAgent",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-timeout=90000 test/copilotkit.test.mjs"
+  },
+  "dependencies": {
+    "@ag-ui/client": "1.0.2",
+    "@copilotkit/runtime": "1.88.0"
+  }
+}

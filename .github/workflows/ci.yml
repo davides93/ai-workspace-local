@@ -118,6 +118,14 @@ jobs:
         working-directory: tests/agui-client
       - run: npm test
         working-directory: tests/agui-client
+      # The CopilotKit runtime (server side, @copilotkit/runtime 1.88.0) in front of the same server: a heavy install (about
+      # 300 MB of node_modules), a few seconds of tests. Its telemetry and the analytics of one of its dependencies are off.
+      - run: npm ci
+        working-directory: tests/agui-copilotkit
+        env:
+          SCARF_ANALYTICS: "false"
+      - run: npm test
+        working-directory: tests/agui-copilotkit
 
   desktop-linux:
     name: Tauri shell (Linux compile)

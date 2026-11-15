@@ -49,7 +49,7 @@ export function ClientsGuide({ base, token }: {
         </div>
         <h3 className="int-subtitle">{t("integrations.guida_terzi_titolo")}</h3>
         <p className="muted text-sm">
-          {tNode("integrations.guida_terzi_testo", { code: <code>tests/agui-client</code>, code2: <code>@ag-ui/client</code> })}
+          {tNode("integrations.guida_terzi_testo", { code: <code>tests/agui-*</code>, code2: <code>@ag-ui/client</code> })}
         </p>
         <Tabs
           idPrefix="snip-guide" label={t("integrations.guida_terzi_titolo")} value={active.id} onChange={setTab}
