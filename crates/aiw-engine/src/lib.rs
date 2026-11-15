@@ -3,6 +3,7 @@
 pub mod a2a_client;
 mod access;
 pub mod adviser;
+mod agent_credentials;
 pub mod attachments;
 pub mod background;
 pub mod backup;
@@ -1061,6 +1062,8 @@ impl Engine {
         }
         // The folder of the agent goes out of the way first: if it cannot be moved the agent stays, and one created later with
         // the same id never finds the files of this one.
+        // Its credentials first: whatever else fails, they are gone, and an agent created later with the same id has none.
+        self.remove_agent_credentials(id)?;
         let archived = self.archive_agent_workspace(id)?;
         self.0.store.delete_doc("agent", id)?;
         self.0.store.reset_profile_rewards(id)?;
@@ -1659,6 +1662,7 @@ impl Engine {
         // Chat runs and their sub-agents use the session id as thread id: an isolated session
         // works in its worktree. An agent with a folder of its own works there and nowhere else, whatever the session
         // says (a folder given explicitly, as an evaluation does, comes first).
+        let root_given = root.is_some();
         let ws = match root {
             Some(r) => r,
             None if agent.has_dedicated_workspace() => self.dedicated_workspace(&agent.id),
@@ -1695,6 +1699,16 @@ impl Engine {
             if shared.parent().is_some() && !shared.starts_with(&ws) {
                 tool_ctx.shell.hidden.push(shared);
             }
+        }
+        // The credentials of the agent, for its own run only: not a background proposal, not a channel run (text from outside),
+        // not a run in a folder somebody chose (an evaluation). A sub-agent gets the ones of its parent (host.rs).
+        if !root_given {
+            tool_ctx.credentials = self.credential_broker(&agent.id);
+        }
+        // Tests only: a stand-in server on loopback (a build never reaches local addresses from a tool).
+        #[cfg(test)]
+        if tests_isolation::private_network_allowed(&self.0.dirs.root) {
+            tool_ctx.allow_private_network = true;
         }
         // An agent can close its own network, never open the one the settings closed.
         if agent.isolation.as_ref().is_some_and(|i| i.close_shell_network) {
@@ -1744,6 +1758,13 @@ impl Engine {
             tool_ctx.cancel.clone(),
         )));
         let thinking = self.thinking_for(&profile, None);
+        let mut system_extra = vec![env, if apart { self.agents_md_in(&ws) } else { self.agents_md() }, self.language_line()];
+        // What the agent may call by name (a sub-agent is told by host.rs, once it knows whose credentials it uses).
+        if depth == 0 {
+            if let Some(line) = tool_ctx.credentials.as_ref().and_then(|b| Self::credentials_prompt(b, &agent.tools)) {
+                system_extra.push(line);
+            }
+        }
         // Models by role: only for the run the person started, never for a sub-agent.
         let roles = if depth == 0 { self.resolve_roles(&agent, &profile) } else { None };
         RunInput {
@@ -1759,7 +1780,7 @@ impl Engine {
             history,
             user_input,
             user_extra: Default::default(),
-            system_extra: vec![env, if apart { self.agents_md_in(&ws) } else { self.agents_md() }, self.language_line()],
+            system_extra,
             tool_ctx,
             hooks: self.hooks(),
             compact_at: self.0.config.get_f64("context.compact_at").unwrap_or(0.8),
@@ -2989,6 +3010,8 @@ mod tests_eval;
 #[cfg(test)]
 mod tests_vault;
 // The folders of the person exist on macOS only; the tests use canonicalised temp dirs (verbatim paths on Windows).
+#[cfg(test)]
+mod tests_credentials;
 #[cfg(all(test, unix))]
 mod tests_folders;
 #[cfg(test)]

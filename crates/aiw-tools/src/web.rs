@@ -213,6 +213,19 @@ where
     V: Fn(String) -> F,
     F: Future<Output = Result<Vetted>>,
 {
+    fetch_following_with(start, vet, |_| Ok(None)).await
+}
+
+/// [`fetch_following`] with a header chosen for each hop: `extra` is asked about every URL the request goes to, redirects
+/// included, and an `Err` stops the fetch before that request is sent. A credential is asked again at every hop, so a redirect
+/// to a host it is not meant for never carries it. A request that carries a header on a loopback address does not go through
+/// a proxy from the environment.
+async fn fetch_following_with<V, F, H>(start: &str, vet: V, extra: H) -> Result<(reqwest::Response, reqwest::Url)>
+where
+    V: Fn(String) -> F,
+    F: Future<Output = Result<Vetted>>,
+    H: Fn(&reqwest::Url) -> Result<Option<(String, String)>>,
+{
     let deadline = Instant::now() + FETCH_TIMEOUT;
     let mut next = start.to_string();
     for _ in 0..=MAX_REDIRECTS {
@@ -221,6 +234,7 @@ where
         if left.is_zero() {
             return Err(Error::Runtime("timeout della richiesta".into()));
         }
+        let header = extra(&url)?;
         let mut builder = reqwest::Client::builder()
             .timeout(left)
             .redirect(reqwest::redirect::Policy::none())
@@ -228,7 +242,23 @@ where
         if let (Some(host), false) = (url.host_str(), addrs.is_empty()) {
             builder = builder.resolve_to_addrs(host, &addrs);
         }
-        let res = builder.build().map_err(Error::other)?.get(url.clone()).send().await.map_err(|e| Error::Runtime(e.to_string()))?;
+        let mut request = None;
+        if let Some((name, value)) = header {
+            let name =
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| Error::Invalid("intestazione non valida".into()))?;
+            let mut value =
+                reqwest::header::HeaderValue::from_str(&value).map_err(|_| Error::Invalid("valore dell'intestazione non valido".into()))?;
+            value.set_sensitive(true);
+            if is_loopback_host(&url) {
+                builder = builder.no_proxy();
+            }
+            request = Some((name, value));
+        }
+        let mut get = builder.build().map_err(Error::other)?.get(url.clone());
+        if let Some((name, value)) = request {
+            get = get.header(name, value);
+        }
+        let res = get.send().await.map_err(|e| Error::Runtime(e.to_string()))?;
         if !res.status().is_redirection() {
             return Ok((res, url));
         }
@@ -291,24 +321,114 @@ impl Tool for WebFetchTool {
             r = fetch_following(start, |u| async move { vet_url(&u, ctx).await }) => r?,
             _ = ctx.cancel.cancelled() => return Err(Error::Cancelled),
         };
-        let status = res.status();
-        let ctype = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-        let (body, cut) = read_capped(res, MAX_BODY_BYTES).await?;
-        let (title, text) = if ctype.contains("html") || body.trim_start().starts_with('<') { html_to_text(&body) } else { (None, body) };
-        let mut out = format!("URL: {url}\nStato: {status}\n");
-        if let Some(t) = title {
-            out.push_str(&format!("Titolo: {t}\n"));
+        render_response(res, url, max).await
+    }
+}
+
+/// The answer of a fetch as the tool shows it: URL, status, title, then the text of the page.
+async fn render_response(res: reqwest::Response, url: reqwest::Url, max: usize) -> Result<ToolOutput> {
+    let status = res.status();
+    let ctype = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let (body, cut) = read_capped(res, MAX_BODY_BYTES).await?;
+    let (title, text) = if ctype.contains("html") || body.trim_start().starts_with('<') { html_to_text(&body) } else { (None, body) };
+    let mut out = format!("URL: {url}\nStato: {status}\n");
+    if let Some(t) = title {
+        out.push_str(&format!("Titolo: {t}\n"));
+    }
+    out.push('\n');
+    let truncated = text.chars().count() > max;
+    out.push_str(&text.chars().take(max).collect::<String>());
+    if truncated {
+        out.push_str("\n… [troncato]");
+    }
+    if cut {
+        out.push_str(&format!("\n[risposta oltre {} MB: letta solo la parte iniziale]", MAX_BODY_BYTES >> 20));
+    }
+    Ok(if status.is_success() { ToolOutput::text(out) } else { ToolOutput::error(out) })
+}
+
+/// Is the host of `u` the local machine: `localhost`, `*.localhost` or a loopback address.
+pub fn is_loopback_host(u: &reqwest::Url) -> bool {
+    let Some(host) = u.host_str() else { return false };
+    let host = host.to_ascii_lowercase();
+    let bare = host.trim_start_matches('[').trim_end_matches(']').trim_end_matches('.');
+    bare == "localhost" || bare.ends_with(".localhost") || bare.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// What replaces a credential in what a server sends back.
+const REDACTED: &str = "[credenziale]";
+
+/// `text` without the secrets: each one as it is and percent-encoded (a server that echoes the request in a query string).
+fn redact_secrets(text: &str, secrets: &[String]) -> String {
+    let mut out = text.to_string();
+    for s in secrets.iter().filter(|s| s.len() >= 8) {
+        out = out.replace(s.as_str(), REDACTED);
+        let encoded: String = s
+            .bytes()
+            .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+            .collect();
+        if encoded != *s {
+            out = out.replace(&encoded, REDACTED);
         }
-        out.push('\n');
-        let truncated = text.chars().count() > max;
-        out.push_str(&text.chars().take(max).collect::<String>());
-        if truncated {
-            out.push_str("\n… [troncato]");
-        }
-        if cut {
-            out.push_str(&format!("\n[risposta oltre {} MB: letta solo la parte iniziale]", MAX_BODY_BYTES >> 20));
-        }
-        Ok(if status.is_success() { ToolOutput::text(out) } else { ToolOutput::error(out) })
+    }
+    out
+}
+
+/// `web_fetch_auth`: `web_fetch` with a credential of the agent. The model says which one by name; the engine, through the
+/// [`crate::CredentialBroker`] of the run, adds the header and only to the hosts the credential was given for, over https.
+/// The value never goes through the model: not in the arguments, and a server that echoes it back gets it stripped from the
+/// answer. It needs an explicit grant (`*` does not cover it).
+#[derive(Default)]
+pub struct WebFetchAuthTool;
+
+/// Name of [`WebFetchAuthTool`].
+pub const WEB_FETCH_AUTH: &str = "web_fetch_auth";
+
+#[async_trait]
+impl Tool for WebFetchAuthTool {
+    fn name(&self) -> &str {
+        WEB_FETCH_AUTH
+    }
+    fn description(&self) -> &str {
+        "Scarica una pagina o una risorsa web con una credenziale di questo agente (un token, una chiave) e la restituisce come testo. \
+         Dici solo il nome della credenziale (`credential`, tra quelle elencate nell'ambiente): la aggiunge l'app, tu non ne vedi mai il valore, \
+         e parte solo verso gli host per cui l'utente l'ha data, solo in https. Per una pagina pubblica usa web_fetch."
+    }
+    fn parameters(&self) -> Value {
+        json!({"type":"object","properties":{
+            "url":{"type":"string"},
+            "credential":{"type":"string","description":"Nome della credenziale dell'agente"},
+            "max_chars":{"type":"integer","description":"Default 20000"}
+        },"required":["url","credential"]})
+    }
+    fn risk(&self) -> Risk {
+        Risk::Network
+    }
+    fn explicit_grant(&self) -> bool {
+        true
+    }
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let Some(broker) = ctx.credentials.clone() else {
+            return Err(Error::Denied("questo agente non ha credenziali utilizzabili in questo run".into()));
+        };
+        let start = arg_str(&args, "url")?;
+        let name = arg_str(&args, "credential")?.trim().to_string();
+        let max = args.get("max_chars").and_then(|v| v.as_u64()).unwrap_or(20_000).clamp(500, 200_000) as usize;
+        let secrets = std::sync::Mutex::new(Vec::<String>::new());
+        let insecure_ok = ctx.allow_private_network;
+        let header = |u: &reqwest::Url| -> Result<Option<(String, String)>> {
+            let used = broker.authorize(&name, u, insecure_ok)?;
+            secrets.lock().unwrap().push(used.secret.clone());
+            Ok(Some((used.header.clone(), used.value.clone())))
+        };
+        let fetched = tokio::select! {
+            r = fetch_following_with(start, |u| async move { vet_url(&u, ctx).await }, header) => r,
+            _ = ctx.cancel.cancelled() => return Err(Error::Cancelled),
+        };
+        let (res, url) = fetched?;
+        let mut out = render_response(res, url, max).await?;
+        out.content = redact_secrets(&out.content, &secrets.lock().unwrap());
+        Ok(out)
     }
 }
 

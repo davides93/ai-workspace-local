@@ -19,12 +19,28 @@ pub(crate) const ALFA_FILE: &str = "CONTENUTO-RISERVATO-DI-ALFA";
 pub(crate) const BETA_FILE: &str = "CONTENUTO-RISERVATO-DI-BETA";
 const SHARED_FILE: &str = "CONTENUTO-DEL-WORKSPACE-CONDIVISO";
 
+/// Data folders of the engines whose runs may reach a stand-in server on loopback (`build_input_at` reads it in tests only).
+static PRIVATE_NETWORK: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn allow_private_network_for(data: &Path) {
+    PRIVATE_NETWORK.lock().unwrap().push(data.to_path_buf());
+}
+
+pub(crate) fn private_network_allowed(data: &Path) -> bool {
+    PRIVATE_NETWORK.lock().unwrap().iter().any(|p| p == data)
+}
+
 pub(crate) async fn engine_at(data: &Path, ws: &Path) -> Engine {
+    engine_with(data, ws, crate::vault::Keychain::None).await
+}
+
+pub(crate) async fn engine_with(data: &Path, ws: &Path, keychain: crate::vault::Keychain) -> Engine {
     let e = Engine::new(EngineOptions {
         data_dir: Some(data.to_path_buf()),
         workspace_root: Some(ws.to_path_buf()),
         mode: "embedded".into(),
         offline: true,
+        keychain,
         ..Default::default()
     })
     .await
@@ -83,11 +99,11 @@ pub(crate) fn input_of(e: &Engine, agent_id: &str) -> RunInput {
     )
 }
 
-async fn call(e: &Engine, input: &RunInput, tool: &str, args: Value) -> aiw_core::Result<ToolOutput> {
+pub(crate) async fn call(e: &Engine, input: &RunInput, tool: &str, args: Value) -> aiw_core::Result<ToolOutput> {
     e.tool_registry().get(tool).unwrap_or_else(|| panic!("tool {tool}")).call(args, &input.tool_ctx).await
 }
 
-fn denied(r: aiw_core::Result<ToolOutput>, what: &str) {
+pub(crate) fn denied(r: aiw_core::Result<ToolOutput>, what: &str) {
     match r {
         Err(Error::Denied(_)) => {}
         other => panic!("{what}: expected a refusal, got {other:?}"),

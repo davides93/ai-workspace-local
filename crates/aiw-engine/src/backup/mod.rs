@@ -95,9 +95,9 @@ fn allowed(rel: &str, sensitive: bool) -> bool {
 
 /// Kinds of the `documents` table that are secrets in themselves: not saved without `include_secrets`. The table of the vault
 /// (`vault::rules`) is the one place that says which they are.
-const SECRET_KINDS: [&str; 3] = rules::WHOLE_KINDS;
+const SECRET_KINDS: [&str; rules::WHOLE_KINDS.len()] = rules::WHOLE_KINDS;
 /// Kinds that carry a secret among other things: saved with the secret emptied (same table).
-const SCRUB_KINDS: [&str; 5] = rules::BY_NAME_KINDS;
+const SCRUB_KINDS: [&str; rules::BY_NAME_KINDS.len()] = rules::BY_NAME_KINDS;
 /// Kinds that hold no secret. Together with the two lists above this must cover every kind the engine writes: a test
 /// reads the sources and fails when a new kind is not classified here.
 #[cfg(test)]

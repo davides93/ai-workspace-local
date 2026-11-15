@@ -1236,6 +1236,13 @@ fn is_assistant(id: &str) -> bool {
 
 /// Why an agent with these settings is outside what the tool manages (and so is not made or edited from the chat), if it is.
 fn envelope_problem(e: &Engine, a: &AgentProfile) -> Option<String> {
+    // An agent kept apart is configured by its owner: from the chat nobody edits its prompt or tools, and its isolation is not here to change.
+    if a.isolation.is_some() {
+        return Some("è tenuto separato dagli altri (isolation)".into());
+    }
+    if !a.id.is_empty() && e.agent_has_credentials(&a.id) {
+        return Some("ha credenziali sue".into());
+    }
     if !["plan", "ask"].contains(&a.mode.as_str()) {
         return Some(format!("la modalità «{}» non è tra quelle ammesse (solo plan e ask)", a.mode));
     }

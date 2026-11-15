@@ -821,6 +821,40 @@ impl AgentIsolation {
     }
 }
 
+/// A credential of one agent, as the API lists it: what identifies it and where it may be used, never the value.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentCredentialInfo {
+    /// What the agent calls it (`github`): the model names it in `web_fetch_auth`, never sees its value.
+    pub name: String,
+    /// The only hosts it is sent to (each also covers its subdomains).
+    pub hosts: Vec<String>,
+    /// The request header it travels in.
+    pub header: String,
+    /// What goes before the value in the header (`Bearer `).
+    pub prefix: String,
+    /// A value is stored and can be read back by this computer (false: it is empty, or sealed with a key that is not
+    /// available now).
+    pub set: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// `PUT /api/agents/{id}/credentials/{name}`: what the owner sends to create or change a credential.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentCredentialInput {
+    /// The hosts the credential may be sent to: at least one, bare names (`api.github.com`), no scheme, port or path.
+    pub hosts: Vec<String>,
+    /// Header name; absent: `Authorization` (or the one stored).
+    #[serde(default)]
+    pub header: Option<String>,
+    /// Text before the value; absent: `Bearer ` for `Authorization`, nothing for another header (or the one stored).
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// The secret. Required to create; absent when changing a credential that exists keeps the stored value. Never returned.
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
 /// The four jobs a model can have inside one agent run.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]

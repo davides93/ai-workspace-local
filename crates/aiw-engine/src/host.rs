@@ -226,6 +226,9 @@ impl RunHost for EngineHost {
         }
         // The network of the shell can be closed by a sub-agent, never reopened.
         input.tool_ctx.shell.network &= parent.tool_ctx.shell.network;
+        // The credentials are the ones of the parent, the agent that was talking: a sub-agent never uses its own (so a parent
+        // that does not hold a credential cannot borrow it by delegating), and only if the tool reached it through the narrowing.
+        input.tool_ctx.credentials = parent.tool_ctx.credentials.clone();
         // A sub-agent never gets more freedom than its parent.
         if mode_rank(&input.policy.mode) > mode_rank(&parent.policy.mode) {
             input.policy.mode = parent.policy.mode.clone();
@@ -246,6 +249,9 @@ impl RunHost for EngineHost {
         // The management tools (`aiw_*`, `ask_user`) are for the agent the person talks to: a sub-agent never gets one.
         input.agent.tools.retain(|t| !crate::management::is_management(t));
         input.agent.delegate_tools.retain(|t| !crate::management::is_management(t));
+        if let Some(line) = input.tool_ctx.credentials.as_ref().and_then(|b| Engine::credentials_prompt(b, &input.agent.tools)) {
+            input.system_extra.push(line);
+        }
         // The members of a team share its state (the tool is harmless: it touches nothing outside the run).
         input.in_team = parent.in_team;
         input.shared = parent.shared.clone();
@@ -296,12 +302,13 @@ impl RunHost for EngineHost {
             return Err(Error::Denied("la conversazione non può passare a un agente remoto: delegagli il lavoro".into()));
         }
         let target = self.engine.agent(agent_id)?;
-        // The conversation does not cross the boundary of an agent apart, in either direction: its history would carry what one
-        // side saw into the folder and the credentials of the other.
-        if from.agent.has_dedicated_workspace() || target.has_dedicated_workspace() {
+        // The conversation does not cross the boundary of an agent that is kept apart (a folder of its own, credentials of its
+        // own), in either direction: its history would carry what one side saw into the folder and the credentials of the other.
+        let apart = |a: &aiw_core::api::AgentProfile| a.has_dedicated_workspace() || self.engine.agent_has_credentials(&a.id);
+        if let Some(isolated) = [&target, &from.agent].into_iter().find(|a| apart(a)) {
             return Err(Error::Denied(format!(
-                "«{}» lavora in uno spazio separato dagli altri agenti: la conversazione non passa da o verso un agente isolato. Scrivi direttamente a chi serve.",
-                if target.has_dedicated_workspace() { &target.name } else { &from.agent.name }
+                "«{}» è un agente isolato (ha un workspace o delle credenziali sue): la conversazione non passa da o verso di lui. Scrivi direttamente a chi serve.",
+                isolated.name
             )));
         }
         // The conversation never moves to an agent with more freedom than the one that started it.
