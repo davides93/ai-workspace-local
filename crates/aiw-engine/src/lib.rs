@@ -2921,6 +2921,8 @@ mod tests_background;
 #[cfg(test)]
 mod tests_backup;
 #[cfg(test)]
+mod tests_brief;
+#[cfg(test)]
 mod tests_channels;
 #[cfg(test)]
 mod tests_eval;

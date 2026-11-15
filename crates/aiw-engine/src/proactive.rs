@@ -252,6 +252,10 @@ pub(crate) struct ConnectorCtx {
     events: Vec<aiw_tools::connectors::Event>,
     /// Messages that arrived since the last tick, newest first.
     pub(crate) mail: Vec<aiw_tools::connectors::Mail>,
+    /// Calendar sources and mail sources that could not be read (a count, never their names or paths: the briefing may
+    /// be sent to a channel).
+    pub(crate) calendar_unread: usize,
+    pub(crate) mail_unread: usize,
 }
 
 impl ConnectorCtx {
@@ -271,6 +275,15 @@ impl ConnectorCtx {
         }
         if !self.mail.is_empty() {
             out.push(self.mail_line());
+        }
+        // A source that cannot be read is said, so that an empty calendar is not taken for a free day.
+        for (n, what) in [(self.calendar_unread, "del calendario"), (self.mail_unread, "della posta")] {
+            if n > 0 {
+                out.push(format!(
+                    "Non ho potuto leggere {n} {} {what}: controlla i connettori nelle impostazioni.",
+                    if n == 1 { "fonte" } else { "fonti" }
+                ));
+            }
         }
         out
     }
@@ -871,11 +884,15 @@ e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
                 .from_local_datetime(&(now.date_naive() + ChronoDuration::days(1)).and_hms_opt(0, 0, 0).unwrap())
                 .earliest()
                 .unwrap_or(now);
-            ctx.events = c.calendar_events(now, midnight_next).await.0;
+            let (events, notes) = c.calendar_events(now, midnight_next).await;
+            ctx.events = events;
+            ctx.calendar_unread = notes.len();
         }
         if c.mail_enabled() {
             // File reading happens off the async threads, inside; IMAP is read with its own timeouts.
-            ctx.mail = c.mail_since(since, now).await.0;
+            let (mail, notes) = c.mail_since(since, now).await;
+            ctx.mail = mail;
+            ctx.mail_unread = notes.len();
         }
         ctx
     }
