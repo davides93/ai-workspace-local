@@ -74,6 +74,13 @@ impl EngineHost {
         self.route = route;
         self
     }
+    /// A background task does not count the time its run spent waiting for the person.
+    fn waited(&self, d: Duration) {
+        if let Some(ctx) = &self.task {
+            self.engine.task_waited(ctx, d);
+        }
+    }
+
     /// The run is a segment of a background task: it stops, saves and listens at every turn boundary.
     pub(crate) fn with_task(mut self, ctx: crate::bgtasks::RunCtx) -> Self {
         self.task = Some(ctx);
@@ -136,10 +143,13 @@ impl RunHost for EngineHost {
         if self.deny_approvals {
             return false;
         }
-        match self.approval_timeout {
+        let started = std::time::Instant::now();
+        let answer = match self.approval_timeout {
             Some(t) => self.engine.wait_approval_outcome(req, self.session_id.clone(), Some(t)).await == ApprovalOutcome::Allowed,
             None => self.engine.wait_approval(req, self.session_id.clone()).await,
-        }
+        };
+        self.waited(started.elapsed());
+        answer
     }
 
     async fn approve_outcome(&self, req: ApprovalRequest) -> ApprovalOutcome {
@@ -147,9 +157,13 @@ impl RunHost for EngineHost {
         if self.deny_approvals {
             return ApprovalOutcome::Denied;
         }
-        self.engine
+        let started = std::time::Instant::now();
+        let outcome = self
+            .engine
             .wait_approval_outcome(req, self.session_id.clone(), self.approval_timeout.or_else(|| self.engine.approval_timeout()))
-            .await
+            .await;
+        self.waited(started.elapsed());
+        outcome
     }
 
     fn audit(&self, entry: AuditEntry) {

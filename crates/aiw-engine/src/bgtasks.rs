@@ -147,6 +147,15 @@ fn note(t: &mut BackgroundTask, text: impl Into<String>) {
     }
 }
 
+/// `s` cut to `n` characters, keeping its line breaks (the answer of an agent is read as written).
+fn clip_text(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>().trim_end())
+    }
+}
+
 fn pending(t: &BackgroundTask) -> Vec<&TaskInstruction> {
     t.instructions.iter().filter(|i| i.status == "pending").collect()
 }
@@ -166,9 +175,12 @@ fn exhausted(t: &BackgroundTask) -> Option<String> {
     None
 }
 
+/// What is left of the limits of the task, as the budget of the next run. The time is not part of it: the run's own clock
+/// counts the minutes the person takes to answer a confirmation, so the time of a task is checked at every turn instead,
+/// without that waiting (see [`Engine::task_checkpoint`]).
 fn remaining(t: &BackgroundTask) -> BudgetLimits {
     BudgetLimits {
-        max_seconds: t.limits.max_seconds.map(|m| m.saturating_sub(t.progress.seconds).max(1)),
+        max_seconds: None,
         max_turns: t.limits.max_turns.map(|m| m.saturating_sub(t.progress.turns).max(1)),
         max_tokens: t.limits.max_tokens.map(|m| m.saturating_sub(t.progress.tokens).max(1)),
     }
@@ -256,20 +268,10 @@ impl Engine {
         let _ = self.0.store.put_doc(SPEND_KIND, SPEND_ID, &s);
     }
 
-    /// Seconds of work the tasks used today, the segments that are going on included.
+    /// Seconds of work the tasks used today. A step is added when it ends a turn (waiting for the person is never added),
+    /// so what is going on right now is counted a turn late, never twice.
     pub(crate) fn tasks_seconds_today(&self, now: DateTime<Local>) -> f64 {
-        let inflight: f64 = self
-            .0
-            .store
-            .list_docs::<BackgroundTask>(KIND)
-            .unwrap_or_default()
-            .iter()
-            .filter(|t| t.status == "running")
-            .filter_map(|t| t.segment_started_at.as_deref())
-            .filter_map(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|s| (now - s.with_timezone(&Local)).num_milliseconds().max(0) as f64 / 1000.0)
-            .sum();
-        self.spend_today(now) + inflight
+        self.spend_today(now)
     }
 
     // ------------------------------------------------------------------ the rules
@@ -475,6 +477,8 @@ impl Engine {
             t.auto_resume = false;
             t.stopping = false;
             t.segment_started_at = Some(stamp);
+            t.segment_wait_s = 0;
+            t.segment_billed_s = 0;
             let seed = Seed {
                 task_id: t.id.clone(),
                 segment,
@@ -489,8 +493,11 @@ impl Engine {
         match self.start_run_inner(&t.session_id, text, None, 0, None, vec![], None, Some(seed.clone())).await {
             Ok(run_id) => {
                 let (t, ()) = self.task_mut(id, |t| {
-                    if t.segments == seed.segment {
+                    // A run that was over before this ran (a task that finishes at once) leaves the record as it is.
+                    if t.segments == seed.segment && t.status == "running" {
                         t.current_run_id = Some(run_id.clone());
+                    }
+                    if t.segments == seed.segment {
                         t.run_ids.push(run_id.clone());
                     }
                     Ok(())
@@ -680,7 +687,7 @@ impl Engine {
         }
         let used_turns = ctx.budget.used_turns();
         let used_tokens = ctx.budget.used_tokens();
-        let elapsed = ctx.started.elapsed().as_secs();
+        let wall = ctx.started.elapsed().as_secs();
         let last_tool = new.iter().rev().find_map(|m| m.tool_calls.as_ref().and_then(|c| c.last()).map(|c| c.name.clone()));
         let last_text = new.iter().rev().find(|m| m.role == "assistant" && !m.content.trim().is_empty()).map(|m| short(&m.content, 200));
         let later_turn = new.len() > 1;
@@ -690,7 +697,13 @@ impl Engine {
             }
             t.progress.turns = ctx.base_turns + used_turns;
             t.progress.tokens = ctx.base_tokens + used_tokens;
-            t.progress.seconds = ctx.base_seconds + elapsed;
+            // Time spent waiting for the person is not time spent working.
+            t.progress.seconds = ctx.base_seconds + wall.saturating_sub(t.segment_wait_s);
+            let working = t.progress.seconds - ctx.base_seconds;
+            if working > t.segment_billed_s {
+                self.spend_add(now, (working - t.segment_billed_s) as f64);
+                t.segment_billed_s = working;
+            }
             if last_tool.is_some() {
                 t.progress.last_tool.clone_from(&last_tool);
             }
@@ -700,6 +713,15 @@ impl Engine {
             t.progress.updated_at = Some(now_rfc3339());
             if t.stopping {
                 return Ok((Some(t.pause_text.clone().unwrap_or_else(|| "Messo in pausa.".into())), vec![]));
+            }
+            if let Some(what) = exhausted(t) {
+                let text = format!("Il lavoro ha usato tutto il suo budget ({what}): aggiungine altro per riprendere.");
+                t.stopping = true;
+                t.pause_reason = Some("task_budget".into());
+                t.pause_text = Some(text.clone());
+                t.auto_resume = false;
+                note(t, format!("Si ferma: {text}"));
+                return Ok((Some(text), vec![]));
             }
             if let Some(g) = self.task_gate(t, now) {
                 t.stopping = true;
@@ -759,13 +781,26 @@ impl Engine {
         Checkpoint { stop: None, instructions: deliver.into_iter().map(|(_, t)| t).collect() }
     }
 
+    /// The run of a segment waited `d` for the person to answer a confirmation: that is not working time.
+    pub(crate) fn task_waited(&self, ctx: &RunCtx, d: std::time::Duration) {
+        let _ = self.task_mut(&ctx.task_id, |t| {
+            if t.segments == ctx.segment && t.status == "running" {
+                t.segment_wait_s += d.as_secs();
+            }
+            Ok(())
+        });
+    }
+
     /// A segment's run ended. Decides what the task does next: finish, pause, or go straight on with a new segment.
     pub(crate) async fn task_segment_ended(&self, ctx: &RunCtx, outcome: SegmentEnd, final_text: &str) {
         let now = Local::now();
-        let elapsed = ctx.started.elapsed();
+        let wall = ctx.started.elapsed();
         let used_turns = ctx.budget.used_turns();
         let used_tokens = ctx.budget.used_tokens();
-        self.spend_add(now, elapsed.as_secs_f64());
+        // Only the time the task worked counts (not the minutes it waited for a confirmation).
+        let (waited, billed) = self.task_load(&ctx.task_id).map(|t| (t.segment_wait_s, t.segment_billed_s)).unwrap_or((0, 0));
+        let elapsed = wall.saturating_sub(std::time::Duration::from_secs(waited));
+        self.spend_add(now, (elapsed.as_secs_f64() - billed as f64).max(0.0));
         let mut next: Option<u32> = None;
         let res = self.task_mut(&ctx.task_id, |t| {
             if t.segments != ctx.segment {
@@ -780,6 +815,8 @@ impl Engine {
             }
             t.current_run_id = None;
             t.segment_started_at = None;
+            t.segment_wait_s = 0;
+            t.segment_billed_s = 0;
             if t.status != "running" {
                 // Paused, killed or cancelled from outside while the run was ending: that already decided.
                 return Ok(());
@@ -823,7 +860,7 @@ impl Engine {
                     let goes_on = matches!(end, RunEnd::TurnLimit) || (matches!(end, RunEnd::Finished) && more > 0);
                     if !goes_on {
                         t.status = "succeeded".into();
-                        t.result = (!final_text.trim().is_empty()).then(|| short(final_text, 2000));
+                        t.result = (!final_text.trim().is_empty()).then(|| clip_text(final_text.trim(), 2000));
                         t.finished_at = Some(now_rfc3339());
                         t.forced = false;
                         t.stopping = false;
