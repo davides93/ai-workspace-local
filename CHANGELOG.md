@@ -2,7 +2,10 @@
 
 ## Non rilasciato
 
+## 0.5.0-beta.11 - pre-release
+
 - **Mac App Store/TestFlight: cartelle consentite.** Da Impostazioni → *Cartelle consentite* si scelgono con il pannello di macOS una o più cartelle del Mac (Download, Documenti…) in cui gli agenti leggono e scrivono, con un permesso che resta dopo il riavvio (security-scoped bookmark, entitlement `files.bookmarks.app-scope` aggiunto). Prima l'agente vedeva solo la cartella dell'app (un «Download» nel container). Solo l'utente le aggiunge (nessuna rotta, impostazione o strumento lo fa; `GET /api/folders` è di sola lettura); restano nascosti i dati dell'app e i luoghi segreti anche dentro una cartella consentita; `delete_file` rifiuta fuori dal workspace perché il ripristino dei run non li copre; `shell` e server MCP non ricevono le cartelle. DMG, Windows, Linux e mobile non cambiano. **Provato** con test Rust/UI e con un'app di prova firmata in App Sandbox (`macos-folders/selftest.sh`); **non provato** il clic sul pannello vero né una build firmata con i certificati dello store.
+- Il flusso «Verify store delivery» controlla per default la build degli store della configurazione corrente invece di un numero scritto a mano (#103). Build store **5013**.
 
 ## 0.5.0-beta.10 - pre-release
 
