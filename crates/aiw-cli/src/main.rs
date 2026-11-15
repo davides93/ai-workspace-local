@@ -62,6 +62,8 @@ enum Cmd {
         adapter: Vec<String>,
     },
     /// Esegue un compito con un agente e mostra la risposta in streaming
+    ///
+    /// Gli strumenti di gestione dell'Assistente (modelli, impostazioni, connettori, segreti) funzionano solo dalla chat dell'app: da terminale usa i comandi `aiw models`, `aiw runtimes`, `aiw profile`.
     Run {
         prompt: String,
         #[arg(long, default_value = "operator")]
