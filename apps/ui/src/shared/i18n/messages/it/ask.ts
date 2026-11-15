@@ -24,7 +24,7 @@ export const askIt = {
   "ask.segreto_richiesto": "Serve un valore riservato",
   "ask.segreto_testo": "L'assistente chiede: {label}",
   "ask.segreto_destinazione": "Sarà salvato in: {destination}",
-  "ask.segreto_riservato": "Resta fra te e la destinazione: l'assistente non lo vede mai e non finisce nella conversazione.",
+  "ask.segreto_riservato": "Resta fra te e la destinazione: l'assistente non lo vede mai e non finisce nella conversazione. Su questo computer è salvato senza cifratura.",
   "ask.segreto_campo": "Valore di «{label}»",
   "ask.mostra_il_valore": "Mostra il valore",
   "ask.salva": "Salva",
