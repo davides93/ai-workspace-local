@@ -1,4 +1,7 @@
 import type { UiMode } from "../../lib/uiMode";
+import { createChannel, updateChannel } from "./channels";
+import { createContext } from "./contexts";
+import { seedDraft } from "./drafts";
 import { catalog, configLayers, folderGrants, models, nid, now, runtimes, sessionMessages, sessions, system } from "./fixtures";
 
 /**
@@ -10,8 +13,11 @@ import { catalog, configLayers, folderGrants, models, nid, now, runtimes, sessio
  *   the simple interface looks like before "Prepara tutto".
  * - `mas`: the sandboxed Mac App Store build: the agents work in the app's own folder and the person grants more
  *   folders of the Mac (Download is already granted), so Settings shows «Cartelle consentite».
+ * - `mail`: a Telegram channel and an email channel, both on, linked into one shared conversation, and four email drafts
+ *   (two written by the assistant and waiting for the owner, one that failed, one already sent), so «Canali» shows the
+ *   linked conversations and the review of the drafts.
  */
-export const MOCK_SCENARIOS = ["first-run", "mas"] as const;
+export const MOCK_SCENARIOS = ["first-run", "mas", "mail"] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 export const isMockScenario = (v: unknown): v is MockScenario => (MOCK_SCENARIOS as readonly unknown[]).includes(v);
@@ -24,6 +30,27 @@ export function applyMockScenario(name: MockScenario): void {
     for (const r of runtimes) r.loaded_models = [];
     sessions.length = 0;
     for (const id of Object.keys(sessionMessages)) delete sessionMessages[id];
+  }
+  if (name === "mail") {
+    const tg = createChannel({ kind: "telegram", name: "Telegram", mode: "ask", allowed: ["111"], secrets: { bot_token: "123456:demo" } });
+    const mail = createChannel({
+      kind: "email", name: "Posta", mode: "ask", allowed: ["mario@example.it"],
+      secrets: { imap_password: "demo", smtp_password: "demo" },
+      settings: { imap_host: "imap.example.org", imap_user: "assistente", smtp_host: "smtp.example.org", from: "assistente@casa.example" },
+    });
+    updateChannel(tg.id, { enabled: true });
+    updateChannel(mail.id, { enabled: true });
+    createContext({ name: "Mario, ovunque", members: [{ channel_id: tg.id, sender: "111" }, { channel_id: mail.id, sender: "mario@example.it" }] });
+    seedDraft({
+      to: ["anna@cliente.it"], cc: ["capo@esempio.it"], bcc: ["archivio@esempio.it"], subject: "Preventivo per il cantiere",
+      body: "Buongiorno Anna,\nin allegato il preventivo richiesto per il cantiere di via Roma.\n\nResto a disposizione.\nMario",
+      in_reply_to: "<richiesta@cliente.it>", attachments: ["docs/preventivo-cantiere.pdf"], source: "mail:<richiesta@cliente.it>",
+    }, "assistant");
+    seedDraft({ to: ["luca@esempio.it"], subject: "Conferma riunione di giovedì", body: "Ciao Luca, confermo la riunione di giovedì alle 15.", source: "calendar:Riunione di giovedì" }, "assistant");
+    seedDraft({ to: ["rotto@cliente.it"], subject: "Sollecito fattura", body: "Gentile cliente, ricordo la fattura in scadenza." }, "user", {
+      status: "failed", note: "il server di posta ha rifiutato il destinatario rotto@cliente.it (550 no such user) (non è partito nulla)",
+    });
+    seedDraft({ to: ["bruno@esempio.it"], subject: "Grazie", body: "Grazie per l'incontro di ieri." }, "user", { status: "sent", sent_at: now(), message_id: "<draft-demo@aiw.local>" });
   }
   if (name === "mas") {
     system.sandboxed = true;
