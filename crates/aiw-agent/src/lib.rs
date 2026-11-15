@@ -266,7 +266,14 @@ mod tests {
         host.refused.lock().unwrap().insert("write_file".into(), "Qui non si può.".into());
         let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
         assert!(!dir.path().join("out.txt").exists(), "the refused call did not run");
-        assert_eq!(out.new_messages[2].content, "ERRORE: Qui non si può.");
+        assert_eq!(out.new_messages[2].content, "ERRORE: Negato: Qui non si può.");
+        // A refusal is final: the self-check at the end of the run does not hand it back with «correggi la chiamata e riprova».
+        assert_eq!(out.final_text, "ok");
+        assert!(
+            !out.new_messages.iter().any(|m| m.content.contains("Controllo automatico")),
+            "{:?}",
+            out.new_messages.iter().map(|m| &m.content).collect::<Vec<_>>()
+        );
         assert!(!asked_for_a_confirmation(&host), "no approval request: {:?}", types(&host));
         {
             let audits = host.audits.lock().unwrap();
@@ -297,7 +304,7 @@ mod tests {
         let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
         let tools: Vec<&str> = out.new_messages.iter().filter(|m| m.role == "tool").map(|m| m.content.as_str()).collect();
         assert_eq!(tools.len(), 2, "{tools:?}");
-        assert_eq!(tools[0], "ERRORE: Niente shell.");
+        assert_eq!(tools[0], "ERRORE: Negato: Niente shell.");
         assert!(tools[1].contains("a.txt"), "{}", tools[1]);
         assert_eq!(out.final_text, "fatto");
     }
@@ -789,7 +796,7 @@ mod hook_event_tests {
         let out = AgentRunner::run(inp, host.clone()).await.unwrap();
         assert!(logged(&log).is_empty(), "no hook ran: {:?}", logged(&log));
         assert!(!dir.path().join("out.txt").exists());
-        assert_eq!(out.new_messages.iter().find(|m| m.role == "tool").unwrap().content, "ERRORE: Qui non si può.");
+        assert_eq!(out.new_messages.iter().find(|m| m.role == "tool").unwrap().content, "ERRORE: Negato: Qui non si può.");
         let evs = host.events.lock().unwrap();
         assert!(!evs.iter().any(|e| matches!(e, AgEvent::Custom { name, .. } if name == "aiw.approval_request")), "no approval request");
     }

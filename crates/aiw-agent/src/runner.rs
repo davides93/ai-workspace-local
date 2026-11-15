@@ -1527,7 +1527,8 @@ impl AgentRunner {
         // confirmation: a question nobody can answer (or whose answer changes nothing) is never asked.
         if let Some(why) = host.refuse_tool(&input.run_id, &tc.name) {
             audit("deny", why.clone());
-            return (ToolOutput::error(why), None);
+            // «Negato…» is what marks a refusal as final: the self-check at the end of the run does not hand it back.
+            return (ToolOutput::error(format!("Negato: {why}")), None);
         }
         // PreToolUse hooks.
         let pre =
