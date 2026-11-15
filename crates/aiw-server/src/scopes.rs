@@ -47,6 +47,7 @@ const RULES: &[(&str, &str, Required)] = &[
     ("*", "/api/tokens/**", FULL),
     ("*", "/api/tls", FULL),
     ("*", "/api/tls/**", FULL),
+    ("*", "/api/security/secrets", FULL),
     // The surfaces of third-party apps and paired computers.
     ("*", "/v1/**", GATEWAY),
     ("*", "/a2a", A2A),

@@ -41,6 +41,39 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --no-fail-fast
 
+  # The tests of the secrets at rest that talk to the real keychain of the runner (`#[ignore]`: a headless machine has none, and
+  # `cargo test` never touches one). Windows Credential Manager, macOS Keychain, and the Secret Service of Linux (gnome-keyring
+  # on a D-Bus session, and a session without one). They use a service name of their own and remove what they make.
+  keychain:
+    name: Portachiavi vero (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Portachiavi del sistema (Windows, macOS)
+        if: runner.os != 'Linux'
+        run: cargo test -p aiw-engine --lib vault::tests::real_keychain -- --ignored --nocapture --test-threads=1
+      # Before gnome-keyring is installed: a runner that has it could start it by D-Bus activation and the test expects none.
+      - name: Linux senza servizio dei segreti
+        if: runner.os == 'Linux'
+        run: env -u DBUS_SESSION_BUS_ADDRESS cargo test -p aiw-engine --lib vault::tests::real_keychain::without_a_secret_service -- --ignored --nocapture --test-threads=1
+      - name: Servizio dei segreti (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11 libsecret-tools
+      - name: Linux con il servizio dei segreti (gnome-keyring su una sessione D-Bus)
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- bash -c '
+            # With a password: the login keyring is created and unlocked without a graphical prompt (an empty one asks for it).
+            echo -n "test-password" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            cargo test -p aiw-engine --lib vault::tests::real_keychain::the_ -- --ignored --nocapture --test-threads=1
+          '
+
   ui:
     name: UI (typecheck, test, build, mockup)
     runs-on: ubuntu-latest

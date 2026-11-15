@@ -129,6 +129,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: BackupCmd,
     },
+    /// Segreti cifrati sul disco: stato, ritorno in chiaro, cifratura, pulizia dei segreti che non si leggono più
+    Secrets {
+        #[command(subcommand)]
+        cmd: SecretsCmd,
+    },
     /// Esporta la diagnostica in un file JSON da allegare a una segnalazione: versione, sistema, hardware, runtime,
     /// impostazioni (segreti mascherati), schema del database, controlli di salute, ultime righe dei log.
     /// Non contiene chat, documenti o posta.
@@ -136,6 +141,25 @@ enum Cmd {
         /// File di destinazione (di serie: stampa sul terminale)
         #[arg(long, short)]
         output: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretsCmd {
+    /// Mostra se i segreti sono cifrati, con quale portachiavi e quanti sono cifrati, in chiaro o illeggibili (mai i valori)
+    Status,
+    /// Cifra i segreti con una chiave custodita nel portachiavi del sistema (è lo stato di serie dove il portachiavi c'è).
+    /// Solo con l'app chiusa e il daemon fermo
+    Encrypt,
+    /// Riporta i segreti in chiaro e toglie la chiave dal portachiavi (imposta security.secrets_at_rest = off).
+    /// Solo con l'app chiusa e il daemon fermo
+    Decrypt,
+    /// Toglie i segreti cifrati che non si possono più aprire (la chiave non è nel portachiavi), così si reinseriscono; poi
+    /// si crea una chiave nuova. È l'unico caso in cui un segreto cifrato viene scartato. Solo con l'app chiusa e il daemon fermo
+    ForgetUnreadable {
+        /// Non chiede conferma
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -552,6 +576,7 @@ async fn main() -> Result<()> {
     // Backup commands never start the engine: restoring must not have the database open, and inspecting needs no data.
     let cmd = match cli.cmd {
         Cmd::Backup { cmd } => return backup_cmd(cli.data.clone(), cmd),
+        Cmd::Secrets { cmd } => return secrets_cmd(cli.data.clone(), cli.workspace.clone(), cmd).await,
         other => other,
     };
     let serve_mode = matches!(cmd, Cmd::Serve { .. });
@@ -559,6 +584,10 @@ async fn main() -> Result<()> {
         data_dir: cli.data.clone(),
         workspace_root: cli.workspace.clone(),
         mode: if serve_mode { "daemon".into() } else { "embedded".into() },
+        keychain: aiw_engine::vault::Keychain::System,
+        // Only what stays up (`aiw serve`) may make the key or migrate: a one-shot command can run next to the app, which holds
+        // the key in memory and would write back what it has.
+        secrets_read_only: !serve_mode,
         ..Default::default()
     })
     .await
@@ -598,7 +627,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Backup { .. } => unreachable!("handled before the engine starts"),
+        Cmd::Backup { .. } | Cmd::Secrets { .. } => unreachable!("handled before the engine starts"),
         Cmd::Diagnostics { output } => {
             let doc = serde_json::to_string_pretty(&engine.diagnostics().await?)?;
             match output {
@@ -1335,6 +1364,9 @@ fn backup_cmd(data: Option<PathBuf>, cmd: BackupCmd) -> Result<()> {
         for s in &m.skipped {
             println!("  Non salvato: {s}");
         }
+        for n in &m.notes {
+            println!("  Nota: {n}");
+        }
     };
     match cmd {
         BackupCmd::Create { output, include_secrets } => {
@@ -1342,11 +1374,15 @@ fn backup_cmd(data: Option<PathBuf>, cmd: BackupCmd) -> Result<()> {
                 let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
                 PathBuf::from(format!("aiw-backup-{stamp}{}.tar.gz", if include_secrets { "-con-segreti" } else { "" }))
             });
-            let m = backup::create(&dirs, &BackupOptions { include_secrets }, &out)?;
+            // What this computer keeps sealed is opened with the key of the keychain: with secrets the archive is portable (they go
+            // in plain), without them the scrubbing sees an address with a password before it is sealed.
+            let codec: Option<std::sync::Arc<dyn aiw_core::sealed::SecretCodec>> =
+                Some(aiw_engine::vault::Vault::reader(&dirs, aiw_engine::vault::os_keystore()) as _);
+            let m = backup::create(&dirs, &BackupOptions { include_secrets, codec }, &out)?;
             println!("Backup creato: {} ({})", out.display(), size(std::fs::metadata(&out)?.len()));
             describe(&m);
             if include_secrets {
-                eprintln!("ATTENZIONE: l'archivio contiene i segreti in chiaro. Non caricarlo su servizi condivisi e non allegarlo a una segnalazione.");
+                eprintln!("ATTENZIONE: l'archivio contiene i segreti in chiaro (anche quelli che su questo computer sono cifrati: così si ripristina su qualunque computer). Non caricarlo su servizi condivisi e non allegarlo a una segnalazione.");
             } else {
                 eprintln!("I segreti non sono inclusi: dopo un ripristino vanno inseriti di nuovo (chiavi dei provider, password IMAP, token dei canali e dei server MCP).");
             }
@@ -1387,7 +1423,10 @@ fn backup_cmd(data: Option<PathBuf>, cmd: BackupCmd) -> Result<()> {
             }
             let r = backup::restore(&dirs, &file)?;
             match &r.safety_copy {
-                Some(p) => println!("Copia di sicurezza dei dati di prima (con i segreti, trattala come sensibile): {}", p.display()),
+                Some(p) => println!(
+                    "Copia di sicurezza dei dati di prima (con i segreti, cifrati con la chiave di questo computer dove c'è un portachiavi; trattala come sensibile): {}",
+                    p.display()
+                ),
                 None => println!("Non c'erano dati da salvare prima."),
             }
             if r.schema_from != r.schema_to {
@@ -1396,7 +1435,106 @@ fn backup_cmd(data: Option<PathBuf>, cmd: BackupCmd) -> Result<()> {
             println!("Ripristinati {} file. Riavvia l'app.", r.restored.len());
             if !r.manifest.sensitive {
                 println!("Il backup non conteneva i segreti: reinserisci chiavi dei provider, password IMAP, token dei canali e dei server MCP, e accoppia di nuovo i dispositivi.");
+            } else {
+                println!("I segreti del backup sono tornati com'erano nell'archivio (in chiaro): al prossimo avvio si cifrano con la chiave di questo computer, se c'è un portachiavi (controlla con `aiw secrets status`).");
             }
+        }
+    }
+    Ok(())
+}
+
+/// What `aiw secrets status` and `aiw doctor` say about the secrets at rest: the state in words, then the counts.
+fn secrets_lines(s: &aiw_core::api::SecretsAtRest) -> Vec<String> {
+    let state = match s.state.as_str() {
+        "active" => format!("cifrati con una chiave custodita nel portachiavi ({})", s.backend.as_deref().unwrap_or("del sistema")),
+        "off" => "NON cifrati: la cifratura è spenta (security.secrets_at_rest = off)".to_string(),
+        "unavailable" => format!(
+            "NON cifrati: il portachiavi non è utilizzabile ora ({}). Restano in chiaro; non si perde nulla e al prossimo avvio con il portachiavi si cifrano",
+            s.detail.as_deref().unwrap_or("motivo sconosciuto")
+        ),
+        "key_lost" => "ATTENZIONE: la chiave non è più nel portachiavi: i segreti cifrati non si leggono. Reinseriscili dopo `aiw secrets forget-unreadable`".to_string(),
+        _ => format!("NON cifrati: {}", s.detail.as_deref().unwrap_or("questa copia di AIW non usa il portachiavi")),
+    };
+    vec![
+        format!("Segreti: {state}"),
+        format!("  valori cifrati {} · in chiaro {} · illeggibili {}", s.encrypted, s.plain, s.unreadable),
+        "  La cifratura protegge da una copia del disco o della cartella dei dati; non da un programma che gira con il tuo stesso utente."
+            .to_string(),
+    ]
+}
+
+/// `aiw secrets encrypt|decrypt` write the global layer; a value set in the device layer wins over it, and the command would
+/// then report a success that changed nothing.
+fn warn_if_overridden(engine: &Engine, wanted: &str) {
+    let now = engine.config().effective.get("security.secrets_at_rest").and_then(|v| v.as_str().map(String::from));
+    if now.as_deref().unwrap_or("auto") != wanted {
+        eprintln!(
+            "ATTENZIONE: l'impostazione security.secrets_at_rest vale «{}» perché la decide un altro livello (dispositivo o cartella di lavoro): cambiala lì, il comando non ha effetto.",
+            now.unwrap_or_default()
+        );
+    }
+}
+
+/// `aiw secrets`: these never start the whole app (no network, no background loops) and the ones that change something refuse to
+/// run while another process has the data open: that process holds the secrets in memory and would write them back.
+async fn secrets_cmd(data: Option<PathBuf>, workspace: Option<PathBuf>, cmd: SecretsCmd) -> Result<()> {
+    let dirs = data.clone().map(aiw_core::paths::DataDirs::at).unwrap_or_else(aiw_core::paths::DataDirs::resolve);
+    let changes = !matches!(cmd, SecretsCmd::Status);
+    if changes && aiw_engine::backup::data_in_use(&dirs)? {
+        bail!("i dati in {} sono in uso: chiudi l'app e ferma il daemon (`aiw serve`), poi riprova", dirs.root.display());
+    }
+    let engine = Engine::new(EngineOptions {
+        data_dir: data,
+        workspace_root: workspace,
+        mode: "embedded".into(),
+        offline: true,
+        keychain: aiw_engine::vault::Keychain::System,
+        // `status` only reads; the others are the explicit requests that may change the vault (and refused above if the data are in use).
+        secrets_read_only: !changes,
+        ..Default::default()
+    })
+    .await
+    .context("avvio del motore")?;
+    let show = |engine: &Engine| {
+        for l in secrets_lines(&engine.secrets_at_rest()) {
+            println!("{l}");
+        }
+    };
+    match cmd {
+        SecretsCmd::Status => show(&engine),
+        SecretsCmd::Encrypt => {
+            engine.set_config("global", "security.secrets_at_rest", serde_json::json!("auto"))?;
+            warn_if_overridden(&engine, "auto");
+            let m = engine.secrets_reconcile();
+            println!("Cifrati {} documenti e {} impostazioni.", m.sealed_docs, m.sealed_settings);
+            show(&engine);
+        }
+        SecretsCmd::Decrypt => {
+            engine.set_config("global", "security.secrets_at_rest", serde_json::json!("off"))?;
+            warn_if_overridden(&engine, "off");
+            let m = engine.secrets_reconcile();
+            println!("Riportati in chiaro {} documenti e {} impostazioni.", m.unsealed_docs, m.unsealed_settings);
+            show(&engine);
+        }
+        SecretsCmd::ForgetUnreadable { yes } => {
+            let before = engine.secrets_at_rest();
+            if before.unreadable == 0 {
+                println!("Nessun segreto illeggibile: non c'è nulla da togliere.");
+                show(&engine);
+                return Ok(());
+            }
+            if !yes {
+                eprint!("Tolgo {} segreti cifrati che non si possono più aprire (vanno reinseriti a mano). [s/N] ", before.unreadable);
+                std::io::stderr().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                if !(line.trim().eq_ignore_ascii_case("s") || line.trim().eq_ignore_ascii_case("y")) {
+                    bail!("annullato: non ho toccato nulla");
+                }
+            }
+            let n = engine.secrets_forget_unreadable().map_err(|e| anyhow::anyhow!(e))?;
+            println!("Tolti {n} segreti illeggibili: reinseriscili dall'app.");
+            show(&engine);
         }
     }
     Ok(())
@@ -1572,6 +1710,10 @@ async fn doctor(engine: &Engine) {
         if r.status != "unsupported" {
             println!("  {:<16} {:<12} {}", r.id, r.status, r.status_detail.unwrap_or_default());
         }
+    }
+    println!();
+    for l in secrets_lines(&engine.secrets_at_rest()) {
+        println!("{l}");
     }
     println!("\nModelli locali: {}", engine.models().len());
     println!("Workspace: {}", engine.workspace_root().display());

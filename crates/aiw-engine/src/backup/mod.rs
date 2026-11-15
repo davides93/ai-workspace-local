@@ -31,8 +31,10 @@ mod tar;
 
 use crate::secrets::is_secret_name;
 use crate::store::{self, SCHEMA_VERSION};
+use crate::vault::rules;
 use crate::Engine;
 use aiw_core::paths::DataDirs;
+use aiw_core::sealed::{is_sealed, SecretCodec, SecretRead};
 use aiw_core::{now_rfc3339, Error, Result};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -44,6 +46,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Version of the archive layout. A reader refuses a higher one.
@@ -90,10 +93,11 @@ fn allowed(rel: &str, sensitive: bool) -> bool {
     AREAS.iter().filter(|a| a.path == first).any(|a| (!a.secret || sensitive) && (a.dir == rel.contains('/')))
 }
 
-/// Kinds of the `documents` table that are secrets in themselves: not saved without `include_secrets`.
-const SECRET_KINDS: [&str; 3] = ["secret", "peer_token", "mcp_oauth"];
-/// Kinds that carry a secret among other things: saved with the secret emptied.
-const SCRUB_KINDS: [&str; 5] = ["mcp", "channel", "model_provider", "remote_agent", "runtime_settings"];
+/// Kinds of the `documents` table that are secrets in themselves: not saved without `include_secrets`. The table of the vault
+/// (`vault::rules`) is the one place that says which they are.
+const SECRET_KINDS: [&str; 3] = rules::WHOLE_KINDS;
+/// Kinds that carry a secret among other things: saved with the secret emptied (same table).
+const SCRUB_KINDS: [&str; 5] = rules::BY_NAME_KINDS;
 /// Kinds that hold no secret. Together with the two lists above this must cover every kind the engine writes: a test
 /// reads the sources and fails when a new kind is not classified here.
 #[cfg(test)]
@@ -164,6 +168,9 @@ pub struct BackupManifest {
     /// Things that were there but could not be saved (links, names that are not UTF-8), in words.
     #[serde(default)]
     pub skipped: Vec<String>,
+    /// What a person should know about how the secrets went in (plain and portable, or sealed and tied to this computer).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     pub files: Vec<ManifestFile>,
 }
 
@@ -177,6 +184,12 @@ impl BackupManifest {
 pub struct BackupOptions {
     /// Save the secrets too (see the module documentation). Models are never saved: there is no option for it.
     pub include_secrets: bool,
+    /// How the secrets that this computer keeps sealed (see `vault`) are opened for the copy. With `include_secrets` and the
+    /// codec they are **opened**, and the archive holds them plain: it can be restored on any computer (which seals them again
+    /// at the first start there) and it is exactly as sensitive as it says. With `include_secrets` and no codec they are copied
+    /// as stored, sealed: only this computer's key opens them (the safety copy before a restore is made like this, so that it is
+    /// never plain on disk). Without `include_secrets` the codec only lets the scrubbing see an address before it is sealed.
+    pub codec: Option<Arc<dyn SecretCodec>>,
 }
 
 fn db_err<E: std::fmt::Display>(e: E) -> Error {
@@ -220,7 +233,7 @@ fn restrict(_: &Path, _: u32) {}
 
 /// An address without the credentials that can ride in it: `https://user:pass@host/` loses `user:pass@`, and the value
 /// of `?api_key=…`, `&token=…` and the like is emptied.
-fn scrub_url(s: &str) -> String {
+pub(crate) fn scrub_url(s: &str) -> String {
     use regex::Regex;
     use std::sync::LazyLock;
     static USERINFO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(\b[a-z][a-z0-9+.\-]*://)[^/\s?#@]*@").expect("static pattern"));
@@ -245,6 +258,8 @@ fn scrub_value(v: &mut Value) {
                 }
                 match x {
                     Value::String(s) if is_secret_name(k) => s.clear(),
+                    // A sealed value that was not opened first (no key at hand) is of no use in a backup.
+                    Value::String(s) if is_sealed(s) => s.clear(),
                     Value::String(s) if s.contains("://") => *s = scrub_url(s),
                     _ => scrub_value(x),
                 }
@@ -271,7 +286,8 @@ fn scrub_db(c: &Connection) -> Result<()> {
     if !table_exists(c, "documents")? {
         return Ok(());
     }
-    for kind in SECRET_KINDS {
+    // The vault row says where this computer keeps its key: it means nothing anywhere else.
+    for kind in SECRET_KINDS.iter().chain(&rules::INTERNAL_KINDS) {
         c.execute("DELETE FROM documents WHERE kind = ?1", [kind]).map_err(db_err)?;
     }
     for kind in SCRUB_KINDS {
@@ -311,8 +327,62 @@ fn scrub_config(bytes: &[u8], what: &str) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec_pretty(&v)?)
 }
 
-/// A consistent copy of the database at `dest`, scrubbed when asked. Returns its schema version.
-fn snapshot_db(src: &Path, dest: &Path, scrub: bool) -> Result<i64> {
+/// What a copy of the database does with the secrets.
+enum DbSecrets<'a> {
+    /// Takes them out (the default backup). Sealed values are opened first when there is a codec, so that an address with a
+    /// password in it keeps its host and path and loses only the password.
+    Scrub(Option<&'a dyn SecretCodec>),
+    /// Opens the sealed ones: the copy holds plain values (the backup with secrets, portable).
+    Open(&'a dyn SecretCodec),
+    /// Leaves everything as it is.
+    AsStored,
+}
+
+/// Opens every sealed secret of a copy of the database with `codec`; what cannot be opened is cleared (a sealed value is of no
+/// use anywhere else) and counted. The vault row goes: it describes this computer's keychain. Returns how many were cleared.
+///
+/// With `scrub` the plain value never reaches the copy: an opened address keeps its host and path and loses its credentials, any
+/// other opened secret is emptied at once. (A copy that is killed halfway must not leave a plain database in the data folder.)
+fn open_secrets_in_db(c: &Connection, codec: &dyn SecretCodec, scrub: bool) -> Result<usize> {
+    if !table_exists(c, "documents")? {
+        return Ok(0);
+    }
+    c.execute("DELETE FROM documents WHERE kind = ?1", [rules::INTERNAL_KINDS[0]]).map_err(db_err)?;
+    let mut lost = 0;
+    for kind in rules::secret_kinds() {
+        let rows: Vec<(String, String)> = {
+            let mut st = c.prepare("SELECT id, json FROM documents WHERE kind = ?1").map_err(db_err)?;
+            let r = st.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?))).map_err(db_err)?;
+            r.collect::<std::result::Result<_, _>>().map_err(db_err)?
+        };
+        for (id, json) in rows {
+            let Ok(mut v) = serde_json::from_str::<Value>(&json) else { continue };
+            let mut changed = false;
+            rules::visit_secrets(kind, &mut v, &mut |s| {
+                if is_sealed(s) {
+                    match codec.open(s) {
+                        SecretRead::Opened(plain) if !scrub => *s = plain,
+                        SecretRead::Opened(plain) => *s = if plain.contains("://") { scrub_url(&plain) } else { String::new() },
+                        _ => {
+                            s.clear();
+                            lost += 1;
+                        }
+                    }
+                    changed = true;
+                }
+            });
+            if changed {
+                c.execute("UPDATE documents SET json = ?3 WHERE kind = ?1 AND id = ?2", rusqlite::params![kind, id, v.to_string()])
+                    .map_err(db_err)?;
+            }
+        }
+    }
+    Ok(lost)
+}
+
+/// A consistent copy of the database at `dest`, with the secrets handled as asked. Returns its schema version and how many
+/// sealed secrets could not be opened (and so are not in the copy).
+fn snapshot_db(src: &Path, dest: &Path, secrets: DbSecrets) -> Result<(i64, usize)> {
     {
         let conn = Connection::open_with_flags(src, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(db_err)?;
         conn.busy_timeout(Duration::from_secs(10)).map_err(db_err)?;
@@ -320,14 +390,52 @@ fn snapshot_db(src: &Path, dest: &Path, scrub: bool) -> Result<i64> {
         conn.execute("VACUUM INTO ?1", [to]).map_err(db_err)?;
     }
     let copy = Connection::open(dest).map_err(db_err)?;
-    if scrub {
-        copy.execute_batch("PRAGMA secure_delete = ON").map_err(db_err)?;
-        scrub_db(&copy)?;
-        copy.execute_batch("VACUUM").map_err(db_err)?;
+    let mut lost = 0;
+    match secrets {
+        DbSecrets::Scrub(codec) => {
+            copy.execute_batch("PRAGMA secure_delete = ON").map_err(db_err)?;
+            if let Some(codec) = codec {
+                lost = open_secrets_in_db(&copy, codec, true)?;
+            }
+            scrub_db(&copy)?;
+            copy.execute_batch("VACUUM").map_err(db_err)?;
+        }
+        DbSecrets::Open(codec) => {
+            // The archive does not keep a sealed copy next to the plain one: old pages are overwritten and the file compacted.
+            copy.execute_batch("PRAGMA secure_delete = ON").map_err(db_err)?;
+            lost = open_secrets_in_db(&copy, codec, false)?;
+            copy.execute_batch("VACUUM").map_err(db_err)?;
+        }
+        DbSecrets::AsStored => {}
     }
     let version = copy.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).map_err(db_err)?;
     copy.execute_batch("PRAGMA journal_mode = DELETE").map_err(db_err)?;
-    Ok(version)
+    Ok((version, lost))
+}
+
+/// A settings file with its sealed secret settings opened (what cannot be opened is removed). Returns the new bytes and how many
+/// were removed.
+fn open_config(bytes: &[u8], codec: &dyn SecretCodec, what: &str) -> Result<(Vec<u8>, usize)> {
+    let mut v: Value = serde_json::from_slice(bytes).map_err(|e| Error::Invalid(format!("{what} non è un JSON valido ({e})")))?;
+    let mut lost = 0;
+    if let Value::Object(m) = &mut v {
+        let schema = aiw_core::config::app_schema();
+        let keys: Vec<String> = m.keys().filter(|k| schema.properties.get(*k).is_some_and(|f| f.secret)).cloned().collect();
+        for k in keys {
+            if let Some(Value::String(s)) = m.get_mut(&k) {
+                if is_sealed(s) {
+                    match codec.open(s) {
+                        SecretRead::Opened(plain) => *s = plain,
+                        _ => {
+                            m.remove(&k);
+                            lost += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok((serde_json::to_vec_pretty(&v)?, lost))
 }
 
 // ----------------------------------------------------------------------------- create
@@ -414,7 +522,12 @@ pub fn create(dirs: &DataDirs, opts: &BackupOptions, out: &Path) -> Result<Backu
     let mut skipped = vec![];
 
     let snapshot = work.path().join(DB_NAME);
-    let schema_version = snapshot_db(&db, &snapshot, !opts.include_secrets)?;
+    let mode = match (opts.include_secrets, &opts.codec) {
+        (false, codec) => DbSecrets::Scrub(codec.as_deref()),
+        (true, Some(codec)) => DbSecrets::Open(codec.as_ref()),
+        (true, None) => DbSecrets::AsStored,
+    };
+    let (schema_version, mut unopened) = snapshot_db(&db, &snapshot, mode)?;
     let mut items = vec![Item { rel: DB_NAME.into(), source: Source::Disk(snapshot) }];
 
     for a in AREAS.iter().filter(|a| opts.include_secrets || !a.secret) {
@@ -431,10 +544,20 @@ pub fn create(dirs: &DataDirs, opts: &BackupOptions, out: &Path) -> Result<Backu
             found.push((a.path.to_string(), p));
         }
         for (rel, path) in found {
-            let is_settings = !opts.include_secrets && (rel == "config.json" || (rel.starts_with("devices/") && rel.ends_with(".json")));
-            let source = if is_settings {
+            let is_settings = rel == "config.json" || (rel.starts_with("devices/") && rel.ends_with(".json"));
+            let source = if is_settings && !opts.include_secrets {
                 let bytes = std::fs::read(&path).map_err(|e| Error::Other(format!("{rel}: {e}")))?;
                 Source::Memory(scrub_config(&bytes, &rel)?)
+            } else if is_settings && opts.codec.is_some() {
+                // With secrets, portable: a sealed secret setting goes in plain (only files that hold one are rewritten).
+                let bytes = std::fs::read(&path).map_err(|e| Error::Other(format!("{rel}: {e}")))?;
+                if String::from_utf8_lossy(&bytes).contains("aiwenc") {
+                    let (opened, lost) = open_config(&bytes, opts.codec.as_deref().expect("checked"), &rel)?;
+                    unopened += lost;
+                    Source::Memory(opened)
+                } else {
+                    Source::Disk(path)
+                }
             } else {
                 Source::Disk(path)
             };
@@ -452,6 +575,29 @@ pub fn create(dirs: &DataDirs, opts: &BackupOptions, out: &Path) -> Result<Backu
         std::io::copy(&mut r, &mut std::io::sink()).map_err(|e| Error::Other(format!("{}: {e}", it.rel)))?;
         files.push(ManifestFile { path: it.rel.clone(), size: r.bytes, sha256: hex(&r.hasher.finalize()) });
     }
+    let mut notes = vec![];
+    if opts.include_secrets {
+        if opts.codec.is_some() {
+            notes.push(
+                "i segreti sono nel backup in chiaro (aperti con la chiave di questo computer): si ripristina su qualunque computer, dove al primo avvio si cifrano di nuovo con la chiave di quello. Trattalo come una password"
+                    .to_string(),
+            );
+        } else {
+            notes.push(
+                "i segreti che questo computer tiene cifrati sono nel backup cifrati con la sua chiave: si leggono solo su questo computer"
+                    .to_string(),
+            );
+        }
+        if unopened > 0 {
+            skipped.push(format!(
+                "{unopened} segreti cifrati non si sono potuti aprire (la chiave non è raggiungibile): non sono nel backup e vanno inseriti di nuovo"
+            ));
+        }
+    } else if unopened > 0 {
+        skipped.push(format!(
+            "{unopened} valori cifrati non si sono potuti aprire (la chiave non è raggiungibile): gli indirizzi che portavano una credenziale sono stati svuotati del tutto, host e percorso compresi"
+        ));
+    }
     let manifest = BackupManifest {
         format: FORMAT,
         app: APP_ID.into(),
@@ -463,6 +609,7 @@ pub fn create(dirs: &DataDirs, opts: &BackupOptions, out: &Path) -> Result<Backu
         sensitive: opts.include_secrets,
         excluded: excluded_notes(opts.include_secrets),
         skipped,
+        notes,
         files,
     };
 
@@ -721,7 +868,7 @@ pub fn restore(dirs: &DataDirs, archive: &Path) -> Result<RestoreReport> {
         let name =
             format!("prima-del-ripristino-{}-{}.tar.gz", chrono::Local::now().format("%Y%m%d-%H%M%S"), &aiw_core::ids::new_id("r")[14..]);
         let path = backups.join(name);
-        create(dirs, &BackupOptions { include_secrets: true }, &path)
+        create(dirs, &BackupOptions { include_secrets: true, codec: None }, &path)
             .map_err(|e| Error::Other(format!("copia di sicurezza dei dati attuali non riuscita, non ho toccato nulla: {e}")))?;
         Some(path)
     } else {
@@ -785,7 +932,10 @@ impl Engine {
 
     /// Makes a backup at `out` and notes it in the activity log (never its content).
     pub fn backup_create(&self, opts: &BackupOptions, out: &Path) -> Result<BackupManifest> {
-        let m = create(&self.0.dirs, opts, out)?;
+        // This engine's key opens what it sealed: with secrets the archive holds them plain (portable), without them the
+        // settings that merely carry one (an address with a password) are scrubbed from their plain form.
+        let opts = BackupOptions { codec: opts.codec.clone().or_else(|| Some(self.secrets_codec())), ..opts.clone() };
+        let m = create(&self.0.dirs, &opts, out)?;
         self.audit_user(
             "backup.create",
             &format!("{} file, {} byte{}", m.files.len(), m.total_bytes(), if m.sensitive { ", con i segreti" } else { "" }),

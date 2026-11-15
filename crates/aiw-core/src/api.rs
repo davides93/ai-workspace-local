@@ -2216,6 +2216,28 @@ pub struct SecretRequest {
     pub expires_at: Option<String>,
 }
 
+/// Whether the secrets are encrypted on disk and what is known about it (`GET /api/security/secrets`, the `secrets` part of
+/// the diagnostics, `aiw doctor`). Counts say how many secret values are stored sealed, plain or unreadable; no value is in it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretsAtRest {
+    /// `active` (sealed with a key in the keychain), `off` (switched off by the setting), `unavailable` (there is a keychain
+    /// but it cannot be used now), `key_lost` (sealed values exist and their key is not in the keychain), `not_used` (this
+    /// build or process does not use a keychain).
+    pub state: String,
+    /// The keychain in words (`Portachiavi di macOS (Keychain)`), when one is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    /// Why it is `unavailable` or `not_used`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Secret values stored sealed (and openable with the key).
+    pub encrypted: u64,
+    /// Secret values stored as they are.
+    pub plain: u64,
+    /// Sealed values that cannot be opened now: they are kept as they are and do not open (see `docs/segreti.md`).
+    pub unreadable: u64,
+}
+
 /// Body of `POST /api/secret-requests/{id}`: `action` is `provide` (with the `value`) or `decline`.
 /// It holds a secret, so it can be neither cloned nor serialised, and `Debug` hides the value.
 #[derive(Deserialize)]

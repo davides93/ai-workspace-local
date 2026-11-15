@@ -253,6 +253,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/tokens/{id}", delete(tokens_api::revoke))
         .route("/api/tokens/{id}/rotate", post(tokens_api::rotate))
         .route("/api/tls", get(tokens_api::tls_status))
+        .route("/api/security/secrets", get(tokens_api::secrets_status))
         .route("/api/tls/ca.pem", get(tokens_api::tls_ca))
         .route("/api/tls/ca", get(tokens_api::tls_ca_json))
         .route("/api/backup", post(backup_api::create))

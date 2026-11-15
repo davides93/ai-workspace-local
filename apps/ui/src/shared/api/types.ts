@@ -132,6 +132,20 @@ export interface TlsStatus {
   warning: boolean;
 }
 
+/**
+ * Whether the secrets are encrypted on disk (`GET /api/security/secrets`): `active` = sealed with a key held by the system keychain;
+ * `off` = switched off by the setting; `unavailable` = there is a keychain but it cannot be used now; `key_lost` = sealed values
+ * exist and their key is not in the keychain; `not_used` = this build or process does not use a keychain. Counts only, never a value.
+ */
+export interface SecretsAtRest {
+  state: "active" | "off" | "unavailable" | "key_lost" | "not_used";
+  backend?: string;
+  detail?: string;
+  encrypted: number;
+  plain: number;
+  unreadable: number;
+}
+
 export interface MeshState {
   /** mDNS discovery running (the LAN server is on). */
   discovery: boolean;

@@ -118,6 +118,7 @@ export const qk = {
 
   tokens: () => ["tokens"] as const,
   tls: () => ["tls"] as const,
+  secretsAtRest: () => ["secrets-at-rest"] as const,
 
   voice: () => ["voice"] as const,
 

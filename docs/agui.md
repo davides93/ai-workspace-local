@@ -293,8 +293,8 @@ viene mai ripetuto):
 Dove passa il valore: il corpo di quella sola richiesta HTTP, la memoria del motore e la destinazione, scritto con la
 funzione che esiste già per quella destinazione. Non passa da argomenti o risultato dello strumento, eventi (compreso
 questo stream), messaggi salvati, riga di audit (`secret.set` con il solo `target`), richiesta di approvazione e prompt
-del modello. Dove viene salvato resta **in chiaro** nello stesso store di prima (vedi `SECURITY.md`): questo flusso non
-lo cambia.
+del modello. Dove viene salvato è lo stesso store di prima, dove il valore è **cifrato a riposo** con una chiave nel portachiavi del sistema (se il
+portachiavi c'è; altrimenti resta in chiaro e lo stato è dichiarato: `docs/segreti.md`, `SECURITY.md`): questo flusso non lo cambia.
 
 Attesa: `approvals.timeout_s` se impostato, altrimenti 300 secondi; allo scadere l'esito è `timeout`. Un run annullato
 (compresa la richiesta HTTP chiusa dal client) o il kill switch chiudono domande e richieste in attesa con `cancelled`.

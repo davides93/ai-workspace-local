@@ -39,6 +39,7 @@ pub mod train_jobs;
 mod training_tool;
 pub mod tts;
 pub mod update;
+pub mod vault;
 pub mod voice;
 pub mod webhook;
 pub mod worktree;
@@ -85,6 +86,13 @@ pub struct EngineOptions {
     /// Mac App Store build (App Sandbox): no external programs are installed or launched, and the
     /// agents' folder is the one the shell passes (the `workspace.root` setting is ignored).
     pub sandboxed: bool,
+    /// Which keychain holds the key of the secrets at rest (see [`vault`]). The default is none: secrets stay as they are
+    /// and the state says so, which is what the tests and the short-lived background worker want. The app and the daemon
+    /// ask for [`vault::Keychain::System`].
+    pub keychain: vault::Keychain,
+    /// The vault is only read, never made, migrated or changed (see [`vault::start`]): for a one-shot command that may run while
+    /// the app or the daemon has the same data open. The app and the daemon leave it false.
+    pub secrets_read_only: bool,
 }
 
 /// One event on the global bus (Tauri forwards these as `aiw://run-event`).
@@ -199,6 +207,8 @@ pub(crate) struct Inner {
     /// OAuth sign-ins in progress, by `state` (see `mcp_oauth`).
     pub oauth_pending: Mutex<HashMap<String, mcp_oauth::PendingAuth>>,
     pub store: Store,
+    /// The key of the secrets at rest and what it says about them (see [`vault`]).
+    pub vault: Arc<vault::Vault>,
     pub runs: Mutex<HashMap<String, RunHandle>>,
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
     pub session_allow: Mutex<HashMap<String, Arc<Mutex<HashSet<String>>>>>,
@@ -285,6 +295,9 @@ impl Engine {
         runtimes.set_sandboxed(opts.sandboxed);
         runtimes.set_pyenv_dir(dirs.root.join("pyenv")); // pip-installed runtimes (MLX…) live here
         let store = Store::open(&dirs.db_file())?;
+        // Before anything reads a secret: documents and settings are sealed and opened from here on, and what was stored plain
+        // is migrated (or, where there is no keychain, left as it is with the state declared). It never fails the start.
+        let vault = vault::start(&store, &config, &opts.keychain, !opts.secrets_read_only);
         mcp_host::migrate_mcp_approvals(&store);
         let overrides: Vec<Value> = store.list_docs("runtime_settings")?;
         runtimes.load_overrides(
@@ -364,6 +377,7 @@ impl Engine {
             secret_requests: Default::default(),
             oauth_pending: Default::default(),
             store,
+            vault,
             runs: Default::default(),
             approvals: Default::default(),
             session_allow: Default::default(),
@@ -2890,6 +2904,8 @@ mod tests_backup;
 mod tests_channels;
 #[cfg(test)]
 mod tests_eval;
+#[cfg(test)]
+mod tests_vault;
 // The folders of the person exist on macOS only; the tests use canonicalised temp dirs (verbatim paths on Windows).
 #[cfg(all(test, unix))]
 mod tests_folders;

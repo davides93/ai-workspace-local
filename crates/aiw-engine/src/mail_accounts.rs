@@ -27,14 +27,16 @@ impl Engine {
         self.0.config.get("connectors.mail.imap").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
     }
 
-    fn imap_password(&self, id: &str) -> Option<String> {
+    pub(crate) fn imap_password(&self, id: &str) -> Option<String> {
         self.0
             .store
             .get_doc::<Value>("secret", &secret_id(id))
             .ok()
             .flatten()
             .and_then(|v| v["value"].as_str().map(String::from))
-            .filter(|p| !p.is_empty())
+            // A sealed string this process could not open is not a password: it is never sent to a mail server (repeated failed
+            // logins can lock the account).
+            .filter(|p| !p.is_empty() && !aiw_core::sealed::is_sealed(p))
     }
 
     /// The accounts as the API shows them: the password is the mask when one is stored, empty otherwise.

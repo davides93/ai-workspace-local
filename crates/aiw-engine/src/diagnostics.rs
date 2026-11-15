@@ -145,6 +145,7 @@ impl Engine {
         }
         let tables: serde_json::Map<String, Value> = self.0.store.table_counts()?.into_iter().map(|(n, c)| (n, json!(c))).collect();
         let tls = self.tls_status();
+        let secrets_at_rest = serde_json::to_value(self.secrets_at_rest())?;
         let update = self.update_status();
         let doctor = self.train_doctor().await;
         let local_models = self.models().len();
@@ -173,6 +174,8 @@ impl Engine {
                 "shell_sandbox": sys.shell_sandbox,
                 "mcp_sandbox": sys.mcp_sandbox,
                 "sandboxed": sys.sandboxed,
+                // Whether the secrets are encrypted on disk, with the counts: never a value.
+                "secrets_at_rest": secrets_at_rest,
                 "tls": { "mode": tls.mode, "active": tls.active, "lan": tls.lan, "port": tls.port, "expires_at": tls.expires_at, "error": tls.error, "names": tls.names.len() },
                 "update": { "current": update.current, "channel": update.channel, "configured": update.configured, "state": update.state, "checked_at": update.checked_at, "error": update.error },
                 "training": { "can_train": doctor.can_train, "advice": doctor.advice },
