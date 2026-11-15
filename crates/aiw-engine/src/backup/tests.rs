@@ -113,6 +113,7 @@ fn manifest_for(files: &[(&str, &[u8])], schema: i64, sensitive: bool) -> Backup
         sensitive,
         excluded: vec![],
         skipped: vec![],
+        notes: vec![],
         files: files.iter().map(|(p, d)| ManifestFile { path: p.to_string(), size: d.len() as u64, sha256: sha(d) }).collect(),
     }
 }
@@ -631,7 +632,8 @@ fn every_document_kind_in_the_sources_is_classified() {
         regex::Regex::new(r#"(?:put_doc|get_doc(?:::<[^>]*>)?|list_docs(?:::<[^>]*>)?|delete_doc)\(\s*"([a-z_]+)""#).unwrap(),
         regex::Regex::new(r#"(?:_KIND|COLLECTION): &str = "([a-z_]+)""#).unwrap(),
     );
-    let known: BTreeSet<&str> = SECRET_KINDS.iter().chain(&SCRUB_KINDS).chain(&PLAIN_KINDS).copied().collect();
+    let known: BTreeSet<&str> =
+        SECRET_KINDS.iter().chain(&SCRUB_KINDS).chain(&PLAIN_KINDS).chain(&rules::INTERNAL_KINDS).copied().collect();
     let mut found = BTreeSet::new();
     fn walk(dir: &Path, f: &mut dyn FnMut(&Path)) {
         for e in std::fs::read_dir(dir).unwrap() {

@@ -16,6 +16,15 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+/// Takes a sub-agent out of `Inner::run_parents` when it ends, however it ends.
+struct ForgetSubrun(Engine, String);
+
+impl Drop for ForgetSubrun {
+    fn drop(&mut self) {
+        self.0 .0.run_parents.lock().unwrap().remove(&self.1);
+    }
+}
+
 pub struct EngineHost {
     engine: Engine,
     session_id: Option<String>,
@@ -259,6 +268,10 @@ impl RunHost for EngineHost {
         host.deny_approvals = self.deny_approvals;
         host.approval_timeout = self.approval_timeout;
         let host = Arc::new(host);
+        // While it runs, the sub-agent is known as part of the parent's run (a tool that has to ask the person, like the browser
+        // handover, asks in the conversation the person is in).
+        self.engine.0.run_parents.lock().unwrap().insert(run_id.to_string(), parent.run_id.clone());
+        let _forget = ForgetSubrun(self.engine.clone(), run_id.to_string());
         let out = AgentRunner::run(input, host).await?;
         Ok(if out.final_text.is_empty() { "(nessuna risposta)".into() } else { out.final_text })
     }

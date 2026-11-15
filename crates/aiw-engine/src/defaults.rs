@@ -63,7 +63,7 @@ pub fn agents() -> Vec<AgentProfile> {
             "Navigatore",
             "Ricerca e azioni nel browser controllato (CDP).",
             "Usi il browser per trovare informazioni e completare moduli. Prima di inviare dati personali, pagamenti o moduli definitivi chiedi conferma. Cita le pagine da cui prendi le informazioni.",
-            &["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_screenshot", "browser_tabs", "browser_tab_new", "browser_tab_select", "browser_select", "browser_hover", "browser_downloads", "browser_console", "web_fetch", "web_search", "todo"],
+            &["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back", "browser_press", "browser_wait", "browser_screenshot", "browser_tabs", "browser_tab_new", "browser_tab_select", "browser_select", "browser_hover", "browser_downloads", "browser_console", "browser_dialog", "browser_handover", "web_fetch", "web_search", "todo"],
             "ask",
             "read-only",
             40,
@@ -96,6 +96,28 @@ pub fn agents() -> Vec<AgentProfile> {
 /// Agents added after the first release: an install that predates them gets them at start-up when
 /// they are missing (the others are only seeded on an empty install and then belong to the user).
 pub const LATE_AGENTS: &[&str] = &["teacher", ASSISTANT_ID];
+
+/// The two tools the `browser` agent got with the live view: `browser_dialog` answers the `confirm` or `prompt` that now waits
+/// instead of being refused, and `browser_handover` asks the person to log in.
+const BROWSER_LATE_TOOLS: [&str; 2] = ["browser_dialog", "browser_handover"];
+
+/// Gives an installation that stored the `browser` agent before these tools the two of the live view, but only when its list is
+/// exactly the one of that release (nobody edited it): an agent the person tuned stays as they made it. Returns whether it changed.
+pub fn upgrade_browser_agent(stored: &mut AgentProfile) -> bool {
+    if stored.id != "browser" || BROWSER_LATE_TOOLS.iter().any(|t| stored.tools.iter().any(|n| n == t)) {
+        return false;
+    }
+    let Some(current) = agents().into_iter().find(|a| a.id == "browser") else { return false };
+    let mut before: Vec<&String> = current.tools.iter().filter(|t| !BROWSER_LATE_TOOLS.contains(&t.as_str())).collect();
+    let mut have: Vec<&String> = stored.tools.iter().collect();
+    before.sort();
+    have.sort();
+    if before != have {
+        return false;
+    }
+    stored.tools.extend(BROWSER_LATE_TOOLS.iter().map(|t| t.to_string()));
+    true
+}
 
 /// The agent of the simple interface: the only one of its chat. It answers, delegates to the other
 /// agents with the `agent` tool and manages the app with the `aiw_*` tools.
@@ -364,10 +386,28 @@ mod tests {
         .map(|t| t.name().to_string())
         .collect();
         for a in &all {
-            for t in a.tools.iter().filter(|t| t.starts_with("browser_")) {
+            // `browser_handover` is the engine's own tool (it asks the person, `browser_live.rs`).
+            for t in a.tools.iter().filter(|t| t.starts_with("browser_") && *t != "browser_handover") {
                 assert!(known.contains(t), "{} lists the unknown tool {t}", a.id);
             }
         }
+    }
+
+    #[test]
+    fn a_stored_browser_agent_gets_the_live_view_tools_only_when_nobody_edited_its_list() {
+        let current = agents().into_iter().find(|a| a.id == "browser").unwrap();
+        let mut old = current.clone();
+        old.tools.retain(|t| t != "browser_dialog" && t != "browser_handover");
+        assert!(upgrade_browser_agent(&mut old));
+        assert!(old.tools.iter().any(|t| t == "browser_dialog") && old.tools.iter().any(|t| t == "browser_handover"));
+        assert!(!upgrade_browser_agent(&mut old), "once is enough");
+        // One the person tuned (a tool taken out, another added) is left alone, and so is any other agent.
+        let mut tuned = current.clone();
+        tuned.tools.retain(|t| t != "browser_dialog" && t != "browser_handover" && t != "browser_hover");
+        let before = tuned.tools.clone();
+        assert!(!upgrade_browser_agent(&mut tuned) && tuned.tools == before);
+        let mut other = agents().into_iter().find(|a| a.id == "operator").unwrap();
+        assert!(!upgrade_browser_agent(&mut other));
     }
 
     const GB: u64 = 1024 * 1024 * 1024;

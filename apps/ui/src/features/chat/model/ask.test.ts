@@ -29,6 +29,45 @@ const secretCall = (id = "c2"): AgEvent[] => [
   { type: "TOOL_CALL_END", toolCallId: id },
 ];
 
+describe("request for help in the browser (live)", () => {
+  const help: Question = {
+    id: "ask_h", run_id: "run_1", kind: "handover", title: "Serve il tuo intervento nel browser", message: "Accedi a example.com", options: [], multiple: false, allow_other: false,
+    fields: [], confirm_label: "Ho finito: restituisci il controllo", deny_label: "Non posso ora", expires_at: null,
+  };
+  const handoverCall = (id = "h1"): AgEvent[] => [
+    { type: "TOOL_CALL_START", toolCallId: id, toolCallName: "browser_handover" },
+    { type: "TOOL_CALL_ARGS", toolCallId: id, delta: JSON.stringify({ reason: help.message }) },
+    { type: "TOOL_CALL_END", toolCallId: id },
+  ];
+
+  it("takes the place of the running browser_handover card: one row, not a tool card and a question", () => {
+    const items = fold([...handoverCall(), { type: "CUSTOM", name: "aiw.question", value: help }]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "question", id: "ask_h", callId: "h1", q: { kind: "handover" } });
+  });
+
+  it("an ask_user call running at the same time is not taken for it", () => {
+    const items = fold([...askCall("c1"), ...handoverCall("h1"), { type: "CUSTOM", name: "aiw.question", value: help }]);
+    expect(items.map((i) => i.kind)).toEqual(["tool", "question"]);
+    expect(items[0]).toMatchObject({ kind: "tool", name: "ask_user" });
+  });
+
+  it("is closed by the event, or by the result of the tool when the event was missed (returned → answered)", () => {
+    const resolved = { id: "ask_h", outcome: "answered", answer: { selected: null, other: null, confirmed: true, values: null } };
+    expect(fold([...handoverCall(), { type: "CUSTOM", name: "aiw.question", value: help }, { type: "CUSTOM", name: "aiw.question_resolved", value: resolved }])[0])
+      .toMatchObject({ kind: "question", outcome: "answered", answer: { confirmed: true } });
+    expect(fold([...handoverCall(), { type: "CUSTOM", name: "aiw.question", value: help }, { type: "TOOL_CALL_RESULT", messageId: "m", toolCallId: "h1", content: '{"outcome":"returned"}' }])[0])
+      .toMatchObject({ kind: "question", outcome: "answered", answer: { confirmed: true } });
+    expect(fold([...handoverCall(), { type: "CUSTOM", name: "aiw.question", value: help }, { type: "TOOL_CALL_RESULT", messageId: "m", toolCallId: "h1", content: '{"outcome":"declined"}' }])[0])
+      .toMatchObject({ kind: "question", outcome: "declined" });
+  });
+
+  it("left open when the run ends, it is closed as without an answer", () => {
+    const open = fold([...handoverCall(), { type: "CUSTOM", name: "aiw.question", value: help }]);
+    expect(reduce(open, { type: "RUN_FINISHED", threadId: "t", runId: "r" })[0]).toMatchObject({ kind: "question", outcome: "cancelled" });
+  });
+});
+
 describe("question rows (live)", () => {
   it("replaces the card of the ask_user call with one row, so a question is shown once", () => {
     const items = fold([...askCall(), { type: "CUSTOM", name: "aiw.question", value: question }]);
@@ -160,6 +199,31 @@ describe("conversations loaded from the stored messages", () => {
     expect(row).toMatchObject({ outcome: "stored", req: { label: "Token di Hugging Face", target: "provider_token:hf", destination: "" } });
     const declined = historyToItems([msgs[0], msgs[1], { ...msgs[2], content: '{"outcome":"declined"}' }]).find((i) => i.kind === "secret");
     expect(declined).toMatchObject({ outcome: "declined" });
+  });
+
+  it("shows a stored request for help in the browser as a closed row: what was asked and how it ended (returned is an answer)", () => {
+    const reason = "Accedi a example.com con la tua email";
+    const msgs = (result?: string): ChatMessage[] => [
+      { id: "m1", role: "user", content: "Accedi al sito", created_at: stamp },
+      { id: "m2", role: "assistant", content: "", tool_calls: [{ id: "h1", name: "browser_handover", arguments: JSON.stringify({ reason }) }], created_at: stamp },
+      ...(result === undefined ? [] : [{ id: "m3", role: "tool" as const, content: result, tool_call_id: "h1", created_at: stamp }]),
+    ];
+    const row = (result?: string) => historyToItems(msgs(result)).find((i) => i.kind === "question") as QuestionItem | undefined;
+    expect(row('{"outcome":"returned","hint":"x"}')).toMatchObject({ outcome: "answered", answer: { confirmed: true }, q: { kind: "handover", message: reason } });
+    expect(row('{"outcome":"declined","hint":"x"}')).toMatchObject({ outcome: "declined" });
+    expect(row('{"outcome":"timeout"}')).toMatchObject({ outcome: "timeout" });
+    // A stopped run left it open: a closed line, not a tool that never ends.
+    expect(row(undefined)).toMatchObject({ outcome: "cancelled" });
+    expect(historyToItems(msgs(undefined)).some((i) => i.kind === "tool")).toBe(false);
+    // The browser was not open, or the device cannot ask: the tool card keeps what the tool said.
+    for (const result of ['{"outcome":"not_open","hint":"x"}', '{"outcome":"unsupported","hint":"x"}', "ERRORE: reason mancante"]) {
+      const items = historyToItems(msgs(result));
+      expect(items.find((i) => i.kind === "tool"), result).toMatchObject({ name: "browser_handover" });
+      expect(items.some((i) => i.kind === "question")).toBe(false);
+    }
+    const broken = msgs('{"outcome":"returned"}');
+    broken[1].tool_calls![0].arguments = '{"reason": "  "}';
+    expect(historyToItems(broken).some((i) => i.kind === "question")).toBe(false);
   });
 
   it("a live conversation and the same one reloaded show the same rows", () => {

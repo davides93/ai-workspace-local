@@ -56,6 +56,19 @@ rcgen.workspace = true
 ring.workspace = true
 pdf-extract = "0.12"
 
+# Key of the secrets at rest in the system keychain (see `vault`): `keyring-core` and the store of each platform, not the
+# `keyring` umbrella crate (its default store is an in-memory mock where no store is compiled in, which would lose the key at
+# every restart). Only macOS, Windows and Linux: elsewhere the secrets stay as they are and the state is declared.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+keyring-core = "1"
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", default-features = false, features = ["keychain"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1"
+# Secret Service over D-Bus with zbus (pure Rust: no libdbus to install on the build machines).
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus-secret-service-keyring-store = { version = "1", features = ["rt-async-io-crypto-rust"] }
+
 [dev-dependencies]
 # Benchmarks (`cargo bench`); the CI only compiles them. Without the default features criterion does not pull rayon or plotters.
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }

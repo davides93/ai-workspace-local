@@ -253,6 +253,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/tokens/{id}", delete(tokens_api::revoke))
         .route("/api/tokens/{id}/rotate", post(tokens_api::rotate))
         .route("/api/tls", get(tokens_api::tls_status))
+        .route("/api/security/secrets", get(tokens_api::secrets_status))
         .route("/api/tls/ca.pem", get(tokens_api::tls_ca))
         .route("/api/tls/ca", get(tokens_api::tls_ca_json))
         .route("/api/backup", post(backup_api::create))
@@ -338,6 +339,12 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/approvals/{id}", post(respond_approval))
         .route("/api/questions", get(questions))
         .route("/api/questions/{id}", post(respond_question))
+        // The live view of the controlled browser and the human takeover: the owner's (see `scopes.rs`).
+        .route("/api/browser", get(browser_state))
+        .route("/api/browser/frame", get(browser_frame))
+        .route("/api/browser/control", post(browser_control))
+        .route("/api/browser/input", post(browser_input).layer(DefaultBodyLimit::max(16 * 1024)))
+        .route("/api/browser/dialog", post(browser_dialog).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/secret-requests", get(secret_requests))
         .route("/api/secret-requests/{id}", post(respond_secret_request))
         .route("/api/proposals", get(proposals))
@@ -1209,6 +1216,63 @@ async fn respond_question(State(s): State<AppState>, Path(id): Path<String>, Jso
     s.engine.respond_question(&id, b)?;
     ok(json!({}))
 }
+// ------------------------------------------------------------------ live view of the browser (owner only)
+
+/// What the browser shows and who drives it. `no-store`: it names the page in front.
+async fn browser_state(State(s): State<AppState>) -> Result<Response, ApiError> {
+    Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(s.engine.browser_state().await)).into_response())
+}
+
+/// One frame of the page as a data URL (the in-app IPC carries JSON only). Never stored, never cached: `{"running":false}` when
+/// no browser runs (this route never starts one), 409 while a window of the site waits for an answer.
+async fn browser_frame(State(s): State<AppState>) -> Result<Response, ApiError> {
+    use base64::Engine as _;
+    let body = match s.engine.browser_frame().await? {
+        None => json!({"running": false}),
+        Some(f) => json!({
+            "running": true,
+            "image": format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&f.jpeg)),
+            "width": f.width,
+            "height": f.height,
+        }),
+    };
+    Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(body)).into_response())
+}
+
+/// A body read by hand: one that does not fit is refused with a fixed sentence, never with the parser's message, which
+/// could quote what the person typed.
+fn browser_body(bytes: &[u8]) -> Result<Value, ApiError> {
+    serde_json::from_slice(bytes).map_err(|_| ApiError(Error::Invalid("richiesta non valida".into())))
+}
+
+/// `{"action":"pause"|"resume"|"take"|"give_back"}`: the person's controls. Each change of who drives is one audit row.
+async fn browser_control(State(s): State<AppState>, body: axum::body::Bytes) -> Result<Response, ApiError> {
+    let b = browser_body(&body)?;
+    let action = b.get("action").and_then(Value::as_str).ok_or_else(|| ApiError(Error::Invalid("manca `action`".into())))?;
+    let state = s.engine.browser_control(action).await?;
+    Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(state)).into_response())
+}
+
+/// Click, scroll, key or text of the person in the page. Accepted only while they drive; never logged, never kept.
+async fn browser_input(State(s): State<AppState>, body: axum::body::Bytes) -> ApiResult<Value> {
+    let input: aiw_engine::BrowserInput = serde_json::from_slice(&body).map_err(|_| ApiError(Error::Invalid("input non valido".into())))?;
+    s.engine.browser_input(input).await?;
+    ok(json!({}))
+}
+
+/// `{"action":"accept"|"dismiss","text":"…"?}`: the person answers a window of the site.
+async fn browser_dialog(State(s): State<AppState>, body: axum::body::Bytes) -> ApiResult<Value> {
+    let b = browser_body(&body)?;
+    let accept = match b.get("action").and_then(Value::as_str) {
+        Some("accept") => true,
+        Some("dismiss") => false,
+        _ => return Err(ApiError(Error::Invalid("`action` deve essere accept o dismiss".into()))),
+    };
+    let text = b.get("text").and_then(Value::as_str).map(String::from);
+    s.engine.browser_dialog(accept, text).await?;
+    ok(json!({}))
+}
+
 /// The requests for a secret that wait for the person: never a value.
 async fn secret_requests(State(s): State<AppState>) -> ApiResult<Vec<SecretRequest>> {
     ok(s.engine.secret_requests())
@@ -1893,6 +1957,8 @@ mod tests;
 mod tests_assistant;
 #[cfg(test)]
 mod tests_backup;
+#[cfg(test)]
+mod tests_browser;
 #[cfg(test)]
 mod tests_channels;
 #[cfg(test)]

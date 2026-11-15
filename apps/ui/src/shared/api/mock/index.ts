@@ -9,8 +9,9 @@ import { mockSpeak, mockTtsStatus } from "./voice";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
 import type {
   AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest,
-  ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
+  ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, SecretsAtRest, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, SessionImage, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
+  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState,
   ChannelCreate, ChannelPatch, FoldersAdded, FoldersInfo, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
   BackgroundTask, TaskCreate, TaskQuery, TaskResume,
 } from "../types";
@@ -29,6 +30,7 @@ import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimization
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
 import { buildDetail, corpus, fakeSha, providers, searchCorpus } from "./hub";
 import * as training from "./training";
+import { BrowserDemo } from "./browser";
 import { AskStore, assistantScript, checkProviderToken, runAssistantScript, type AssistantScript } from "./assistant";
 
 /** A simulated download: files transferred one after the other, then verified. */
@@ -173,6 +175,7 @@ export class MockTransport implements Transport {
     for (const [, p] of this.pendingApprovals) p.resolve(false);
     this.taskStore.killSwitch();
     this.ask.cancelRun();
+    this.browser.endHandover();
     audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "kill", detail: "Kill switch premuto dalla UI" });
   }
 
@@ -1017,6 +1020,36 @@ export class MockTransport implements Transport {
     audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "secret.set", detail: target });
   }
 
+  // The controlled browser (`browser.ts`): the engine's rules. `?scope=device` (a paired device) makes every route a 403, which hides it all.
+  private readonly browser = new BrowserDemo();
+  private browserOwnerOnly(): void {
+    if (this.secretScope === "device") throw new ApiError(403, "questo dispositivo non può usare il browser: serve l'accesso completo");
+  }
+  async browserState(): Promise<BrowserState> { this.browserOwnerOnly(); return this.browser.state(); }
+  async browserFrame(): Promise<BrowserFrame> { this.browserOwnerOnly(); return this.browser.frame(); }
+  async browserControl(action: BrowserControlAction): Promise<BrowserState> {
+    this.browserOwnerOnly();
+    return this.browser.control(action, (questionId) => {
+      try {
+        this.ask.answerQuestion(questionId, { action: "answer", selected: null, other: null, confirmed: true, values: null });
+      } catch {
+        /* the question was closed already */
+      }
+    });
+  }
+  async browserInput(input: BrowserInput): Promise<void> { this.browserOwnerOnly(); this.browser.input(input); }
+  async browserDialog(reply: BrowserDialogReply): Promise<void> { this.browserOwnerOnly(); this.browser.answerDialog(reply); }
+  /** An action of the agent on the browser: it waits while the person has it, and the person's input waits while it runs. */
+  private async agentBrowser<T>(fn: () => Promise<T>): Promise<T> {
+    await this.browser.gate();
+    this.browser.setBusy(true);
+    try {
+      return await fn();
+    } finally {
+      this.browser.setBusy(false);
+    }
+  }
+
   subscribeRun(runId: string, onEvent: (e: AgEvent) => void) {
     (this.runLog.get(runId) ?? []).forEach(onEvent);
     const set = this.runListeners.get(runId) ?? new Set();
@@ -1026,6 +1059,7 @@ export class MockTransport implements Transport {
   }
   async cancelRun(runId: string) {
     this.ask.cancelRun(runId);
+    this.browser.releaseRun(runId);
     this.emit(runId, { type: "RUN_ERROR", message: "Run annullato dall'utente", code: "cancelled" });
   }
 
@@ -1165,9 +1199,13 @@ export class MockTransport implements Transport {
     await this.streamText(runId, m1, "Apro la pagina dei preventivi e guardo com'è fatta.", "text");
     this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m1 });
 
-    await this.toolCall(runId, "browser_navigate", { url: "https://fornitori.example.com/preventivi" }, "Pagina aperta: «Preventivi fornitori» (200 OK, 3 tabelle).");
-    await this.toolCall(runId, "browser_screenshot", {}, "Screenshot della pagina acquisito (256×160, PNG).", undefined, { mime: "image/png", data: DEMO_SCREENSHOT_PNG });
-    await this.toolCall(runId, "browser_snapshot", {}, "table «Preventivi»\n  row: Rossi Srl · 12.400 € · 45 gg\n  row: Nordtech · 14.950 € · 20 gg\n  row: Alfa Impianti · 13.700 € · 30 gg");
+    // The browser runs from the first page on: the chat shows its «Browser» button, and the live view has something to show.
+    await this.agentBrowser(async () => {
+      this.browser.open("quotes");
+      await this.toolCall(runId, "browser_navigate", { url: "https://fornitori.example.com/preventivi" }, "Pagina aperta: «Preventivi fornitori» (200 OK, 3 tabelle).");
+    });
+    await this.agentBrowser(() => this.toolCall(runId, "browser_screenshot", {}, "Screenshot della pagina acquisito (256×160, PNG).", undefined, { mime: "image/png", data: DEMO_SCREENSHOT_PNG }));
+    await this.agentBrowser(() => this.toolCall(runId, "browser_snapshot", {}, "table «Preventivi»\n  row: Rossi Srl · 12.400 € · 45 gg\n  row: Nordtech · 14.950 € · 20 gg\n  row: Alfa Impianti · 13.700 € · 30 gg"));
 
     const final = "La pagina elenca tre preventivi: **Rossi Srl** è il più economico (12.400 €, 45 gg), **Nordtech** il più rapido (20 gg, 14.950 €). Lo screenshot qui sopra mostra la tabella com'è nel browser.";
     const m2 = nid("m");
@@ -1225,6 +1263,7 @@ export class MockTransport implements Transport {
         this.emit(runId, { type: "TEXT_MESSAGE_END", messageId: m });
       },
       tool: (name, args, result, id, approval) => this.toolCall(runId, name, args, result, approval, undefined, id),
+      browser: this.browser, browserAct: (fn) => this.agentBrowser(fn),
       finish: (stored, final) => {
         (sessionMessages[sessionId] ??= []).push(...stored);
         this.finish(sessionId, final);
@@ -1695,6 +1734,9 @@ export class MockTransport implements Transport {
       fingerprint: on ? "3A:9F:C2:11:7B:E4:05:6D:88:AA:10:F3:42:9C:7E:21:B0:5D:E9:34:6A:C7:18:FF:0D:92:41:B6:73:2E:AD:60" : undefined,
       fingerprint_of: on ? "ca" : undefined, expires_at: on ? "2027-06-20T00:00:00Z" : undefined, ca_available: this.tlsMode === "self_signed", warning: !on,
     };
+  }
+  async secretsAtRest(): Promise<SecretsAtRest> {
+    return { state: "active", backend: "Portachiavi di macOS (Keychain)", encrypted: 6, plain: 0, unreadable: 0 };
   }
   async tlsCa(): Promise<{ pem: string }> {
     return { pem: "-----BEGIN CERTIFICATE-----\n(demo)\n-----END CERTIFICATE-----\n" };

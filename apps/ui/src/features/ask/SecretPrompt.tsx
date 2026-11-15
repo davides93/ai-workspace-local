@@ -6,6 +6,7 @@ import { errorMessage } from "../../shared/lib/errors";
 import { qk } from "../../shared/query/keys";
 import type { SecretRequest } from "../../shared/api/types";
 import { Button, Icon } from "../../shared/ui";
+import { useSecretsAtRest } from "../security/api";
 import type { SecretItem } from "../chat/model/items";
 import { secretClosedText, secretFailure } from "./model";
 import { useAnnounce, useFocusOnOpen } from "./useAskFocus";
@@ -47,6 +48,9 @@ function OpenSecret({ req }: { req: SecretRequest }) {
   const [state, setState] = useState<Sending>({ status: "idle" });
   const [error, setError] = useState<string | null>(null);
   const said = useAnnounce(t("ask.segreto_testo", { label: req.label }));
+  // How the value is kept on this computer. Said only once it is known: until then the card claims neither.
+  const atRest = useSecretsAtRest().data;
+  const kept = atRest ? (atRest.state === "active" ? t("ask.segreto_cifrato") : t("ask.segreto_in_chiaro")) : "";
   useFocusOnOpen(root);
   const busy = state.status === "sending" || state.status === "sent" || state.status === "gone";
 
@@ -146,7 +150,7 @@ function OpenSecret({ req }: { req: SecretRequest }) {
               <Button size="sm" variant="ghost" aria-pressed={shown} disabled={busy} onClick={() => setShown((v) => !v)}>{t("ask.mostra_il_valore")}</Button>
             </div>
           </div>
-          <p id={noteId} className="ask-hint-private"><Icon name="shield" size={14} /><span>{t("ask.segreto_riservato")}</span></p>
+          <p id={noteId} className="ask-hint-private"><Icon name="shield" size={14} /><span>{t("ask.segreto_riservato")}{kept && ` ${kept}`}</span></p>
         </>
       )}
 

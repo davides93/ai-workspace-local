@@ -13,6 +13,7 @@ const paths = {
   plus: "M10 4v12M4 10h12",
   send: "M4 10l12-6-5 13-2-5z",
   stop: "M6 6h8v8H6z",
+  pause: "M7 4v12M13 4v12",
   power: "M10 3v7M6.2 5.8a6 6 0 1 0 7.6 0",
   play: "M7 5l8 5-8 5z",
   download: "M10 3v10M6 9l4 4 4-4M4 16h12",
@@ -56,7 +57,6 @@ const paths = {
   thumbup: "M4 9h3v8H4zM7 9l3-6c1.4 0 2 1 2 2v3h4a1 1 0 0 1 1 1.2l-1 6A1.5 1.5 0 0 1 14.5 17H7",
   thumbdown: "M4 11h3V3H4zM7 11l3 6c1.4 0 2-1 2-2v-3h4a1 1 0 0 0 1-1.2l-1-6A1.5 1.5 0 0 0 14.5 3H7",
   cloud:"M6 15a4 4 0 0 1-.5-8 5 5 0 0 1 9.5 1A3.5 3.5 0 0 1 14.5 15z",
-  pause: "M7 4.5v11M13 4.5v11",
   clock: "M10 3a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM10 6.5V10l2.5 1.5",
 } as const;
 
