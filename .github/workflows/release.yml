@@ -8,9 +8,10 @@ name: Release (DMG macOS, installer Windows; arm64 e CUDA opzionali)
 # Che cosa si costruisce lo decide scripts/ci/select-targets.sh (provabile in locale con --self-test):
 #   - `default` (nessun input e nessuna variabile): solo Windows x64 e macOS universale, come sempre;
 #   - input `targets` di "Run workflow", oppure la variabile del repository AIW_RELEASE_TARGETS per i
-#     tag: un elenco separato da virgole di target (windows-x64, macos, linux-arm64, windows-arm64,
-#     daemon-linux-arm64, daemon-windows-arm64, cuda-linux, cuda-windows) o di gruppi (default, arm64,
-#     cuda, extras, all). I target nuovi (arm64, CUDA) non fermano mai la release se falliscono.
+#     tag: un elenco separato da virgole di target (windows-x64, macos, linux-x64, linux-arm64,
+#     windows-arm64, daemon-linux-arm64, daemon-windows-arm64, cuda-linux, cuda-windows, vulkan-linux,
+#     vulkan-windows) o di gruppi (default, linux, arm64, cuda, vulkan, extras, all). I target
+#     facoltativi (Linux, arm64, CUDA, Vulkan) non fermano mai la release se falliscono.
 # Procedura completa: docs/release/RELEASE.md.
 on:
   workflow_dispatch:
@@ -20,7 +21,7 @@ on:
         required: false
         default: ""
       targets:
-        description: "Target da costruire, separati da virgole (es. linux-arm64,cuda); vuoto = default (+ variabile AIW_RELEASE_TARGETS). Gruppi: default, arm64, cuda, extras, all"
+        description: "Target da costruire, separati da virgole (es. linux-x64,vulkan); vuoto = default (+ variabile AIW_RELEASE_TARGETS). Gruppi: default, linux, arm64, cuda, vulkan, extras, all"
         required: false
         default: ""
   push:
@@ -42,6 +43,7 @@ jobs:
       desktop: ${{ steps.sel.outputs.desktop }}
       daemon: ${{ steps.sel.outputs.daemon }}
       cuda: ${{ steps.sel.outputs.cuda }}
+      vulkan: ${{ steps.sel.outputs.vulkan }}
       core: ${{ steps.sel.outputs.core }}
       selected: ${{ steps.sel.outputs.selected }}
     steps:
@@ -265,17 +267,39 @@ jobs:
             Write-Output "$($f.Name): $($sig.Status) - $($sig.SignerCertificate.Subject)"
             if ($sig.Status -ne 'Valid') { throw "firma non valida: $($f.Name)" }
           }
-      # RPM versions cannot contain '-' ("0.5.0-beta.8" is rejected by the bundler): the prerelease is
-      # spelled the RPM way (0.5.0~beta.8, sorts before 0.5.0) through a config override used by this
-      # build only; the app and the other bundles keep the real version. If the Tauri CLI refuses a
-      # non-semver override the release still ships the .deb and the AppImage.
+      # RPM versions cannot contain '-' ("0.5.0-beta.8" is rejected by the bundler), and the Tauri CLI
+      # (2.12) validates `version` as SemVer, so the usual `0.5.0~beta.8` is refused before the
+      # bundler even starts (this is what made the old override fail silently). Newer bundlers do
+      # the `~` conversion themselves (tauri-apps/tauri#16336, not in a stable 2.x CLI yet).
+      # Until then the prerelease goes to the RPM `release` tag, the Fedora way for a pre-release:
+      # 0.5.0-beta.8 becomes version 0.5.0, release 0.beta.8 (it sorts before the final 0.5.0-1).
+      # The override is used by this build only; the app itself reports the real version (it comes
+      # from Cargo, not from tauri.conf.json), and the deb and AppImage keep it too.
+      # No `continue-on-error` here: the Linux legs are optional as a whole, but inside one a missing
+      # rpm must show up as a failed step (the upload below only checks that *some* file exists).
       - name: Build RPM (Linux)
         if: runner.os == 'Linux'
-        continue-on-error: true
         working-directory: apps/desktop
+        shell: bash
         run: |
-          rpm_version=$(node -p "require('./src-tauri/tauri.conf.json').version.replace('-', '~')")
-          npx tauri build --bundles rpm --config "{\"version\":\"$rpm_version\"}"
+          set -euo pipefail
+          full=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          base="${full%%-*}"
+          if [ "$base" = "$full" ]; then
+            rpm_release=1
+          else
+            pre="${full#*-}"
+            rpm_release="0.${pre//-/.}"
+          fi
+          cfg=$(node -e 'console.log(JSON.stringify({version: process.argv[1], bundle: {linux: {rpm: {release: process.argv[2]}}}}))' "$base" "$rpm_release")
+          echo "RPM: version $base, release $rpm_release (app version $full)"
+          npx tauri build --bundles rpm --config "$cfg"
+          rpm_file="$(find "$GITHUB_WORKSPACE/target" -path '*release/bundle/rpm/*.rpm' -type f | head -n 1)"
+          test -n "$rpm_file" || { echo "::error::il bundler non ha prodotto nessun .rpm"; exit 1; }
+          sudo apt-get install -y rpm
+          rpm -qip "$rpm_file"
+          got="$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$rpm_file")"
+          test "$got" = "$base-$rpm_release" || { echo "::error::versione rpm inattesa: $got (attesa $base-$rpm_release)"; exit 1; }
       - uses: actions/upload-artifact@v7
         with:
           name: aiw-desktop-${{ matrix.os }}
@@ -464,9 +488,111 @@ jobs:
           path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
+  # Vulkan builds of the daemon (embedded llama.cpp with `llama-vulkan`), Linux x64 and Windows x64.
+  # Restored from the job that was removed with the store split (commit 3cb23ae, #54); its last
+  # known-good run was 42513812773 (both legs green). Optional and non-blocking: a Vulkan SDK or
+  # CMake hiccup never fails the release. The Vulkan loader is the one of the system (the GPU
+  # driver brings it), so nothing from the SDK is shipped.
+  vulkan:
+    name: aiw daemon (Vulkan) ${{ matrix.name }}
+    needs: select
+    if: needs.select.outputs.vulkan != '[]'
+    continue-on-error: true
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.vulkan) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vulkan
+      - name: Linux dependencies (headers, loader, glslc)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake pkg-config libclang-dev libvulkan-dev glslc spirv-headers
+      # No guessed SDK version: LunarG's "latest" endpoints are used (the installer is named
+      # vulkan-sdk.exe there; older SDKs used VulkanSDK-<ver>-Installer.exe). Every download is
+      # checked to be a real PE executable (MZ header, > 10 MB) before it is run, because LunarG
+      # answers an unknown URL with an HTML error page that "is not a valid application".
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk.exe'
+          $version = ''
+          try { $version = (Invoke-RestMethod -Uri 'https://vulkan.lunarg.com/sdk/latest/windows.txt' -TimeoutSec 60).ToString().Trim() } catch { Write-Host "latest version lookup failed: $_" }
+          $urls = @('https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe')
+          if ($version -match '^\d+\.\d+\.\d+(\.\d+)?$') {
+            Write-Host "LunarG latest SDK: $version"
+            $urls += "https://sdk.lunarg.com/sdk/download/$version/windows/vulkan_sdk.exe"
+            $urls += "https://sdk.lunarg.com/sdk/download/$version/windows/VulkanSDK-$version-Installer.exe"
+          }
+          $ok = $false
+          foreach ($url in $urls) {
+            for ($try = 1; $try -le 3 -and -not $ok; $try++) {
+              Write-Host "Downloading $url (attempt $try)"
+              Remove-Item $installer -ErrorAction SilentlyContinue
+              & curl.exe --fail --silent --show-error --location --retry 2 --connect-timeout 30 --max-time 900 -o $installer $url
+              if ($LASTEXITCODE -ne 0 -or -not (Test-Path $installer)) { Start-Sleep -Seconds (5 * $try); continue }
+              $bytes = [IO.File]::ReadAllBytes($installer)
+              if ($bytes.Length -gt 10MB -and $bytes[0] -eq 0x4D -and $bytes[1] -eq 0x5A) { $ok = $true }
+              else {
+                Write-Host "Not a PE executable ($($bytes.Length) bytes); first bytes:"
+                Write-Host ([Text.Encoding]::ASCII.GetString($bytes, 0, [Math]::Min(200, $bytes.Length)))
+                Start-Sleep -Seconds (5 * $try)
+              }
+            }
+            if ($ok) { break }
+          }
+          if (-not $ok) { throw 'Could not download a valid Vulkan SDK installer from LunarG' }
+          $root = 'C:\VulkanSDK'
+          $p = Start-Process -FilePath $installer -ArgumentList @('--root', $root, '--accept-licenses', '--default-answer', '--confirm-command', 'install') -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer exited with $($p.ExitCode)" }
+          # With --root the SDK lands in the root itself (older installers used a version subfolder).
+          $sdk = @(Get-Item $root) + @(Get-ChildItem $root -Directory | Sort-Object Name -Descending) | Where-Object { Test-Path (Join-Path $_.FullName 'Bin\glslc.exe') } | Select-Object -First 1
+          if (-not $sdk) { throw "glslc.exe not found under $root after install" }
+          Write-Host "Vulkan SDK at $($sdk.FullName)"
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=$($sdk.FullName)"
+          Add-Content $env:GITHUB_PATH (Join-Path $sdk.FullName 'Bin')
+      # Windows: a short target dir. llama.cpp's Vulkan build runs a nested CMake/MSBuild project
+      # (vulkan-shaders-gen) whose paths exceed MAX_PATH under the default
+      # D:\a\<repo>\<repo>\target\... and cl.exe then fails with C1083 on its test program.
+      # Also Ninja instead of the Visual Studio generator: its install step of the nested
+      # vulkan-shaders-gen project fails ("Not a file: .../cmake_install.cmake").
+      - name: MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      # (pwsh, not bash: Git's bash puts its own usr/bin/link.exe in front of MSVC's linker.)
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: C:\t
+          CMAKE_GENERATOR: Ninja
+        run: cargo build --release -p aiw-cli --features llama-vulkan
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: cargo build --release -p aiw-cli --features llama-vulkan
+      - name: Name the binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          src=target/release/aiw
+          if [ "$RUNNER_OS" = "Windows" ]; then src=/c/t/release/aiw.exe; fi
+          cp "$src" "dist/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aiw-daemon-${{ matrix.os }}-vulkan
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
   # Creates the GitHub (pre)release from the artifacts of the build jobs (the macOS DMG and the
-  # Windows installer, plus the optional arm64 and CUDA files when they were built). Tags only.
-  # The optional jobs are continue-on-error, so their files are included when present.
+  # Windows installer, plus the optional Linux, arm64, CUDA and Vulkan files when they were built).
+  # Tags only. The optional jobs are continue-on-error, so their files are included when present.
   publish:
     name: Publish release
     # A pushed tag, or a manual run with a tag name: the release action then creates the tag on
@@ -474,7 +600,7 @@ jobs:
     # `desktop` must not have failed (it is skipped when only other targets were selected); the
     # optional jobs cannot fail the release.
     if: ${{ !cancelled() && needs.select.result == 'success' && needs.desktop.result != 'failure' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v'))) }}
-    needs: [select, desktop, daemon-arm64, cuda]
+    needs: [select, desktop, daemon-arm64, cuda, vulkan]
     env:
       RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.tag }}
     runs-on: ubuntu-latest
@@ -495,7 +621,7 @@ jobs:
           tag="${RELEASE_TAG}"
           ver="${tag#v}"
           # Bundles keep the bundler names (spaces become underscores: GitHub rewrites them anyway).
-          # The daemon binaries are named aiw-<version>-<os>-<arch>[-cuda12][.exe]: the `aiw-` prefix is
+          # The daemon binaries are named aiw-<version>-<os>-<arch>[-cuda12|-vulkan][.exe]: the `aiw-` prefix is
           # what the in-app updater uses to skip them when it looks for an installer.
           while IFS= read -r f; do
             b="$(basename "$f")"

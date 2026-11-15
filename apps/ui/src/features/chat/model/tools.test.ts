@@ -44,6 +44,9 @@ describe("result reading", () => {
   it("classifies an answer", () => {
     expect(resultStatus("Negato dall'utente.")).toBe("denied");
     expect(resultStatus("negato dalla policy")).toBe("denied");
+    // What the agent loop stores for a refusal: «ERRORE: » in front, and still a refusal (not a failure).
+    expect(resultStatus("ERRORE: Negato: /Users/x/Downloads è fuori dal workspace (/Users/x/work)")).toBe("denied");
+    expect(resultStatus("ERRORE: Negato dalla policy: regola")).toBe("denied");
     expect(resultStatus("ERRORE: file non trovato")).toBe("failed");
     expect(resultStatus("ERRORE: strumento non eseguito, il run è stato interrotto prima.")).toBe("interrupted");
     expect(resultStatus("ERRORE: Annullato: il run è stato fermato prima della conferma.")).toBe("interrupted");

@@ -621,6 +621,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_refusal_of_the_tool_itself_is_final_and_the_self_check_does_not_hand_it_back() {
+        // `list_dir` on a folder outside the workspace is refused by the tool («è fuori dal workspace»), as in the
+        // Mac App Store build, where the workspace is the app's own folder and Downloads is not part of it.
+        let (host, dir) = setup(
+            vec![
+                ScriptedBackend::tool_turn("c1", "list_dir", json!({"path": "/"})),
+                ScriptedBackend::text_turn("Non posso guardare fuori dalla cartella di lavoro."),
+            ],
+            true,
+        );
+        let out = AgentRunner::run(input(dir.path(), "ask"), host.clone()).await.unwrap();
+        let tool = out.new_messages.iter().find(|m| m.role == "tool").unwrap().content.clone();
+        assert!(tool.starts_with("ERRORE: Negato: ") && tool.contains("fuori dal workspace"), "{tool}");
+        // A refusal is final: no note «Controllo automatico…» and no extra model turn to «correct» it.
+        assert_eq!(out.final_text, "Non posso guardare fuori dalla cartella di lavoro.");
+        let all: Vec<&str> = out.new_messages.iter().map(|m| m.content.as_str()).collect();
+        assert!(!all.iter().any(|c| c.contains("Controllo automatico")), "{all:?}");
+    }
+
+    #[tokio::test]
     async fn a_failed_run_hands_back_what_it_did() {
         let (host, dir) = setup(vec![], true);
         std::fs::write(dir.path().join("a.txt"), "x").unwrap();

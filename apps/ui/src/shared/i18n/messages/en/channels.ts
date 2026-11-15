@@ -104,7 +104,8 @@ export const channelsEn: Record<keyof typeof channelsIt, string> = {
   "channels.scrivi_la_password_per_gmail": "Enter the password (Gmail and Microsoft need an \"app password\").",
   "channels.si_sta_collegando": "Connecting",
   "channels.non_disponibile": "Unavailable",
-  "channels.accendi_il_canale": "Turn the channel on.",
+  "channels.accendi_il_canale": "Turn the channel on with the switch at the top right: the bot only answers while it is on.",
+  "channels.per_il_codice_accendi_il_canale": "To generate the code, turn the channel on first (the switch at the top right): the bot only answers while it is on.",
   "channels.manca_list": "Missing: {list}.",
   "channels.per_esempio_u024be7lh": "For example U024BE7LH",
 };

@@ -102,7 +102,8 @@ export const channelsIt = {
   "channels.scrivi_la_password_per_gmail": "Scrivi la password (per Gmail e Microsoft serve una «password per le app»).",
   "channels.si_sta_collegando": "Si sta collegando",
   "channels.non_disponibile": "Non disponibile",
-  "channels.accendi_il_canale": "Accendi il canale.",
+  "channels.accendi_il_canale": "Accendi il canale con l'interruttore in alto a destra: il bot risponde solo mentre è acceso.",
+  "channels.per_il_codice_accendi_il_canale": "Per generare il codice accendi prima il canale (l'interruttore in alto a destra): il bot risponde solo mentre è acceso.",
   "channels.manca_list": "Manca: {list}.",
   "channels.per_esempio_u024be7lh": "Per esempio U024BE7LH",
 } as const;
