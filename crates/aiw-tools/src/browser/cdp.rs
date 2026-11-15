@@ -106,8 +106,9 @@ pub(crate) struct State {
     /// The person drove the browser and gave it back: addresses lose their query and fragment (they may
     /// carry a code or a token) until the agent navigates by itself. See `control.rs`.
     pub redact: bool,
-    /// A `confirm` or `prompt` waits for an answer (see [`DIALOG_HOLD`]).
-    pub dialog: Option<PendingDialog>,
+    /// The `confirm` and `prompt` that wait for an answer (see [`DIALOG_HOLD`]), by session: a tab has at most one open, and two
+    /// tabs do not take each other's place.
+    pub dialogs: HashMap<String, PendingDialog>,
     pub dialog_hold: Option<Duration>,
     pub dialogs_opened: u64,
     /// Attached to somebody's own Chrome: the targets this connection created (or that its pages opened). Everything else
@@ -129,6 +130,15 @@ impl State {
     pub(crate) fn active_tab(&mut self) -> Option<&mut Tab> {
         let id = self.active.clone()?;
         self.tabs.iter_mut().find(|t| t.target_id == id)
+    }
+
+    /// The window to show and answer first: the one of the tab in front, else the oldest.
+    fn current_dialog(&mut self) -> Option<PendingDialog> {
+        let active = self.active_tab().and_then(|t| t.session.clone());
+        if let Some(d) = active.and_then(|s| self.dialogs.get(&s)) {
+            return Some(d.clone());
+        }
+        self.dialogs.values().min_by_key(|d| d.id).cloned()
     }
 }
 
@@ -311,7 +321,7 @@ impl Cdp {
     /// A window of the site is waiting for an answer on this session.
     fn dialog_blocks(&self, session: Option<&str>) -> bool {
         let st = self.st.lock().unwrap();
-        matches!((&st.dialog, session), (Some(d), Some(s)) if d.session == s)
+        session.is_some_and(|s| st.dialogs.contains_key(s))
     }
 
     /// Ends when a window of the site is waiting on this session.
@@ -329,10 +339,10 @@ impl Cdp {
 
     /// The window of the site that waits for an answer, if any.
     pub(crate) fn pending_dialog(&self) -> Option<super::live::DialogInfo> {
-        self.st.lock().unwrap().dialog.as_ref().map(|d| super::live::DialogInfo {
-            kind: d.kind.clone(),
-            message: d.message.clone(),
-            default_text: d.default_text.clone(),
+        self.st.lock().unwrap().current_dialog().map(|d| super::live::DialogInfo {
+            kind: d.kind,
+            message: d.message,
+            default_text: d.default_text,
         })
     }
 
@@ -342,8 +352,7 @@ impl Cdp {
             .st
             .lock()
             .unwrap()
-            .dialog
-            .clone()
+            .current_dialog()
             .ok_or_else(|| Error::NotFound("nessuna finestra del sito aspetta una risposta".into()))?;
         let mut params = json!({"accept": accept});
         if let (true, Some(t)) = (accept && d.kind == "prompt", text) {
@@ -351,8 +360,8 @@ impl Cdp {
         }
         self.call_on(Some(&d.session), "Page.handleJavaScriptDialog", params).await?;
         let mut st = self.st.lock().unwrap();
-        if st.dialog.as_ref().is_some_and(|x| x.id == d.id) {
-            st.dialog = None;
+        if st.dialogs.get(&d.session).is_some_and(|x| x.id == d.id) {
+            st.dialogs.remove(&d.session);
         }
         drop(st);
         self.dialog_notify.notify_waiters();
@@ -878,13 +887,16 @@ fn on_event(h: &Hub, v: &Value) {
                     let mut st = h.st.lock().unwrap();
                     st.dialogs_opened += 1;
                     let id = st.dialogs_opened;
-                    st.dialog = Some(PendingDialog {
-                        session: sid.to_string(),
-                        kind: ty.to_string(),
-                        message: msg.clone(),
-                        default_text: clip(p["defaultPrompt"].as_str().unwrap_or_default(), 200),
-                        id,
-                    });
+                    st.dialogs.insert(
+                        sid.to_string(),
+                        PendingDialog {
+                            session: sid.to_string(),
+                            kind: ty.to_string(),
+                            message: msg.clone(),
+                            default_text: clip(p["defaultPrompt"].as_str().unwrap_or_default(), 200),
+                            id,
+                        },
+                    );
                     (id, st.dialog_hold.unwrap_or(DIALOG_HOLD))
                 };
                 h.dialog_notify.notify_waiters();
@@ -895,9 +907,9 @@ fn on_event(h: &Hub, v: &Value) {
                     tokio::time::sleep(hold).await;
                     let still = {
                         let mut st = h.st.lock().unwrap();
-                        let same = st.dialog.as_ref().is_some_and(|d| d.id == id);
+                        let same = st.dialogs.get(&sid).is_some_and(|d| d.id == id);
                         if same {
-                            st.dialog = None;
+                            st.dialogs.remove(&sid);
                             st.note(Note::Text(format!(
                                 "Finestra del sito ({ty}): «{msg}»: annullata automaticamente, nessuno ha risposto."
                             )));
@@ -914,10 +926,7 @@ fn on_event(h: &Hub, v: &Value) {
         "Page.javascriptDialogClosed" => {
             // Answered by somebody else (the browser's own window, the page itself): nothing waits any more.
             if let Some(sid) = session {
-                let mut st = h.st.lock().unwrap();
-                if st.dialog.as_ref().is_some_and(|d| d.session == sid) {
-                    st.dialog = None;
-                }
+                h.st.lock().unwrap().dialogs.remove(sid);
             }
             h.dialog_notify.notify_waiters();
         }
@@ -1023,9 +1032,7 @@ fn remove_tabs(h: &Hub, pred: impl Fn(&Tab) -> bool) {
     st.tabs.retain(|t| !pred(t));
     for (id, session) in gone {
         if let Some(s) = session {
-            if st.dialog.as_ref().is_some_and(|d| d.session == s) {
-                st.dialog = None;
-            }
+            st.dialogs.remove(&s);
             let prefix = format!("{s}:");
             st.inflight.retain(|k| !k.starts_with(&prefix));
         }

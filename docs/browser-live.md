@@ -6,7 +6,7 @@ Issue #73 (live view, login e 2FA dell'utente) e residui di #18 (collegamento a 
 
 - L'utente **vede** il browser controllato dall'agente durante il task (un fotogramma JPEG circa due volte al secondo) dalla chat: pulsante «Browser» nell'intestazione, anche in modalità semplice.
 - L'utente può **mettere in pausa** l'agente, **prendere il controllo** (clic, scorrimento, tasti, testo incollato nella pagina) e **restituirlo**. Login, 2FA e CAPTCHA li fa lui: le credenziali vanno solo alla pagina.
-- L'agente può **chiedere l'intervento** con lo strumento `browser_handover` («Accedi a example.com e completa la verifica in due passaggi»): in chat compare una scheda con la vista live e «Ho finito: restituisci il controllo» / «Non posso ora», e il run aspetta.
+- L'agente può **chiedere l'intervento** con lo strumento `browser_handover` (anche quando il lavoro sul browser lo fa il sotto-agente `browser` a cui l'Assistente delega: la domanda, l'origine del run e gli eventi sono quelli del run della persona, e un run da telefono è rifiutato lì come altrove) («Accedi a example.com e completa la verifica in due passaggi»): in chat compare una scheda con la vista live e «Ho finito: restituisci il controllo» / «Non posso ora», e il run aspetta.
 - Dopo la restituzione l'agente riprende **lo stesso task**: la chiamata che aspettava prosegue.
 - I `confirm` e i `prompt` del sito non vengono più annullati in silenzio: restano in attesa di una risposta dell'agente (`browser_dialog`) o dell'utente (vista live).
 - Con `browser.attach_url` l'agente usa un **Chrome già aperto dall'utente** invece del suo browser separato.
@@ -51,7 +51,7 @@ Il fotogramma è la viewport in pixel CSS, scalata a 1000 px al massimo; le posi
 
 ## Dialoghi (`alert`, `confirm`, `prompt`, `beforeunload`)
 
-`alert` e `beforeunload` hanno una sola uscita e si chiudono subito (con nota all'agente). `confirm` e `prompt` aspettano: l'agente risponde con `browser_dialog` (`accept`/`dismiss`, `text` per il prompt), l'utente dalla vista live. Una chiamata bloccata dalla finestra (un clic che apre un `confirm` non torna finché è risolto) **rientra subito** con la domanda e il modo di rispondere, invece di aspettare i 30 s del browser. Se nessuno risponde entro 120 s la finestra viene annullata (la risposta sicura) e l'agente ne riceve la nota. **Cambio di comportamento voluto**: prima ogni «sei sicuro?» riceveva «no» in silenzio.
+`alert` e `beforeunload` hanno una sola uscita e si chiudono subito (con nota all'agente). `confirm` e `prompt` aspettano: l'agente risponde con `browser_dialog` (`accept`/`dismiss`, `text` per il prompt), l'utente dalla vista live. Una chiamata bloccata dalla finestra (un clic che apre un `confirm` non torna finché è risolto) **rientra subito** con la domanda e il modo di rispondere, invece di aspettare i 30 s del browser. Ogni scheda ha la sua finestra (due schede non si sostituiscono a vicenda; si mostra e si risolve prima quella della scheda in primo piano). Se nessuno risponde entro 120 s la finestra viene annullata (la risposta sicura) e l'agente ne riceve la nota. **Cambio di comportamento voluto**: prima ogni «sei sicuro?» riceveva «no» in silenzio.
 
 ## Collegamento a un Chrome già aperto (`browser.attach_url`)
 
@@ -66,7 +66,7 @@ Impostazione (livello globale o dispositivo; **vietata al workspace e agli strum
 
 ## Scritture di file atomiche
 
-`write_file` (anche in append), `edit_file` e `copy_file` scrivono in un file temporaneo nascosto nella stessa cartella (`.<nome>.aiw-tmp-<casuale>`), `fsync`, poi `rename` sulla destinazione: un'interruzione a metà lascia il file com'era, mai troncato. Conservati i permessi; i collegamenti simbolici interni al workspace restano collegamenti (si sostituisce il file puntato; `ctx.resolve` blocca quelli che escono); un file di sola lettura o una cartella al posto del file continuano a dare errore. Il ripiego di copia dei download è atomico. Differenze note: gli hard link aggiuntivi restano al contenuto vecchio, proprietario/ACL/xattr non si conservano, nessun `fsync` della cartella, in una cartella di sola lettura la scrittura ora fallisce anche se il file è scrivibile. Provato su macOS; **Windows non verificato** (i test sono scritti per girarci).
+`write_file` (anche in append), `edit_file` e `copy_file` scrivono in un file temporaneo nascosto nella stessa cartella (`.<nome>.aiw-tmp-<casuale>`), `fsync`, poi `rename` sulla destinazione: un'interruzione a metà lascia il file com'era, mai troncato. Conservati i permessi; i collegamenti simbolici interni al workspace restano collegamenti (si sostituisce il file puntato; `ctx.resolve` blocca quelli che escono); un file di sola lettura o una cartella al posto del file continuano a dare errore. Il ripiego di copia dei download è atomico. Differenze note: gli hard link aggiuntivi restano al contenuto vecchio, proprietario/ACL/xattr non si conservano, nessun `fsync` della cartella, in una cartella di sola lettura la scrittura ora fallisce anche se il file è scrivibile. Su Windows un `rename` rifiutato perché un altro programma tiene aperta la destinazione (editor, antivirus) è ritentato fino a 5 volte in circa mezzo secondo prima di dare errore. Provato su macOS; **Windows non verificato** (i test sono scritti per girarci; il ripetitore non è stato mai eseguito lì).
 
 ## Cosa NON è provato
 

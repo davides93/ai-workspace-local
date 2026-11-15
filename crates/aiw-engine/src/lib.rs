@@ -196,6 +196,8 @@ pub(crate) struct Inner {
     pub elicitations: Mutex<HashMap<String, (McpElicitation, oneshot::Sender<aiw_tools::mcp::Elicited>)>>,
     /// Questions of `ask_user` waiting for the person, by id.
     pub questions: Mutex<HashMap<String, PendingQuestion>>,
+    /// The running sub-agents: sub-run id → the run that delegated to it (see [`Engine::root_run`]).
+    pub run_parents: Mutex<HashMap<String, String>>,
     /// Requests for a secret of `aiw_secret_request` waiting for the person, by id.
     pub secret_requests: Mutex<HashMap<String, PendingSecret>>,
     /// OAuth sign-ins in progress, by `state` (see `mcp_oauth`).
@@ -363,6 +365,7 @@ impl Engine {
             mcp: Default::default(),
             elicitations: Default::default(),
             questions: Default::default(),
+            run_parents: Default::default(),
             secret_requests: Default::default(),
             oauth_pending: Default::default(),
             store,
@@ -2071,6 +2074,19 @@ impl Engine {
 
     /// Who started a run that is still going, when the server started it for a person. `None` for
     /// every other run (and for one that has finished): see [`RunOrigin`].
+    /// The run a person started that this run belongs to: itself, or, for a sub-agent, the run that delegated to it (and so on up).
+    pub fn root_run(&self, run_id: &str) -> String {
+        let parents = self.0.run_parents.lock().unwrap();
+        let mut id = run_id;
+        for _ in 0..16 {
+            match parents.get(id) {
+                Some(p) => id = p,
+                None => break,
+            }
+        }
+        id.to_string()
+    }
+
     pub fn run_origin(&self, run_id: &str) -> Option<RunOrigin> {
         self.0.runs.lock().unwrap().get(run_id).filter(|h| !h.done).and_then(|h| h.origin)
     }

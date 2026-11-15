@@ -529,3 +529,26 @@ async fn only_a_chrome_on_this_computer_can_be_attached() {
     let out = call(&t, &ctx, "browser_snapshot", json!({})).await;
     assert!(out.is_error && out.content.contains("--remote-debugging-port"), "{}", out.content);
 }
+
+#[tokio::test]
+async fn two_tabs_with_a_confirm_each_do_not_take_each_others_place() {
+    let lv = Live::new(page("http://e.example/")).await;
+    lv.mgr.set_dialog_hold(Duration::from_millis(400));
+    lv.run("browser_snapshot", json!({})).await;
+    lv.run("browser_tab_new", json!({})).await;
+    // S1 is the first tab, S2 the second (the active one): each opens its own confirm.
+    lv.fake.push(super::fake::event(Some("S1"), "Page.javascriptDialogOpening", json!({"type": "confirm", "message": "Prima scheda?"})));
+    lv.fake.push(super::fake::event(Some("S2"), "Page.javascriptDialogOpening", json!({"type": "confirm", "message": "Seconda scheda?"})));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    // The one of the tab in front is the one that is shown and answered first.
+    assert_eq!(lv.mgr.live_state().dialog.unwrap().message, "Seconda scheda?");
+    lv.mgr.take_control().await.unwrap();
+    lv.mgr.answer_dialog(true, None).await.unwrap();
+    let first = lv.fake.commands("Page.handleJavaScriptDialog").remove(0);
+    assert_eq!((first.session.as_deref(), first.params["accept"].as_bool()), (Some("S2"), Some(true)));
+    assert_eq!(lv.mgr.live_state().dialog.unwrap().message, "Prima scheda?", "the other one is still there");
+    // And the one nobody answers is dismissed on its own timer, in its own tab.
+    let dismissed = lv.fake.wait_for(|r| r.method == "Page.handleJavaScriptDialog" && r.session.as_deref() == Some("S1")).await;
+    assert_eq!(dismissed.params["accept"], false);
+    assert!(lv.mgr.live_state().dialog.is_none());
+}

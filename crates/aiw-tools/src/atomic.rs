@@ -130,9 +130,34 @@ impl TempFile {
         file.sync_all()?;
         // Closed before the rename and before any cleanup: an open handle blocks both on Windows.
         drop(file);
-        std::fs::rename(&self.path, target)?;
+        rename_over(&self.path, target)?;
         self.kept = true;
         Ok(())
+    }
+}
+
+/// `rename` over an existing file. On Windows it is refused while another program has the destination open without allowing
+/// deletion (an editor, an antivirus scan, a search indexer), usually for a moment: a few short, bounded retries, then the error.
+/// (Not tried on Windows: written from the documented behaviour of `MoveFileEx`.)
+fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        let mut last = None;
+        for attempt in 0..6 {
+            match std::fs::rename(from, to) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() == io::ErrorKind::PermissionDenied && attempt < 5 => {
+                    last = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(25 << attempt.min(3)));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last.unwrap_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "rename")))
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(from, to)
     }
 }
 

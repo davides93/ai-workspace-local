@@ -81,7 +81,10 @@ impl Tool for BrowserHandover {
         let engine = self.0.upgrade().map(Engine).ok_or_else(|| Error::Conflict("motore in arresto".into()))?;
         // Only a person at this computer can be asked: the live view needs the owner, and a run from a phone, a channel
         // or the command line has nobody to show it to (it would wait for nothing).
-        let origin = engine.run_origin(&ctx.run_id).filter(|o| o.owner && o.questions);
+        // (From a sub-agent too: the browser work of the Assistant runs in the `browser` agent it delegates to, and the person
+        // is in the conversation of the run that delegated: the origin, the question and its events are that run's.)
+        let top = engine.root_run(&ctx.run_id);
+        let origin = engine.run_origin(&top).filter(|o| o.owner && o.questions);
         if origin.is_none() {
             return Ok(answer(
                 json!({"outcome": "unsupported", "hint": "L'accesso va fatto dall'app su questo computer: di' all'utente di aprire la chat da lì e di accedere al sito (o di fornirti un altro modo)."}),
@@ -101,7 +104,7 @@ impl Tool for BrowserHandover {
         let wait = handover_wait(engine.interaction_wait());
         let question = Question {
             id: new_id("ask"),
-            run_id: ctx.run_id.clone(),
+            run_id: top.clone(),
             kind: "handover".into(),
             title: Some("Serve il tuo intervento nel browser".into()),
             message: reason.to_string(),
@@ -113,19 +116,15 @@ impl Tool for BrowserHandover {
             deny_label: Some("Non posso ora".into()),
             expires_at: None,
         };
-        browser.control().begin_handover(Handover {
-            question_id: question.id.clone(),
-            run_id: ctx.run_id.clone(),
-            reason: reason.to_string(),
-        });
+        browser.control().begin_handover(Handover { question_id: question.id.clone(), run_id: top.clone(), reason: reason.to_string() });
         let host = engine.browser_host();
         engine.audit_system("browser.handover", &format!("l'agente chiede all'utente di intervenire nel browser{host}"));
-        engine.emit_browser(Some(&ctx.run_id));
-        let (outcome, reply) = engine.ask_for(ctx, question, wait, "browser_handover").await;
+        engine.emit_browser(Some(&top));
+        let (outcome, reply) = engine.ask_for(ctx, question, wait, "browser_handover", &top).await;
         // Whatever ended the wait, the browser goes back to the agent (idempotent if the person already gave it back).
         browser.control().give_back();
         engine.audit_system("browser.handover_end", &format!("esito: {}{}", outcome.as_str(), engine.browser_host()));
-        engine.emit_browser(Some(&ctx.run_id));
+        engine.emit_browser(Some(&top));
         let confirmed = reply.as_ref().and_then(|a| a.confirmed).unwrap_or(false);
         let result = match (outcome, confirmed) {
             (QuestionOutcome::Answered, true) => json!({
@@ -154,7 +153,7 @@ impl Engine {
 
     /// Tells the run the browser was last used by that who drives it now (mode only: no address, no title).
     fn emit_browser(&self, run_id: Option<&str>) {
-        let Some(run_id) = run_id.map(String::from).or_else(|| self.0.browser.last_run()) else { return };
+        let Some(run_id) = run_id.map(String::from).or_else(|| self.0.browser.last_run()).map(|r| self.root_run(&r)) else { return };
         let live = self.0.runs.lock().unwrap().get(&run_id).is_some_and(|h| !h.done);
         if !live {
             return;
@@ -265,6 +264,7 @@ mod tests {
     use crate::management::test_ctx;
     use crate::tests::engine;
     use crate::RunOrigin;
+    use aiw_core::events::AgEvent;
     use aiw_tools::browser::fake::FakeCdp;
 
     const OWNER: RunOrigin = RunOrigin { owner: true, questions: true, secrets: true };
@@ -376,6 +376,76 @@ mod tests {
         assert_eq!(audit_details(&e, "browser.control").len(), 1, "{:?}", audit_details(&e, "browser.control"));
         for a in e.audit() {
             assert!(!a.detail.contains(REASON) && !a.detail.contains("example.com"), "{a:?}");
+        }
+    }
+
+    /// The path of the simple mode: the person talks to the Assistant, which delegates the browser work to the `browser` agent.
+    /// The handover is asked by the sub-agent, but the card, its events and the origin are the Assistant's run: that is where the
+    /// person is. (A run from a phone has no live view to give: it is refused there too.)
+    #[tokio::test]
+    async fn a_handover_asked_by_the_browser_subagent_is_asked_in_the_conversation_of_the_person() {
+        use aiw_runtimes::ScriptedBackend;
+        for (origin, shown) in [(OWNER, true), (PHONE, false)] {
+            let (e, _fake, _ctx, _a, _b) = with_browser().await;
+            let backend = ScriptedBackend::new(vec![
+                ScriptedBackend::tool_turn("a", "agent", json!({"agent": "browser", "task": "accedi a example.com"})),
+                ScriptedBackend::tool_turn("h", "browser_handover", json!({"reason": REASON})),
+                ScriptedBackend::text_turn("Accesso fatto"),
+                ScriptedBackend::text_turn("Ho finito"),
+            ]);
+            e.register_native_runtime("llama-embedded", Arc::new(backend));
+            let s = e.create_session("assistant", None).unwrap();
+            let run = e.start_run_from(&s.id, "Accedi per me".into(), None, None, vec![], Some(origin)).await.unwrap();
+            // Whatever asks for a confirmation on the way (delegating, browsing) is allowed: the person is not the point here.
+            let answered = tokio::spawn({
+                let e = e.clone();
+                async move {
+                    for _ in 0..600 {
+                        for a in e.approvals() {
+                            let _ = e.respond_approval_as(&a.id, true, false, true);
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }
+            });
+            if shown {
+                let q = next_question(&e).await;
+                assert_eq!((q.kind.as_str(), q.run_id.as_str()), ("handover", run.as_str()), "the card belongs to the run of the person");
+                assert_eq!(e.browser_state().await.control.handover.map(|h| h.run_id), Some(run.clone()));
+                let events: Vec<String> = e
+                    .run_events(&run)
+                    .into_iter()
+                    .filter_map(|s| match s.event.event {
+                        AgEvent::Custom { name, .. } => Some(name),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(events.iter().any(|n| n == "aiw.question") && events.iter().any(|n| n == "aiw.browser"), "{events:?}");
+                // «Ho finito» from the card: the sub-agent goes on and the Assistant answers.
+                e.respond_question(
+                    &q.id,
+                    QuestionReply { action: "answer".into(), answer: QuestionAnswer { confirmed: Some(true), ..Default::default() } },
+                )
+                .unwrap();
+            }
+            for _ in 0..500 {
+                if e.run_done(&run) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(e.run_done(&run), "the run ends");
+            answered.abort();
+            let handed =
+                e.messages(&s.id).unwrap().into_iter().any(|m| m.content.contains("Accesso fatto") || m.content.contains("Ho finito"));
+            assert!(handed, "the run went through to its answer");
+            if !shown {
+                assert!(e.questions().is_empty(), "no card for a client that cannot show the live view");
+                assert!(e.audit().iter().all(|a| a.action != "browser.handover"), "the handover never started");
+            } else {
+                assert_eq!(e.audit().iter().filter(|a| a.action == "browser.handover_end").count(), 1);
+            }
+            assert_eq!(e.browser_state().await.control.mode, Mode::Agent);
         }
     }
 
