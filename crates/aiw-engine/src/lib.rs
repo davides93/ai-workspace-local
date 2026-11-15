@@ -2,6 +2,7 @@
 
 pub mod a2a_client;
 mod access;
+pub mod agui_threads;
 pub mod adviser;
 pub mod attachments;
 pub mod background;
@@ -1348,6 +1349,7 @@ impl Engine {
         }
         self.0.store.delete_session(id)?;
         self.remove_attachments(id);
+        self.remove_agui_threads_of(id);
         Ok(())
     }
 
@@ -1774,6 +1776,23 @@ impl Engine {
         uploads: Vec<aiw_core::api::AttachmentUpload>,
         origin: Option<RunOrigin>,
     ) -> Result<String> {
+        self.start_run_ctx(session_id, input, kind, thinking, uploads, origin, None).await
+    }
+
+    /// [`Engine::start_run_from`] with what the client application says about itself for this run
+    /// only (`app_context`, a ready-made section of text: the AG-UI `context` and `state`). It goes to
+    /// the model in the system prompt, as data and not as instructions, and is never stored.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_run_ctx(
+        &self,
+        session_id: &str,
+        input: String,
+        kind: Option<&str>,
+        thinking: Option<ThinkingMode>,
+        uploads: Vec<aiw_core::api::AttachmentUpload>,
+        origin: Option<RunOrigin>,
+        app_context: Option<String>,
+    ) -> Result<String> {
         if input.trim().is_empty() && uploads.is_empty() {
             return Err(Error::Invalid("messaggio vuoto".into()));
         }
@@ -1788,7 +1807,7 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
-        self.start_run_inner(session_id, input, name, 0, thinking, files, origin).await
+        self.start_run_inner(session_id, input, name, 0, thinking, files, origin, app_context).await
     }
 
     /// Most handoffs one user message can chain before the conversation stops with a note.
@@ -1806,8 +1825,9 @@ impl Engine {
         thinking: Option<ThinkingMode>,
         files: Vec<attachments::Prepared>,
         origin: Option<RunOrigin>,
+        app_context: Option<String>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files, origin))
+        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files, origin, app_context))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1820,6 +1840,7 @@ impl Engine {
         thinking: Option<ThinkingMode>,
         files: Vec<attachments::Prepared>,
         origin: Option<RunOrigin>,
+        app_context: Option<String>,
     ) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
@@ -1940,6 +1961,8 @@ impl Engine {
         run_input.system_extra.extend(memory);
         // Which document collections exist (the passages themselves are found with `kb_search`, never injected).
         run_input.system_extra.extend(self.kb_prompt(&run_input.agent));
+        // What the client application said about itself (AG-UI `context` and `state`): data for this run only.
+        run_input.system_extra.extend(app_context.filter(|c| !c.trim().is_empty()));
         if let Some(team) = &team {
             self.apply_team(&mut run_input, team);
         }
@@ -2060,7 +2083,7 @@ impl Engine {
         self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
         let input = format!("[Passaggio da {from_name}] {summary}");
         // The next agent starts without an origin: a handoff does not carry the person's rights over.
-        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![], None).await {
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![], None, None).await {
             note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
         }
     }

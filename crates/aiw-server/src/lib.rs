@@ -3,6 +3,7 @@
 
 mod a2a;
 mod agui;
+mod agui_wire;
 mod anthropic;
 mod backup_api;
 mod extract;
@@ -64,7 +65,7 @@ fn ok<T>(v: T) -> ApiResult<T> {
 pub struct AppState {
     pub engine: Engine,
     /// AG-UI `threadId` -> session id, in memory only (see `agui`).
-    pub(crate) agui_threads: agui::Threads,
+    pub(crate) agui: agui::Threads,
 }
 
 /// What the authentication middleware decided about a request, for the handlers that need to know.
@@ -240,7 +241,7 @@ async fn auth(State(st): State<AppState>, mut req: Request, next: Next) -> Respo
 
 /// Builds the full API router. `ui_dir` serves the web UI (`apps/ui/dist`) when present.
 pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
-    let st = AppState { engine, agui_threads: Default::default() };
+    let st = AppState { engine, agui: Default::default() };
     let api = Router::new()
         .route("/api/system", get(system))
         .route("/api/kill", post(kill))
