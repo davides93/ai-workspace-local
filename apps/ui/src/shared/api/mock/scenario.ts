@@ -1,5 +1,6 @@
 import type { UiMode } from "../../lib/uiMode";
 import { catalog, configLayers, folderGrants, models, nid, now, runtimes, sessionMessages, sessions, system } from "./fixtures";
+import { taskScenario } from "./tasks";
 
 /**
  * Named starting states of the demo, picked with `?scenario=<name>` in the address of the mockup.
@@ -24,6 +25,8 @@ export function applyMockScenario(name: MockScenario): void {
     for (const r of runtimes) r.loaded_models = [];
     sessions.length = 0;
     for (const id of Object.keys(sessionMessages)) delete sessionMessages[id];
+    // No chat, no background task: the demo tasks live in those sessions.
+    taskScenario.empty = true;
   }
   if (name === "mas") {
     system.sandboxed = true;
