@@ -22,7 +22,7 @@ for (const size of SIZES) {
       });
 
       test("settings of the Mac App Store build: allowed folders", async ({ page }, info) => {
-        await openApp(page, "/settings", { theme, scenario: "mas" });
+        await openApp(page, "/settings", { theme, scenario: "mas", mode: "developer" });
         await expect(page.getByTestId("folders-panel")).toBeVisible();
         await expectNoBlockingViolations(page, info);
         await expectNoPlaceholderLeaks(page);
