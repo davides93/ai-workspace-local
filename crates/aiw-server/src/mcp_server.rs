@@ -26,7 +26,9 @@ fn tools_list(s: &AppState) -> Value {
         .engine
         .tools()
         .into_iter()
-        .filter(|t| t.enabled && t.available && t.source == "builtin")
+        // The management tools of the Assistant are not offered to other agents (and a call by name is refused
+        // anyway: they work only in a chat run). `aiw_agent_run` below is this server's own tool, not one of them.
+        .filter(|t| t.enabled && t.available && t.source == "builtin" && !aiw_engine::management::is_management(&t.name))
         .map(|t| {
             json!({
                 "name": t.name,

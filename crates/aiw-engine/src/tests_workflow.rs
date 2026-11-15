@@ -377,12 +377,10 @@ async fn rewind_restores_originals_deletes_created_files_and_refuses_a_running_r
     assert_eq!(info.delete, vec!["nuovo.md"]);
 
     // A run that is still going cannot be rewound.
-    engine
-        .0
-        .runs
-        .lock()
-        .unwrap()
-        .insert("run_rw".into(), RunHandle { session_id: None, cancel: CancellationToken::new(), events: vec![], done: false });
+    engine.0.runs.lock().unwrap().insert(
+        "run_rw".into(),
+        RunHandle { session_id: None, cancel: CancellationToken::new(), events: vec![], done: false, origin: None },
+    );
     assert!(matches!(engine.rewind("run_rw"), Err(Error::Conflict(_))));
     assert_eq!(std::fs::read_to_string(ws.path().join("vecchio.md")).unwrap(), "cambiato");
     engine.0.runs.lock().unwrap().get_mut("run_rw").unwrap().done = true;

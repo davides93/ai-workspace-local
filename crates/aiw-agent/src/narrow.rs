@@ -33,12 +33,77 @@ pub fn narrow_tools(parent: &[String], child: &[String]) -> Vec<String> {
     }
 }
 
+/// [`narrow_tools`] for a parent that also has `delegate_tools`: the child gets its own list
+/// narrowed to what the parent can hand out, its own `tools` plus the ones it only delegates.
+///
+/// With no `delegate_tools` this is exactly [`narrow_tools`]. With some, a `*` among the granted
+/// names stands for the tools that do not need an explicit grant (`explicit` says which ones
+/// those are): a child that lists one of the others keeps it only if the parent names it itself.
+pub fn narrow_tools_delegating(
+    parent: &[String],
+    parent_delegate: &[String],
+    child: &[String],
+    explicit: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    if parent_delegate.is_empty() {
+        return narrow_tools(parent, child);
+    }
+    let mut granted: Vec<String> = parent.to_vec();
+    for t in parent_delegate {
+        if !granted.contains(t) {
+            granted.push(t.clone());
+        }
+    }
+    narrow_tools(&granted, child).into_iter().filter(|t| t == "*" || !explicit(t) || granted.contains(t)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn v(l: &[&str]) -> Vec<String> {
         l.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn without_delegate_tools_narrowing_is_the_plain_intersection() {
+        let explicit = |t: &str| t == "channel_send";
+        for (parent, child) in [
+            (v(&["*"]), v(&["read_file", "channel_send"])),
+            (v(&["todo", "agent"]), v(&["*"])),
+            (v(&["todo", "agent"]), v(&["agent", "shell"])),
+            (v(&[]), v(&["*"])),
+        ] {
+            assert_eq!(narrow_tools_delegating(&parent, &[], &child, explicit), narrow_tools(&parent, &child), "{parent:?} / {child:?}");
+        }
+    }
+
+    #[test]
+    fn delegate_tools_widen_what_the_child_can_get_but_never_past_the_explicit_grants() {
+        let explicit = |t: &str| matches!(t, "channel_send" | "browser_eval");
+        let parent = v(&["agent", "todo"]);
+        // `*` among the delegated tools: the child keeps its own list...
+        assert_eq!(
+            narrow_tools_delegating(&parent, &v(&["*"]), &v(&["browser_navigate", "web_fetch", "todo"]), explicit),
+            v(&["browser_navigate", "web_fetch", "todo"])
+        );
+        // ...minus the tools that need an explicit grant the parent never named.
+        assert_eq!(
+            narrow_tools_delegating(&parent, &v(&["*"]), &v(&["read_file", "browser_eval", "channel_send"]), explicit),
+            v(&["read_file"])
+        );
+        // A tool the parent names itself (own or delegated) is granted even when explicit.
+        assert_eq!(
+            narrow_tools_delegating(&parent, &v(&["*", "channel_send"]), &v(&["channel_send", "browser_eval"]), explicit),
+            v(&["channel_send"])
+        );
+        // A child with `*` gets the named tools of the parent (no wildcard to hand out).
+        assert_eq!(narrow_tools_delegating(&parent, &v(&["web_fetch"]), &v(&["*"]), explicit), v(&["agent", "todo", "web_fetch"]));
+        // A named delegate list only lets those names through.
+        assert_eq!(
+            narrow_tools_delegating(&parent, &v(&["web_fetch"]), &v(&["web_fetch", "shell", "todo"]), explicit),
+            v(&["web_fetch", "todo"])
+        );
     }
 
     #[test]

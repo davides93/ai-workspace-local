@@ -1235,8 +1235,9 @@ fn parse_sampling(params: &Value) -> std::result::Result<SamplingRequest, String
     })
 }
 
-/// Same words as the engine uses to hide secrets: a server must not ask for them in a form.
-fn looks_secret(s: &str) -> bool {
+/// Same words as the engine uses to hide secrets: a server must not ask for them in a form (nor the
+/// agent in a question: `ask_user` uses this too).
+pub fn looks_secret(s: &str) -> bool {
     let n = s.to_ascii_lowercase();
     ["password", "passwd", "passcode", "token", "secret", "api key", "api_key", "apikey", "credential", "private key", "pin", "chiave"]
         .iter()
