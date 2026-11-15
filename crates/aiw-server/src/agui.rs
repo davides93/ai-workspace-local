@@ -7,8 +7,8 @@
 //! What a request means:
 //! - the text and the files of the LAST user message start the run; the history is the one the server
 //!   keeps for the session (it is authoritative: a client that comes without it, or with another one, is
-//!   sent a `MESSAGES_SNAPSHOT`), and a message or a `runId` the server has seen is not run twice, the run
-//!   it started is sent again;
+//!   sent a `MESSAGES_SNAPSHOT`), and a message the server has run (same `id`, text and files) is not run
+//!   twice: the run it started is sent again;
 //! - `context` and `state` go to the model as data for this run (see `agui_wire::app_context_section`), and the
 //!   client's `state` is kept in every `STATE_SNAPSHOT`; `tools` (client-defined) and `parentRunId` are accepted
 //!   and ignored;
@@ -37,21 +37,51 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
 
 /// What the endpoint keeps in memory: a lock for the lookups of threads (the record itself is in the store, see
-/// `aiw_engine::agui_threads`) and the runs that are paused on an interrupt.
+/// `aiw_engine::agui_threads`), the runs that are paused on an interrupt, and how many response streams follow each run.
 #[derive(Default)]
 pub(crate) struct AguiState {
     threads: Mutex<()>,
-    pauses: Mutex<HashMap<String, Pause>>,
+    pauses: Mutex<HashMap<String, Slot>>,
+    followers: Mutex<HashMap<String, usize>>,
 }
 
 pub(crate) type Threads = Arc<AguiState>;
 
-/// Most pauses kept, and how long: a pause nobody resumes is forgotten (the run itself keeps waiting for the
-/// answer in the engine, like any confirmation, until it is decided or cancelled).
+/// Most pauses kept, and how long. A pause nobody answers for [`PAUSE_TTL`] (or the oldest one over the limit) is dropped and
+/// its run is cancelled: it would otherwise hold its session for ever.
 const MAX_PAUSES: usize = 256;
 const PAUSE_TTL: Duration = Duration::from_secs(24 * 3600);
-/// How long the stream waits after the first interrupt for the others of the same moment (parallel tool calls).
+/// Answered pauses kept per thread, so that an answer sent again (a response that got lost) after the run paused once more is
+/// still recognised.
+const MAX_ANSWERED: usize = 8;
+/// How long the stream waits after the first interrupt for the others of the same moment (the questions and the subagents of
+/// one turn run together).
 const SETTLE: Duration = Duration::from_millis(150);
+/// Longest `threadId` and `runId`, and largest `state` of the client (serialized), in bytes.
+const MAX_ID_LEN: usize = 256;
+const MAX_STATE_BYTES: usize = 1 << 20;
+
+/// The pause a thread waits on, and the ones before it that were answered.
+struct Slot {
+    current: Pause,
+    answered: Vec<Pause>,
+}
+
+/// Drops the pauses that nobody answered in time, and cancels their runs (a run that is waiting for an answer that will not come).
+fn drop_stale(pauses: &mut HashMap<String, Slot>, engine: &Engine) {
+    let stale: Vec<String> = pauses.iter().filter(|(_, sl)| sl.current.since.elapsed() >= PAUSE_TTL).map(|(k, _)| k.clone()).collect();
+    for k in stale {
+        if let Some(sl) = pauses.remove(&k) {
+            cancel_unanswered(&sl.current, engine);
+        }
+    }
+}
+
+fn cancel_unanswered(p: &Pause, engine: &Engine) {
+    if p.applied.is_none() && !engine.run_done(&p.run_id) {
+        let _ = engine.cancel_run(&p.run_id);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Kind {
@@ -236,16 +266,36 @@ fn resolve_thread(s: &AppState, agent: &str, thread_id: &str, title: Option<Stri
     Ok((t, true))
 }
 
-/// Cancels the run when dropped while armed: in AG-UI, closing the request is how a client stops a run.
+/// Cancels the run when the last stream that follows it goes away while armed: in AG-UI, closing the request is how a client
+/// stops a run. A stream that is sent again for a run (a retry) must not be cancelled by the old one that was cut.
 struct CancelGuard {
     engine: Engine,
+    state: Threads,
     run_id: String,
     armed: bool,
 }
 
+impl CancelGuard {
+    fn new(state: Threads, engine: Engine, run_id: &str, armed: bool) -> Self {
+        *state.followers.lock().unwrap().entry(run_id.to_string()).or_default() += 1;
+        Self { engine, state, run_id: run_id.to_string(), armed }
+    }
+}
+
 impl Drop for CancelGuard {
     fn drop(&mut self) {
-        if self.armed {
+        let last = {
+            let mut followers = self.state.followers.lock().unwrap();
+            let left = followers.get_mut(&self.run_id).map(|n| {
+                *n = n.saturating_sub(1);
+                *n
+            });
+            if left.unwrap_or(0) == 0 {
+                followers.remove(&self.run_id);
+            }
+            left.unwrap_or(0) == 0
+        };
+        if self.armed && last {
             let _ = self.engine.cancel_run(&self.run_id);
         }
     }
@@ -440,6 +490,8 @@ impl Follow {
         let open_questions: HashSet<String> = self.engine.questions().into_iter().map(|q| q.id).collect();
         let mut interrupts: Vec<Value> = vec![];
         let mut open: Vec<OpenInterrupt> = vec![];
+        // The runs of the subagents that wait on an interrupt, with the id of the interrupt.
+        let mut waiting: Vec<(String, String)> = vec![];
         for e in &found {
             let AgEvent::Custom { name, value } = &e.event.event else { continue };
             if name == "aiw.approval_request" {
@@ -457,6 +509,10 @@ impl Follow {
                 });
                 if let Some(c) = call {
                     i["toolCallId"] = json!(c);
+                }
+                if self.wire.is_open_subagent(&req.run_id) {
+                    i["subagentRunId"] = json!(req.run_id);
+                    waiting.push((req.run_id.clone(), req.id.clone()));
                 }
                 open.push(OpenInterrupt { id: req.id.clone(), kind: Kind::Approval });
                 interrupts.push(i);
@@ -483,6 +539,10 @@ impl Follow {
                 if let Some(t) = &q.expires_at {
                     i["expiresAt"] = json!(t);
                 }
+                if self.wire.is_open_subagent(&q.run_id) {
+                    i["subagentRunId"] = json!(q.run_id);
+                    waiting.push((q.run_id.clone(), q.id.clone()));
+                }
                 open.push(OpenInterrupt { id: q.id.clone(), kind: Kind::Question });
                 interrupts.push(i);
             }
@@ -493,6 +553,11 @@ impl Follow {
         }
         let Some(pc) = self.pause.as_ref() else { return };
         let ts = chrono::Utc::now().timestamp_millis();
+        // The client refuses `RUN_FINISHED` while a subagent is open: they are closed as suspended (the spec's outcome for a
+        // subagent that waits for outside input) and announced again, with the same ids, when the run is resumed.
+        for data in self.wire.suspend_subagents(&waiting, ts) {
+            self.out.push_back(Frame { seq: None, data });
+        }
         // The spec: the state needed to resume goes out before the interrupt.
         let history = self.engine.messages(&pc.session_id).unwrap_or_default();
         let mut messages = agui_wire::history_messages(&history, &pc.client_ids, None);
@@ -518,12 +583,26 @@ impl Follow {
             since: Instant::now(),
         };
         let mut pauses = pc.state.pauses.lock().unwrap();
-        pauses.retain(|_, p| p.since.elapsed() < PAUSE_TTL);
+        drop_stale(&mut pauses, &self.engine);
+        // The one that replaces an answered pause of this thread keeps it as an answered one; an unanswered one is simply replaced.
+        let mut answered = match pauses.remove(&pc.thread_id) {
+            Some(old) if old.current.applied.is_some() => {
+                let mut list = old.answered;
+                list.push(old.current);
+                list
+            }
+            Some(old) => old.answered,
+            None => vec![],
+        };
+        let extra = answered.len().saturating_sub(MAX_ANSWERED);
+        answered.drain(..extra);
         while pauses.len() >= MAX_PAUSES {
-            let Some(oldest) = pauses.iter().min_by_key(|(_, p)| p.since).map(|(k, _)| k.clone()) else { break };
-            pauses.remove(&oldest);
+            let Some(oldest) = pauses.iter().min_by_key(|(_, sl)| sl.current.since).map(|(k, _)| k.clone()) else { break };
+            if let Some(sl) = pauses.remove(&oldest) {
+                cancel_unanswered(&sl.current, &self.engine);
+            }
         }
-        pauses.insert(pc.thread_id.clone(), pause);
+        pauses.insert(pc.thread_id.clone(), Slot { current: pause, answered });
     }
 
     fn sse(f: Frame) -> Event {
@@ -606,7 +685,7 @@ fn follow_run(s: &AppState, run_id: &str, from_seq: u64, wire: Wire, started: bo
         ready: VecDeque::new(),
         out: VecDeque::new(),
         after_started: vec![],
-        guard: CancelGuard { engine: s.engine.clone(), run_id: run_id.to_string(), armed },
+        guard: CancelGuard::new(s.agui.clone(), s.engine.clone(), run_id, armed),
         pause,
         done: false,
     }
@@ -635,6 +714,12 @@ pub(crate) async fn run_agent(
     if input.thread_id.trim().is_empty() || input.run_id.trim().is_empty() {
         return Err(invalid("threadId e runId non possono essere vuoti").into());
     }
+    if input.thread_id.len() > MAX_ID_LEN || input.run_id.len() > MAX_ID_LEN {
+        return Err(invalid(format!("threadId e runId non possono superare {MAX_ID_LEN} byte")).into());
+    }
+    if input.state.is_object() && input.state.to_string().len() > MAX_STATE_BYTES {
+        return Err(invalid(format!("lo stato condiviso (`state`) supera {} KiB", MAX_STATE_BYTES >> 10)).into());
+    }
     let declared = declared_interactive(&input.forwarded_props);
     let user = last_user(&input)?;
     let resuming = input.resume.as_ref().is_some_and(|r| !r.is_empty());
@@ -646,16 +731,16 @@ pub(crate) async fn run_agent(
             return Err(invalid("il messaggio dell'utente è vuoto").into());
         }
     }
+    // An answer for a thread nobody knows has nothing to answer: it makes no session.
+    if resuming && s.engine.agui_thread(&input.thread_id)?.is_none() && s.engine.session(&input.thread_id).is_err() {
+        let msg = "nessuna interruzione aperta per questo thread (il server è stato riavviato, oppure il thread non esiste)";
+        return Ok(run_error(&input, "interrupt_not_found", msg, &[]));
+    }
     let title = user.as_ref().and_then(|u| title_of(&u.text));
     let (mut thread, created) = resolve_thread(&s, &agent, &input.thread_id, title)?;
 
     // 1. The answer to an interrupt.
     if resuming {
-        if created {
-            // An answer for a thread nobody knows: nothing to answer, and no session for it.
-            let _ = s.engine.delete_session(&thread.session_id);
-            let _ = s.engine.remove_agui_thread(&input.thread_id);
-        }
         return resume_run(&s, owner, &input, declared, thread, user).await;
     }
     // 2. A message the server has seen: the run it started is sent again, it is not run twice (unless that run failed or was
@@ -669,7 +754,11 @@ pub(crate) async fn run_agent(
         return Ok(replay_run(&s, &input, declared, thread, run));
     }
     // 3. New input while a run waits for the answer to its interrupts.
-    let paused = s.agui.pauses.lock().unwrap().get(&input.thread_id).cloned();
+    let paused = {
+        let mut pauses = s.agui.pauses.lock().unwrap();
+        drop_stale(&mut pauses, &s.engine);
+        pauses.get(&input.thread_id).map(|sl| sl.current.clone())
+    };
     if let Some(p) = paused.filter(|p| p.applied.is_none() && !s.engine.run_done(&p.run_id)) {
         let ids: Vec<&str> = p.interrupts.iter().map(|i| i.id.as_str()).collect();
         let msg =
@@ -705,13 +794,16 @@ pub(crate) async fn run_agent(
     let stored = s.engine.messages(&thread.session_id).unwrap_or_default();
     let server_user = stored.iter().rev().find(|m| m.role == "user").map(|m| m.id.clone()).unwrap_or_default();
     let client_user = user.id.clone().unwrap_or_else(|| server_user.clone());
-    thread.record(AguiRun {
-        client_run_id: input.run_id.clone(),
-        run_id: run_id.clone(),
-        user_message_id: client_user,
-        user_server_id: server_user.clone(),
-    });
-    let _ = s.engine.save_agui_thread(&thread);
+    record_run(
+        &s,
+        &mut thread,
+        AguiRun {
+            client_run_id: input.run_id.clone(),
+            run_id: run_id.clone(),
+            user_message_id: client_user,
+            user_server_id: server_user.clone(),
+        },
+    );
     let wire = Wire::new(&input.thread_id, &input.run_id, &input.state);
     let mut follow = follow_run(&s, &run_id, 0, wire, false, Some(pause_ctx(&s, &thread, declared, HashSet::new())), true);
     if needs_snapshot {
@@ -719,6 +811,18 @@ pub(crate) async fn run_agent(
         follow.after_started.extend(agui_wire::history_snapshots(messages, chrono::Utc::now().timestamp_millis()));
     }
     Ok(stream_response(follow, &thread.session_id, &run_id))
+}
+
+/// Adds a run to the thread record, read again under the lock so that two requests of one thread do not lose each other's run.
+fn record_run(s: &AppState, thread: &mut AguiThread, run: AguiRun) {
+    let _guard = s.agui.threads.lock().unwrap();
+    if let Ok(Some(stored)) = s.engine.agui_thread(&thread.thread_id) {
+        if stored.session_id == thread.session_id {
+            *thread = stored;
+        }
+    }
+    thread.record(run);
+    let _ = s.engine.save_agui_thread(thread);
 }
 
 /// Is this message the one the run was started with? The id says so for a client that makes its ids up as it should; the text and
@@ -771,104 +875,162 @@ enum Decision {
 
 /// `resume`: answers the interrupts of the run that paused, and continues its stream. The spec's rules
 /// (<https://docs.ag-ui.com/concepts/interrupts>): the same thread, every open interrupt addressed, an answer that fits
-/// the schema, a replay that is safe; what does not hold is a `RUN_ERROR`.
+/// the schema, a replay that is safe; what does not hold is a `RUN_ERROR`. Nothing is applied until every answer has been
+/// checked, so that an answer that does not fit leaves everything as it was.
 async fn resume_run(
     s: &AppState,
     owner: bool,
     input: &RunAgentInput,
     declared: Declared,
-    mut thread: AguiThread,
+    thread: AguiThread,
     user: Option<LastUser>,
 ) -> Result<Response, ApiError> {
     let entries = input.resume.as_deref().unwrap_or_default();
     // A client that sends `resume` has shown that it handles interrupts, whether or not it says so again: the next confirmation
-    // of the run (they come one at a time) is another pause, not a blocking `CUSTOM` it may not know.
+    // of the run is another pause, not a blocking `CUSTOM` it may not know.
     let declared = Declared { interrupts: true, ..declared };
     let headers = [("x-aiw-session-id", thread.session_id.clone())];
     let refuse = |code: &str, msg: &str| -> Result<Response, ApiError> { Ok(run_error(input, code, msg, &headers)) };
-    let Some(pause) = s.agui.pauses.lock().unwrap().get(&input.thread_id).cloned() else {
-        return refuse(
-            "interrupt_not_found",
-            "nessuna interruzione aperta per questo thread (il server è stato riavviato, oppure la richiesta è stata chiusa da un'altra parte)",
-        );
+    let (current, answered) = {
+        let mut pauses = s.agui.pauses.lock().unwrap();
+        drop_stale(&mut pauses, &s.engine);
+        match pauses.get(&input.thread_id) {
+            Some(sl) => (sl.current.clone(), sl.answered.clone()),
+            None => {
+                return refuse(
+                    "interrupt_not_found",
+                    "nessuna interruzione aperta per questo thread (il server è stato riavviato, oppure la pausa è scaduta)",
+                );
+            }
+        }
     };
     // A new message together with the answer is two things at once.
     if user.as_ref().and_then(|u| u.id.as_deref()).is_some_and(|id| !thread.is_client_message(id)) {
         return refuse("resume_with_new_input", "una richiesta con `resume` non può portare anche un nuovo messaggio dell'utente");
     }
-    let open: HashSet<&str> = pause.interrupts.iter().map(|i| i.id.as_str()).collect();
-    if let Some(unknown) = entries.iter().find(|e| !open.contains(e.interrupt_id.as_str())) {
-        return refuse("interrupt_not_found", &format!("l'interruzione {} non esiste tra quelle aperte del thread", unknown.interrupt_id));
-    }
-    let addressed: HashSet<&str> = entries.iter().map(|e| e.interrupt_id.as_str()).collect();
-    if let Some(missing) = pause.interrupts.iter().find(|i| !addressed.contains(i.id.as_str())) {
-        return refuse("resume_incomplete", &format!("`resume` deve rispondere a tutte le interruzioni aperte: manca {}", missing.id));
+    let ids: HashSet<&str> = entries.iter().map(|e| e.interrupt_id.as_str()).collect();
+    if ids.len() != entries.len() {
+        return refuse("resume_invalid", "`resume` risponde due volte alla stessa interruzione");
     }
     let print = fingerprint(entries);
-    match &pause.applied {
-        // The same answer again: safe, the run is sent again from the pause.
-        Some(done) if *done == print => {}
-        Some(_) => return refuse("resume_conflict", "queste interruzioni hanno già ricevuto una risposta diversa"),
-        None => {
-            let mut decisions: Vec<(&OpenInterrupt, Decision)> = vec![];
-            for e in entries {
-                let it = pause.interrupts.iter().find(|i| i.id == e.interrupt_id).expect("checked above");
-                let cancelled = match e.status.as_str() {
-                    "resolved" => false,
-                    "cancelled" => true,
-                    other => return refuse("resume_invalid", &format!("lo stato «{other}» non esiste: usa resolved o cancelled")),
-                };
-                let decision = match (&it.kind, cancelled) {
-                    (Kind::Approval, true) => Decision::Allow(false),
-                    (Kind::Approval, false) => match e.payload.as_ref().and_then(|p| p.get("approved")).and_then(Value::as_bool) {
-                        Some(a) => Decision::Allow(a),
-                        None => return refuse("resume_invalid", &format!("la risposta a {} deve avere `approved` (true o false)", it.id)),
-                    },
-                    (Kind::Question, true) => {
-                        Decision::Reply(QuestionReply { action: "decline".into(), answer: QuestionAnswer::default() })
-                    }
-                    (Kind::Question, false) => match e.payload.clone().map(serde_json::from_value::<QuestionAnswer>) {
-                        Some(Ok(a)) => Decision::Reply(QuestionReply { action: "answer".into(), answer: a }),
-                        _ => return refuse("resume_invalid", &format!("la risposta a {} non ha la forma attesa dalla domanda", it.id)),
-                    },
-                };
-                decisions.push((it, decision));
-            }
-            // The questions first: an answer that does not fit leaves everything as it was.
-            decisions.sort_by_key(|(it, _)| it.kind == Kind::Approval);
-            for (it, decision) in decisions {
-                let r = match decision {
-                    Decision::Allow(allow) => s.engine.respond_approval_as(&it.id, allow, false, owner),
-                    Decision::Reply(reply) => s.engine.respond_question(&it.id, reply),
-                };
-                match r {
-                    Ok(()) => {}
-                    // Closed meanwhile (decided in the app, or the wait ended): what was decided there stands.
-                    Err(Error::NotFound(_)) => {}
-                    Err(Error::Invalid(m)) => return refuse("resume_invalid", &m),
-                    // Not the owner of a management tool, and the like: an HTTP error, the pause stays.
-                    Err(e) => return Err(e.into()),
-                }
-            }
-            if let Some(p) = s.agui.pauses.lock().unwrap().get_mut(&input.thread_id) {
-                p.applied = Some(print);
+    // Which pause is this the answer to: the one the run waits on, or an earlier one that was answered (a client that lost the
+    // response sends the same answer again, even after the run paused once more).
+    let open: HashSet<&str> = current.interrupts.iter().map(|i| i.id.as_str()).collect();
+    let earlier = answered.iter().rev().find(|p| {
+        let theirs: HashSet<&str> = p.interrupts.iter().map(|i| i.id.as_str()).collect();
+        theirs == ids
+    });
+    let pause = if ids.iter().all(|id| open.contains(id)) {
+        if let Some(missing) = current.interrupts.iter().find(|i| !ids.contains(i.id.as_str())) {
+            return refuse("resume_incomplete", &format!("`resume` deve rispondere a tutte le interruzioni aperte: manca {}", missing.id));
+        }
+        &current
+    } else if let Some(p) = earlier {
+        p
+    } else {
+        let unknown = entries.iter().find(|e| !open.contains(e.interrupt_id.as_str())).map(|e| e.interrupt_id.as_str()).unwrap_or_default();
+        return refuse("interrupt_not_found", &format!("l'interruzione {unknown} non esiste tra quelle aperte del thread"));
+    };
+    if std::ptr::eq(pause, &current) && current.applied.is_none() {
+        // The answer is new. Everything is checked first; nothing is applied until it all fits.
+        let mut decisions: Vec<(&OpenInterrupt, Decision)> = vec![];
+        for e in entries {
+            let it = current.interrupts.iter().find(|i| i.id == e.interrupt_id).expect("checked above");
+            let cancelled = match e.status.as_str() {
+                "resolved" => false,
+                "cancelled" => true,
+                other => return refuse("resume_invalid", &format!("lo stato «{other}» non esiste: usa resolved o cancelled")),
+            };
+            let decision = match (&it.kind, cancelled) {
+                (Kind::Approval, true) => Decision::Allow(false),
+                (Kind::Approval, false) => match e.payload.as_ref().and_then(|p| p.get("approved")).and_then(Value::as_bool) {
+                    Some(a) => Decision::Allow(a),
+                    None => return refuse("resume_invalid", &format!("la risposta a {} deve avere `approved` (true o false)", it.id)),
+                },
+                (Kind::Question, true) => Decision::Reply(QuestionReply { action: "decline".into(), answer: QuestionAnswer::default() }),
+                (Kind::Question, false) => match e.payload.clone().map(serde_json::from_value::<QuestionAnswer>) {
+                    Some(Ok(a)) => Decision::Reply(QuestionReply { action: "answer".into(), answer: a }),
+                    _ => return refuse("resume_invalid", &format!("la risposta a {} non ha la forma attesa dalla domanda", it.id)),
+                },
+            };
+            decisions.push((it, decision));
+        }
+        let mut closed: Vec<&str> = vec![];
+        for (it, decision) in &decisions {
+            let r = match decision {
+                Decision::Allow(_) => s.engine.check_approval_answer(&it.id, owner),
+                Decision::Reply(reply) => s.engine.check_question_reply(&it.id, reply),
+            };
+            match r {
+                Ok(()) => {}
+                Err(Error::NotFound(_)) => closed.push(&it.id),
+                Err(Error::Invalid(m)) => return refuse("resume_invalid", &m),
+                // Not the owner of a management tool, and the like: an HTTP error, the pause stays.
+                Err(e) => return Err(e.into()),
             }
         }
+        if !closed.is_empty() {
+            // Closed meanwhile, in the app or because the wait ran out: the run went on without this answer, which is not applied
+            // in silence. The pause is over; sending the message again brings the stream of the run.
+            s.agui.pauses.lock().unwrap().remove(&input.thread_id);
+            let msg = format!(
+                "le interruzioni {} sono già chiuse (nell'app o per scadenza): il run è andato avanti senza questa risposta; rimanda il messaggio per riprenderne lo stream",
+                closed.join(", ")
+            );
+            return refuse("interrupt_closed", &msg);
+        }
+        // The answer is recorded first, under the lock: of two answers that arrive together, one wins and the other is a replay or a conflict.
+        {
+            let mut pauses = s.agui.pauses.lock().unwrap();
+            match pauses.get_mut(&input.thread_id) {
+                Some(sl) if sl.current.run_id == current.run_id && sl.current.next_seq == current.next_seq => match &sl.current.applied {
+                    None => sl.current.applied = Some(print.clone()),
+                    Some(done) if *done == print => {}
+                    Some(_) => return refuse("resume_conflict", "queste interruzioni hanno già ricevuto una risposta diversa"),
+                },
+                _ => return refuse("interrupt_not_found", "la pausa del thread è cambiata mentre arrivava la risposta: riprova"),
+            }
+        }
+        // Questions first, then the confirmations. What was checked above can only fail now if it was closed in the meantime.
+        decisions.sort_by_key(|(it, _)| it.kind == Kind::Approval);
+        for (it, decision) in decisions {
+            let r = match decision {
+                Decision::Allow(allow) => s.engine.respond_approval_as(&it.id, allow, false, owner),
+                Decision::Reply(reply) => s.engine.respond_question(&it.id, reply),
+            };
+            if let Err(e) = r {
+                if !matches!(e, Error::NotFound(_)) {
+                    if let Some(sl) = s.agui.pauses.lock().unwrap().get_mut(&input.thread_id) {
+                        sl.current.applied = None;
+                    }
+                    return match e {
+                        Error::Invalid(m) => refuse("resume_invalid", &m),
+                        other => Err(other.into()),
+                    };
+                }
+            }
+        }
+    } else {
+        // A pause that was answered: the same answer again is safe, another one is a conflict.
+        match &pause.applied {
+            Some(done) if *done == print => {}
+            _ => return refuse("resume_conflict", "queste interruzioni hanno già ricevuto una risposta diversa"),
+        }
     }
-    // The run goes on: a new `runId` for the client, and the events from where the pause left off.
-    let wire = pause.wire.resumed(&input.run_id, &input.state);
+    // The run goes on: a new `runId` for the client, the suspended subagents announced again, and the events from where the pause
+    // left off.
+    let mut wire = pause.wire.resumed(&input.run_id, &input.state);
     let managed: HashSet<String> = pause.interrupts.iter().map(|i| i.id.clone()).collect();
     let done = s.engine.run_done(&pause.run_id);
-    let mut follow = follow_run(s, &pause.run_id, pause.next_seq, wire, true, Some(pause_ctx(s, &thread, declared, managed)), !done);
     let ts = chrono::Utc::now().timestamp_millis();
+    let again = wire.resume_subagents(ts);
+    let mut follow = follow_run(s, &pause.run_id, pause.next_seq, wire, true, Some(pause_ctx(s, &thread, declared, managed)), !done);
     follow.out.push_back(Frame {
         seq: None,
         data: json!({"type": "RUN_STARTED", "threadId": input.thread_id, "runId": input.run_id, "parentRunId": pause.client_run_id, "timestamp": ts}),
     });
-    // A retry of this answer with another `runId` finds the same run.
-    if let Some(prev) = thread.runs.iter().rev().find(|r| r.run_id == pause.run_id).cloned() {
-        thread.record(AguiRun { client_run_id: input.run_id.clone(), ..prev });
-        let _ = s.engine.save_agui_thread(&thread);
+    for data in again {
+        follow.out.push_back(Frame { seq: None, data });
     }
     Ok(stream_response(follow, &thread.session_id, &pause.run_id))
 }
@@ -1245,7 +1407,7 @@ mod tests {
             ready: VecDeque::new(),
             out: VecDeque::new(),
             after_started: vec![],
-            guard: CancelGuard { engine: e.clone(), run_id: "run_x".into(), armed: false },
+            guard: CancelGuard::new(Default::default(), e.clone(), "run_x", false),
             pause: None,
             done: false,
         };
@@ -1497,14 +1659,17 @@ mod tests {
         let st = AppState { engine: e.clone(), agui: Default::default() };
         st.agui.pauses.lock().unwrap().insert(
             thread.into(),
-            Pause {
-                run_id: "run_x".into(),
-                client_run_id: "r0".into(),
-                next_seq: 0,
-                wire: Wire::new(thread, "r0", &Value::Null),
-                interrupts: interrupts.iter().map(|(id, kind)| OpenInterrupt { id: (*id).into(), kind: kind.clone() }).collect(),
-                applied: None,
-                since: Instant::now(),
+            Slot {
+                answered: vec![],
+                current: Pause {
+                    run_id: "run_x".into(),
+                    client_run_id: "r0".into(),
+                    next_seq: 0,
+                    wire: Wire::new(thread, "r0", &Value::Null),
+                    interrupts: interrupts.iter().map(|(id, kind)| OpenInterrupt { id: (*id).into(), kind: kind.clone() }).collect(),
+                    applied: None,
+                    since: Instant::now(),
+                },
             },
         );
         st
@@ -1553,7 +1718,7 @@ mod tests {
         // Nothing of this touched the pause: it is still there, unanswered.
         {
             let pauses = st.agui.pauses.lock().unwrap();
-            assert!(pauses.get(&ses.id).is_some_and(|p| p.applied.is_none() && p.interrupts.len() == 2));
+            assert!(pauses.get(&ses.id).is_some_and(|sl| sl.current.applied.is_none() && sl.current.interrupts.len() == 2));
         }
         // A thread nobody paused: no interrupt to answer, and no session made for it.
         let evs = resume_with(&st, "altro-thread", json!([resolved("apr_1", json!({"approved": true}))]), json!([])).await;
@@ -1636,5 +1801,39 @@ mod tests {
         assert_eq!(evs.last().unwrap()["type"], "RUN_FINISHED");
         assert!(evs.last().unwrap().get("outcome").is_none());
         assert!(e.run_done(&rid) && e.approvals().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_last_stream_that_follows_a_run_cancels_it_and_not_the_first_one_to_go() {
+        let (app, e, _d, _w) = fixture(write_turns()).await;
+        let res = post_raw(&app, "operator", input("thr-guard", "r1", json!("scrivi nota.md")), &[]).await;
+        let rid = header(&res, "x-aiw-run-id");
+        let mut body = res.into_body();
+        read_until(&mut body, "aiw.approval_request").await;
+        // Two streams for one run (a response that was cut and the one that follows it): the first to go does not stop the run.
+        let state: Threads = Default::default();
+        let first = CancelGuard::new(state.clone(), e.clone(), &rid, true);
+        let second = CancelGuard::new(state.clone(), e.clone(), &rid, true);
+        drop(first);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!e.run_done(&rid), "the first stream to go cancelled a run that another one still follows");
+        drop(second);
+        wait_for("the last stream to go cancels the run", || e.run_done(&rid)).await;
+        assert!(state.followers.lock().unwrap().is_empty(), "the count of followers is cleaned up");
+        drop(body);
+    }
+
+    #[tokio::test]
+    async fn an_answer_for_a_thread_nobody_knows_makes_no_session_and_ids_are_bounded() {
+        let (app, e, _d, _w) = fixture(vec![]).await;
+        let long = "x".repeat(MAX_ID_LEN + 1);
+        let (st, msg) = failure(&app, "planner", input(&long, "r", json!("ciao"))).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{msg}");
+        let mut big = input("thr-big", "r", json!("ciao"));
+        big["state"] = json!({"x": "y".repeat(MAX_STATE_BYTES)});
+        let (st, msg) = failure(&app, "planner", big).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{msg}");
+        assert!(msg.contains("state"), "{msg}");
+        assert!(e.sessions().unwrap().is_empty());
     }
 }

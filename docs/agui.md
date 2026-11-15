@@ -26,8 +26,9 @@ su AIW (token, CORS, rete, OpenBot, OpenDots) è nella pagina **Integrazioni** d
 3. avvia il run e risponde `200` con `Content-Type: text/event-stream`: ogni evento è una riga `data: <json>`, con
    `id:` uguale al numero d'ordine nel log del run quando l'evento viene da lì (gli eventi che il server aggiunge, come gli
    snapshot dei messaggi, non hanno `id:`; un evento del run può diventare più eventi con lo stesso `id:`). Lo stream si apre
-   sempre con `RUN_STARTED`: gli eventi `CUSTOM` che il motore emette prima (scelta del profilo, avvisi sugli allegati)
-   arrivano subito dopo, quindi in quel caso gli `id:` non sono in ordine crescente. In `RUN_STARTED` e `RUN_FINISHED` i
+   con `RUN_STARTED`: gli eventi `CUSTOM` che il motore emette prima (scelta del profilo, avvisi sugli allegati)
+   arrivano subito dopo, quindi in quel caso gli `id:` non sono in ordine crescente (eccezione: un run che finisce o fallisce prima
+   di `RUN_STARTED` manda prima quei `CUSTOM`, e il client vero lo rifiuta). In `RUN_STARTED` e `RUN_FINISHED` i
    campi `threadId` e `runId` sono quelli **inviati dal client**; il run interno ha un altro id, nell'intestazione
    `x-aiw-run-id`; `x-aiw-session-id` dice quale sessione AIW ha ricevuto il messaggio;
 4. chiude lo stream dopo `RUN_FINISHED` o `RUN_ERROR`, oppure dopo un `RUN_FINISHED` con esito `interrupt` (vedi
@@ -67,6 +68,9 @@ curl -N http://127.0.0.1:7777/agui/planner \
         "messages": [{"id": "m1", "role": "user", "content": "Che cosa c'\''è nella cartella di lavoro?"}]
       }'
 ```
+
+Negli esempi gli id sono fissi (`m1`, `run-1`): rilanciando lo stesso comando con lo stesso testo il server riconosce il messaggio già
+eseguito e rimanda la risposta di prima senza chiamare il modello. Cambia l'`id` del messaggio (e il testo) a ogni prova.
 
 Con `@ag-ui/client` (provato, è lo stesso schema dei test):
 
@@ -135,8 +139,9 @@ l'ultimo messaggio utente. Per questo:
 - **un client senza la cronologia del thread** (una pagina ricaricata che manda solo il messaggio nuovo, o una cronologia che il
   server non riconosce) riceve subito dopo `RUN_STARTED` la cronologia del server, con gli id che il client ha dato ai suoi
   messaggi utente e gli id del server per gli altri. È un `MESSAGES_SNAPSHOT` **in due tempi** (prima senza il messaggio nuovo,
-  poi con): `@ag-ui/client` tiene i messaggi che ha dove sono e aggiunge dietro quelli nuovi, quindi un solo snapshot
-  metterebbe la cronologia dopo il messaggio appena scritto. Un client già allineato non riceve nulla;
+  poi con): `@ag-ui/client` tiene al loro posto i messaggi che lo snapshot ripete, toglie gli altri (salvo ragionamento e attività: un
+  messaggio `system` o `developer` che il client ha aggiunto da sé sparisce a ogni snapshot) e aggiunge dietro quelli nuovi, quindi
+  un solo snapshot metterebbe la cronologia dopo il messaggio appena scritto. Un client già allineato non riceve nulla;
 - gli snapshot non contengono mai i byte di un allegato: solo `metadata.aiw.attachments` (id, nome, tipo, dimensione), i byte
   sono a `/api/sessions/{id}/attachments/{id}`. Il ragionamento e le note di errore dei run non sono messaggi dello snapshot.
 
@@ -196,8 +201,14 @@ AG-UI, dove l'esito `interrupt` è disattivato di default). L'esito arriva così
 
 - prima, gli snapshot che la spec chiede: `MESSAGES_SNAPSHOT` (la cronologia e i messaggi del run fino a lì, con la chiamata
   dello strumento) e `STATE_SNAPSHOT`;
-- poi `RUN_FINISHED` con una `Interrupt` per ogni richiesta aperta di quel momento (le chiamate di strumento del motore sono una
-  alla volta: di norma ne arriva una, e la seconda si apre dopo la risposta alla prima, come nuova pausa):
+- se un **sottoagente** è aperto (una conferma o una domanda che arriva da dentro un sottoagente), prima un `SUBAGENT_FINISHED`
+  con `outcome: {type: "suspended", interruptIds: […]}`: `@ag-ui/client` rifiuta un `RUN_FINISHED` mentre un sottoagente è
+  aperto. Alla ripresa il sottoagente è annunciato di nuovo (`SUBAGENT_STARTED`, stesso `subagentRunId`) subito dopo
+  `RUN_STARTED`, e l'interruzione porta `subagentRunId`;
+- poi `RUN_FINISHED` con una `Interrupt` per ogni richiesta aperta entro 150 ms dalla prima. Gli strumenti che modificano
+  qualcosa girano uno alla volta (di norma una conferma per pausa, la successiva è una nuova pausa dopo la risposta), ma le
+  domande di `ask_user` e i sottoagenti dello stesso turno girano insieme: più interruzioni nella stessa pausa sono possibili
+  (due domande, due sottoagenti), e quelle che arrivano più tardi sono pause successive:
 
 | Richiesta del motore | `reason` | Contenuto |
 |---|---|---|
@@ -226,15 +237,17 @@ la pausa resta aperta):
 |---|---|
 | risposta a tutte le interruzioni aperte, nessuna parziale | `resume_incomplete` |
 | `interruptId` che esiste tra quelle aperte, stesso thread | `interrupt_not_found` (anche dopo un riavvio: le pause sono in memoria) |
-| `payload` della forma attesa, `status` `resolved` o `cancelled` | `resume_invalid` (la pausa resta; una risposta di una domanda che non va con la domanda la lascia aperta) |
+| `payload` della forma attesa, `status` `resolved` o `cancelled`, nessuna interruzione due volte | `resume_invalid`: prima si controllano **tutte** le risposte e solo dopo se ne applica una, quindi una risposta che non va non ne consuma nessuna e la pausa resta |
+| l'interruzione è ancora aperta | `interrupt_closed` se è già stata chiusa altrove (nell'app, o la domanda è scaduta dopo 300 s): la risposta non si applica in silenzio, la pausa finisce e rimandare il messaggio riprende lo stream del run |
 | altro input su un thread con interruzioni aperte | `interrupt_pending` |
 | `resume` insieme a un messaggio utente nuovo | `resume_with_new_input` |
-| stesso `resume` rimandato (anche da un client che ha perso la risposta) | **sicuro**: si rimanda il run da dov'era, senza applicare due volte la decisione |
+| stesso `resume` rimandato (anche da un client che ha perso la risposta, e anche dopo una seconda pausa: si tengono le ultime 8 già risposte) | **sicuro**: si rimanda il run da dov'era, senza applicare due volte la decisione. Se due risposte uguali arrivano insieme vince la prima registrata; con due flussi aperti sullo stesso run, quello che resta non è annullato dalla chiusura dell'altro |
 | un altro `resume` per interruzioni già risposte | `resume_conflict` |
 
 Il client vero fa già da sé una parte di questi controlli (`@ag-ui/client` 1.0.4 rifiuta di mandare un `resume` che non risponde
 a tutte le interruzioni aperte o un input nuovo mentre ce ne sono): i casi che arrivano al server sono provati con richieste scritte
-a mano. Una conferma già chiusa altrove (nell'app, per scadenza) vale come è stata decisa lì: il `resume` riprende lo stream.
+a mano. Le conferme non portano `expiresAt` (la scadenza, se c'è, è `approvals.timeout_s`: nessuna per impostazione predefinita);
+le domande sì.
 
 **La conferma di uno strumento di gestione vale solo se arriva dal proprietario**, anche da `resume`: gli strumenti `aiw_*` che
 modificano qualcosa (e `aiw_secret_clear`) chiedono sempre conferma, in qualunque modalità dell'agente e anche dopo «Consenti per la
@@ -249,8 +262,10 @@ strumento è rifiutato subito («accesso completo…»), perché nessuno potrebb
 evento né nel corpo di un `RunAgentInput`, che il client tiene nei suoi messaggi). Con `"interrupts"` e senza `"secrets"`
 `aiw_secret_request` risponde `unsupported`; con `"secrets"` dichiarato resta come descritto sotto (evento `aiw.secret_request` e
 valore su `POST /api/secret-requests/{id}`). Limiti: le pause stanno in memoria (dopo un riavvio il run non c'è più: `resume`
-dà `interrupt_not_found`), si dimenticano dopo 24 ore e al massimo 256; il run in pausa aspetta come ogni conferma, anche se
-nessuno risponde, finché non lo decidi (nell'app o con `resume`) o non lo annulli.
+dà `interrupt_not_found`). Una pausa senza risposta per 24 ore, o la più vecchia oltre le 256, viene tolta **e il suo run
+annullato** (altrimenti terrebbe la sessione per sempre); prima di allora il run aspetta come ogni conferma, anche se nessuno
+risponde, finché non lo decidi (nell'app o con `resume`) o non lo annulli. Anche `threadId` e `runId` hanno un massimo di 256
+byte e lo `state` del client di 1 MiB (altrimenti `400`).
 
 ## L'agente `assistant`: domande, segreti e strumenti di gestione
 
@@ -428,7 +443,8 @@ cd tests/agui-client && npm ci && npm test
 
 La suite (`tests/agui-client/test/interop.test.mjs`, 16-40 secondi, nessun account né rete) avvia il vero `aiw serve` in una
 cartella temporanea, lo punta a un provider OpenAI finto (`lib/fake-provider.mjs`) con le risposte scritte a mano e usa
-`HttpAgent` di `@ag-ui/client`. Ogni avviso del client (campi tolti, patch dello stato non applicabili) fa fallire il test.
+`HttpAgent` di `@ag-ui/client`. Fanno fallire il test gli avvisi del client sui campi che toglie perché non li conosce e sulle patch dello
+stato che non riesce ad applicare.
 Scenari, per `@ag-ui/client` 1.0.4 e 1.0.2: testo con ragionamento, stato e contesto; strumento e piano; sottoagente; allegati
 (documento e immagine); conferma come `CUSTOM` con risposta REST; conferma come interruzione con `resume`. Solo per la 1.0.4:
 rifiuto e annullamento, regole del `resume` (richieste scritte a mano), catena di conferme, domanda come interruzione,
@@ -466,7 +482,9 @@ gli strumenti.
   segreti (l'agente ne riceve `unsupported`), e lo stesso vale per il token `owner` dalla LAN senza TLS. Le conferme degli
   strumenti di gestione hanno la stessa regola: solo il proprietario. Un segreto non passa mai da `resume`.
 - **Pause in memoria**: dopo un riavvio una pausa non c'è più (il thread, la cronologia e i messaggi già eseguiti sì).
-- **Agenti**: niente team (`team:…`) né agenti interni.
+- **Agenti**: niente team (`team:…`) né agenti interni. Un agente con lo strumento `handoff` può passare la sessione a un altro: la
+  richiesta successiva a `/agui/{agente originale}` riceve `409` (la sessione è di un altro agente) e il run del passaggio non è
+  seguito da questo stream (preesistente).
 - **Non provato**: i componenti React di CopilotKit, OpenBot, OpenDots; un modello vero; Windows e telefono.
 
 ## Riferimenti alla specifica

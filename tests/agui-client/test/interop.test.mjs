@@ -174,6 +174,42 @@ for (const Client of clients) {
   });
 }
 
+
+// Il client vero rifiuta un RUN_FINISHED mentre un sottoagente è aperto: la pausa lo chiude come «sospeso» e la ripresa lo riapre.
+for (const Client of clients) {
+  describe(`${Client.name}: pausa dentro un sottoagente`, () => {
+    it("un sottoagente che chiede una conferma sospende il run; la ripresa lo riapre con gli stessi id", async () => {
+      const file = `sotto-${uid("f").slice(0, 8)}.md`;
+      prov.set([
+        call("agent", { agent: "operator", task: `scrivi ${file}` }),
+        call("write_file", { path: file, content: "dal sotto-agente" }),
+        text("scritto dal sotto-agente"),
+        text("Finito"),
+      ]);
+      const agent = makeAgent(Client, srv, "assistant", { messages: [userMessage(`Fai scrivere ${file} a operator`)] });
+      const r1 = await runCollect(agent, { runId: uid("run"), forwardedProps: INTERRUPTS });
+      ok(r1);
+      assert.equal(r1.outcome?.type, "interrupt", `${r1.types}`);
+      const [it] = r1.outcome.interrupts;
+      const started = r1.events.find((e) => e.type === "SUBAGENT_STARTED");
+      const suspended = r1.events.find((e) => e.type === "SUBAGENT_FINISHED");
+      assert.ok(started?.subagentRunId, `${r1.types}`);
+      assert.equal(it.subagentRunId, started.subagentRunId, "l'interruzione non dice di quale sottoagente è");
+      assert.equal(suspended.subagentRunId, started.subagentRunId);
+      assert.deepEqual(suspended.outcome, { type: "suspended", interruptIds: [it.id] });
+      assert.ok(!fs.existsSync(written(file)));
+      const r2 = await runCollect(agent, { runId: uid("run"), resume: [{ interruptId: it.id, status: "resolved", payload: { approved: true } }] });
+      ok(r2);
+      const again = r2.events.find((e) => e.type === "SUBAGENT_STARTED");
+      assert.equal(again?.subagentRunId, started.subagentRunId, "la ripresa non riapre il sottoagente con lo stesso id");
+      assert.equal(r2.events.filter((e) => e.type === "SUBAGENT_FINISHED").length, 1);
+      assert.equal(r2.types.at(-1), "RUN_FINISHED", `${r2.types}`);
+      assert.equal(fs.readFileSync(written(file), "utf8"), "dal sotto-agente");
+      assert.equal(assistantTexts(agent).at(-1), "Finito");
+    });
+  });
+}
+
 describe("human-in-the-loop interoperabile (@ag-ui/client 1.0.4)", () => {
   it("un rifiuto e un annullamento non eseguono lo strumento e il modello va avanti", async () => {
     const [a, b] = [`no-${uid("f").slice(0, 8)}.md`, `ann-${uid("f").slice(0, 8)}.md`];
@@ -267,6 +303,86 @@ describe("human-in-the-loop interoperabile (@ag-ui/client 1.0.4)", () => {
     const r = await runCollect(agent, { runId: uid("run"), resume: [{ interruptId: "x", status: "resolved", payload: { approved: true } }] });
     assert.equal(r.runError?.code, "interrupt_not_found");
     assert.equal((await srv.api("GET", "/api/sessions")).json.length, before);
+  });
+
+  it("due domande dello stesso turno sono due interruzioni: una risposta che non va non ne consuma nessuna, poi si risponde a tutte", async () => {
+    const tag = uid("q").slice(0, 8);
+    const q = (id) => ({ kind: "choice", title: `Domanda ${id} ${tag}`, message: "Scegli", options: [{ id: "si", label: "Sì" }, { id: "no", label: "No" }] });
+    prov.set([calls([["ask_user", q("uno"), "ask-1"], ["ask_user", q("due"), "ask-2"]]), text("Ho le due risposte")]);
+    const agent = makeAgent(latest, srv, "assistant", { messages: [userMessage(`Due domande ${tag}`)] });
+    const r1 = await runCollect(agent, { runId: uid("run"), forwardedProps: INTERRUPTS });
+    ok(r1);
+    const its = r1.outcome.interrupts;
+    assert.equal(its.length, 2, "le due domande aperte insieme sono un solo RUN_FINISHED");
+    assert.deepEqual(its.map((i) => i.toolCallId).toSorted(), ["ask-1", "ask-2"]);
+    const atInterrupt = structuredClone(agent.messages);
+    const body = (resume) => ({ threadId: agent.threadId, runId: uid("run"), messages: atInterrupt, forwardedProps: INTERRUPTS, resume });
+    const answer = (i, payload) => ({ interruptId: i.id, status: "resolved", payload });
+    const open = async () => ((await srv.api("GET", "/api/questions")).json ?? []).length;
+    // Solo una: manca l'altra.
+    let r = await rawRun(srv, "assistant", body([answer(its[0], { selected: ["si"] })]));
+    assert.equal(r.events[1].code, "resume_incomplete", r.raw);
+    // La prima va, la seconda no: non si applica niente, nemmeno la prima.
+    r = await rawRun(srv, "assistant", body([answer(its[0], { selected: ["si"] }), answer(its[1], { selected: ["zzz"] })]));
+    assert.equal(r.events[1].code, "resume_invalid", r.raw);
+    assert.equal(await open(), 2, "una risposta valida è stata consumata anche se l'altra no");
+    // La stessa interruzione due volte nello stesso resume.
+    r = await rawRun(srv, "assistant", body([answer(its[0], { selected: ["si"] }), answer(its[0], { selected: ["no"] })]));
+    assert.equal(r.events[1].code, "resume_invalid", r.raw);
+    // Tutte e due: il run riprende.
+    const r2 = await runCollect(agent, { runId: uid("run"), resume: its.map((i) => answer(i, { selected: ["no"] })) });
+    ok(r2);
+    assert.equal(r2.types.at(-1), "RUN_FINISHED", `${r2.types}`);
+    assert.equal(assistantTexts(agent).at(-1), "Ho le due risposte");
+  });
+
+  it("una risposta a una conferma già chiusa nell'app è un RUN_ERROR interrupt_closed e non passa in silenzio", async () => {
+    const file = `chiusa-${uid("f").slice(0, 8)}.md`;
+    prov.set([call("write_file", { path: file, content: "x" }), text("Non scrivo")]);
+    const agent = makeAgent(latest, srv, "operator", { messages: [userMessage(`Scrivi ${file}`)] });
+    const r1 = await runCollect(agent, { runId: uid("run"), forwardedProps: INTERRUPTS });
+    ok(r1);
+    const [it] = r1.outcome.interrupts;
+    const [ap] = await approvalsOf(file);
+    // La persona nega dall'app; poi il client, che non lo sa, risponde di sì.
+    assert.equal((await srv.api("POST", `/api/approvals/${ap.id}`, { decision: "deny" })).status, 200);
+    // Il run va avanti da solo: si aspetta che finisca, perché non consumi il copione del test dopo.
+    await until("il run finisce", async () => {
+      const ev = (await srv.api("GET", `/api/runs/${ap.run_id}/events.json`)).json ?? [];
+      const last = ev.at(-1)?.event ?? ev.at(-1);
+      return last && ["RUN_ERROR", "RUN_FINISHED"].includes(last.type);
+    });
+    const r = await rawRun(srv, "operator", {
+      threadId: agent.threadId, runId: uid("run"), messages: structuredClone(agent.messages), forwardedProps: INTERRUPTS,
+      resume: [{ interruptId: it.id, status: "resolved", payload: { approved: true } }],
+    });
+    assert.equal(r.events[1]?.code, "interrupt_closed", r.raw);
+    assert.ok(!fs.existsSync(written(file)), "la risposta tardiva ha eseguito lo strumento");
+  });
+
+  it("una catena: la stessa risposta rimandata dopo la seconda pausa rifà lo stream fino alla seconda pausa", async () => {
+    const [a, b] = [`rep-a-${uid("f").slice(0, 8)}.md`, `rep-b-${uid("f").slice(0, 8)}.md`];
+    prov.set([calls([["write_file", { path: a, content: "a" }], ["write_file", { path: b, content: "b" }]]), text("Fatto")]);
+    const agent = makeAgent(latest, srv, "operator", { messages: [userMessage(`Scrivi ${a} e ${b}`)] });
+    const r1 = await runCollect(agent, { runId: uid("run"), forwardedProps: INTERRUPTS });
+    ok(r1);
+    assert.equal(r1.outcome?.type, "interrupt", `${r1.types} ${JSON.stringify(r1.runError ?? "")}`);
+    const atFirst = structuredClone(agent.messages);
+    const first = { interruptId: r1.outcome.interrupts[0].id, status: "resolved", payload: { approved: true } };
+    const r2 = await runCollect(agent, { runId: uid("run"), resume: [first] });
+    ok(r2);
+    assert.equal(r2.outcome?.type, "interrupt");
+    // Il client ha perso la risposta alla prima risposta e la rimanda: il server non dice «interruzione sconosciuta».
+    const lost = makeAgent(latest, srv, "operator", { threadId: agent.threadId, messages: atFirst });
+    const again = await runCollect(lost, { runId: uid("run"), resume: [first] });
+    ok(again);
+    assert.equal(again.outcome?.type, "interrupt", `${again.types}`);
+    assert.equal(again.outcome.interrupts[0].id, r2.outcome.interrupts[0].id, "la seconda pausa è un'altra");
+    // Poi si risponde alla seconda e il run finisce, con lo strumento eseguito una volta.
+    const last = await runCollect(lost, { runId: uid("run"), resume: [{ interruptId: again.outcome.interrupts[0].id, status: "resolved", payload: { approved: true } }] });
+    ok(last);
+    assert.equal(last.types.at(-1), "RUN_FINISHED");
+    assert.deepEqual([fs.readFileSync(written(a), "utf8"), fs.readFileSync(written(b), "utf8")], ["a", "b"]);
   });
 
   it("una domanda di ask_user è un'interruzione input_required con lo schema della risposta", async () => {

@@ -440,6 +440,16 @@ impl Engine {
         all
     }
 
+    /// Would [`Engine::respond_question`] take this reply? It looks and changes nothing: the question stays open.
+    pub fn check_question_reply(&self, id: &str, reply: &QuestionReply) -> Result<()> {
+        let question = self.0.questions.lock().unwrap().get(id).map(|p| p.question.clone()).ok_or_else(|| not_open("domanda", id))?;
+        match reply.action.as_str() {
+            "answer" => check_answer(&question, reply.answer.clone()).map(|_| ()),
+            "decline" => Ok(()),
+            other => Err(Error::Invalid(format!("azione `{other}` non valida: usa answer o decline"))),
+        }
+    }
+
     /// The person answers a question (`answer`) or declines it (`decline`). An answer that does not fit
     /// the question is an error and leaves it open; a question that is closed already is `NotFound`.
     pub fn respond_question(&self, id: &str, reply: QuestionReply) -> Result<()> {

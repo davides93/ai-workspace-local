@@ -119,6 +119,10 @@ pub struct RunOrigin {
     pub secrets: bool,
 }
 
+/// What a caller that is not the owner is told when it answers the request of a management tool.
+const NOT_OWNER_MESSAGE: &str =
+    "Questa richiesta può essere decisa solo dal proprietario, dall'app su questo computer: da qui non è consentito.";
+
 pub(crate) struct PendingApproval {
     req: ApprovalRequest,
     tx: oneshot::Sender<bool>,
@@ -2166,6 +2170,17 @@ impl Engine {
         self.respond_approval_as(id, allow, remember, false)
     }
 
+    /// Would [`Engine::respond_approval_as`] take this answer? It looks and changes nothing: `NotFound` when the request is
+    /// closed, `Denied` when it is the request of a management tool and the caller is not the owner.
+    pub fn check_approval_answer(&self, id: &str, owner: bool) -> Result<()> {
+        let approvals = self.0.approvals.lock().unwrap();
+        match approvals.get(id) {
+            None => Err(Error::NotFound(format!("richiesta {id} non trovata (forse già gestita)"))),
+            Some(p) if management::is_management(&p.req.tool) && !owner => Err(Error::Denied(NOT_OWNER_MESSAGE.into())),
+            Some(_) => Ok(()),
+        }
+    }
+
     /// Answers a confirmation. `owner` says whether the caller has full access to this computer:
     /// the request of a management tool answered by anyone else is refused and stays open.
     pub fn respond_approval_as(&self, id: &str, allow: bool, remember: bool, owner: bool) -> Result<()> {
@@ -2176,10 +2191,7 @@ impl Engine {
                 None => return Err(Error::NotFound(format!("richiesta {id} non trovata (forse già gestita)"))),
             };
             if management && !owner {
-                return Err(Error::Denied(
-                    "Questa richiesta può essere decisa solo dal proprietario, dall'app su questo computer: da qui non è consentito."
-                        .into(),
-                ));
+                return Err(Error::Denied(NOT_OWNER_MESSAGE.into()));
             }
             // «Consenti per la sessione» does not exist for a management tool.
             (approvals.remove(id).expect("the request was found above"), remember && !management)
