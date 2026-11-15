@@ -1447,7 +1447,11 @@ export interface McpElicitationAnswer {
 
 // ---------- Questions and secret requests of the agent (tools `ask_user` and `aiw_secret_request`) ----------
 
-export type QuestionKind = "choice" | "confirm" | "form";
+/**
+ * `handover`: the agent asks the person to do a step in the controlled browser (log in, a verification code): `message` says what to
+ * do, the answer is a confirmation (`confirmed: true` = «Ho finito: restituisci il controllo»), and the live view of the browser is in the card.
+ */
+export type QuestionKind = "choice" | "confirm" | "form" | "handover";
 
 export interface QuestionOption {
   id: string;
@@ -1513,6 +1517,71 @@ export type SecretOutcome = "stored" | "declined" | "timeout" | "cancelled" | "u
 
 /** Body of `POST /api/secret-requests/{id}`. The value lives here and nowhere else. */
 export type SecretReply = { action: "provide"; value: string } | { action: "decline" };
+
+// ---------- Live view of the controlled browser and the human takeover (`/api/browser`, owner only) ----------
+
+/** Who drives the browser: the agent, nobody (the person paused it) or the person. */
+export type BrowserMode = "agent" | "paused" | "human";
+
+/** The agent asked the person to step in (`browser_handover`): the question of the chat that ends it. */
+export interface BrowserHandover {
+  question_id: string;
+  run_id: string;
+  /** What the person is asked to do, in the agent's words. */
+  reason: string;
+}
+
+/** The page in front, as little as the person needs: never an address or a query. */
+export interface BrowserPage {
+  title: string;
+  host: string;
+  secure: boolean;
+}
+
+/** A window of the site that waits for an answer. `kind` is `confirm` or `prompt`; the engine may also name `alert` or `beforeunload`. */
+export interface BrowserDialog {
+  kind: "confirm" | "prompt" | (string & {});
+  message: string;
+  /** What a `prompt` has in its field to begin with. */
+  default_text: string;
+}
+
+/** `GET /api/browser`. */
+export interface BrowserState {
+  running: boolean;
+  /** The browser has no window of its own: the live view is the only way to see it. */
+  headless: boolean;
+  mode: BrowserMode;
+  /** An action of the agent is still running: the person's input waits for it. */
+  agent_busy: boolean;
+  /** The agent has to look at the page again before it acts (the person drove in between). */
+  stale: boolean;
+  handover: BrowserHandover | null;
+  page: BrowserPage | null;
+  dialog: BrowserDialog | null;
+  /** In words, the control that has the focus in the page (never its value); only while the person drives. */
+  focus: string | null;
+}
+
+/** `GET /api/browser/frame`: the image is a JPEG data URL (the IPC carries JSON only); width and height are the page's CSS pixels. */
+export type BrowserFrame = { running: false } | { running: true; image: string; width: number; height: number };
+
+/** Body of `POST /api/browser/control`; `resume` is only for a pause. */
+export type BrowserControlAction = "pause" | "resume" | "take" | "give_back";
+
+/** Body of `POST /api/browser/input`: only while the person drives. Positions are fractions (0 to 1) of the frame. */
+export type BrowserInput =
+  | { type: "click"; x: number; y: number; button: "left"; count: number }
+  | { type: "scroll"; x: number; y: number; dy: number }
+  | { type: "key"; key: string; shift: boolean }
+  /** At most 512 characters: a paste, a virtual keyboard, a password manager. */
+  | { type: "text"; text: string };
+
+/** Body of `POST /api/browser/dialog`. */
+export interface BrowserDialogReply {
+  action: "accept" | "dismiss";
+  text?: string;
+}
 
 // ---------- Config & audit ----------
 export interface ConfigLayer {

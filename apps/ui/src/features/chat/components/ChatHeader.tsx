@@ -1,11 +1,13 @@
 import { Link } from "../../../app/router";
 import type { ReactNode } from "react";
 import { SIMPLE_AGENT_ID } from "../../../shared/lib/agents";
-import { Icon, IconButton, Led, Pill, type PillTone } from "../../../shared/ui";
+import { Button, Icon, IconButton, Led, Pill, type PillTone } from "../../../shared/ui";
 import type { AgentProfile, InferenceProfile, Session } from "../../../shared/api/types";
 import { modeInfo, RUN_STATUS_LABEL, sandboxInfo } from "../model/labels";
 
 import { t, t as tr } from "../../../shared/i18n";
+/** Id of the «Browser» button: the chat gives the focus back to it when the panel closes. */
+export const BROWSER_BUTTON_ID = "ws-browser-btn";
 /** One fact about the session: icon, text, a tooltip and a spoken label so the icon is not the only cue. */
 function Meta({ icon, label, tone = "neutral", title, children }: { icon: string; label: string; tone?: PillTone; title?: string; children: ReactNode }) {
   return (
@@ -26,7 +28,7 @@ function Meta({ icon, label, tone = "neutral", title, children }: { icon: string
  * approval mode; the agent only when it is not the Assistente, and neither sandbox nor worktree. On a phone it
  * has a «Menu» button, since there is no tab bar.
  */
-export function ChatHeader({ session, agent, profile, running, simple = false, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser, onOpenMenu }: {
+export function ChatHeader({ session, agent, profile, running, simple = false, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser, browserLive, onOpenMenu }: {
   session: Session | null;
   agent: AgentProfile | null;
   profile: InferenceProfile | null;
@@ -40,6 +42,11 @@ export function ChatHeader({ session, agent, profile, running, simple = false, s
   onOpenWorktree: () => void;
   /** Present on devices whose agent browser is a panel that can be closed (iPhone, iPad, Android). */
   onOpenBrowser?: () => void;
+  /**
+   * The «Browser» button of the live view (a browser runs, or the agent asks for help): opens and closes the panel. `status` is read after the name;
+   * `attention`: the agent is waiting for the person to step in; `overlay`: the panel opens as a dialog.
+   */
+  browserLive?: { open: boolean; onToggle: () => void; status: string; attention: boolean; overlay: boolean };
   /** Simple interface: opens the menu (shown on phones only, where there is no rail). */
   onOpenMenu?: () => void;
 }) {
@@ -53,6 +60,15 @@ export function ChatHeader({ session, agent, profile, running, simple = false, s
         {running && <Pill tone="run"><Led tone="run" small />{tr("chat.in_esecuzione")}</Pill>}
         {!running && session?.last_status && session.last_status !== "succeeded" && (
           <Pill tone={session.last_status === "failed" ? "crit" : "neutral"} title={t("chat.esito_dell_ultimo_run")}>{RUN_STATUS_LABEL[session.last_status] ?? session.last_status}</Pill>
+        )}
+        {browserLive && (
+          <Button
+            id={BROWSER_BUTTON_ID} size="sm" icon="globe" className={browserLive.open ? "ws-browser-btn is-on" : "ws-browser-btn"} title={browserLive.open ? t("browser.chiudi_vista") : t("browser.apri_vista")}
+            aria-label={`${t("browser.pulsante")}: ${browserLive.status}`} aria-expanded={browserLive.open} aria-haspopup={browserLive.overlay ? "dialog" : undefined} onClick={browserLive.onToggle}
+          >
+            <span className="ws-browser-label">{t("browser.pulsante")}</span>
+            {browserLive.attention && <Led tone="warn" small />}
+          </Button>
         )}
         {onOpenBrowser && <IconButton aria-label={t("chat.browser_dell_agente")} title={t("chat.apri_il_browser_dell_agente")} icon="globe" onClick={onOpenBrowser} />}
         <IconButton aria-label={t("chat.pannello_del_run")} aria-pressed={inspectorOpen} icon="panel" onClick={onToggleInspector} className={inspectorOpen ? "is-on" : undefined} />

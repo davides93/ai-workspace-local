@@ -5,6 +5,7 @@ import type {
   DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, FoldersInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
+  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   CommandAnalysis, PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
@@ -219,6 +220,11 @@ export class HttpTransport implements Transport {
     this.req<void>("POST", `/approvals/${enc(id)}`, { decision, remember: !!remember });
   questions = () => this.req<Question[]>("GET", "/questions");
   answerQuestion = (id: string, reply: QuestionReply) => this.req<void>("POST", `/questions/${enc(id)}`, reply);
+  browserState = () => this.req<BrowserState>("GET", "/browser");
+  browserFrame = () => this.req<BrowserFrame>("GET", "/browser/frame");
+  browserControl = (action: BrowserControlAction) => this.req<BrowserState>("POST", "/browser/control", { action });
+  browserInput = (input: BrowserInput) => this.req<void>("POST", "/browser/input", input);
+  browserDialog = (reply: BrowserDialogReply) => this.req<void>("POST", "/browser/dialog", reply);
   secretRequests = () => this.req<SecretRequest[]>("GET", "/secret-requests");
   answerSecretRequest = (id: string, reply: SecretReply) => this.req<{ stored?: boolean }>("POST", `/secret-requests/${enc(id)}`, reply);
 

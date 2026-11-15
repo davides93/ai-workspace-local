@@ -1,0 +1,58 @@
+/* Live view of the controlled browser: the side panel, the card of a request for help, the viewer and its controls. Tokens only. */
+.bl { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.bl-head { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.bl-status { margin: 0; font-size: var(--fs-md); font-weight: 650; overflow-wrap: anywhere; }
+.bl-status.is-agent { color: var(--accent-ink); }
+.bl-status.is-paused { color: var(--warn); }
+.bl-status.is-human { color: var(--ok); }
+.bl-page { margin: 0; display: flex; align-items: center; gap: var(--space-2); min-width: 0; font-size: var(--fs-sm); color: var(--fg-muted); }
+.bl-page-text { min-width: 0; overflow-wrap: anywhere; }
+.bl-conn { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 1px 8px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 600; }
+.bl-conn.is-secure { background: var(--ok-soft); color: var(--ok); }
+.bl-conn.is-insecure { background: var(--warn-soft); color: var(--warn); }
+.bl-reason { margin: 0; padding: var(--space-2) var(--space-3); border-left: 3px solid var(--accent); border-radius: var(--r-sm); background: var(--accent-soft); color: var(--fg); overflow-wrap: anywhere; }
+.bl-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.bl-problem { margin: 0; font-size: var(--fs-sm); color: var(--crit); overflow-wrap: anywhere; }
+
+/* The page: an image. While the person drives it takes the keys (and the wheel, and a finger) and shows it with a frame. */
+.bl-viewer { position: relative; display: block; min-height: 96px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface-2); overflow: hidden; line-height: 0; }
+.bl-viewer img { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+.bl-viewer.is-live { border: 2px solid var(--ok); cursor: pointer; touch-action: none; }
+.bl-viewer.is-live:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+.bl-loading, .bl-empty { margin: 0; padding: var(--space-5) var(--space-3); line-height: 1.45; font-size: var(--fs-sm); color: var(--fg-muted); text-align: center; overflow-wrap: anywhere; }
+.bl-empty { border: 1px dashed var(--line-strong); border-radius: var(--r-md); }
+.bl-hint { margin: 0; font-size: var(--fs-xs); color: var(--fg-muted); }
+.bl-focus { margin: 0; font-size: var(--fs-xs); color: var(--fg-muted); overflow-wrap: anywhere; }
+.bl-notes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-xs); color: var(--fg-muted); }
+
+/* Keys the viewer cannot send (Tab leaves it), and the field for a virtual keyboard, a password manager, a code. */
+.bl-keys { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.bl-keybtns { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.bl-type { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.bl-type > label { font-size: var(--fs-sm); font-weight: 600; }
+.bl-type-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: stretch; min-width: 0; }
+.bl-type-row .input { flex: 1 1 9rem; min-width: 0; }
+.bl-privacy { margin: 0; display: flex; align-items: flex-start; gap: var(--space-2); font-size: var(--fs-xs); color: var(--fg-muted); }
+.bl-privacy > svg { flex: none; margin-top: 1px; }
+
+/* A window of the site (confirm, prompt) that waits for an answer. */
+.bl-dialog { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--warn); border-radius: var(--r-md); background: var(--warn-soft); color: var(--fg); }
+.bl-dialog-title { font-size: var(--fs-md); }
+.bl-dialog-msg { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bl-dialog-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* The panel of the chat: a column on wide screens (it takes the place of the run panel), a drawer on tablets, a full-screen sheet on phones. */
+.ws-browser > .overlay-head h2, .bl-sheet > .overlay-head h2, .bl-drawer > .overlay-head h2 { font-size: var(--fs-lg); }
+.overlay-surface.sheet.bl-sheet { inset: 0; width: 100%; height: 100%; max-height: none; transform: none; border-radius: 0; padding-top: env(safe-area-inset-top, 0px); }
+.overlay-surface.drawer.bl-drawer { width: min(480px, 100%); }
+
+/* The card in the conversation. */
+.ask-handover .bl-viewer { max-width: 560px; }
+.ask-handover .ask-message:focus { outline: none; }
+.ask-handover .ask-message:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+
+/* Touch and phone: every target is at least 44 px. */
+@media (max-width: 700px), (pointer: coarse) {
+  .bl .btn, .bl .input { min-height: 44px; }
+  .bl .btn.sm { min-height: 44px; }
+}

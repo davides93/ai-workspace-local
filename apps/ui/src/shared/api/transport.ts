@@ -6,6 +6,7 @@ import type {
   CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
+  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState,
   ModelProviderInfo, ModelSearchParams, FoldersAdded, FoldersInfo, PullRequest, RemoteModelDetail, SearchPage,
   PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
@@ -240,6 +241,20 @@ export interface Transport {
    * provide secrets; 404: already closed.
    */
   answerSecretRequest(id: string, reply: SecretReply): Promise<{ stored?: boolean }>;
+
+  /**
+   * The live view of the controlled browser and the human takeover (owner only: a `device` token gets 403, an older backend 404).
+   * Nothing of what goes through these calls is kept: the frames, the keys and the text are the caller's to forget.
+   */
+  browserState(): Promise<BrowserState>;
+  /** One frame of the page. 409: a window of the site waits for an answer (keep the last frame). */
+  browserFrame(): Promise<BrowserFrame>;
+  /** `pause`, `resume` (from a pause), `take` (the person drives), `give_back` (also ends the agent's request for a handover). */
+  browserControl(action: BrowserControlAction): Promise<BrowserState>;
+  /** A click, a scroll, a key or some text of the person in the page; 409 (with the reason in Italian) unless they drive and the agent is idle. */
+  browserInput(input: BrowserInput): Promise<void>;
+  /** The person answers a window of the site (only while they drive). */
+  browserDialog(reply: BrowserDialogReply): Promise<void>;
 
   workflows(): Promise<WorkflowDef[]>;
   saveWorkflow(w: WorkflowDef): Promise<WorkflowDef>;
