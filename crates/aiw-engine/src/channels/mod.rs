@@ -1356,6 +1356,17 @@ impl Engine {
 
     pub(crate) fn register_channel_tool(&self) {
         tool::register(self);
+        draft_tool::register(self);
+    }
+
+    /// Is there an email channel a draft could go through?
+    pub(crate) fn draft_channel_exists(&self) -> bool {
+        self.channels_raw().iter().any(|c| c.kind == "email")
+    }
+
+    /// The session a run belongs to, while it goes on.
+    pub(crate) fn session_of_run(&self, run_id: &str) -> Option<String> {
+        self.0.runs.lock().unwrap().get(run_id).and_then(|h| h.session_id.clone())
     }
 }
 

@@ -1,7 +1,8 @@
-//! A small SMTP submission client for the email channel: implicit TLS (465) or STARTTLS (587, and any
-//! other port), authentication with `AUTH PLAIN` only after the channel is encrypted, one message per
-//! connection. The recipient is always the allowed sender the reply is for, and every header value is
-//! stripped of line breaks, so a subject or an address cannot add headers or recipients.
+//! A small SMTP submission client for the email channel and for the drafts the owner approves: implicit TLS (465)
+//! or STARTTLS (587, and any other port), authentication with `AUTH PLAIN` only after the channel is encrypted,
+//! one message per connection. Every header value and every address is stripped of line breaks and control
+//! characters, so a subject or an address cannot add headers or recipients. The reply of the channel goes to the
+//! one allowed sender; a draft goes to the recipients the owner saw, and to nobody else.
 
 use aiw_tools::connectors::tls::{self, BoxIo};
 use base64::Engine as _;
@@ -21,12 +22,44 @@ pub(crate) struct SmtpConfig {
     pub roots: Vec<Vec<u8>>,
 }
 
+/// A file that goes with a message.
+pub(crate) struct Attach {
+    pub name: String,
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
 pub(crate) struct Outgoing {
-    pub to: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    /// Hidden recipients: they get the message (`RCPT TO`) but are never written in a header.
+    pub bcc: Vec<String>,
     pub subject: String,
     pub body: String,
     pub in_reply_to: Option<String>,
     pub references: Option<String>,
+    pub attachments: Vec<Attach>,
+    /// The `Message-ID` (without the angle brackets); random when not given. A draft always gives one derived from
+    /// its own id, so a second attempt carries the same.
+    pub message_id: Option<String>,
+    /// An automatic answer: the message says so (`Auto-Submitted`), so that other automatic systems do not answer
+    /// it. A message the owner approved is not one.
+    pub auto: bool,
+}
+
+/// Why a send did not complete, and whether the server may nevertheless have taken the message.
+#[derive(Debug)]
+pub(crate) struct SendError {
+    pub message: String,
+    /// The failure came after the message was handed over (or the answer never came): it may have been delivered,
+    /// so it is never repeated on its own.
+    pub uncertain: bool,
+}
+
+impl SendError {
+    fn before(message: impl Into<String>) -> Self {
+        Self { message: message.into(), uncertain: false }
+    }
 }
 
 struct Conn {
@@ -147,39 +180,117 @@ fn encode_header(s: &str) -> String {
     }
 }
 
-/// The text of the message (headers and body), with CRLF line ends.
+fn wrap_base64(data: &[u8]) -> String {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+    let lines: Vec<String> = b64.as_bytes().chunks(76).map(|c| String::from_utf8_lossy(c).to_string()).collect();
+    lines.join("\r\n")
+}
+
+/// A file name that is safe in a header: no path, no quotes, no control characters.
+fn safe_name(name: &str) -> String {
+    let n: String =
+        name.chars().filter(|c| !c.is_control()).map(|c| if matches!(c, '"' | '\\' | '/' | ':' | ';') { '_' } else { c }).collect();
+    let n = n.trim().chars().take(120).collect::<String>();
+    if n.is_empty() {
+        "allegato".into()
+    } else {
+        n
+    }
+}
+
+fn safe_mime(mime: &str) -> String {
+    let m = mime.trim().to_ascii_lowercase();
+    let ok = m
+        .split_once('/')
+        .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric() || "/+.-_".contains(c)));
+    if ok {
+        m
+    } else {
+        "application/octet-stream".into()
+    }
+}
+
+fn percent_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
+/// The text of the message (headers and body), with CRLF line ends. The hidden recipients are not in it.
 pub(crate) fn build(cfg: &SmtpConfig, m: &Outgoing) -> String {
-    let mut h = vec![
-        format!("From: {}", clean(&cfg.from)),
-        format!("To: {}", clean(&m.to)),
-        format!("Subject: {}", encode_header(&m.subject)),
-        format!("Date: {}", chrono::Local::now().to_rfc2822()),
-        format!("Message-ID: <{}@aiw.local>", uuid::Uuid::new_v4().simple()),
-    ];
+    let addrs = |v: &[String]| v.iter().map(|a| clean(a)).filter(|a| !a.is_empty()).collect::<Vec<_>>().join(", ");
+    let message_id = match m.message_id.as_deref().map(clean).filter(|i| !i.is_empty()) {
+        Some(id) => id.trim_matches(['<', '>']).to_string(),
+        None => format!("{}@aiw.local", uuid::Uuid::new_v4().simple()),
+    };
+    let mut h = vec![format!("From: {}", clean(&cfg.from)), format!("To: {}", addrs(&m.to))];
+    if !m.cc.is_empty() {
+        h.push(format!("Cc: {}", addrs(&m.cc)));
+    }
+    h.push(format!("Subject: {}", encode_header(&m.subject)));
+    h.push(format!("Date: {}", chrono::Local::now().to_rfc2822()));
+    h.push(format!("Message-ID: <{message_id}>"));
     if let Some(r) = m.in_reply_to.as_deref().map(clean).filter(|r| !r.is_empty()) {
         h.push(format!("In-Reply-To: {r}"));
     }
     if let Some(r) = m.references.as_deref().map(clean).filter(|r| !r.is_empty()) {
         h.push(format!("References: {r}"));
     }
-    // Tells other automatic systems not to answer this one: no mail loops.
-    h.push("Auto-Submitted: auto-replied".into());
+    if m.auto {
+        // Tells other automatic systems not to answer this one: no mail loops.
+        h.push("Auto-Submitted: auto-replied".into());
+    }
     h.push("MIME-Version: 1.0".into());
-    h.push("Content-Type: text/plain; charset=utf-8".into());
-    h.push("Content-Transfer-Encoding: base64".into());
-    let b64 = base64::engine::general_purpose::STANDARD.encode(m.body.as_bytes());
-    let body: Vec<String> = b64.as_bytes().chunks(76).map(|c| String::from_utf8_lossy(c).to_string()).collect();
-    format!("{}\r\n\r\n{}\r\n", h.join("\r\n"), body.join("\r\n"))
+    let text_part = |extra_headers: bool| {
+        let mut p = String::new();
+        if extra_headers {
+            p.push_str("Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n");
+        }
+        p.push_str(&wrap_base64(m.body.as_bytes()));
+        p
+    };
+    if m.attachments.is_empty() {
+        h.push("Content-Type: text/plain; charset=utf-8".into());
+        h.push("Content-Transfer-Encoding: base64".into());
+        return format!("{}\r\n\r\n{}\r\n", h.join("\r\n"), text_part(false));
+    }
+    // The boundary has dashes, which base64 never has: it cannot appear inside a part.
+    let boundary = format!("aiw-{}", uuid::Uuid::new_v4().simple());
+    h.push(format!("Content-Type: multipart/mixed; boundary=\"{boundary}\""));
+    let mut out = format!("{}\r\n\r\nQuesto messaggio è in formato MIME.\r\n", h.join("\r\n"));
+    out.push_str(&format!("--{boundary}\r\n{}\r\n", text_part(true)));
+    for a in &m.attachments {
+        let name = safe_name(&a.name);
+        let disposition = if name.is_ascii() {
+            format!("attachment; filename=\"{name}\"")
+        } else {
+            let fallback: String = name.chars().map(|c| if c.is_ascii() { c } else { '_' }).collect();
+            format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{}", percent_encode(&name))
+        };
+        out.push_str(&format!(
+            "--{boundary}\r\nContent-Type: {}; name=\"{}\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: {disposition}\r\n\r\n{}\r\n",
+            safe_mime(&a.mime),
+            if name.is_ascii() { name.clone() } else { name.chars().map(|c| if c.is_ascii() { c } else { '_' }).collect() },
+            wrap_base64(&a.data)
+        ));
+    }
+    out.push_str(&format!("--{boundary}--\r\n"));
+    out
 }
 
-pub(crate) async fn send(cfg: &SmtpConfig, m: &Outgoing) -> Result<(), String> {
-    if !valid_address(&m.to) || !valid_address(&cfg.from) {
-        return Err("indirizzo di posta non valido".into());
+/// Sends the message; says whether a failure may have left it delivered.
+pub(crate) async fn send_message(cfg: &SmtpConfig, m: &Outgoing) -> Result<(), SendError> {
+    let rcpt: Vec<String> = m.to.iter().chain(&m.cc).chain(&m.bcc).map(|a| a.trim().to_string()).collect();
+    if rcpt.is_empty() || !rcpt.iter().all(|a| valid_address(a)) || !valid_address(&cfg.from) {
+        return Err(SendError::before("indirizzo di posta non valido"));
     }
-    let mut c = open(cfg).await?;
-    c.cmd(&format!("MAIL FROM:<{}>", cfg.from.trim()), &[250], "il mittente").await?;
-    c.cmd(&format!("RCPT TO:<{}>", m.to.trim()), &[250, 251], "il destinatario").await?;
-    c.cmd("DATA", &[354], "l'invio").await?;
+    let mut c = open(cfg).await.map_err(SendError::before)?;
+    c.cmd(&format!("MAIL FROM:<{}>", cfg.from.trim()), &[250], "il mittente").await.map_err(SendError::before)?;
+    // Every recipient must be accepted before anything is sent: no message goes out to some and not to others.
+    for a in &rcpt {
+        c.cmd(&format!("RCPT TO:<{a}>"), &[250, 251], &format!("il destinatario {a}")).await.map_err(SendError::before)?;
+    }
+    c.cmd("DATA", &[354], "l'invio").await.map_err(SendError::before)?;
     let text = build(cfg, m);
     let mut stuffed = String::new();
     for line in text.split("\r\n") {
@@ -190,14 +301,30 @@ pub(crate) async fn send(cfg: &SmtpConfig, m: &Outgoing) -> Result<(), String> {
         stuffed.push_str("\r\n");
     }
     stuffed.push_str(".\r\n");
-    tokio::time::timeout(IO_TIMEOUT, async {
+    // From here on the server may have the message: a failure is «uncertain», never «not sent».
+    let uncertain = |message: String| SendError { message, uncertain: true };
+    tokio::time::timeout(IO_TIMEOUT * 3, async {
         c.io.get_mut().write_all(stuffed.as_bytes()).await?;
         c.io.get_mut().flush().await
     })
     .await
-    .map_err(|_| "il server di posta non risponde in tempo".to_string())?
-    .map_err(|e| format!("errore di rete: {e}"))?;
-    c.expect(&[250], "il messaggio").await?;
+    .map_err(|_| uncertain("il server di posta non risponde in tempo".into()))?
+    .map_err(|e| uncertain(format!("errore di rete: {e}")))?;
+    match c.reply().await {
+        Ok((250, _)) => {}
+        // An answer that refuses the message: the server did not take it.
+        Ok((code, lines)) => {
+            return Err(SendError::before(format!(
+                "il server di posta ha rifiutato il messaggio ({code} {})",
+                lines.first().cloned().unwrap_or_default().chars().take(80).collect::<String>()
+            )))
+        }
+        Err(e) => return Err(uncertain(format!("{e}: non so se il messaggio è partito"))),
+    }
     let _ = c.send("QUIT").await;
     Ok(())
+}
+
+pub(crate) async fn send(cfg: &SmtpConfig, m: &Outgoing) -> Result<(), String> {
+    send_message(cfg, m).await.map_err(|e| e.message)
 }

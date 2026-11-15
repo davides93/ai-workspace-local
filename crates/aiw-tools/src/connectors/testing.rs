@@ -241,12 +241,27 @@ async fn imap_session(
 /// A message the fake SMTP server took: (envelope sender, recipients, DATA).
 pub type SmtpMail = (String, Vec<String>, String);
 
+/// A failure the fake SMTP server can be told to show, to prove what a client does when a send goes wrong.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SmtpFault {
+    #[default]
+    None,
+    /// `550` for this recipient (compared without case).
+    RejectRecipient(String),
+    /// `554` after the message was sent: the server did not take it.
+    RejectMessage,
+    /// The message is taken and the connection is closed before the `250`: the client cannot know.
+    DropAfterData,
+}
+
 pub struct FakeSmtp {
     pub addr: SocketAddr,
     pub cert: Vec<u8>,
     pub commands: Arc<Mutex<Vec<String>>>,
     /// The messages received: (envelope sender, recipients, DATA as sent with the CRLFs).
     pub mails: Arc<Mutex<Vec<SmtpMail>>>,
+    /// What the server does wrong, from now on.
+    pub fault: Arc<Mutex<SmtpFault>>,
 }
 
 impl FakeSmtp {
@@ -256,19 +271,20 @@ impl FakeSmtp {
         let (acceptor, cert) = self_signed();
         let commands = Arc::new(Mutex::new(Vec::new()));
         let mails = Arc::new(Mutex::new(Vec::new()));
-        let (c2, m2) = (commands.clone(), mails.clone());
+        let fault = Arc::new(Mutex::new(SmtpFault::None));
+        let (c2, m2, f2) = (commands.clone(), mails.clone(), fault.clone());
         let (user, password) = (user.to_string(), password.to_string());
         tokio::spawn(async move {
             loop {
                 let Ok((tcp, _)) = listener.accept().await else { return };
-                let (acceptor, commands, mails, user, password) =
-                    (acceptor.clone(), c2.clone(), m2.clone(), user.clone(), password.clone());
+                let (acceptor, commands, mails, user, password, fault) =
+                    (acceptor.clone(), c2.clone(), m2.clone(), user.clone(), password.clone(), f2.clone());
                 tokio::spawn(async move {
-                    let _ = smtp_session(tcp, security, acceptor, commands, mails, user, password).await;
+                    let _ = smtp_session(tcp, security, acceptor, commands, mails, user, password, fault).await;
                 });
             }
         });
-        FakeSmtp { addr, cert, commands, mails }
+        FakeSmtp { addr, cert, commands, mails, fault }
     }
 }
 
@@ -280,6 +296,7 @@ async fn smtp_session(
     mails: Arc<Mutex<Vec<SmtpMail>>>,
     user: String,
     password: String,
+    fault: Arc<Mutex<SmtpFault>>,
 ) -> std::io::Result<()> {
     use base64::Engine as _;
     let first: Boxed = if security == Security::Implicit { Box::new(acceptor.accept(tcp).await?) } else { Box::new(tcp) };
@@ -308,7 +325,12 @@ async fn smtp_session(
             rcpt.clear();
             io.get_mut().write_all(b"250 ok\r\n").await?;
         } else if upper.starts_with("RCPT TO") {
-            rcpt.push(line.split('<').nth(1).and_then(|s| s.split('>').next()).unwrap_or("").to_string());
+            let addr = line.split('<').nth(1).and_then(|s| s.split('>').next()).unwrap_or("").to_string();
+            if matches!(&*fault.lock().unwrap(), SmtpFault::RejectRecipient(a) if a.eq_ignore_ascii_case(&addr)) {
+                io.get_mut().write_all(b"550 no such user\r\n").await?;
+                continue;
+            }
+            rcpt.push(addr);
             io.get_mut().write_all(b"250 ok\r\n").await?;
         } else if upper.starts_with("DATA") {
             io.get_mut().write_all(b"354 go\r\n").await?;
@@ -320,7 +342,15 @@ async fn smtp_session(
                 data.push_str(l.strip_prefix("..").map(|r| format!(".{r}")).as_deref().unwrap_or(&l));
                 data.push_str("\r\n");
             }
+            let fault_now = fault.lock().unwrap().clone();
+            if fault_now == SmtpFault::RejectMessage {
+                io.get_mut().write_all(b"554 message refused\r\n").await?;
+                continue;
+            }
             mails.lock().unwrap().push((from.clone(), rcpt.clone(), data));
+            if fault_now == SmtpFault::DropAfterData {
+                return Ok(());
+            }
             io.get_mut().write_all(b"250 queued\r\n").await?;
         } else if upper.starts_with("QUIT") {
             io.get_mut().write_all(b"221 bye\r\n").await?;

@@ -97,11 +97,14 @@ const SCRUB_KINDS: [&str; 5] = ["mcp", "channel", "model_provider", "remote_agen
 /// Kinds that hold no secret. Together with the two lists above this must cover every kind the engine writes: a test
 /// reads the sources and fails when a new kind is not classified here.
 #[cfg(test)]
-const PLAIN_KINDS: [&str; 19] = [
+const PLAIN_KINDS: [&str; 22] = [
     "adapter",
     "agent",
+    "channel_context",
     "channel_conv",
     "channel_state",
+    "email_draft",
+    "email_draft_files",
     "eval_suite",
     "hooks",
     "lesson",
