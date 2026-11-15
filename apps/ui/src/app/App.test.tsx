@@ -1,7 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../shared/api/http";
+import { setStoredUiMode } from "../shared/lib/uiMode";
 import { MockTransport } from "../shared/api/mock";
+import { DEMO_PAIRING_CODE, transportForScenario } from "../shared/api/mock/scenario";
 import { renderApp } from "../test-utils/render";
 
 // The shell around the views: the route table, the simple interface's single chat, the palette and the states of the connection.
@@ -11,7 +13,7 @@ describe("App shell: simple interface", () => {
       const { unmount } = await renderApp({ route, mode: "simple" });
       await waitFor(() => expect(location.hash, route).toMatch(/^#\/chat(\/ses_\w+)?$/));
       expect(screen.getByRole("textbox", { name: "Messaggio" }), route).toBeInTheDocument();
-      expect(screen.queryByText("Pagina non trovata"), route).toBeNull();
+      await waitFor(() => expect(screen.queryByText("Pagina non trovata"), route).toBeNull());
       unmount();
     }
   });
@@ -83,33 +85,55 @@ describe("App shell: Developer interface", () => {
 });
 
 describe("App shell: the connection", () => {
-  it("when the workspace stops answering a banner says so, and «Riprova» asks again", async () => {
+  it("scenario offline: a banner says the workspace is lost, «Riprova» asks again and the views say they could not load", async () => {
+    const api = transportForScenario(new MockTransport(), "offline");
+    // The configuration cannot be read, so the mode kept on the device decides: this device is the Developer's.
+    setStoredUiMode("developer");
+    const { user } = await renderApp({ route: "/models", mode: "developer", api });
+    const banner = (await screen.findByText("Connessione al workspace persa", {}, { timeout: 8000 })).closest('[role="alert"]') as HTMLElement;
+    expect(banner).not.toBeNull();
+    const retry = within(banner).getByRole("button", { name: "Riprova" });
+    await user.click(retry);
+    // Still offline: after the new try fails the banner is there again, with the button for the next one.
+    await screen.findByText("Connessione al workspace persa", {}, { timeout: 8000 });
+    // The banner and the failed view each have their own button.
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Riprova" }).length).toBe(2));
+    for (const b of screen.getAllByRole("button", { name: "Riprova" })) expect(b).toBeEnabled();
+    expect(screen.getByText("Qualcosa non ha funzionato")).toBeInTheDocument();
+    // The view around it is still the Models page (a failing request is not a crash).
+    expect(screen.getByRole("heading", { name: "Modelli", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByText("Questa pagina non si è caricata")).toBeNull();
+  }, 20_000);
+
+  it("when the workspace comes back the banner goes away on «Riprova»", async () => {
     const api = new MockTransport();
     const system = vi.spyOn(api, "system").mockRejectedValue(new ApiError(503, "non risponde"));
     const { user } = await renderApp({ route: "/", mode: "developer", api });
     const banner = (await screen.findByText("Connessione al workspace persa", {}, { timeout: 8000 })).closest('[role="alert"]') as HTMLElement;
-    expect(banner).not.toBeNull();
     system.mockRestore();
     await user.click(within(banner).getByRole("button", { name: "Riprova" }));
     await waitFor(() => expect(screen.queryByText("Connessione al workspace persa")).toBeNull(), { timeout: 8000 });
   }, 20_000);
 
-  it("a browser that is not paired yet gets the pairing screen instead of the view, and a wrong code stays on it", async () => {
-    const api = new MockTransport();
-    vi.spyOn(api, "system").mockRejectedValue(new ApiError(401, "serve il pairing"));
-    const pair = vi.fn().mockRejectedValue(new Error("codice scaduto"));
-    (api as unknown as { pair: typeof pair }).pair = pair;
-    const { user } = await renderApp({ route: "/", mode: "developer", api });
+  it("scenario unpaired: the pairing screen instead of the view; a wrong code stays on it and says why, the right one opens the app", async () => {
+    const api = transportForScenario(new MockTransport(), "unpaired");
+    const { user } = await renderApp({ route: "/models", mode: "developer", api });
     expect(await screen.findByRole("heading", { name: "Accoppia questo dispositivo" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Modelli", level: 1 })).toBeNull();
     const code = screen.getByRole("textbox", { name: "Codice di pairing" });
     const send = screen.getByRole("button", { name: "Accoppia" });
     expect(send).toBeDisabled();
-    await user.type(code, "123456");
+    await user.type(code, "000000");
     expect(send).toBeEnabled();
     await user.keyboard("{Enter}");
-    await waitFor(() => expect(pair).toHaveBeenCalledWith("123456"));
+    expect(await screen.findByText(/codice non valido o scaduto/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Accoppia questo dispositivo" })).toBeInTheDocument();
-  });
+    await user.clear(code);
+    await user.type(code, `${DEMO_PAIRING_CODE.slice(0, 3)} ${DEMO_PAIRING_CODE.slice(3)}`);
+    await user.click(screen.getByRole("button", { name: "Accoppia" }));
+    expect(await screen.findByRole("heading", { name: "Modelli", level: 1 }, { timeout: 8000 })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Accoppia questo dispositivo" })).toBeNull();
+  }, 20_000);
 });
 
 describe("App shell: the demo", () => {

@@ -1,4 +1,6 @@
 import type { UiMode } from "../../lib/uiMode";
+import { ApiError } from "../http";
+import type { Transport } from "../transport";
 import { catalog, configLayers, folderGrants, models, nid, now, runtimes, sessionMessages, sessions, system } from "./fixtures";
 import { LONG_CHAT_ID, longChatMessages } from "./long-chat";
 
@@ -11,10 +13,13 @@ import { LONG_CHAT_ID, longChatMessages } from "./long-chat";
  *   the simple interface looks like before "Prepara tutto".
  * - `long-chat`: the default demo plus one very long conversation (`ses_long`, about four hundred rows with code in every language of the
  *   highlighter, tool cards, a table and a list): what a person who uses the app for months has. It is the first session of the list.
+ * - `offline`: the workspace does not answer (every request fails with a 503): the connection banner and the error state of every view.
+ * - `unpaired`: this browser has no token on a device that wants one (every request fails with a 401 until the pairing code `123456`
+ *   is entered): the pairing screen, then the app. A wrong code is refused.
  * - `mas`: the sandboxed Mac App Store build: the agents work in the app's own folder and the person grants more
  *   folders of the Mac (Download is already granted), so Settings shows «Cartelle consentite».
  */
-export const MOCK_SCENARIOS = ["first-run", "mas", "long-chat"] as const;
+export const MOCK_SCENARIOS = ["first-run", "mas", "long-chat", "offline", "unpaired"] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 export const isMockScenario = (v: unknown): v is MockScenario => (MOCK_SCENARIOS as readonly unknown[]).includes(v);
@@ -59,4 +64,34 @@ export function applyMockScenario(name: MockScenario): void {
 export function applyMockUiMode(mode: UiMode): void {
   const global = configLayers.find((l) => l.name === "global");
   if (global) global.values = { ...global.values, "ui.mode": mode };
+}
+
+/** The code the `unpaired` scenario accepts. */
+export const DEMO_PAIRING_CODE = "123456";
+
+/**
+ * The transport as a scenario wants it. Most scenarios are data (`applyMockScenario`) and the transport is the demo's; `offline` and
+ * `unpaired` are about the connection, so every request of the demo goes through a wrapper that fails the way the real one would.
+ * `subscribeRun` is the one synchronous member of the interface: it is not a request and is never refused.
+ */
+export function transportForScenario(demo: Transport, name: MockScenario | null): Transport {
+  if (name !== "offline" && name !== "unpaired") return demo;
+  let paired = name !== "unpaired";
+  const refusal = () => (name === "offline" ? new ApiError(503, "il workspace non risponde") : new ApiError(401, "serve il pairing: inserisci il codice mostrato sull'altro dispositivo"));
+  return new Proxy(demo, {
+    get(target, prop) {
+      if (name === "unpaired") {
+        if (prop === "capabilities") return { ...target.capabilities, pairing: true };
+        if (prop === "pair") {
+          return async (code: string): Promise<void> => {
+            if (code.replace(/\D/g, "") !== DEMO_PAIRING_CODE) throw new ApiError(400, "codice non valido o scaduto");
+            paired = true;
+          };
+        }
+      }
+      const value = Reflect.get(target, prop, target) as unknown;
+      if (typeof value !== "function" || prop === "subscribeRun") return typeof value === "function" ? value.bind(target) : value;
+      return (...args: unknown[]) => (paired && name === "unpaired") ? (value as (...a: unknown[]) => unknown).apply(target, args) : Promise.reject(refusal());
+    },
+  });
 }

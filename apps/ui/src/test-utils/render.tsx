@@ -9,6 +9,7 @@ import { ApiProvider } from "../shared/api/context";
 import { createQueryClient } from "../shared/query/client";
 import { useLocale } from "../shared/i18n";
 import { MockTransport } from "../shared/api/mock";
+import type { Transport } from "../shared/api/transport";
 import { applyMockScenario, applyMockUiMode, type MockScenario } from "../shared/api/mock/scenario";
 import type { UiMode } from "../shared/lib/uiMode";
 
@@ -23,8 +24,8 @@ export interface AppOptions {
   mode?: UiMode;
   /** Applied once per test file: it empties what a new installation does not have yet (see `scenario.ts`). */
   scenario?: MockScenario;
-  /** Another transport, e.g. a `MockTransport` with a method replaced to make a request fail. */
-  api?: MockTransport;
+  /** Another transport, e.g. a `MockTransport` with a method replaced to make a request fail, or `transportForScenario(...)`. */
+  api?: Transport;
 }
 
 const applied = new Set<MockScenario>();
@@ -41,7 +42,7 @@ export const setup = () => userEvent.setup({ delay: null });
  * Renders the whole app (shell, route table, the real view, the demo transport) on `route`, as the browser would after
  * `#/route`, and waits until the shell and the view are there. A view is a lazy chunk: the first test of a file pays for it.
  */
-export async function renderApp({ route = "/chat", mode = "simple", scenario, api = new MockTransport() }: AppOptions = {}): Promise<RenderResult & { api: MockTransport; user: ReturnType<typeof setup> }> {
+export async function renderApp({ route = "/chat", mode = "simple", scenario, api = new MockTransport() }: AppOptions = {}): Promise<RenderResult & { api: Transport; user: ReturnType<typeof setup> }> {
   if (scenario && !applied.has(scenario)) {
     applyMockScenario(scenario);
     applied.add(scenario);

@@ -110,6 +110,25 @@ for (const size of SIZES) {
         await expectNoBlockingViolations(page, info);
       });
 
+      test("the workspace does not answer: the connection banner and the error state of the chat", async ({ page }, info) => {
+        await openApp(page, "/chat", { theme, scenario: "offline" });
+        await expect(page.getByText("Connessione al workspace persa")).toBeVisible();
+        await expect(page.getByRole("button", { name: "Riprova" }).first()).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+      });
+
+      test("a browser that is not paired: the pairing screen, and a wrong code", async ({ page }, info) => {
+        await openApp(page, "/", { theme, scenario: "unpaired" });
+        await expect(page.getByRole("heading", { name: "Accoppia questo dispositivo" })).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await page.getByRole("textbox", { name: "Codice di pairing" }).fill("000000");
+        await page.getByRole("button", { name: "Accoppia" }).click();
+        await expect(page.getByText(/codice non valido o scaduto/)).toBeVisible();
+        await expectNoBlockingViolations(page, info);
+        await expectNoPlaceholderLeaks(page);
+      });
+
       test("documents with a search result", async ({ page }, info) => {
         await openApp(page, "/documents", { theme, mode: "developer" });
         const search = page.getByRole("region", { name: "Cerca nei documenti" });

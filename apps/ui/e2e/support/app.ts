@@ -14,7 +14,7 @@ export interface OpenOptions {
    */
   mode?: "simple" | "developer";
   /** Starting state of the demo data (`?scenario=`, see src/shared/api/mock/scenario.ts). */
-  scenario?: "first-run" | "mas" | "long-chat";
+  scenario?: "first-run" | "mas" | "long-chat" | "offline" | "unpaired";
 }
 
 /** Path of a hash route without its query (`/models/discover?q=x` → `/models/discover`). */

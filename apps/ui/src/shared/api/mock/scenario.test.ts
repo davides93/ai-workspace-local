@@ -3,13 +3,15 @@ import { agents, catalog, models, runtimes, sessions } from "./fixtures";
 import { MockTransport } from "./index";
 import { grammarFor } from "../../ui/highlight/languages";
 import { LONG_CHAT_FIRST, LONG_CHAT_ID, LONG_CHAT_LAST, LONG_CHAT_NEEDLE, LONG_CHAT_TURNS, longChatMessages } from "./long-chat";
-import { applyMockScenario, applyMockUiMode, isMockScenario } from "./scenario";
+import { DEMO_PAIRING_CODE, applyMockScenario, applyMockUiMode, isMockScenario, transportForScenario } from "./scenario";
 
 describe("mock scenarios", () => {
   it("knows its names", () => {
     expect(isMockScenario("first-run")).toBe(true);
     expect(isMockScenario("mas")).toBe(true);
     expect(isMockScenario("long-chat")).toBe(true);
+    expect(isMockScenario("offline")).toBe(true);
+    expect(isMockScenario("unpaired")).toBe(true);
     expect(isMockScenario("nope")).toBe(false);
     expect(isMockScenario(null)).toBe(false);
   });
@@ -94,5 +96,36 @@ describe("mock agents", () => {
     expect(assistant?.tools).toContain("ask_user");
     expect(assistant?.tools).toContain("aiw_secret_request");
     expect(agents).toHaveLength(7);
+  });
+});
+
+describe("connection scenarios", () => {
+  it("the data scenarios leave the transport as it is", () => {
+    const demo = new MockTransport();
+    expect(transportForScenario(demo, null)).toBe(demo);
+    expect(transportForScenario(demo, "first-run")).toBe(demo);
+  });
+
+  it("offline: every request fails with a 503, and subscribing to a run (not a request) still works", async () => {
+    const api = transportForScenario(new MockTransport(), "offline");
+    await expect(api.system()).rejects.toMatchObject({ status: 503 });
+    await expect(api.models()).rejects.toMatchObject({ status: 503 });
+    await expect(api.sessions()).rejects.toMatchObject({ status: 503 });
+    expect(api.kind).toBe("mock");
+    expect(api.capabilities.demo).toBe(true);
+    expect(typeof api.subscribeRun("run_x", () => {})).toBe("function");
+  });
+
+  it("unpaired: every request fails with a 401 until the right code is given, a wrong or empty one is refused, and then it all works", async () => {
+    const api = transportForScenario(new MockTransport(), "unpaired");
+    expect(api.capabilities.pairing).toBe(true);
+    await expect(api.system()).rejects.toMatchObject({ status: 401 });
+    await expect(api.pair!("000000")).rejects.toMatchObject({ status: 400 });
+    await expect(api.pair!("")).rejects.toMatchObject({ status: 400 });
+    await expect(api.models()).rejects.toMatchObject({ status: 401 });
+    // The code may be typed with a space in the middle, as it is shown.
+    await api.pair!(`${DEMO_PAIRING_CODE.slice(0, 3)} ${DEMO_PAIRING_CODE.slice(3)}`);
+    expect((await api.system()).version).toBeTruthy();
+    expect(Array.isArray(await api.models())).toBe(true);
   });
 });
