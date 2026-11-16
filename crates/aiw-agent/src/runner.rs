@@ -1694,6 +1694,8 @@ fn reason_text(tool: &str, reason: &str, risk: Risk) -> String {
         Risk::Exec if management => {
             "L'Assistente vuole eseguire un'azione delicata sull'app (installare, eliminare, collegare un servizio o cambiare impostazioni di macchina)"
         }
+        // Not files: a draft that waits for the person's review, and that this tool cannot send.
+        Risk::Write if tool == "email_draft" => "L'agente vuole salvare la bozza di un'email (non la invia: la rivedi e la approvi tu)",
         Risk::Write => "L'agente vuole modificare dei file",
         Risk::Exec => "L'agente vuole eseguire un comando",
         Risk::Computer => "L'agente vuole usare mouse e tastiera",
@@ -1816,6 +1818,9 @@ mod reason_text_tests {
     #[test]
     fn every_other_tool_keeps_its_sentence() {
         assert_eq!(reason_text("write_file", "", Risk::Write), "L'agente vuole modificare dei file");
+        // A draft of an email is not a file, and the card says it is not sent.
+        let draft = reason_text("email_draft", "", Risk::Write);
+        assert!(draft.contains("bozza") && draft.contains("non la invia") && !draft.contains("file"), "{draft}");
         assert_eq!(reason_text("bash", "", Risk::Exec), "L'agente vuole eseguire un comando");
         assert_eq!(reason_text("computer", "", Risk::Computer), "L'agente vuole usare mouse e tastiera");
         assert_eq!(reason_text("web_fetch", "", Risk::Network), "L'agente vuole accedere alla rete");

@@ -184,6 +184,8 @@ async fn handle_event(engine: &Engine, ch: &Channel, tr: &Arc<dyn Transport>, ev
     if seen.contains(&key) {
         return;
     }
+    // The same key goes to the engine too: `seen` is rebuilt at every reconnection, the engine's list is not.
+    let key_for_engine = key.clone();
     seen.push_back(key);
     if seen.len() > 200 {
         seen.pop_front();
@@ -200,7 +202,18 @@ async fn handle_event(engine: &Engine, ch: &Channel, tr: &Arc<dyn Transport>, ev
         let thread = ev["thread_ts"].as_str().or_else(|| ev["ts"].as_str()).unwrap_or("");
         (format!("{channel}:{thread}"), json!({"thread_ts": thread}))
     };
-    let msg = Inbound { conv, senders: vec![user.to_string()], name: user.to_string(), text: body, files: vec![], reply };
+    // A direct message is a conversation with one person; a mention in a channel is answered to everyone there.
+    let msg = Inbound {
+        conv,
+        senders: vec![user.to_string()],
+        name: user.to_string(),
+        text: body,
+        files: vec![],
+        reply,
+        id: Some(key_for_engine),
+        answer: None,
+        direct: is_dm,
+    };
     engine.channel_inbound(&ch.id, tr.clone(), msg).await;
 }
 

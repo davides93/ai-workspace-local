@@ -3,6 +3,7 @@
 
 mod a2a;
 mod agui;
+mod agui_wire;
 mod anthropic;
 mod backup_api;
 mod extract;
@@ -63,8 +64,8 @@ fn ok<T>(v: T) -> ApiResult<T> {
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Engine,
-    /// AG-UI `threadId` -> session id, in memory only (see `agui`).
-    pub(crate) agui_threads: agui::Threads,
+    /// What the AG-UI endpoint keeps in memory: its lookups and the runs paused on an interrupt (see `agui`).
+    pub(crate) agui: agui::Threads,
 }
 
 /// What the authentication middleware decided about a request, for the handlers that need to know.
@@ -240,7 +241,7 @@ async fn auth(State(st): State<AppState>, mut req: Request, next: Next) -> Respo
 
 /// Builds the full API router. `ui_dir` serves the web UI (`apps/ui/dist`) when present.
 pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
-    let st = AppState { engine, agui_threads: Default::default() };
+    let st = AppState { engine, agui: Default::default() };
     let api = Router::new()
         .route("/api/system", get(system))
         .route("/api/kill", post(kill))
@@ -362,6 +363,13 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/channels/{id}/test", post(test_channel))
         .route("/api/channels/{id}/pair", post(pair_channel))
         .route("/api/channels/{id}/status", get(channel_status))
+        .route("/api/contexts", get(contexts).post(create_context))
+        .route("/api/contexts/{id}", patch(patch_context).delete(delete_context))
+        .route("/api/email-drafts", get(email_drafts).post(create_email_draft))
+        .route("/api/email-drafts/{id}", get(email_draft).patch(patch_email_draft).delete(delete_email_draft))
+        .route("/api/email-drafts/{id}/send", post(send_email_draft))
+        .route("/api/email-drafts/{id}/reject", post(reject_email_draft))
+        .route("/api/email-drafts/{id}/cancel", post(cancel_email_draft))
         .route("/api/connectors/mail/accounts", get(mail_accounts).put(put_mail_accounts))
         .route("/api/connectors/mail/test", post(test_mail_account))
         .route("/api/proactive/status", get(proactive_status))
@@ -979,6 +987,56 @@ async fn pair_channel(State(s): State<AppState>, Path(id): Path<String>) -> ApiR
 }
 async fn channel_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<ChannelStatus> {
     ok(s.engine.channel_status(&id)?)
+}
+// ---- shared contexts: one conversation across several channels (only the owner links accounts)
+async fn contexts(State(s): State<AppState>) -> ApiResult<Vec<ContextInfo>> {
+    ok(s.engine.contexts()?)
+}
+async fn create_context(State(s): State<AppState>, Json(body): Json<ContextCreate>) -> ApiResult<ContextInfo> {
+    ok(s.engine.context_create(body)?)
+}
+async fn patch_context(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<ContextPatch>) -> ApiResult<ContextInfo> {
+    ok(s.engine.context_patch(&id, body)?)
+}
+async fn delete_context(State(s): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    s.engine.context_delete(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+// ---- email drafts: reviewed by the owner, sent only with the hash of the content they saw
+#[derive(Deserialize)]
+struct DraftsQuery {
+    /// draft | sending | sent | failed | uncertain | rejected | cancelled; absent = all.
+    status: Option<String>,
+}
+async fn email_drafts(State(s): State<AppState>, Query(q): Query<DraftsQuery>) -> ApiResult<Vec<EmailDraft>> {
+    ok(s.engine.email_drafts(q.status.as_deref())?)
+}
+async fn email_draft(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<EmailDraft> {
+    ok(s.engine.email_draft(&id)?)
+}
+async fn create_email_draft(State(s): State<AppState>, Json(body): Json<EmailDraftCreate>) -> ApiResult<EmailDraft> {
+    ok(s.engine.email_draft_create(body)?)
+}
+async fn patch_email_draft(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<EmailDraftPatch>) -> ApiResult<EmailDraft> {
+    ok(s.engine.email_draft_patch(&id, body)?)
+}
+async fn delete_email_draft(State(s): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    s.engine.email_draft_delete(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+/// The owner's approval: `{"approved_hash": "<the content_hash they were shown>"}`. A draft changed since is a 409.
+async fn send_email_draft(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<EmailDraftSend>) -> ApiResult<EmailDraft> {
+    ok(s.engine.email_draft_send(&id, body).await?)
+}
+async fn reject_email_draft(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<EmailDraftReject>>,
+) -> ApiResult<EmailDraft> {
+    ok(s.engine.email_draft_reject(&id, body.and_then(|b| b.0.reason).as_deref())?)
+}
+async fn cancel_email_draft(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<EmailDraft> {
+    ok(s.engine.email_draft_cancel(&id)?)
 }
 async fn mail_accounts(State(s): State<AppState>) -> ApiResult<Vec<MailAccount>> {
     ok(s.engine.mail_accounts())

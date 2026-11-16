@@ -11,9 +11,9 @@ import type {
   AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest,
   ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, SecretsAtRest, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, SessionImage, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState,
-  ChannelCreate, ChannelPatch, FoldersAdded, FoldersInfo, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo, BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect,
-  BackgroundTask, TaskCreate, TaskQuery, TaskResume,
+  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState, ChannelCreate, ChannelPatch, FoldersAdded, FoldersInfo, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo,
+  BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect, BackgroundTask, TaskCreate, TaskQuery, TaskResume, ContextCreate, ContextPatch,
+  DraftStatus, EmailDraftCreate, EmailDraftPatch, EmailDraftSend,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, maskConfigSecrets, mcp, models, nid, now, policyRules, profiles,
@@ -23,6 +23,8 @@ import { demoLesson, lessonProblem, lessons } from "./lessons";
 import * as mem from "./memories";
 import * as kb from "./kb";
 import * as chan from "./channels";
+import * as ctxs from "./contexts";
+import * as drafts from "./drafts";
 import { proactiveState, PROPOSAL_KINDS, PROPOSAL_STATUSES, proposals } from "./proposals";
 import { TaskStore } from "./tasks";
 import { teacherTurn } from "./teacher";
@@ -150,7 +152,9 @@ export class MockTransport implements Transport {
   private providerAuth = new Map<string, { configured: boolean; endpoint?: string }>();
 
   /** What the demo banner says: a string, or a function when the text must follow the language. */
-  constructor(private readonly noticeSource?: string | (() => string)) {}
+  constructor(private readonly noticeSource?: string | (() => string)) {
+    drafts.installDemoHooks();
+  }
   get notice(): string | undefined {
     return typeof this.noticeSource === "function" ? this.noticeSource() : this.noticeSource;
   }
@@ -703,6 +707,17 @@ export class MockTransport implements Transport {
   async testChannel(id: string) { return chan.testChannel(id); }
   async pairChannel(id: string) { return chan.pairChannel(id); }
   async channelStatus(id: string) { return chan.channelStatus(id); }
+  async contexts() { return ctxs.listContexts(); }
+  async createContext(body: ContextCreate) { return ctxs.createContext(body); }
+  async updateContext(id: string, patch: ContextPatch) { return ctxs.updateContext(id, patch); }
+  async deleteContext(id: string) { ctxs.deleteContext(id); }
+  async emailDrafts(status?: DraftStatus) { return drafts.listDrafts(status); }
+  async createEmailDraft(body: EmailDraftCreate) { return drafts.createDraft(body); }
+  async updateEmailDraft(id: string, patch: EmailDraftPatch) { return drafts.updateDraft(id, patch); }
+  async deleteEmailDraft(id: string) { drafts.deleteDraft(id); }
+  async sendEmailDraft(id: string, body: EmailDraftSend) { return drafts.sendDraft(id, body); }
+  async rejectEmailDraft(id: string, reason?: string) { return drafts.rejectDraft(id, reason); }
+  async cancelEmailDraft(id: string) { return drafts.cancelDraft(id); }
   async mailAccounts() { return chan.listMaskedMailAccounts(); }
   async setMailAccounts(list: MailAccount[]) { return chan.setMailAccounts(list); }
   async testMailAccount(a: MailAccount) {

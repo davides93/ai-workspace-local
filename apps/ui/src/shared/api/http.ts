@@ -4,7 +4,8 @@ import type {
   AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest,
   AttachmentData, AttachmentUpload, RoutingStats, TeamDef, ApprovalRequest, AuditEntry, CatalogModel, ChatMessage, ConfigView, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision,
   Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary,
-  BackgroundTask, Proposal, ProposalQuery, TaskCreate, TaskQuery, TaskResume, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, SecretsAtRest,
+  BackgroundTask, Proposal, ProposalQuery, TaskCreate, TaskQuery, TaskResume, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, SecretsAtRest, ContextCreate, ContextInfo,
+  ContextPatch, DraftStatus, EmailDraft, EmailDraftCreate, EmailDraftPatch, EmailDraftSend,
   DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, FoldersInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -332,6 +333,17 @@ export class HttpTransport implements Transport {
   testChannel = (id: string) => this.req<ChannelTestResult>("POST", `/channels/${enc(id)}/test`, {});
   pairChannel = (id: string) => this.req<ChannelPairing>("POST", `/channels/${enc(id)}/pair`, {});
   channelStatus = (id: string) => this.req<ChannelStatus>("GET", `/channels/${enc(id)}/status`);
+  contexts = () => this.req<ContextInfo[]>("GET", "/contexts");
+  createContext = (body: ContextCreate) => this.req<ContextInfo>("POST", "/contexts", body);
+  updateContext = (id: string, patch: ContextPatch) => this.req<ContextInfo>("PATCH", `/contexts/${enc(id)}`, patch);
+  deleteContext = (id: string) => this.req<void>("DELETE", `/contexts/${enc(id)}`);
+  emailDrafts = (status?: DraftStatus) => this.req<EmailDraft[]>("GET", `/email-drafts${status ? `?status=${enc(status)}` : ""}`);
+  createEmailDraft = (body: EmailDraftCreate) => this.req<EmailDraft>("POST", "/email-drafts", body);
+  updateEmailDraft = (id: string, patch: EmailDraftPatch) => this.req<EmailDraft>("PATCH", `/email-drafts/${enc(id)}`, patch);
+  deleteEmailDraft = (id: string) => this.req<void>("DELETE", `/email-drafts/${enc(id)}`);
+  sendEmailDraft = (id: string, body: EmailDraftSend) => this.req<EmailDraft>("POST", `/email-drafts/${enc(id)}/send`, body);
+  rejectEmailDraft = (id: string, reason?: string) => this.req<EmailDraft>("POST", `/email-drafts/${enc(id)}/reject`, reason ? { reason } : {});
+  cancelEmailDraft = (id: string) => this.req<EmailDraft>("POST", `/email-drafts/${enc(id)}/cancel`, {});
   mailAccounts = () => this.req<MailAccount[]>("GET", "/connectors/mail/accounts");
   setMailAccounts = (accounts: MailAccount[]) => this.req<MailAccount[]>("PUT", "/connectors/mail/accounts", accounts);
   testMailAccount = (account: MailAccount) => this.req<MailAccountTest>("POST", "/connectors/mail/test", account);

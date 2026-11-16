@@ -525,7 +525,7 @@ impl Engine {
             note(t, if first { "Partito.".to_string() } else { format!("Ripreso (passo {segment}).") });
             Ok((text, seed))
         })?;
-        match self.start_run_inner(&t.session_id, text, None, 0, None, vec![], None, Some(seed.clone())).await {
+        match self.start_run_inner(&t.session_id, text, None, 0, None, vec![], None, None, Some(seed.clone())).await {
             Ok(run_id) => {
                 let (t, ()) = self.task_mut(id, |t| {
                     // A run that was over before this ran (a task that finishes at once) leaves the record as it is.

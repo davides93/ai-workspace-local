@@ -132,6 +132,17 @@ const RULES: &[(&str, &str, Required)] = &[
     // Channels and mail: configuration of this computer's accounts.
     ("*", "/api/channels", FULL),
     ("*", "/api/channels/**", FULL),
+    // Linking accounts into one conversation is the owner's decision.
+    ("*", "/api/contexts", FULL),
+    ("*", "/api/contexts/**", FULL),
+    // Email drafts: a paired device may look at them and refuse or withdraw one (both only stop an email); writing,
+    // changing, deleting and above all sending one is the owner's.
+    ("GET", "/api/email-drafts", DEVICE),
+    ("GET", "/api/email-drafts/*", DEVICE),
+    ("POST", "/api/email-drafts/*/reject", DEVICE),
+    ("POST", "/api/email-drafts/*/cancel", DEVICE),
+    ("*", "/api/email-drafts", FULL),
+    ("*", "/api/email-drafts/**", FULL),
     ("*", "/api/connectors/**", FULL),
     // The proactive assistant.
     ("*", "/api/proactive/**", DEVICE),
