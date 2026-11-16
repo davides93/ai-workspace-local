@@ -110,6 +110,19 @@ Vedi `docs/browser-live.md`. In sintesi:
 - **Chrome già aperto (`browser.attach_url`).** Solo su questo computer (l'indirizzo e la risposta di Chrome devono essere loopback), vietata al workspace e agli strumenti di gestione. L'agente apre schede sue e non vede né intercetta quelle dell'utente, ma **agisce con i cookie di quel profilo**; i download restano a Chrome (non passano dal workspace né dai suoi limiti); alla chiusura non chiude Chrome. Da Chrome 136 la porta di debug è ignorata con il profilo predefinito: serve un profilo dedicato.
 - **Download durante la presa di controllo**: non vengono tenuti.
 
+## File che il motore legge per conto proprio: `AGENTS.md` e skill del workspace
+
+La sandbox protegge i comandi e i tool di file di un agente, non il motore. Il motore legge da sé `AGENTS.md` del workspace condiviso e i `SKILL.md` di `<workspace>/.aiw/skills` e li mette nel prompt di sistema. Prima un collegamento fatto da un agente in una shell che può scrivere il workspace (`ln -s <dati>/token AGENTS.md`), o portato da un repository clonato (`AGENTS.md -> ~/.ssh/id_ed25519`), faceva arrivare nel prompt del messaggio successivo **qualsiasi file che il motore sa leggere**, token del proprietario compreso. Ora (`aiw_core::confined`):
+
+- il file si **apre prima**, senza attendere (una pipe chiamata `AGENTS.md` non blocca il run), e deve essere un file vero, non una cartella;
+- il percorso, con tutti i collegamenti risolti, deve restare **dentro il workspace** e **fuori dai luoghi nascosti** (la cartella dei dati e `sandbox.deny_read`, come per i tool di file: vale anche quando il workspace contiene la cartella dei dati, per esempio se è la tua home e i dati sono in `~/.aiw`);
+- il file aperto deve essere quello a cui il percorso porta adesso (stesso dispositivo e stesso inode): un collegamento scambiato fra il controllo e la lettura non entra nel prompt;
+- un file con **più nomi** (collegamento rigido) passa solo se tutti i suoi nomi sono nella stessa cartella: `ln CLAUDE.md AGENTS.md` va bene, `ln <dati>/token AGENTS.md` no (ha un nome altrove).
+
+Un collegamento che resta dentro il workspace (`AGENTS.md -> CLAUDE.md`, `-> docs/agenti.md`) si legge come prima. Per le skill del workspace la cartella delle skill deve a sua volta restare nel workspace, e `SKILL.md` e la cartella di ogni skill dentro la cartella da cui la skill è stata scoperta; `skill` ricontrolla quando carica la skill (compreso l'elenco dei file). Una skill rifiutata non nasconde una skill dell'utente con lo stesso nome.
+
+**Non cambia:** `AGENTS.md` globale e le skill in `<dati>/skills` (le ha messe l'utente, anche come collegamenti, e nessun agente scrive nella cartella dei dati); chi spegne la sandbox di un agente gli lascia comunque leggere ciò che l'account legge (è ciò che «spenta» significa). **Limiti:** un file in un workspace molto largo (la tua home) è «nel workspace» anche se è un tuo file personale che non è tra i luoghi nascosti; un collegamento rigido fra due file di cartelle diverse del workspace è rifiutato; **su Windows** il percorso si controlla dopo l'apertura (risolto e confrontato col workspace) ma non c'è il confronto di dispositivo e inode né il conteggio dei nomi: non provato; con bubblewrap su Linux la parte di Unix è provata solo su macOS.
+
 ## Limiti noti
 
 Elenco completo e aggiornato in [docs/STATUS.md](docs/STATUS.md) §2.9. In sintesi:
