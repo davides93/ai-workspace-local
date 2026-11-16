@@ -73,6 +73,33 @@ pub struct ShellSandbox {
     pub env_allow: Vec<String>,
 }
 
+/// How a tool may use the credentials of the agent that is running (issue #71). The engine implements it, bound to one agent:
+/// the tool names a credential, the engine adds the header, and neither the model nor the tool ever holds the value apart from
+/// the moment the request is sent. Everything is read at the moment of the call, so removing a credential (or the agent)
+/// stops its use at once, also for a run that is in progress.
+pub trait CredentialBroker: Send + Sync {
+    /// The credentials of the agent with the hosts each one may be sent to: what the prompt can say. Never a value.
+    fn describe(&self) -> Vec<(String, Vec<String>)>;
+    /// The header credential `name` adds to a request to `url`, or why it may not: it is not a credential of this agent (any
+    /// more), it has no readable value, the host is outside its scope, the address is not https. `insecure_loopback_ok` lets
+    /// plain http through to a loopback address (the tests of a stand-in server; a build never sets it).
+    fn authorize(&self, name: &str, url: &reqwest::Url, insecure_loopback_ok: bool) -> Result<CredentialUse>;
+}
+
+/// A credential ready to be sent: the header it goes in, the full header value, and the bare secret (so that the tool can
+/// strip it from what comes back).
+pub struct CredentialUse {
+    pub header: String,
+    pub value: String,
+    pub secret: String,
+}
+
+impl std::fmt::Debug for CredentialUse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialUse").field("header", &self.header).finish_non_exhaustive()
+    }
+}
+
 /// Execution context handed to tools.
 #[derive(Clone)]
 pub struct ToolContext {
@@ -107,6 +134,11 @@ pub struct ToolContext {
     pub training_jobs: Arc<tokio::sync::Mutex<Vec<String>>>,
     /// What an MCP server may ask of this run while it serves a tool call (sampling, questions to the person).
     pub mcp_run: Option<Arc<dyn mcp::RunMcp>>,
+    /// The credentials of the agent that is running, for the tools that send one (`web_fetch_auth`). Only the engine sets it.
+    pub credentials: Option<Arc<dyn CredentialBroker>>,
+    /// The workspace is a folder that must exist for the whole run (the folder of an agent apart): when it is gone, because the
+    /// agent was removed, every path is refused instead of the folder being created again by a write.
+    pub root_must_exist: bool,
 }
 
 impl ToolContext {
@@ -127,6 +159,8 @@ impl ToolContext {
             seen_files: Arc::default(),
             training_jobs: Arc::default(),
             mcp_run: None,
+            credentials: None,
+            root_must_exist: false,
         }
     }
 
@@ -141,6 +175,9 @@ impl ToolContext {
     pub fn resolve(&self, p: &str, write: bool) -> Result<PathBuf> {
         if p.trim().is_empty() {
             return Err(Error::Invalid("percorso vuoto".into()));
+        }
+        if self.root_must_exist && self.sandbox != SandboxMode::Off && !self.workspace_root.is_dir() {
+            return Err(Error::Denied("la cartella di lavoro di questo agente non esiste più (l'agente è stato rimosso)".into()));
         }
         let expanded = aiw_core::paths::expand_home(p.trim());
         let abs = if expanded.is_absolute() { expanded } else { self.workspace_root.join(expanded) };
@@ -453,6 +490,8 @@ pub fn register_builtins(
     }
     reg.register(Arc::new(shell::ShellTool));
     reg.register(Arc::new(web::WebFetchTool));
+    // The same page fetch with a credential of the agent added by the engine; only an agent that lists it gets it.
+    reg.register(Arc::new(web::WebFetchAuthTool));
     // Web search; listed only while the settings do not switch it off.
     reg.register(Arc::new(search::WebSearchTool::new(search)));
     for t in browser::tools(browser) {

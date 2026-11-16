@@ -424,6 +424,37 @@ describe("HttpTransport channels and mail accounts", () => {
     expect(JSON.parse(calls[8].body!)).toEqual([account]);
   });
 
+  it("calls the background task paths with the bodies of the contract", async () => {
+    const calls: { method: string; url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "GET", url: url.replace("http://h/api", ""), body: init.body as string | undefined });
+      return new Response("[]", { status: 200 });
+    });
+    const t = new HttpTransport("http://h", "tok");
+    await t.tasks();
+    await t.tasks({ status: "paused" });
+    await t.createTask({ instruction: "Riordina", limits: { max_seconds: 600 } });
+    await t.task("tsk/1");
+    await t.pauseTask("tsk/1");
+    await t.resumeTask("tsk/1");
+    await t.resumeTask("tsk/1", { force: true });
+    await t.resumeTask("tsk/1", { extend: { max_seconds: 600 } });
+    await t.sendTaskInstruction("tsk/1", "Guarda anche Documenti");
+    await t.sendTaskInstruction("tsk/1", "Detto a voce", "voice");
+    await t.cancelTask("tsk/1");
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      "GET /tasks", "GET /tasks?status=paused", "POST /tasks", "GET /tasks/tsk%2F1", "POST /tasks/tsk%2F1/pause",
+      "POST /tasks/tsk%2F1/resume", "POST /tasks/tsk%2F1/resume", "POST /tasks/tsk%2F1/resume", "POST /tasks/tsk%2F1/instructions",
+      "POST /tasks/tsk%2F1/instructions", "POST /tasks/tsk%2F1/cancel",
+    ]);
+    expect(JSON.parse(calls[2].body!)).toEqual({ instruction: "Riordina", limits: { max_seconds: 600 } });
+    expect(JSON.parse(calls[5].body!)).toEqual({});
+    expect(JSON.parse(calls[6].body!)).toEqual({ force: true });
+    expect(JSON.parse(calls[7].body!)).toEqual({ extend: { max_seconds: 600 } });
+    expect(JSON.parse(calls[8].body!)).toEqual({ text: "Guarda anche Documenti", source: "user" });
+    expect(JSON.parse(calls[9].body!)).toEqual({ text: "Detto a voce", source: "voice" });
+  });
+
   it("speaks through POST /voice/speak with a JSON body", async () => {
     const calls: { method: string; url: string; body?: string }[] = [];
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {

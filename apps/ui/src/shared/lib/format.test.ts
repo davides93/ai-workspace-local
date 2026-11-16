@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { formatBytes, formatCompact, formatContext, formatDuration, formatMb, formatNumber, formatParams, formatPercent, formatSpeed, relTime } from "./format";
+import { afterEach, describe, expect, it } from "vitest";
+import { forceLocale } from "../i18n/locale";
+import { formatBytes, formatFixed, formatCompact, formatContext, formatDuration, formatMb, formatNumber, formatParams, formatPercent, formatSpeed, relTime } from "./format";
 
 const GB = 1024 ** 3;
 
@@ -74,5 +75,17 @@ describe("relTime", () => {
   });
   it("tolerates invalid input", () => {
     expect(relTime("not a date", now)).toBe("—");
+  });
+});
+
+describe("formatFixed", () => {
+  afterEach(() => forceLocale("it"));
+  it("keeps the decimals and uses the separator of the active language (scores were once always written with a comma)", () => {
+    expect(formatFixed(0.85)).toBe("0,85");
+    expect(formatFixed(1)).toBe("1,00");
+    forceLocale("en");
+    expect(formatFixed(0.85)).toBe("0.85");
+    expect(formatFixed(1)).toBe("1.00");
+    expect(formatFixed(-0.5, 1)).toBe("-0.5");
   });
 });

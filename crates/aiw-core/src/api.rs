@@ -785,6 +785,86 @@ pub struct AgentProfile {
     /// `tools` + `delegate_tools` of the parent. Empty: only `tools` count, as always.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delegate_tools: Vec<String>,
+    /// How much this agent is kept apart from the others (a folder of its own, no shell network). Absent: the agent
+    /// works in the shared workspace, as every agent always did. On save an absent value keeps the stored one, so an
+    /// editor that does not know the field cannot switch the isolation off by saving; to switch it off the owner sends
+    /// the object with both flags `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<AgentIsolation>,
+}
+
+impl AgentProfile {
+    /// The agent works in a folder of its own that no other agent can read or write.
+    pub fn has_dedicated_workspace(&self) -> bool {
+        self.isolation.as_ref().is_some_and(|i| i.dedicated_workspace)
+    }
+}
+
+/// What keeps an agent apart from the others (issue #71). Everything here can only make the agent more closed than
+/// the global settings: nothing in it opens a door.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentIsolation {
+    /// The agent works in a folder of its own, inside the data folder of the app (which no agent can see). No other
+    /// agent reads or writes it, and this agent sees neither the shared workspace nor the folders the person granted.
+    /// Needs a sandbox that is not `off` (without a sandbox nothing is kept apart).
+    #[serde(default)]
+    pub dedicated_workspace: bool,
+    /// The commands of this agent never get the network, whatever `sandbox.shell_network` says.
+    #[serde(default)]
+    pub close_shell_network: bool,
+}
+
+impl AgentIsolation {
+    /// At least one flag is on.
+    pub fn is_active(&self) -> bool {
+        self.dedicated_workspace || self.close_shell_network
+    }
+}
+
+/// A credential of one agent, as the API lists it: what identifies it and where it may be used, never the value.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentCredentialInfo {
+    /// What the agent calls it (`github`): the model names it in `web_fetch_auth`, never sees its value.
+    pub name: String,
+    /// The only hosts it is sent to (each also covers its subdomains).
+    pub hosts: Vec<String>,
+    /// The request header it travels in.
+    pub header: String,
+    /// What goes before the value in the header (`Bearer `).
+    pub prefix: String,
+    /// A value is stored and can be read back by this computer (false: it is empty, or sealed with a key that is not
+    /// available now).
+    pub set: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// `PUT /api/agents/{id}/credentials/{name}`: what the owner sends to create or change a credential.
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentCredentialInput {
+    /// The hosts the credential may be sent to: at least one, bare names (`api.github.com`), no scheme, port or path.
+    pub hosts: Vec<String>,
+    /// Header name; absent: `Authorization` (or the one stored).
+    #[serde(default)]
+    pub header: Option<String>,
+    /// Text before the value; absent: `Bearer ` for `Authorization`, nothing for another header (or the one stored).
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// The secret. Required to create; absent when changing a credential that exists keeps the stored value. Never returned.
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+impl std::fmt::Debug for AgentCredentialInput {
+    // Never the value: a `{:?}` in a log or a failed assertion must not print it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentCredentialInput")
+            .field("hosts", &self.hosts)
+            .field("header", &self.header)
+            .field("prefix", &self.prefix)
+            .field("value", &self.value.as_ref().map(|_| "…"))
+            .finish()
+    }
 }
 
 /// The four jobs a model can have inside one agent run.
@@ -2592,6 +2672,169 @@ pub struct ProactiveStatus {
     /// Power state when the platform reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_power: Option<bool>,
+}
+
+// ---------------------------------------------------------------- background tasks
+
+/// `BackgroundTask::status`. `queued` is the moment between the creation of a task and its first start.
+pub const TASK_STATUSES: [&str; 6] = ["queued", "running", "paused", "succeeded", "failed", "cancelled"];
+
+/// Why a task is paused (`BackgroundTask::pause_reason`): the person (`user`), one of the rules of the proactive
+/// assistant (`quiet_hours`, `battery`, `daily_budget`), the budget of the task itself
+/// (`task_budget`), the kill switch (`kill_switch`), a restart of the app (`restart`) or a run that could not start (`error`).
+pub const TASK_PAUSE_REASONS: [&str; 8] =
+    ["user", "quiet_hours", "battery", "daily_budget", "task_budget", "kill_switch", "restart", "error"];
+
+/// What the person told a task to do while it was going on. It reaches the agent at its next step.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskInstruction {
+    pub id: String,
+    pub text: String,
+    /// user | voice (typed, or dictated and transcribed before it was sent).
+    pub source: String,
+    pub created_at: String,
+    /// pending | delivered | blocked (a hook refused it).
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_at: Option<String>,
+    /// The segment that was running when it was delivered (internal: an instruction delivered to a segment that a restart
+    /// cut short goes back to `pending`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_in: Option<u32>,
+    /// Why it was blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One line of the history of a task (it survives a restart; the events of the runs do not).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskNote {
+    pub at: String,
+    pub text: String,
+}
+
+/// What a task has done so far.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskProgress {
+    /// Model calls over every segment.
+    pub turns: u32,
+    pub tokens: u64,
+    /// Time spent running, summed over the segments.
+    pub seconds: u64,
+    /// The tool the agent called last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// The last thing the agent said, shortened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+/// A piece of work the assistant does while the person is elsewhere: what the approval of a proposal starts, or what the
+/// person asks to be done in the background. It is a thin record on top of the runs of one session: pausing stops the
+/// agent between two steps, resuming starts a new run in the same session, and what the agent had done is in the session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundTask {
+    pub id: String,
+    pub title: String,
+    /// What the task has to do (the instruction that was approved, possibly edited).
+    pub instruction: String,
+    pub agent_id: String,
+    pub session_id: String,
+    /// proposal | user
+    pub origin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
+    /// queued | running | paused | succeeded | failed | cancelled
+    pub status: String,
+    /// Why it is paused (see [`TASK_PAUSE_REASONS`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_reason: Option<String>,
+    /// The same, in words for the person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_text: Option<String>,
+    /// It goes on by itself when what stopped it ends (quiet hours, battery, the day's budget).
+    #[serde(default)]
+    pub auto_resume: bool,
+    /// A stop was asked for and the task is finishing its current step.
+    #[serde(default)]
+    pub stopping: bool,
+    /// The person resumed it «anyway»: quiet hours, the battery and the day's budget do not stop it until it pauses again.
+    #[serde(default)]
+    pub forced: bool,
+    /// Set when the task is read (not stored): the confirmation of the agent it is waiting for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_approval: Option<ApprovalRequest>,
+    /// Runs started so far (a task is a chain of runs in one session).
+    pub segments: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_run_id: Option<String>,
+    #[serde(default)]
+    pub run_ids: Vec<String>,
+    /// What the whole task may use (all the segments together); a missing field is no limit.
+    #[serde(default)]
+    pub limits: BudgetLimits,
+    #[serde(default)]
+    pub progress: TaskProgress,
+    #[serde(default)]
+    pub instructions: Vec<TaskInstruction>,
+    #[serde(default)]
+    pub notes: Vec<TaskNote>,
+    /// The agent's last answer, when the task ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// When the running segment started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_started_at: Option<String>,
+    /// Milliseconds the running segment spent waiting for the person's confirmations (internal: waiting is not working, so it
+    /// counts neither against the limits of the task nor against the day's time).
+    #[serde(default)]
+    pub segment_wait_ms: u64,
+    /// Seconds of the running segment already added to the day's time (internal: added at every turn, so that the day's
+    /// time never counts a wait nor a step that has not ended).
+    #[serde(default)]
+    pub segment_billed_s: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+}
+
+/// Body of `POST /api/tasks`: a task the person asks for directly (the approval of a proposal makes one too).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskStart {
+    pub instruction: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Defaults to `proactive.agent`.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Limits of the whole task; what is missing comes from the agent and the `agents.budget.*` settings.
+    #[serde(default)]
+    pub limits: Option<BudgetLimits>,
+}
+
+/// Body of `POST /api/tasks/{id}/instructions`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskInstructionNew {
+    pub text: String,
+    /// user (default) | voice
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// Body of `POST /api/tasks/{id}/resume`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskResume {
+    /// Go on even in quiet hours, on battery or with the day's time used up.
+    #[serde(default)]
+    pub force: bool,
+    /// More room for a task that used up its own limits (added to them).
+    #[serde(default)]
+    pub extend: Option<BudgetLimits>,
 }
 
 // ---------------------------------------------------------------- channels (Telegram, Slack, email)

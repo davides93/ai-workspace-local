@@ -31,6 +31,8 @@ interface Props {
   ratePending?: boolean;
   onRate?: (messageId: string, rating: 1 | -1, note?: string) => void;
   onClear?: (messageId: string) => void;
+  /** Far from the end when the conversation opened: its text is not laid out until it comes near the screen (chat.css). */
+  cold?: boolean;
 }
 
 const noop = () => {};
@@ -41,7 +43,7 @@ const contextText = (ctx: Record<string, unknown>) => Object.entries(ctx).map(([
  * One row of the conversation. Memoized: the reducer keeps the identity of rows that did not
  * change, so while one message streams every other row is skipped.
  */
-export const ItemView = memo(function ItemView({ it, sessionId, onRespond, onAction, busy, respondingId, rateable, rating, ratePending, onRate, onClear }: Props) {
+export const ItemView = memo(function ItemView({ it, sessionId, onRespond, onAction, busy, respondingId, rateable, rating, ratePending, onRate, onClear, cold }: Props) {
   switch (it.kind) {
     case "surface":
       return <div className="ws-msg ws-assistant"><A2uiSurface surface={it.surface} onAction={onAction} disabled={busy} /></div>;
@@ -64,7 +66,7 @@ export const ItemView = memo(function ItemView({ it, sessionId, onRespond, onAct
     case "text":
       return (
         <div className="ws-msg ws-assistant">
-          <div className="ws-bubble"><Markdown text={it.text} streaming={it.streaming} /></div>
+          <div className="ws-bubble" data-cold={cold || undefined}><Markdown text={it.text} streaming={it.streaming} /></div>
           {!it.streaming && it.text && (
             <MessageActions
               messageId={it.id} text={it.text} rateable={!!rateable && !!onRate && !!onClear} rating={rating} pending={ratePending}

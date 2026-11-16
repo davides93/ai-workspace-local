@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { Link } from "../../../app/router";
 import { Button, DataTable, DecisionDialog, EmptyState, Icon, KeyValue, Led, Panel, Pill, type Column } from "../../../shared/ui";
-import { formatDateTime } from "../../../shared/lib/format";
+import { formatDateTime, formatFixed } from "../../../shared/lib/format";
 import type { PromptOptimization } from "../../../shared/api/types";
 import { useApplyOptimization } from "../api";
 import { pct } from "../model/evals";
 import { canApply, defaultVariant, diffLineKind, isOptimizing, optRows, verdict, type OptRow } from "../model/optimizations";
 
 import { t, t as tr } from "../../../shared/i18n";
-const score = (n: number) => n.toFixed(2).replace(".", ",");
-const signed = (n: number) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toFixed(2).replace(".", ",")}`;
+const score = (n: number) => formatFixed(n, 2);
+const signed = (n: number) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${formatFixed(Math.abs(n), 2)}`;
 
 function Diff({ text }: { text: string }) {
   if (!text) return <p className="faint text-sm">{t("evals.il_prompt_e_uguale_a")}</p>;

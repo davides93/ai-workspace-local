@@ -25,6 +25,11 @@ export function formatNumber(n: number, digits = 1): string {
   return nf({ maximumFractionDigits: digits }).format(n);
 }
 
+/** Number with exactly `digits` decimals, with the separator of the active language ("0,85" in Italian, "0.85" in English). */
+export function formatFixed(n: number, digits = 2): string {
+  return nf({ minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n);
+}
+
 /** Compact count ("1,5K", "2,3 Mln"). */
 export function formatCompact(n: number): string {
   return nf({ notation: "compact", maximumFractionDigits: 1 }).format(n);

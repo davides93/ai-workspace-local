@@ -76,3 +76,23 @@ segmented control, tabelle dati con numeri tabulari.
 Focus visibile (`:focus-visible` in ambra), `aria-current` su navigazione e sessioni, ruoli
 `dialog`/`alert`/`meter`, `prefers-reduced-motion` rispettato, contrasto verificato in entrambi i
 temi, target di almeno 32 px.
+
+## 7. Catture e mockup
+
+Le catture di [`screenshots/`](screenshots) sono prese dal mockup (la UI vera contro il trasporto demo) con `npm run shots:design` in
+`apps/ui`, dopo `npm run build:mockup`: stessi formati e pagine a ogni giro, orologio fisso, font inclusi. `-- --mockup` aggiorna
+anche [`mockup/index.html`](mockup/index.html). Gli stati che la demo non raggiunge da sola (connessione persa, accoppiamento,
+conversazione lunga, primo avvio) sono gli scenari `?scenario=` descritti in [UI-ARCHITECTURE](UI-ARCHITECTURE.md#scenari-della-demo).
+
+| File | Mostra |
+|---|---|
+| `chat-conferma.png` | Sviluppatore: la shell attende il consenso (è l'immagine del README) |
+| `chat-completata.png` | Sviluppatore: un run finito con la sua tool card e il pannello del run |
+| `chat-semplice.png`, `chat-scuro.png` | Modalità semplice: elenco delle chat e conversazione, tema chiaro e scuro |
+| `mobile-chat.png` | Modalità semplice su telefono (390 px) |
+| `chat-codice.png` | Blocchi di codice colorati per lingua in una conversazione lunga (scenario `long-chat`) |
+| `modelli.png`, `runtime.png`, `impostazioni.png` | Sviluppatore: modelli che girano qui, runtime, impostazioni a strati |
+| `prima-accensione.png` | Nuova installazione (scenario `first-run`) |
+| `connessione-persa.png` | Il workspace non risponde (scenario `offline`) |
+| `accoppiamento.png` | Un browser non ancora accoppiato, su telefono (scenario `unpaired`) |
+

@@ -31,7 +31,7 @@ export function EndpointCard({ endpoint: e, lang, onLang, needsToken }: {
           tabs={e.snippets.map((s) => ({ id: s.lang, label: s.label }))}
         />
         <TabPanel idPrefix={prefix} id={active.lang}>
-          <CodeBlock title={active.label} code={active.code} />
+          <CodeBlock title={active.label} code={active.code} lang={active.lang} />
         </TabPanel>
       </div>
     </Panel>

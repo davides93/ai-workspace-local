@@ -26,6 +26,35 @@ use std::sync::{Arc, Mutex};
 pub const MAX_DEPTH: u32 = 2;
 const MAX_TOOL_OUTPUT: usize = 24_000;
 
+/// What the host answers at a turn boundary (see [`RunHost::checkpoint`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Checkpoint {
+    /// Stop the run here, cleanly: the reason goes to the events (`aiw.stopped`) and the run ends as a finished one,
+    /// with what it had produced so far.
+    pub stop: Option<String>,
+    /// What the person said while the run was going on: each text goes to the model as a user message.
+    pub instructions: Vec<String>,
+}
+
+/// How a run that did not fail ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RunEnd {
+    /// The agent gave its answer.
+    #[default]
+    Finished,
+    /// The agent used the turns it was allowed (`max_turns`) and may have more to do.
+    TurnLimit,
+    /// The budget of the run ran out.
+    Budget,
+    /// The host asked for a stop at a turn boundary ([`Checkpoint::stop`]).
+    Stopped,
+    /// The agent handed the conversation over.
+    Handoff,
+}
+
+/// `name` of the stored user messages that carry an instruction given while the run was going on.
+pub const INSTRUCTION_NAME: &str = "aiw.instruction";
+
 /// Services the loop needs from the engine.
 #[async_trait]
 pub trait RunHost: Send + Sync {
@@ -44,6 +73,11 @@ pub trait RunHost: Send + Sync {
     async fn backend(&self, profile: &InferenceProfile) -> Result<Arc<dyn ChatBackend>>;
     fn tools(&self) -> Arc<ToolRegistry>;
     fn skills(&self) -> Vec<Skill>;
+    /// The skills this run may use. By default all of them; a host that keeps agents apart lists the ones the run's own
+    /// folder holds instead of those of the shared workspace.
+    fn skills_for(&self, _input: &RunInput) -> Vec<Skill> {
+        self.skills()
+    }
     /// Runs `task` with another agent profile in an isolated context; returns its final answer.
     /// `run_id` is the id the sub-agent's run must use (announced in SUBAGENT_STARTED).
     async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str, run_id: &str) -> Result<String>;
@@ -71,6 +105,14 @@ pub trait RunHost: Send + Sync {
     async fn memory_tool(&self, input: &RunInput, name: &str, args: &Value) -> Result<String> {
         let _ = (input, args);
         Err(Error::Unsupported(format!("lo strumento {name} non è disponibile")))
+    }
+    /// Asked at the top of every turn of a top-level run (`depth == 0`), when nothing is half done: every tool call of
+    /// the turns before has its answer. `new_messages` is what the run has produced so far, the user message first.
+    /// The host may ask the run to stop here (a background task paused by the person or by a rule) and may hand over
+    /// what the person said meanwhile. The default asks for nothing.
+    async fn checkpoint(&self, input: &RunInput, new_messages: &[ChatMessage]) -> Checkpoint {
+        let _ = (input, new_messages);
+        Checkpoint::default()
     }
     /// Is `kb_search` offered in this run? (At least one document collection the agent can see.)
     fn kb_available(&self, input: &RunInput) -> bool {
@@ -145,6 +187,8 @@ pub struct RunOutcome {
     /// `(agent id, summary)` when the agent handed the conversation over (the `handoff` tool): the
     /// run ended with that request, and the engine starts the next agent.
     pub handoff: Option<(String, String)>,
+    /// How the run ended (a run that failed or was cancelled has no outcome of this kind).
+    pub ended: RunEnd,
 }
 
 const MAX_SELF_CHECKS: u32 = 2;
@@ -514,7 +558,7 @@ impl AgentRunner {
 
     async fn drive(input: &RunInput, host: Arc<dyn RunHost>, outcome: &mut RunOutcome) -> Result<()> {
         let ev = Emitter { host: host.as_ref(), run_id: input.run_id.clone() };
-        let skills = host.skills();
+        let skills = host.skills_for(input);
         let registry = host.tools();
         let mut specs: Vec<ToolSpec> = registry
             .all()
@@ -634,7 +678,33 @@ impl AgentRunner {
                 ev.emit(AgEvent::Custom { name: "aiw.budget_exceeded".into(), value: json!({"reason": reason}) });
                 outcome.final_text =
                     format!("{last_text}\n\n(Budget del run esaurito: {reason}. Dimmi se devo continuare.)").trim().to_string();
+                outcome.ended = RunEnd::Budget;
                 break;
+            }
+            if input.depth == 0 {
+                let cp = host.checkpoint(input, &outcome.new_messages).await;
+                if let Some(reason) = cp.stop {
+                    ev.emit(AgEvent::Custom { name: "aiw.stopped".into(), value: json!({"reason": reason}) });
+                    outcome.final_text = last_text.clone();
+                    outcome.ended = RunEnd::Stopped;
+                    break;
+                }
+                for text in cp.instructions {
+                    let note = format!("[Istruzione dell'utente, arrivata mentre lavoravi] {}", text.trim());
+                    messages.push(Msg::user(note.clone()));
+                    ev.emit(AgEvent::Custom { name: "aiw.instruction".into(), value: json!({"text": text.trim()}) });
+                    outcome.new_messages.push(ChatMessage {
+                        id: new_id("msg"),
+                        role: "user".into(),
+                        content: note,
+                        reasoning: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: Some(INSTRUCTION_NAME.into()),
+                        attachments: None,
+                        created_at: now_rfc3339(),
+                    });
+                }
             }
             let site = CallSite { first_call: !made_call, after_failure };
             let role = roles::role_for_call(site);
@@ -991,6 +1061,7 @@ impl AgentRunner {
                 });
                 outcome.final_text = note;
                 outcome.handoff = Some((to, summary));
+                outcome.ended = RunEnd::Handoff;
                 break;
             }
             if !images.is_empty() {
@@ -1007,6 +1078,7 @@ impl AgentRunner {
                 outcome.final_text = format!("{text}\n\n(Limite di {} turni raggiunto: dimmi se devo continuare.)", input.agent.max_turns)
                     .trim()
                     .to_string();
+                outcome.ended = RunEnd::TurnLimit;
             }
         }
         let stop = run_hooks(&input.hooks, "Stop", None, &json!({"run_id": input.run_id, "final": outcome.final_text})).await;

@@ -88,7 +88,7 @@ Nella cartella `apps/ui`:
 
 ```bash
 npm run typecheck                           # tsc -b --noEmit
-npm test                                    # vitest run
+npm test                                    # vitest run: logica (node) e componenti (jsdom, *.test.tsx)
 npm run build                               # tsc -b + vite build + controllo «niente host esterni» nel risultato
 npm run build:mockup                        # la demo a file unico
 npx playwright install --with-deps chromium   # una volta sola
@@ -97,6 +97,7 @@ npm run test:e2e                            # i flussi principali contro la demo
 npm run test:a11y                           # axe-core su ogni rotta, chiaro/scuro, 390/1440 px, più la prova da tastiera (serve build:mockup)
 npm run check:bundle                        # la dimensione di dist e dist-mockup resta sotto il budget (serve build e build:mockup)
 npm run bench:startup                       # tempo fino alla prima schermata utilizzabile della demo (solo misura, nessuna soglia)
+npm run shots:design                        # rifà le catture di docs/design/screenshots dal mockup (serve build:mockup; --mockup copia anche il mockup)
 ```
 
 Il test di fumo accetta `-- --route=<percorso>` per una sola pagina e `-- --shots=<cartella>` per salvare le schermate.

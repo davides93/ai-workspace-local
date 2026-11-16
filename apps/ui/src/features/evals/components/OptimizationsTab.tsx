@@ -1,7 +1,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Link, setQuery, useQueryParams } from "../../../app/router";
 import { Button, DataTable, EmptyState, QueryState, StatusPill, type Column } from "../../../shared/ui";
-import { formatDateTime, relTime } from "../../../shared/lib/format";
+import { formatDateTime, relTime, formatFixed } from "../../../shared/lib/format";
 import type { EvalSuite, PromptOptimization } from "../../../shared/api/types";
 import { pct } from "../model/evals";
 import { OptimizationDetail } from "./OptimizationDetail";
@@ -16,11 +16,11 @@ export function OptimizationsTab({ optimizations, suites }: { optimizations: Use
     { key: "status", header: tr("evals.stato"), render: (o) => <StatusPill status={o.status} />, nowrap: true },
     {
       key: "base", header: tr("evals.prompt_attuale"), className: "num", nowrap: true,
-      render: (o) => (o.status === "running" && !o.baseline_report_id ? "…" : <>{o.baseline_score.toFixed(2).replace(".", ",")} <span className="faint text-xs">{pct(o.baseline_pass_rate)}</span></>),
+      render: (o) => (o.status === "running" && !o.baseline_report_id ? "…" : <>{formatFixed(o.baseline_score, 2)} <span className="faint text-xs">{pct(o.baseline_pass_rate)}</span></>),
     },
     {
       key: "best", header: tr("evals.migliore_2"), className: "num", nowrap: true,
-      render: (o) => (o.best === undefined ? "—" : <b>{o.variants[o.best].score.toFixed(2).replace(".", ",")} <span className="faint text-xs">{pct(o.variants[o.best].pass_rate)}</span></b>),
+      render: (o) => (o.best === undefined ? "—" : <b>{formatFixed(o.variants[o.best].score, 2)} <span className="faint text-xs">{pct(o.variants[o.best].pass_rate)}</span></b>),
     },
     { key: "when", header: tr("evals.avviata"), nowrap: true, render: (o) => <span title={formatDateTime(o.started_at)}>{relTime(o.started_at)}</span> },
   ];

@@ -138,6 +138,16 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// Links the session (and the first run, when it has started) of the task an approval made.
+    pub fn proposal_link(&self, id: &str, run: Option<&str>, session: &str) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE proposals SET session_id=?2, run_id=COALESCE(?3, run_id) WHERE id=?1", params![id, session, run])
+            .map_err(db)?;
+        Ok(())
+    }
+
     /// Open proposals past `now` become `expired`. Returns how many.
     pub fn proposal_expire(&self, now: &str) -> Result<usize> {
         self.conn

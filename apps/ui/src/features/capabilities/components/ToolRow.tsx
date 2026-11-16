@@ -17,7 +17,7 @@ export function ToolRow({ tool, onToggle }: { tool: ToolInfo; onToggle: (enabled
         <code className="cap-tool-name" title={tool.name}>{shortToolName(tool)}</code>
         {tool.description && <span className="cap-tool-desc">{tool.description}</span>}
         {!tool.available && (
-          <span className="cap-tool-why">{t("capabilities.non_disponibile", { p: tool.unavailable_reason ? `: ${tool.unavailable_reason}` : " su questo device" })}</span>
+          <span className="cap-tool-why">{tool.unavailable_reason ? t("capabilities.non_disponibile", { p: `: ${tool.unavailable_reason}` }) : t("capabilities.non_disponibile_su_questo_sistema")}</span>
         )}
       </div>
       <Pill tone={risk.tone} title={risk.hint}>{risk.label}</Pill>

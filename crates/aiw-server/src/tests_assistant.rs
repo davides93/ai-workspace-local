@@ -284,7 +284,7 @@ async fn the_assistant_is_listed_and_saved_back_by_the_api_and_the_tool_list_bre
     assert_eq!(a["inference_profile"], "auto:agent");
     assert_eq!(a["max_turns"], 40);
     assert_eq!(a["delegate_tools"], json!(["*"]));
-    assert_eq!(a["tools"].as_array().unwrap().len(), 25);
+    assert_eq!(a["tools"].as_array().unwrap().len(), 26);
     // Its tool list names tools this build has not registered: the editor of the Developer view saves it back all the same,
     // and the extra field survives.
     let (st, saved) = dispatch(app.clone(), "PUT", "/api/agents/assistant", Some(a.clone())).await;

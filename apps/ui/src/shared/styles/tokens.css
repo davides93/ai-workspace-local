@@ -35,6 +35,17 @@
   --info: #2c5e8a;
   --info-soft: #dce8f3;
   --code-bg: #f0f1ec;
+  /* Syntax colors of the code blocks (comment, string, number, keyword, literal, function, type, property, added, removed): >= 4.5:1 on --code-bg, checked by tokens.test.ts. */
+  --tok-com: #5a6258;
+  --tok-str: #1a6f43;
+  --tok-num: #8a4f00;
+  --tok-kw: #7a2f8f;
+  --tok-lit: #a1381f;
+  --tok-fn: #2c5e8a;
+  --tok-ty: #0b6068;
+  --tok-attr: #6b4a9a;
+  --tok-ins: #1a6f43;
+  --tok-del: #b3261e;
   --scrim: rgb(10 12 10 / 0.42);
   --shadow: 0 1px 2px rgb(20 24 20 / 0.06), 0 8px 24px rgb(20 24 20 / 0.08);
 
@@ -109,6 +120,16 @@
   --info: #79acd9;
   --info-soft: #182a3a;
   --code-bg: #101314;
+  --tok-com: #939d95;
+  --tok-str: #4cc38a;
+  --tok-num: #e8b04a;
+  --tok-kw: #c9a0f0;
+  --tok-lit: #f0907a;
+  --tok-fn: #79acd9;
+  --tok-ty: #5ec9d3;
+  --tok-attr: #b8a3e8;
+  --tok-ins: #4cc38a;
+  --tok-del: #f2786e;
   --scrim: rgb(0 0 0 / 0.6);
   --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 10px 30px rgb(0 0 0 / 0.35);
 }

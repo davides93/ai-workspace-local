@@ -26,6 +26,7 @@ mod admin;
 mod inspect;
 mod interaction;
 mod models;
+mod tasks;
 
 /// Every management tool but `ask_user` has a name that starts with this.
 pub const PREFIX: &str = "aiw_";
@@ -34,7 +35,7 @@ pub const ASK_USER: &str = "ask_user";
 
 /// The management tools by name, as the plan fixes them. An agent profile may list them even
 /// where a tool is not registered (yet): see [`is_known`].
-pub const ALL: [&str; 18] = [
+pub const ALL: [&str; 19] = [
     "aiw_inspect",
     "aiw_model_search",
     "aiw_model_download",
@@ -52,11 +53,12 @@ pub const ALL: [&str; 18] = [
     "aiw_memory_delete",
     "aiw_secret_request",
     "aiw_secret_clear",
+    "aiw_task",
     ASK_USER,
 ];
 
 /// The tools that change something (risk `Write`): always confirmed by the owner.
-pub const MODIFYING: [&str; 7] = [
+pub const MODIFYING: [&str; 8] = [
     "aiw_model_download",
     "aiw_model_use",
     "aiw_runtime_control",
@@ -64,6 +66,7 @@ pub const MODIFYING: [&str; 7] = [
     "aiw_agent_save",
     "aiw_memory_review",
     "aiw_secret_clear",
+    "aiw_task",
 ];
 
 /// The tools that change something with a heavier effect (risk `Exec`: they delete, install, run
@@ -295,8 +298,12 @@ pub(super) fn hidden_values(args: &[String]) -> Vec<&str> {
 
 /// Registers the management tools of every area. Called once, when the engine starts.
 pub(crate) fn register(engine: &Engine) {
-    for tool in
-        inspect::tools(engine).into_iter().chain(models::tools(engine)).chain(admin::tools(engine)).chain(interaction::tools(engine))
+    for tool in inspect::tools(engine)
+        .into_iter()
+        .chain(models::tools(engine))
+        .chain(admin::tools(engine))
+        .chain(interaction::tools(engine))
+        .chain(tasks::tools(engine))
     {
         engine.0.tools.register(tool);
     }
@@ -436,7 +443,7 @@ mod tests {
 
     #[test]
     fn the_names_of_the_contract_are_all_management_tools_and_nothing_else_is() {
-        assert_eq!(ALL.len(), 18);
+        assert_eq!(ALL.len(), 19);
         assert!(ALL.iter().all(|n| is_management(n) && is_known(n)));
         assert!(is_management("aiw_something_new") && !is_known("aiw_something_new"));
         for plain in ["read_file", "shell", "agent", "todo", "memory_save", "channel_send", "mcp__x__aiw_inspect", "ask", "ask_users"] {
@@ -447,16 +454,16 @@ mod tests {
     #[test]
     fn modifying_and_strong_tools_are_disjoint_known_names_and_get_an_ask_rule_each() {
         let mut names: Vec<&str> = MODIFYING.iter().chain(STRONG.iter()).copied().collect();
-        assert_eq!(names.len(), 14);
+        assert_eq!(names.len(), 15);
         assert!(names.iter().all(|n| is_known(n)));
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 14, "a tool is either modifying or strong");
+        assert_eq!(names.len(), 15, "a tool is either modifying or strong");
         // The tools that need no confirmation are exactly the four of the plan.
         let free: Vec<&str> = ALL.iter().copied().filter(|n| !names.contains(n)).collect();
         assert_eq!(free, ["aiw_inspect", "aiw_model_search", "aiw_secret_request", "ask_user"]);
         let rules = builtin_rules();
-        assert_eq!(rules.len(), 14);
+        assert_eq!(rules.len(), 15);
         assert!(rules.iter().all(|r| r.action == "ask" && r.pattern.is_none()));
         for name in &names {
             assert!(rules.iter().any(|r| r.tool == *name), "{name}");
@@ -819,12 +826,12 @@ mod tests {
         assert_eq!(a.max_turns, 40);
         assert_eq!(a.delegate_tools, ["*"]);
         assert!(a.description.contains("Un'unica chat per tutto"));
-        // 25 tools: the 7 internal ones it needs, and the 18 of the management contract (16 + ask_user + aiw_secret_request).
-        assert_eq!(a.tools.len(), 25);
+        // 26 tools: the 7 internal ones it needs, and the 19 of the management contract (17 + ask_user + aiw_secret_request).
+        assert_eq!(a.tools.len(), 26);
         let mut unique = a.tools.clone();
         unique.sort();
         unique.dedup();
-        assert_eq!(unique.len(), 25, "no tool listed twice");
+        assert_eq!(unique.len(), 26, "no tool listed twice");
         let internal: Vec<&String> = a.tools.iter().filter(|t| aiw_agent::internal::is_internal(t)).collect();
         assert_eq!(internal.len(), 7, "{internal:?}");
         for name in ALL {
@@ -852,7 +859,7 @@ mod tests {
             assert!(p.contains(phrase), "missing: {phrase}");
         }
         assert!(p.ends_with("Alla fine riepiloga in poche righe che cosa è cambiato davvero."), "{p}");
-        assert!(p.lines().count() == 16, "{} lines", p.lines().count());
+        assert!(p.lines().count() == 17, "{} lines", p.lines().count());
         // The profile passes the same validation as one the person edits (the management names are known before they are registered).
         e.save_agent(a.clone()).expect("the editor can save it back");
         // An agent seeded by the app cannot be deleted.
