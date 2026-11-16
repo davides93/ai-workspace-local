@@ -12,6 +12,7 @@ describe("mock scenarios", () => {
     expect(isMockScenario("long-chat")).toBe(true);
     expect(isMockScenario("offline")).toBe(true);
     expect(isMockScenario("unpaired")).toBe(true);
+    expect(isMockScenario("mail")).toBe(true);
     expect(isMockScenario("nope")).toBe(false);
     expect(isMockScenario(null)).toBe(false);
   });
@@ -96,6 +97,22 @@ describe("mock agents", () => {
     expect(assistant?.tools).toContain("ask_user");
     expect(assistant?.tools).toContain("aiw_secret_request");
     expect(agents).toHaveLength(7);
+  });
+
+  it("mail: two channels on, linked into one conversation, and drafts in four states (one of them already sent)", async () => {
+    applyMockScenario("mail");
+    const api = new MockTransport();
+    expect((await api.channels()).map((c) => [c.kind, c.enabled])).toEqual([["telegram", true], ["email", true]]);
+    const ctx = await api.contexts();
+    expect(ctx).toHaveLength(1);
+    expect(ctx[0].members_info.map((m) => m.problem)).toEqual([undefined, undefined]);
+    expect(sessions.find((s) => s.id === ctx[0].session_id)?.channel).toBe("shared");
+    const drafts = await api.emailDrafts();
+    expect(drafts.map((d) => d.status).sort()).toEqual(["draft", "draft", "failed", "sent"]);
+    const first = drafts.find((d) => d.source.startsWith("mail:"));
+    expect(first?.created_by).toBe("assistant");
+    expect(first?.bcc).toEqual(["archivio@esempio.it"]);
+    expect(first?.attachments.map((a) => a.name)).toEqual(["preventivo-cantiere.pdf"]);
   });
 });
 

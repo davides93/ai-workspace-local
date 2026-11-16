@@ -76,6 +76,8 @@ export const qk = {
     all: () => ["channels"] as const,
     list: () => ["channels", "list"] as const,
   },
+  contexts: { all: () => ["contexts"] as const, list: () => ["contexts", "list"] as const },
+  emailDrafts: { all: () => ["email-drafts"] as const, list: () => ["email-drafts", "list"] as const },
   mailAccounts: () => ["mail-accounts"] as const,
 
   kb: {

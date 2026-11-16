@@ -2,7 +2,7 @@ import { CodeBlock, CopyField, InlineText, Panel, Pill, TabPanel, Tabs } from ".
 import type { Endpoint, SnippetLang } from "../model/snippets";
 
 import { t } from "../../../shared/i18n";
-const ICONS = { openai: "plug", anthropic: "plug", mcp: "tool", a2a: "link", webhook: "bolt" } as const;
+const ICONS = { openai: "plug", anthropic: "plug", agui: "agent", mcp: "tool", a2a: "link", webhook: "bolt" } as const;
 
 /** One endpoint: its URLs to copy and the examples, one tab per language. */
 export function EndpointCard({ endpoint: e, lang, onLang, needsToken }: {

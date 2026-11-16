@@ -15,3 +15,16 @@
 .chn-code code { font-size: var(--fs-lg); overflow-wrap: anywhere; }
 .chn-accounts { display: flex; flex-direction: column; gap: var(--space-3); }
 .chn-account { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+
+/* Conversazioni collegate e bozze email. */
+.ctx, .draft { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); min-width: 0; }
+.ctx h3, .draft h3 { font-size: var(--fs-md); overflow-wrap: anywhere; }
+.ctx-members { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: var(--space-2); overflow-wrap: anywhere; }
+.ctx-members li { display: flex; flex-direction: column; gap: var(--space-1, 4px); }
+.draft-head { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.draft-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.draft-files { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-2); }
+.draft-files li { display: flex; align-items: center; gap: var(--space-2); overflow-wrap: anywhere; }
+.draft-edit { display: flex; flex-direction: column; gap: var(--space-3); }
+.draft-actions { flex-wrap: wrap; }
+.draft-reject { display: flex; flex-direction: column; gap: var(--space-3); }

@@ -3,6 +3,7 @@
 pub mod a2a_client;
 mod access;
 pub mod adviser;
+pub mod agui_threads;
 pub mod attachments;
 pub mod background;
 pub mod backup;
@@ -127,6 +128,10 @@ pub struct RunOrigin {
     /// The client shows the requests for a secret and sends the value to the secrets endpoint.
     pub secrets: bool,
 }
+
+/// What a caller that is not the owner is told when it answers the request of a management tool.
+const NOT_OWNER_MESSAGE: &str =
+    "Questa richiesta può essere decisa solo dal proprietario, dall'app su questo computer: da qui non è consentito.";
 
 pub(crate) struct PendingApproval {
     req: ApprovalRequest,
@@ -1375,6 +1380,7 @@ impl Engine {
         }
         self.0.store.delete_session(id)?;
         self.remove_attachments(id);
+        self.remove_agui_threads_of(id);
         Ok(())
     }
 
@@ -1801,6 +1807,23 @@ impl Engine {
         uploads: Vec<aiw_core::api::AttachmentUpload>,
         origin: Option<RunOrigin>,
     ) -> Result<String> {
+        self.start_run_ctx(session_id, input, kind, thinking, uploads, origin, None).await
+    }
+
+    /// [`Engine::start_run_from`] with what the client application says about itself for this run
+    /// only (`app_context`, a ready-made section of text: the AG-UI `context` and `state`). It goes to
+    /// the model in the system prompt, as data and not as instructions, and is not part of the session history.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_run_ctx(
+        &self,
+        session_id: &str,
+        input: String,
+        kind: Option<&str>,
+        thinking: Option<ThinkingMode>,
+        uploads: Vec<aiw_core::api::AttachmentUpload>,
+        origin: Option<RunOrigin>,
+        app_context: Option<String>,
+    ) -> Result<String> {
         if input.trim().is_empty() && uploads.is_empty() {
             return Err(Error::Invalid("messaggio vuoto".into()));
         }
@@ -1815,7 +1838,7 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
-        self.start_run_inner(session_id, input, name, 0, thinking, files, origin).await
+        self.start_run_inner(session_id, input, name, 0, thinking, files, origin, app_context).await
     }
 
     /// Most handoffs one user message can chain before the conversation stops with a note.
@@ -1833,8 +1856,9 @@ impl Engine {
         thinking: Option<ThinkingMode>,
         files: Vec<attachments::Prepared>,
         origin: Option<RunOrigin>,
+        app_context: Option<String>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files, origin))
+        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files, origin, app_context))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1847,6 +1871,7 @@ impl Engine {
         thinking: Option<ThinkingMode>,
         files: Vec<attachments::Prepared>,
         origin: Option<RunOrigin>,
+        app_context: Option<String>,
     ) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
@@ -1967,6 +1992,8 @@ impl Engine {
         run_input.system_extra.extend(memory);
         // Which document collections exist (the passages themselves are found with `kb_search`, never injected).
         run_input.system_extra.extend(self.kb_prompt(&run_input.agent));
+        // What the client application said about itself (AG-UI `context` and `state`): data for this run only.
+        run_input.system_extra.extend(app_context.filter(|c| !c.trim().is_empty()));
         if let Some(team) = &team {
             self.apply_team(&mut run_input, team);
         }
@@ -2087,7 +2114,8 @@ impl Engine {
         self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
         let input = format!("[Passaggio da {from_name}] {summary}");
         // The next agent starts without an origin: a handoff does not carry the person's rights over.
-        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![], None).await {
+        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![], None, None).await
+        {
             note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
         }
     }
@@ -2182,6 +2210,17 @@ impl Engine {
         self.respond_approval_as(id, allow, remember, false)
     }
 
+    /// Would [`Engine::respond_approval_as`] take this answer? It looks and changes nothing: `NotFound` when the request is
+    /// closed, `Denied` when it is the request of a management tool and the caller is not the owner.
+    pub fn check_approval_answer(&self, id: &str, owner: bool) -> Result<()> {
+        let approvals = self.0.approvals.lock().unwrap();
+        match approvals.get(id) {
+            None => Err(Error::NotFound(format!("richiesta {id} non trovata (forse già gestita)"))),
+            Some(p) if management::is_management(&p.req.tool) && !owner => Err(Error::Denied(NOT_OWNER_MESSAGE.into())),
+            Some(_) => Ok(()),
+        }
+    }
+
     /// Answers a confirmation. `owner` says whether the caller has full access to this computer:
     /// the request of a management tool answered by anyone else is refused and stays open.
     pub fn respond_approval_as(&self, id: &str, allow: bool, remember: bool, owner: bool) -> Result<()> {
@@ -2192,10 +2231,7 @@ impl Engine {
                 None => return Err(Error::NotFound(format!("richiesta {id} non trovata (forse già gestita)"))),
             };
             if management && !owner {
-                return Err(Error::Denied(
-                    "Questa richiesta può essere decisa solo dal proprietario, dall'app su questo computer: da qui non è consentito."
-                        .into(),
-                ));
+                return Err(Error::Denied(NOT_OWNER_MESSAGE.into()));
             }
             // «Consenti per la sessione» does not exist for a management tool.
             (approvals.remove(id).expect("the request was found above"), remember && !management)
@@ -2931,6 +2967,10 @@ mod tests_background;
 mod tests_backup;
 #[cfg(test)]
 mod tests_channels;
+#[cfg(test)]
+mod tests_contexts;
+#[cfg(test)]
+mod tests_drafts;
 #[cfg(test)]
 mod tests_eval;
 #[cfg(test)]

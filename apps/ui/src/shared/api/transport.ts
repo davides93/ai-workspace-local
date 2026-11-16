@@ -2,7 +2,11 @@ import { t } from "../i18n";
 import { isUiMode } from "../lib/uiMode";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, SecretsAtRest, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, ContextCreate, ContextInfo, ContextPatch,
+  DraftStatus, EmailDraft, EmailDraftCreate, EmailDraftPatch, EmailDraftSend, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView,
+  DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch,
+  KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery,
+  OptimizeRequest, PromptOptimization, SecretsAtRest,
   CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -193,6 +197,19 @@ export interface Transport {
   pairChannel(id: string): Promise<ChannelPairing>;
   channelStatus(id: string): Promise<ChannelStatus>;
   /** IMAP accounts of the mail connector (read-only). */
+  /** Shared contexts: the owner links accounts of several channels into one conversation. */
+  contexts(): Promise<ContextInfo[]>;
+  createContext(body: ContextCreate): Promise<ContextInfo>;
+  updateContext(id: string, patch: ContextPatch): Promise<ContextInfo>;
+  deleteContext(id: string): Promise<void>;
+  /** Email drafts waiting for the owner. Sending needs the hash of the content they saw; a stale hash is a 409. */
+  emailDrafts(status?: DraftStatus): Promise<EmailDraft[]>;
+  createEmailDraft(body: EmailDraftCreate): Promise<EmailDraft>;
+  updateEmailDraft(id: string, patch: EmailDraftPatch): Promise<EmailDraft>;
+  deleteEmailDraft(id: string): Promise<void>;
+  sendEmailDraft(id: string, body: EmailDraftSend): Promise<EmailDraft>;
+  rejectEmailDraft(id: string, reason?: string): Promise<EmailDraft>;
+  cancelEmailDraft(id: string): Promise<EmailDraft>;
   mailAccounts(): Promise<MailAccount[]>;
   setMailAccounts(accounts: MailAccount[]): Promise<MailAccount[]>;
   testMailAccount(account: MailAccount): Promise<MailAccountTest>;

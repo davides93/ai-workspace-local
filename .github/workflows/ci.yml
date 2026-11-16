@@ -133,6 +133,33 @@ jobs:
             apps/ui/test-results
           retention-days: 7
 
+  # The real AG-UI client (@ag-ui/client, two versions) against the real `aiw serve` with a fake OpenAI provider: no account,
+  # no network beyond `npm ci`. About 15 s of tests; the build is the cost. See docs/agui.md and tests/agui-client.
+  agui-client:
+    name: AG-UI (real client)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # The major the suite was run with (macOS); the other jobs of this file use 22, which was not tried here.
+          node-version: 26
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p aiw-cli
+      - run: npm ci
+        working-directory: tests/agui-client
+      - run: npm test
+        working-directory: tests/agui-client
+      # The CopilotKit runtime (server side, @copilotkit/runtime 1.88.0) in front of the same server: a heavy install (about
+      # 300 MB of node_modules), a few seconds of tests. Its telemetry and the analytics of one of its dependencies are off.
+      - run: npm ci
+        working-directory: tests/agui-copilotkit
+        env:
+          SCARF_ANALYTICS: "false"
+      - run: npm test
+        working-directory: tests/agui-copilotkit
+
   desktop-linux:
     name: Tauri shell (Linux compile)
     runs-on: ubuntu-latest
