@@ -74,6 +74,12 @@ async fn rig(turns: Vec<Vec<ChatDelta>>) -> Rig {
     Rig { e, backend, entered, release, open, calls, _d: d, ws }
 }
 
+/// The step of the scripted tool has started. Bounded: a step that never starts (a run that stopped before it, on a slow machine)
+/// must fail the test, not leave it waiting for ever (on a Windows runner that held the whole job for hours).
+async fn step_entered(r: &Rig) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), r.entered.notified()).await.expect("the step of the scripted tool started");
+}
+
 fn hold(id: &str) -> Vec<ChatDelta> {
     ScriptedBackend::tool_turn(id, "hold_step", json!({}))
 }
@@ -150,7 +156,7 @@ async fn a_task_is_paused_between_two_steps_hears_the_person_and_goes_on_without
     let t = e.task_start(start("Fai il lavoro")).await.unwrap();
     assert_eq!((t.status.as_str(), t.segments, t.origin.as_str()), ("running", 1, "user"));
     // The first step is going on: ask for a pause and give an instruction. The step finishes, then it stops.
-    r.entered.notified().await;
+    step_entered(&r).await;
     let asked = e.task_pause(&t.id).unwrap();
     assert!(asked.stopping && asked.status == "running", "the step in progress is not cut: {asked:?}");
     e.task_instruct(&t.id, "Scrivi in tono formale", None).unwrap();
@@ -171,7 +177,7 @@ async fn a_task_is_paused_between_two_steps_hears_the_person_and_goes_on_without
     let resumed = e.task_resume(&t.id, TaskResume::default()).await.unwrap();
     assert_eq!((resumed.status.as_str(), resumed.segments), ("running", 2));
     // The new run starts from the session and carries the instruction in its first message.
-    r.entered.notified().await;
+    step_entered(&r).await;
     {
         let seen = r.backend.requests.lock().unwrap();
         let first_of_second = &seen[1];
@@ -201,7 +207,7 @@ async fn an_instruction_given_while_the_task_runs_reaches_the_model_at_its_next_
     let r = rig(vec![hold("c1"), text("Fatto, in tono formale.")]).await;
     let e = &r.e;
     let t = e.task_start(start("Scrivi una nota")).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     let told = e.task_instruct(&t.id, "Sii breve", Some("voice")).unwrap();
     assert_eq!((told.instructions[0].source.as_str(), told.instructions[0].status.as_str()), ("voice", "pending"));
     r.release.notify_one();
@@ -265,7 +271,7 @@ async fn two_resumes_at_once_start_one_segment() {
     let r = rig(vec![hold("c1"), text("Fatto.")]).await;
     let e = &r.e;
     let t = e.task_start(start("Lavora")).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     e.task_pause(&t.id).unwrap();
     r.release.notify_one();
     wait_status(e, &t.id, "paused").await;
@@ -283,7 +289,7 @@ async fn cancelling_stops_the_run_for_good() {
     let r = rig(vec![hold("c1"), text("non arriva")]).await;
     let e = &r.e;
     let t = e.task_start(start("Lavora")).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     let c = e.task_cancel(&t.id).unwrap();
     assert_eq!(c.status, "cancelled");
     let run = c.run_ids[0].clone();
@@ -324,7 +330,7 @@ async fn quiet_hours_that_begin_during_a_task_stop_it_at_the_next_step_and_forci
     let r = rig(vec![hold("c1"), hold("c2"), text("Fatto.")]).await;
     let e = &r.e;
     let t = e.task_start(start("Lavora a lungo")).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     set(e, "proactive.quiet_hours", json!(quiet_now()));
     r.release.notify_one();
     let paused = wait_status(e, &t.id, "paused").await;
@@ -379,7 +385,7 @@ async fn the_kill_switch_stops_every_task_until_the_level_is_set_again() {
     let e = &r.e;
     set(e, "proactive.level", json!("propose"));
     let t = e.task_start(start("Lavora")).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     e.kill().await;
     let paused = wait_status(e, &t.id, "paused").await;
     assert_eq!((paused.pause_reason.as_deref(), paused.auto_resume), (Some("kill_switch"), false));
@@ -457,7 +463,7 @@ async fn working_time_counts_against_the_limit_but_the_time_spent_waiting_for_a_
     let e = &r.e;
     let one_second = Some(BudgetLimits { max_seconds: Some(1), ..Default::default() });
     let t = e.task_start(TaskStart { limits: one_second.clone(), ..start("Lavora") }).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
     r.release.notify_one();
     let paused = wait_status(e, &t.id, "paused").await;
@@ -695,7 +701,7 @@ async fn a_paused_task_survives_a_restart_with_its_instructions_and_resumes_from
     first.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
     let _ = backend1;
     let t = first.task_start(start("Lavoro lungo")).await.unwrap();
-    entered.notified().await;
+    tokio::time::timeout(std::time::Duration::from_secs(30), entered.notified()).await.expect("the step of the scripted tool started");
     first.task_pause(&t.id).unwrap();
     first.task_instruct(&t.id, "Poi controlla", None).unwrap();
     release.notify_one();
@@ -746,7 +752,7 @@ async fn a_dictated_instruction_is_transcribed_first_and_reaches_the_task_like_a
     let e = &r.e;
     e.register_native_stt(Arc::new(FakeStt));
     let t = e.task_start(start("Prepara il rendiconto")).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     // The app records, the engine transcribes, the person reads the text and sends it as an instruction «voice».
     let wav = vec![0u8; 4096];
     let said = e.transcribe(&wav, "audio/wav", Some("it")).await.unwrap();
@@ -770,7 +776,7 @@ async fn the_audit_names_the_task_and_never_the_text_of_an_instruction() {
     let e = &r.e;
     let secret = "hunter2-SEGRETISSIMO";
     let t = e.task_start(start(&format!("Entra con la password {secret} e riordina"))).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     e.task_instruct(&t.id, &format!("Riprova con {secret}"), None).unwrap();
     e.task_pause(&t.id).unwrap();
     r.release.notify_one();
@@ -835,7 +841,7 @@ async fn a_pause_the_person_asks_for_wins_over_a_rule_that_was_already_stopping_
     let r = rig(vec![hold("c1"), text("Fatto.")]).await;
     let e = &r.e;
     let t = e.task_start(start("Lavora")).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     set(e, "proactive.quiet_hours", json!(quiet_now()));
     // Whatever stops it, the person asked it to stay stopped: the end of the quiet hours does not undo that.
     e.task_pause(&t.id).unwrap();
@@ -903,7 +909,7 @@ async fn deleting_the_session_of_a_task_stops_it_and_forgets_it() {
     let r = rig(vec![hold("c1"), text("non arriva")]).await;
     let e = &r.e;
     let t = e.task_start(start("Lavora con la chiave hunter2-SEGRETISSIMO")).await.unwrap();
-    r.entered.notified().await;
+    step_entered(&r).await;
     let run = e.task(&t.id).unwrap().run_ids[0].clone();
     e.delete_session(&t.session_id).unwrap();
     assert!(matches!(e.task(&t.id), Err(Error::NotFound(_))), "the record with the text of the instruction goes with the conversation");
