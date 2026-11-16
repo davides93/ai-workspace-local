@@ -4,6 +4,7 @@
 //! The sandbox protects the commands and the file tools of an agent, not the engine. The engine reads these files with its own
 //! permissions, so a link made by the agent in the workspace (`ln -s <data>/token AGENTS.md`, or one that a cloned repository
 //! ships: `AGENTS.md -> ~/.ssh/id_ed25519`) would carry any file the engine can read into the system prompt of the next message.
+//! Making a link needs no access to its target, so the sandbox does not stop it.
 //!
 //! The rule is the one the file tools already apply to a path (`ToolContext::resolve`), made safe against a swap:
 //!
@@ -12,34 +13,37 @@
 //! * the path, with every link resolved (`canonicalize`), must stay **inside the root** (the workspace, or the folder the skills
 //!   were found in) and out of the **hidden** places (the data folder of the app, `sandbox.deny_read`), unless the root itself
 //!   lives in one of them;
-//! * the opened file must be the one the path leads to now (same device and inode): a path swapped for a link between the
-//!   check and the read gives a different file and is refused;
-//! * a file with several names (a hard link) is accepted only when every one of its names is in the same folder: `ln CLAUDE.md
-//!   AGENTS.md` is the folder's own, `ln <data>/token AGENTS.md` has a name that is not there (the link count is higher than
-//!   the names found) and is refused.
+//! * the open file must be the file that path names *now*, and nothing else: the resolved path is walked from the root one folder
+//!   at a time, each opened without following a link and kept open, and its last name must be a regular file (not a link) with
+//!   the same device and inode as the open file and **a single name** (link count 1). A link swapped in for the file, for a folder
+//!   of the path or for the file's last name between the open and the check leads somewhere else, or is a link, and is refused;
+//! * a file with **several names** (a hard link) is refused, even when all its names are in the workspace: `ln <data>/token
+//!   AGENTS.md` makes a second name for the token, and the other names of a file cannot be told apart without a race. Use a
+//!   symbolic link (`AGENTS.md -> CLAUDE.md`); git does not make hard links.
 //!
-//! A link that stays inside the root (`AGENTS.md -> CLAUDE.md`) is read: that is a common and legitimate use.
+//! A symbolic link that stays inside the root is read: that is a common and legitimate use.
 //!
-//! Only Unix has the device/inode comparison and the link count; on Windows the path is checked after the open (resolved and
-//! compared with the root) but the file cannot be compared with it, and a hard link is not told from a file.
+//! Only Unix has the walk by descriptors, the device/inode comparison and the link count; on Windows the path is checked after the
+//! open (resolved and compared with the root), the open file cannot be compared with it and a hard link is not told from a file.
 
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// Most directory entries looked at to account for the names of a file with more than one.
-#[cfg(unix)]
-const NAME_SCAN_LIMIT: usize = 10_000;
-
 /// `path` with every link resolved, if it stays inside `root` (also resolved) and out of the `hidden` places. The folder
 /// of a skill, or the folder the skills are in, go through here: no file is opened.
 pub fn resolve_within(root: &Path, hidden: &[PathBuf], path: &Path) -> Option<PathBuf> {
+    resolve(root, hidden, path).map(|(_, canon)| canon)
+}
+
+/// The root and `path`, both resolved, if `path` stays inside the root and out of the hidden places.
+fn resolve(root: &Path, hidden: &[PathBuf], path: &Path) -> Option<(PathBuf, PathBuf)> {
     let root = std::fs::canonicalize(root).ok()?;
     let canon = std::fs::canonicalize(path).ok()?;
     if !canon.starts_with(&root) || is_hidden(&canon, &root, hidden) {
         return None;
     }
-    Some(canon)
+    Some((root, canon))
 }
 
 /// True when `canon` lies in a hidden place. The root itself living in one (an isolated session in `<data>/worktrees`) makes
@@ -52,8 +56,8 @@ fn is_hidden(canon: &Path, root: &Path, hidden: &[PathBuf]) -> bool {
 }
 
 /// Opens `path` for reading only if it is a regular file the rule of the module lets the engine read. `None` for anything
-/// else: a link to a file outside `root` or in a hidden place, a hard link to a file that has another name elsewhere, a folder,
-/// a pipe, a file that is not there.
+/// else: a link to a file outside `root` or in a hidden place, a file with more than one name, a folder, a pipe, a file that
+/// is not there.
 pub fn open_regular_within(root: &Path, hidden: &[PathBuf], path: &Path) -> Option<File> {
     let file = open_without_waiting(path)?;
     confirm(&file, root, hidden, path).then_some(file)
@@ -65,20 +69,69 @@ pub(crate) fn confirm(file: &File, root: &Path, hidden: &[PathBuf], path: &Path)
     if !opened.is_file() {
         return false;
     }
-    let Some(canon) = resolve_within(root, hidden, path) else { return false };
+    let Some((root, canon)) = resolve(root, hidden, path) else { return false };
+    confirm_named(&opened, &root, &canon)
+}
+
+/// `canon` is the resolved path of a file inside `root` (both resolved): is the open file, described by `opened`, exactly the
+/// one name it has there? Split from [`confirm`] so that what happens after the path was resolved is a test.
+pub(crate) fn confirm_named(opened: &std::fs::Metadata, root: &Path, canon: &Path) -> bool {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        let Ok(now) = std::fs::metadata(&canon) else { return false };
-        let id = (opened.dev(), opened.ino());
-        if id != (now.dev(), now.ino()) {
-            return false; // the path leads somewhere else than the file that was opened
-        }
-        if opened.nlink() != 1 && !every_name_is_beside(&canon, id, opened.nlink()) {
-            return false; // another name of this file is somewhere else
+        named_here(opened, root, canon).unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (opened, root, canon);
+        true
+    }
+}
+
+/// Walks `canon` from `root` by descriptors: each folder is opened from the one before without following a link, and the last
+/// name is looked at without following it (`fstatat`). The folders stay open, so none can be swapped for a link behind the walk.
+/// True only for a regular file with the device and inode of `opened` and a link count of 1.
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // the width of `st_dev`, `st_ino`, `st_nlink` and `st_mode` depends on the system
+fn named_here(opened: &std::fs::Metadata, root: &Path, canon: &Path) -> Option<bool> {
+    use std::ffi::{CString, OsStr};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Component;
+
+    let mut names: Vec<&OsStr> = Vec::new();
+    for c in canon.strip_prefix(root).ok()?.components() {
+        match c {
+            Component::Normal(n) => names.push(n),
+            _ => return None,
         }
     }
-    true
+    let (last, folders) = names.split_last()?;
+    let cstr = |n: &OsStr| CString::new(n.as_bytes()).ok();
+    let root_path = cstr(root.as_os_str())?;
+    let last = cstr(last)?;
+    // SAFETY: plain system calls on NUL-terminated names made above; the descriptors are owned by `OwnedFd`s and closed on drop.
+    unsafe {
+        let fd = libc::open(root_path.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC);
+        if fd < 0 {
+            return None;
+        }
+        let mut dir = OwnedFd::from_raw_fd(fd);
+        for folder in folders {
+            let name = cstr(folder)?;
+            let fd = libc::openat(dir.as_raw_fd(), name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+            if fd < 0 {
+                return None; // a link, or not a folder: the path is not what it was when it was resolved
+            }
+            dir = OwnedFd::from_raw_fd(fd);
+        }
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstatat(dir.as_raw_fd(), last.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) != 0 {
+            return None;
+        }
+        let regular = (st.st_mode as u32 & libc::S_IFMT as u32) == libc::S_IFREG as u32;
+        Some(regular && st.st_dev as u64 == opened.dev() && st.st_ino as u64 == opened.ino() && st.st_nlink as u64 == 1)
+    }
 }
 
 /// Opens the file at the end of `path` (links followed) without waiting: opening a pipe (`mkfifo AGENTS.md`) would otherwise
@@ -93,27 +146,6 @@ fn open_without_waiting(path: &Path) -> Option<File> {
     {
         File::open(path).ok()
     }
-}
-
-/// Does the file with identity `id` and `nlink` names have all of them in the folder of `canon`? The names are counted among
-/// the regular files of that folder (a link in it does not count): the count equals the link count only when no name of the
-/// file is anywhere else.
-#[cfg(unix)]
-fn every_name_is_beside(canon: &Path, id: (u64, u64), nlink: u64) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    let Some(Ok(entries)) = canon.parent().map(std::fs::read_dir) else { return false };
-    let mut names = 0u64;
-    for (i, entry) in entries.flatten().enumerate() {
-        if i >= NAME_SCAN_LIMIT {
-            return false;
-        }
-        if let Ok(m) = std::fs::symlink_metadata(entry.path()) {
-            if m.is_file() && (m.dev(), m.ino()) == id {
-                names += 1;
-            }
-        }
-    }
-    names == nlink
 }
 
 /// Reads `path` as text (at most `max_chars` characters) under the rule of the module. `None` when the file is refused, is not
@@ -237,26 +269,25 @@ mod tests {
         }
 
         #[test]
-        fn a_hard_link_to_somebody_elses_file_is_refused_and_one_between_two_names_of_the_folder_is_read() {
+        fn a_file_with_more_than_one_name_is_refused_even_when_all_its_names_are_in_the_workspace() {
             let f = fixture();
             fs::hard_link(f.other.join("token"), f.ws.join("AGENTS.md")).unwrap();
             assert_eq!(read(&f, "AGENTS.md"), None, "the token has another name, in the folder of somebody else");
-            // Two more names for it in the workspace do not make it the workspace's: the one outside is still not accounted for.
             fs::hard_link(f.other.join("token"), f.ws.join("COPIA.md")).unwrap();
             assert_eq!(read(&f, "AGENTS.md"), None);
             assert_eq!(read(&f, "COPIA.md"), None);
 
+            // A file of the workspace with two names is refused too (accepted limit: its names cannot be told apart without a race).
             fs::write(f.ws.join("CLAUDE.md"), "Regole").unwrap();
+            assert_eq!(read(&f, "CLAUDE.md").as_deref(), Some("Regole"));
             fs::hard_link(f.ws.join("CLAUDE.md"), f.ws.join("GEMINI.md")).unwrap();
-            assert_eq!(read(&f, "GEMINI.md").as_deref(), Some("Regole"), "both names are in the folder");
-            // A link in the same folder is not a name of the file: the count is of regular files.
-            symlink("CLAUDE.md", f.ws.join("ALTRO.md")).unwrap();
-            assert_eq!(read(&f, "GEMINI.md").as_deref(), Some("Regole"));
-            // A third name, outside the folder, makes it refused again.
-            fs::create_dir_all(f.ws.join("docs")).unwrap();
-            fs::hard_link(f.ws.join("CLAUDE.md"), f.ws.join("docs/copia.md")).unwrap();
             assert_eq!(read(&f, "GEMINI.md"), None);
+            assert_eq!(read(&f, "CLAUDE.md"), None);
+            // A symbolic link to it is the same file; once the second name is gone it is read again.
+            symlink("CLAUDE.md", f.ws.join("ALTRO.md")).unwrap();
             assert_eq!(read(&f, "ALTRO.md"), None);
+            fs::remove_file(f.ws.join("GEMINI.md")).unwrap();
+            assert_eq!(read(&f, "ALTRO.md").as_deref(), Some("Regole"));
         }
 
         #[test]
@@ -272,6 +303,34 @@ mod tests {
             let token = open_without_waiting(&f.other.join("token")).unwrap();
             symlink(f.ws.join("uno.md"), f.ws.join("AGENTS.md")).unwrap();
             assert!(!confirm(&token, &f.ws, &[], &f.ws.join("AGENTS.md")));
+        }
+
+        /// What can change after the path was resolved to a name inside the root: `canon` is given, no path is resolved again.
+        #[test]
+        fn what_the_path_leads_to_after_it_was_resolved_is_looked_at_without_following_a_link() {
+            let f = fixture();
+            let root = fs::canonicalize(&f.ws).unwrap();
+            fs::create_dir_all(root.join("docs")).unwrap();
+            fs::write(root.join("docs/regole.md"), "x").unwrap();
+            let named = |opened: &File, canon: PathBuf| confirm_named(&opened.metadata().unwrap(), &root, &canon);
+
+            // The file itself, in a folder of the workspace: accepted.
+            let regole = open_without_waiting(&root.join("docs/regole.md")).unwrap();
+            assert!(named(&regole, root.join("docs/regole.md")));
+            // The last name made a link to the token after the token was opened: the same inode, but through a link.
+            let token = open_without_waiting(&f.other.join("token")).unwrap();
+            symlink(f.other.join("token"), root.join("uno.md")).unwrap();
+            assert!(!named(&token, root.join("uno.md")), "the last name is a link to the file that was opened");
+            // A folder of the path made a link to the folder of the token after the path was resolved.
+            symlink(&f.other, root.join("cartella")).unwrap();
+            assert!(!named(&token, root.join("cartella/token")), "a folder of the path is a link");
+            // A second name made for the token after it was opened (the metadata of the open file still says one name).
+            let before = token.metadata().unwrap();
+            fs::hard_link(f.other.join("token"), root.join("due.md")).unwrap();
+            assert!(!confirm_named(&before, &root, &root.join("due.md")), "the link count is read from the name, not from the open file");
+            // And not a file at all, or not there.
+            assert!(!named(&regole, root.join("docs")));
+            assert!(!named(&regole, root.join("manca.md")));
         }
 
         #[test]

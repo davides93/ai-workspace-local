@@ -110,15 +110,16 @@ mod unix {
         symlink("CLAUDE.md", ws.path().join("AGENTS.md")).unwrap();
         assert!(e.agents_md().contains("# Istruzioni del workspace (AGENTS.md)\nIstruzioni di Claude"));
         assert!(prompt_of(&e).contains("Istruzioni di Claude"));
-        // Also a file in a folder of the workspace, and a hard link between two files of it.
+        // Also a file in a folder of the workspace.
         std::fs::remove_file(ws.path().join("AGENTS.md")).unwrap();
         std::fs::create_dir_all(ws.path().join("docs")).unwrap();
         std::fs::write(ws.path().join("docs/agenti.md"), "Nella cartella docs").unwrap();
         symlink("docs/agenti.md", ws.path().join("AGENTS.md")).unwrap();
         assert!(e.agents_md().contains("Nella cartella docs"));
+        // A hard link, even between two files of the workspace, is not (accepted limit: use a symbolic link).
         std::fs::remove_file(ws.path().join("AGENTS.md")).unwrap();
         std::fs::hard_link(ws.path().join("CLAUDE.md"), ws.path().join("AGENTS.md")).unwrap();
-        assert!(e.agents_md().contains("Istruzioni di Claude"), "a file with two names, both in the workspace folder");
+        assert_eq!(e.agents_md(), "");
     }
 
     #[tokio::test]
