@@ -23,10 +23,11 @@ describe("buildEndpoints", () => {
   const eps = buildEndpoints(`${BASE}/`);
   const byId = (id: string, list = eps) => list.find((e) => e.id === id)!;
 
-  it("lists the five integrations with the documented paths", () => {
-    expect(eps.map((e) => e.id)).toEqual(["openai", "anthropic", "mcp", "a2a", "webhook"]);
+  it("lists the six integrations with the documented paths", () => {
+    expect(eps.map((e) => e.id)).toEqual(["openai", "anthropic", "agui", "mcp", "a2a", "webhook"]);
     expect(byId("openai").url).toBe(`${BASE}/v1`);
     expect(byId("anthropic").url).toBe(`${BASE}/v1/messages`);
+    expect(byId("agui").url).toBe(`${BASE}/agui/assistant`);
     expect(byId("mcp").url).toBe(`${BASE}/mcp`);
     expect(byId("a2a").url).toBe(`${BASE}/a2a`);
     expect(byId("a2a").extra?.[0].url).toBe(`${BASE}/.well-known/agent-card.json`);
@@ -44,6 +45,7 @@ describe("buildEndpoints", () => {
     const langs = (id: string) => byId(id).snippets.map((s) => s.lang);
     for (const id of ["openai", "anthropic", "a2a", "webhook"]) expect(langs(id)).toEqual(["curl", "python", "javascript"]);
     expect(langs("mcp")).toEqual(["config", "curl", "javascript"]);
+    expect(langs("agui")).toEqual(["curl", "javascript", "typescript"]);
   });
   it("shows the SDK each tab is about", () => {
     const label = (id: string, lang: string) => byId(id).snippets.find((s) => s.lang === lang)!;
@@ -80,7 +82,7 @@ describe("buildEndpoints", () => {
       for (const e of eps) for (const s of e.snippets) expect(s.code).not.toContain(TOKEN_PLACEHOLDER);
       for (const s of byId("webhook", withToken).snippets) expect(s.code).not.toContain(TOKEN_PLACEHOLDER);
       expect(byId("webhook").guarded).toBe(false);
-      expect(eps.filter((e) => e.guarded).map((e) => e.id)).toEqual(["openai", "anthropic", "mcp", "a2a"]);
+      expect(eps.filter((e) => e.guarded).map((e) => e.id)).toEqual(["openai", "anthropic", "agui", "mcp", "a2a"]);
     });
   });
 });
