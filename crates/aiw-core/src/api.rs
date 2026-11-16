@@ -785,6 +785,86 @@ pub struct AgentProfile {
     /// `tools` + `delegate_tools` of the parent. Empty: only `tools` count, as always.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delegate_tools: Vec<String>,
+    /// How much this agent is kept apart from the others (a folder of its own, no shell network). Absent: the agent
+    /// works in the shared workspace, as every agent always did. On save an absent value keeps the stored one, so an
+    /// editor that does not know the field cannot switch the isolation off by saving; to switch it off the owner sends
+    /// the object with both flags `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<AgentIsolation>,
+}
+
+impl AgentProfile {
+    /// The agent works in a folder of its own that no other agent can read or write.
+    pub fn has_dedicated_workspace(&self) -> bool {
+        self.isolation.as_ref().is_some_and(|i| i.dedicated_workspace)
+    }
+}
+
+/// What keeps an agent apart from the others (issue #71). Everything here can only make the agent more closed than
+/// the global settings: nothing in it opens a door.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentIsolation {
+    /// The agent works in a folder of its own, inside the data folder of the app (which no agent can see). No other
+    /// agent reads or writes it, and this agent sees neither the shared workspace nor the folders the person granted.
+    /// Needs a sandbox that is not `off` (without a sandbox nothing is kept apart).
+    #[serde(default)]
+    pub dedicated_workspace: bool,
+    /// The commands of this agent never get the network, whatever `sandbox.shell_network` says.
+    #[serde(default)]
+    pub close_shell_network: bool,
+}
+
+impl AgentIsolation {
+    /// At least one flag is on.
+    pub fn is_active(&self) -> bool {
+        self.dedicated_workspace || self.close_shell_network
+    }
+}
+
+/// A credential of one agent, as the API lists it: what identifies it and where it may be used, never the value.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentCredentialInfo {
+    /// What the agent calls it (`github`): the model names it in `web_fetch_auth`, never sees its value.
+    pub name: String,
+    /// The only hosts it is sent to (each also covers its subdomains).
+    pub hosts: Vec<String>,
+    /// The request header it travels in.
+    pub header: String,
+    /// What goes before the value in the header (`Bearer `).
+    pub prefix: String,
+    /// A value is stored and can be read back by this computer (false: it is empty, or sealed with a key that is not
+    /// available now).
+    pub set: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// `PUT /api/agents/{id}/credentials/{name}`: what the owner sends to create or change a credential.
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentCredentialInput {
+    /// The hosts the credential may be sent to: at least one, bare names (`api.github.com`), no scheme, port or path.
+    pub hosts: Vec<String>,
+    /// Header name; absent: `Authorization` (or the one stored).
+    #[serde(default)]
+    pub header: Option<String>,
+    /// Text before the value; absent: `Bearer ` for `Authorization`, nothing for another header (or the one stored).
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// The secret. Required to create; absent when changing a credential that exists keeps the stored value. Never returned.
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+impl std::fmt::Debug for AgentCredentialInput {
+    // Never the value: a `{:?}` in a log or a failed assertion must not print it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentCredentialInput")
+            .field("hosts", &self.hosts)
+            .field("header", &self.header)
+            .field("prefix", &self.prefix)
+            .field("value", &self.value.as_ref().map(|_| "…"))
+            .finish()
+    }
 }
 
 /// The four jobs a model can have inside one agent run.

@@ -151,6 +151,7 @@ mod tests {
                 roles: None,
                 knowledge: vec![],
                 delegate_tools: vec![],
+                isolation: None,
             },
             profile: InferenceProfile {
                 id: "p".into(),

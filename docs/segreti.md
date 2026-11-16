@@ -25,7 +25,7 @@ gli annunci mDNS, il pairing.
   elencati in `crates/aiw-engine/src/vault/rules.rs`; `LayeredConfig` fa lo stesso per le impostazioni con `secret: true`. Chi
   chiama vede sempre valori in chiaro. Nessun altro codice cifra, e nessuno legge i documenti con SQL.
 - **La tabella** (`vault/rules.rs`) decide quali sono segreti: `secret`, `peer_token`, `mcp_oauth` (documenti fatti di segreti:
-  ogni stringa è cifrata, il backup li lascia fuori) e `mcp`, `channel`, `model_provider`, `remote_agent`, `runtime_settings`
+  ogni stringa è cifrata, il backup li lascia fuori) e `mcp`, `channel`, `model_provider`, `remote_agent`, `runtime_settings` e `agent_credential` (le credenziali di un solo agente, #71: proprietario, nome e host restano leggibili)
   (le stringhe sotto una chiave che nomina un segreto, i valori della mappa `secrets` dei canali e gli indirizzi con credenziali
   dentro: `https://utente:password@host`, `?api_key=…`). Il backup deriva le sue liste dalla stessa tabella; un test legge i sorgenti
   e fallisce se il motore scrive un tipo di documento non classificato.

@@ -44,6 +44,11 @@ pub trait RunHost: Send + Sync {
     async fn backend(&self, profile: &InferenceProfile) -> Result<Arc<dyn ChatBackend>>;
     fn tools(&self) -> Arc<ToolRegistry>;
     fn skills(&self) -> Vec<Skill>;
+    /// The skills this run may use. By default all of them; a host that keeps agents apart lists the ones the run's own
+    /// folder holds instead of those of the shared workspace.
+    fn skills_for(&self, _input: &RunInput) -> Vec<Skill> {
+        self.skills()
+    }
     /// Runs `task` with another agent profile in an isolated context; returns its final answer.
     /// `run_id` is the id the sub-agent's run must use (announced in SUBAGENT_STARTED).
     async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str, run_id: &str) -> Result<String>;
@@ -514,7 +519,7 @@ impl AgentRunner {
 
     async fn drive(input: &RunInput, host: Arc<dyn RunHost>, outcome: &mut RunOutcome) -> Result<()> {
         let ev = Emitter { host: host.as_ref(), run_id: input.run_id.clone() };
-        let skills = host.skills();
+        let skills = host.skills_for(input);
         let registry = host.tools();
         let mut specs: Vec<ToolSpec> = registry
             .all()

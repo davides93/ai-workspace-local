@@ -1234,8 +1234,24 @@ fn is_assistant(id: &str) -> bool {
     id == crate::defaults::ASSISTANT_ID
 }
 
+/// Says if the agent is kept apart from the others (a folder of its own, a closed shell network) or holds credentials: such an agent is
+/// not edited or removed from the chat.
+fn isolation_problem(e: &Engine, a: &AgentProfile) -> Option<String> {
+    if a.isolation.is_some() {
+        return Some("è tenuto separato dagli altri (isolation)".into());
+    }
+    if !a.id.is_empty() && e.agent_has_credentials(&a.id) {
+        return Some("ha credenziali sue".into());
+    }
+    None
+}
+
 /// Why an agent with these settings is outside what the tool manages (and so is not made or edited from the chat), if it is.
 fn envelope_problem(e: &Engine, a: &AgentProfile) -> Option<String> {
+    // An agent kept apart is configured by its owner: from the chat nobody edits its prompt or tools, and its isolation is not here to change.
+    if let Some(problem) = isolation_problem(e, a) {
+        return Some(problem);
+    }
     if !["plan", "ask"].contains(&a.mode.as_str()) {
         return Some(format!("la modalità «{}» non è tra quelle ammesse (solo plan e ask)", a.mode));
     }
@@ -1309,6 +1325,7 @@ fn blank_agent(id: String) -> AgentProfile {
         roles: None,
         knowledge: vec![],
         delegate_tools: vec![],
+        isolation: None,
     }
 }
 
@@ -1476,6 +1493,14 @@ fn agent_delete(e: &Engine, args: &Value) -> Result<Value> {
     let agent = e.agent(&id).map_err(|_| {
         Error::NotFound(format!("Assistente `{}` non trovato: guarda l'elenco con aiw_inspect (topic agents).", text(&id, 60)))
     })?;
+    // Removing an agent that is kept apart also removes its credentials, which cannot be got back: that is for its owner (the Developer
+    // view, the command line), not for the chat.
+    if let Some(problem) = isolation_problem(e, &agent) {
+        return Err(Error::Denied(format!(
+            "L'assistente «{}» {problem}: eliminarlo toglie anche le sue credenziali e non si annulla, quindi si fa dalla vista Sviluppatore.",
+            text(&agent.name, 60)
+        )));
+    }
     for key in ["agent.default", "proactive.agent"] {
         if e.0.config.get_str(key).as_deref() == Some(id.as_str()) {
             return Err(Error::Conflict(format!(

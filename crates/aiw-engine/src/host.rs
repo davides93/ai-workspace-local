@@ -186,6 +186,14 @@ impl RunHost for EngineHost {
         self.engine.skills()
     }
 
+    fn skills_for(&self, input: &RunInput) -> Vec<Skill> {
+        if input.tool_ctx.workspace_root.starts_with(self.engine.0.dirs.agents()) {
+            self.engine.global_skills()
+        } else {
+            self.engine.skills()
+        }
+    }
+
     async fn subagent(&self, parent: &RunInput, agent_id: &str, task: &str, run_id: &str) -> Result<String> {
         if agent_id.starts_with(crate::REMOTE_PREFIX) {
             return self.engine.delegate_remote(agent_id, task, &parent.tool_ctx.cancel, Some(&parent.run_id)).await;
@@ -193,7 +201,13 @@ impl RunHost for EngineHost {
         let agent = self.engine.agent(agent_id)?;
         let profile = self.engine.profile(&agent.inference_profile)?;
         let cancel = parent.tool_ctx.cancel.child_token();
-        let mut input = self.engine.build_input(
+        // An agent with a folder of its own is a boundary around the whole run, sub-agents and team members included: when
+        // the parent or the sub-agent has one, the sub-agent works in the folder of the parent with the folders the parent was
+        // given, never in its own. So a parent never reads what a sub-agent keeps apart, and a sub-agent never reaches what its
+        // parent cannot (issue #71). With no such agent nothing changes.
+        let confined = parent.agent.has_dedicated_workspace() || agent.has_dedicated_workspace();
+        let root = confined.then(|| parent.tool_ctx.workspace_root.clone());
+        let mut input = self.engine.build_input_at(
             run_id,
             &parent.thread_id,
             agent,
@@ -203,7 +217,17 @@ impl RunHost for EngineHost {
             cancel,
             parent.depth + 1,
             parent.session_allow.clone(),
+            root,
         );
+        if confined {
+            input.tool_ctx.write_roots = parent.tool_ctx.write_roots.clone();
+            input.tool_ctx.outside_hint = parent.tool_ctx.outside_hint.clone();
+        }
+        // The network of the shell can be closed by a sub-agent, never reopened.
+        input.tool_ctx.shell.network &= parent.tool_ctx.shell.network;
+        // The credentials are the ones of the parent, the agent that was talking: a sub-agent never uses its own (so a parent
+        // that does not hold a credential cannot borrow it by delegating), and only if the tool reached it through the narrowing.
+        input.tool_ctx.credentials = parent.tool_ctx.credentials.clone();
         // A sub-agent never gets more freedom than its parent.
         if mode_rank(&input.policy.mode) > mode_rank(&parent.policy.mode) {
             input.policy.mode = parent.policy.mode.clone();
@@ -224,6 +248,9 @@ impl RunHost for EngineHost {
         // The management tools (`aiw_*`, `ask_user`) are for the agent the person talks to: a sub-agent never gets one.
         input.agent.tools.retain(|t| !crate::management::is_management(t));
         input.agent.delegate_tools.retain(|t| !crate::management::is_management(t));
+        if let Some(line) = input.tool_ctx.credentials.as_ref().and_then(|b| Engine::credentials_prompt(b, &input.agent.tools)) {
+            input.system_extra.push(line);
+        }
         // The members of a team share its state (the tool is harmless: it touches nothing outside the run).
         input.in_team = parent.in_team;
         input.shared = parent.shared.clone();
@@ -274,6 +301,14 @@ impl RunHost for EngineHost {
             return Err(Error::Denied("la conversazione non può passare a un agente remoto: delegagli il lavoro".into()));
         }
         let target = self.engine.agent(agent_id)?;
+        // The conversation does not cross the boundary of an agent that is kept apart (a folder of its own, credentials of its
+        // own), in either direction: its history would carry what one side saw into the folder and the credentials of the other.
+        if let Some(isolated) = [&target, &from.agent].into_iter().find(|a| self.engine.kept_apart(a)) {
+            return Err(Error::Denied(format!(
+                "«{}» è un agente isolato (ha un workspace o delle credenziali sue): la conversazione non passa da o verso di lui. Scrivi direttamente a chi serve.",
+                isolated.name
+            )));
+        }
         // The conversation never moves to an agent with more freedom than the one that started it.
         if mode_rank(&target.mode) > mode_rank(&from.policy.mode) {
             return Err(Error::Denied(format!(
@@ -310,15 +345,21 @@ impl aiw_workflow::WorkflowHost for EngineHost {
         // Each workflow keeps one session per run so the work is inspectable in the Workspace view.
         // A session runs one thing at a time: the session is taken while an agent works in it, so
         // agents that run together (foreach, parallel) each get their own.
-        let existing = self.workflow_session.lock().unwrap().take();
+        let taken = self.workflow_session.lock().unwrap().take();
+        // A step of another agent gets a session of its own when either agent is kept apart (issue #71): the session of the workflow stays
+        // for the agent it was made for.
+        let (existing, parked) = match taken {
+            Some(sid) if self.engine.session_not_for_step(&sid, agent_id) => (None, Some(sid)),
+            other => (other, None),
+        };
         let name = self.workflow.as_ref().map(|w| w.name.clone()).unwrap_or_else(|| "Workflow".into());
         match self.engine.run_agent_task(agent_id, prompt, existing.as_deref(), &format!("⚙ {name}")).await {
             Ok((text, session_id)) => {
-                self.workflow_session.lock().unwrap().get_or_insert(session_id);
+                self.workflow_session.lock().unwrap().get_or_insert(parked.unwrap_or(session_id));
                 Ok(text)
             }
             Err(e) => {
-                if let Some(s) = existing {
+                if let Some(s) = existing.or(parked) {
                     self.workflow_session.lock().unwrap().get_or_insert(s);
                 }
                 Err(e)

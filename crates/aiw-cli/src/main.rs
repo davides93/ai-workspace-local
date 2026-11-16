@@ -129,6 +129,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: BackupCmd,
     },
+    /// Agenti tenuti separati: workspace dedicato, rete della shell chiusa, credenziali di ciascuno (docs/agenti-isolati.md)
+    Agents {
+        #[command(subcommand)]
+        cmd: Option<AgentsCmd>,
+    },
     /// Segreti cifrati sul disco: stato, ritorno in chiaro, cifratura, pulizia dei segreti che non si leggono più
     Secrets {
         #[command(subcommand)]
@@ -142,6 +147,52 @@ enum Cmd {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum AgentsCmd {
+    /// Elenca gli agenti con il loro isolamento e quante credenziali hanno (predefinito)
+    List,
+    /// Imposta l'isolamento di un agente. Senza opzioni mostra lo stato attuale. Solo il proprietario lo cambia: l'agente no
+    Isolation {
+        /// Id dell'agente
+        id: String,
+        /// `dedicated`: cartella di lavoro sua, che gli altri agenti non leggono; `shared`: il workspace condiviso, come sempre
+        #[arg(long = "workspace-mode", value_parser = ["dedicated", "shared"])]
+        workspace_mode: Option<String>,
+        /// `closed`: la shell di questo agente non ha mai la rete; `inherit`: vale l'impostazione sandbox.shell_network
+        #[arg(long, value_parser = ["closed", "inherit"])]
+        shell_network: Option<String>,
+    },
+    /// Credenziali di un agente: valgono solo per lui, solo verso gli host indicati, e il modello non ne vede mai il valore
+    Credential {
+        #[command(subcommand)]
+        cmd: CredentialCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CredentialCmd {
+    /// Elenca le credenziali di un agente: nome, host, intestazione, stato (mai il valore)
+    List { agent: String },
+    /// Crea o cambia una credenziale. Il valore si legge dallo standard input, mai dagli argomenti (resterebbero nella cronologia
+    /// della shell e in `ps`): `printf %s "$TOKEN" | aiw agents credential set alfa github --host api.github.com`
+    Set {
+        agent: String,
+        /// Nome con cui l'agente la chiama (lettere, cifre, - e _)
+        name: String,
+        /// Host verso cui può essere mandata (con i suoi sottodomini): almeno uno, ripetibile
+        #[arg(long = "host", required = true)]
+        hosts: Vec<String>,
+        /// Intestazione della richiesta (predefinita: Authorization)
+        #[arg(long)]
+        header: Option<String>,
+        /// Testo prima del valore (predefinito: «Bearer » per Authorization, niente per le altre)
+        #[arg(long)]
+        prefix: Option<String>,
+    },
+    /// Toglie una credenziale: da quel momento nessuno la usa più
+    Remove { agent: String, name: String },
 }
 
 #[derive(Subcommand)]
@@ -730,6 +781,7 @@ async fn main() -> Result<()> {
         Cmd::Lessons { cmd } => lessons_cmd(&engine, cmd.unwrap_or(LessonsCmd::List { status: "pending".into() }))?,
         Cmd::Channels { cmd } => channels_cmd(&engine, cmd.unwrap_or(ChannelsCmd::List))?,
         Cmd::Tokens { cmd } => tokens_cmd(&engine, cmd.unwrap_or(TokensCmd::List))?,
+        Cmd::Agents { cmd } => agents_cmd(&engine, cmd.unwrap_or(AgentsCmd::List))?,
         Cmd::Kb { cmd } => kb_cmd(&engine, cmd.unwrap_or(KbCmd::List)).await?,
         Cmd::Run { prompt, agent, yes, worktree } => run(&engine, &agent, prompt, yes, worktree).await?,
         Cmd::Rewind { run_id, dry_run } => {
@@ -1026,6 +1078,103 @@ fn tokens_cmd(engine: &Engine, cmd: TokensCmd) -> Result<()> {
             println!("{}", t.token);
             eprintln!("Il token {id} è stato sostituito da {}: copia il nuovo valore ora, non verrà mostrato di nuovo.", t.info.id);
         }
+    }
+    Ok(())
+}
+
+fn agents_cmd(engine: &Engine, cmd: AgentsCmd) -> Result<()> {
+    use aiw_core::api::{AgentCredentialInput, AgentIsolation};
+    match cmd {
+        AgentsCmd::List => {
+            for a in engine.agents()? {
+                let iso = a.isolation.as_ref();
+                let credentials = engine.agent_credentials(&a.id).map(|c| c.len()).unwrap_or(0);
+                println!(
+                    "{:<18} {:<10} workspace: {:<10} shell: {:<8} credenziali: {credentials}  {}",
+                    a.id,
+                    a.sandbox,
+                    if iso.is_some_and(|i| i.dedicated_workspace) { "dedicato" } else { "condiviso" },
+                    if iso.is_some_and(|i| i.close_shell_network) { "senza rete" } else { "da impostazioni" },
+                    a.name
+                );
+            }
+        }
+        AgentsCmd::Isolation { id, workspace_mode, shell_network } => {
+            let mut agent = engine.agent(&id)?;
+            if workspace_mode.is_some() || shell_network.is_some() {
+                let mut iso = agent.isolation.clone().unwrap_or_default();
+                match workspace_mode.as_deref() {
+                    Some("dedicated") => iso.dedicated_workspace = true,
+                    Some("shared") => iso.dedicated_workspace = false,
+                    _ => {}
+                }
+                match shell_network.as_deref() {
+                    Some("closed") => iso.close_shell_network = true,
+                    Some("inherit") => iso.close_shell_network = false,
+                    _ => {}
+                }
+                // Both flags off is how the owner says «no isolation»: the engine stores it as absent.
+                agent.isolation = Some(iso);
+                agent = engine.save_agent(agent)?;
+            }
+            let iso = agent.isolation.clone().unwrap_or(AgentIsolation::default());
+            for w in engine.isolation_warnings(&agent) {
+                eprintln!("ATTENZIONE: {w}");
+            }
+            println!(
+                "{} ({}): workspace {}, rete della shell {}",
+                agent.name,
+                agent.id,
+                if iso.dedicated_workspace { "dedicato" } else { "condiviso" },
+                if iso.close_shell_network { "sempre chiusa" } else { "come da impostazioni" }
+            );
+            if iso.dedicated_workspace {
+                println!("Cartella: {}", engine.data_dirs().agents().join(&agent.id).join("workspace").display());
+            }
+        }
+        AgentsCmd::Credential { cmd } => match cmd {
+            CredentialCmd::List { agent } => {
+                let list = engine.agent_credentials(&agent)?;
+                if list.is_empty() {
+                    println!("L'agente {agent} non ha credenziali.");
+                }
+                for c in list {
+                    println!(
+                        "{:<20} host: {:<40} {}{}  {}",
+                        c.name,
+                        c.hosts.join(", "),
+                        c.header,
+                        if c.prefix.is_empty() { String::new() } else { format!(" ({}…)", c.prefix.trim_end()) },
+                        if c.set { "valore salvato" } else { "SENZA VALORE leggibile" }
+                    );
+                }
+            }
+            CredentialCmd::Set { agent, name, hosts, header, prefix } => {
+                use std::io::{IsTerminal, Read};
+                // The value comes from a pipe: an argument would stay in the history of the shell and in `ps`.
+                let value = if std::io::stdin().is_terminal() {
+                    None
+                } else {
+                    let mut raw = String::new();
+                    std::io::stdin().read_to_string(&mut raw).context("lettura del valore dallo standard input")?;
+                    Some(raw.trim().to_string()).filter(|v| !v.is_empty())
+                };
+                if value.is_none() {
+                    eprintln!("Nessun valore sullo standard input: se la credenziale esiste ne tengo il valore, altrimenti serve (`printf %s \"$TOKEN\" | aiw agents credential set …`).");
+                }
+                let info = engine.set_agent_credential(&agent, &name, AgentCredentialInput { hosts, header, prefix, value })?;
+                println!(
+                    "Credenziale «{}» dell'agente {agent}: host {}, intestazione {}. Il valore non viene mai mostrato.",
+                    info.name,
+                    info.hosts.join(", "),
+                    info.header
+                );
+            }
+            CredentialCmd::Remove { agent, name } => {
+                engine.remove_agent_credential(&agent, &name)?;
+                println!("Credenziale «{name}» dell'agente {agent} tolta: da ora nessuno la usa.");
+            }
+        },
     }
     Ok(())
 }
@@ -1794,4 +1943,63 @@ async fn run(engine: &Engine, agent: &str, prompt: String, yes: bool, worktree: 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// A flag of a subcommand must not collide with a global one (`--workspace` is global: the first version of
+    /// `aiw agents isolation` reused the name and clap panicked when the command was run).
+    #[test]
+    fn the_agents_commands_parse_next_to_the_global_options() {
+        Cli::command().debug_assert();
+        let parsed = Cli::try_parse_from([
+            "aiw",
+            "--workspace",
+            "/tmp/ws",
+            "agents",
+            "isolation",
+            "alfa",
+            "--workspace-mode",
+            "dedicated",
+            "--shell-network",
+            "closed",
+        ])
+        .unwrap();
+        assert_eq!(parsed.workspace.as_deref(), Some(std::path::Path::new("/tmp/ws")));
+        match parsed.cmd {
+            Cmd::Agents { cmd: Some(AgentsCmd::Isolation { id, workspace_mode, shell_network }) } => {
+                assert_eq!((id.as_str(), workspace_mode.as_deref(), shell_network.as_deref()), ("alfa", Some("dedicated"), Some("closed")));
+            }
+            _ => panic!("not the isolation command"),
+        }
+        let set = Cli::try_parse_from([
+            "aiw",
+            "agents",
+            "credential",
+            "set",
+            "alfa",
+            "github",
+            "--host",
+            "api.example.org",
+            "--host",
+            "git.example.org",
+        ])
+        .unwrap();
+        match set.cmd {
+            Cmd::Agents { cmd: Some(AgentsCmd::Credential { cmd: CredentialCmd::Set { hosts, header, prefix, .. } }) } => {
+                assert_eq!(hosts, ["api.example.org", "git.example.org"]);
+                assert!(header.is_none() && prefix.is_none());
+            }
+            _ => panic!("not the credential command"),
+        }
+        // The value is never an argument: there is no option for it.
+        assert!(Cli::try_parse_from(["aiw", "agents", "credential", "set", "alfa", "github", "--host", "a.example.org", "--value", "x"])
+            .is_err());
+        // A host is required.
+        assert!(Cli::try_parse_from(["aiw", "agents", "credential", "set", "alfa", "github"]).is_err());
+        assert!(Cli::try_parse_from(["aiw", "agents", "isolation", "alfa", "--workspace-mode", "boh"]).is_err());
+    }
 }
