@@ -70,7 +70,7 @@ export function ApprovalCard({ request, resolved, variant = "full", pending, onR
             <code className="apv-summary">{summary}</code>
             <span className="apv-more">{t("approvals.argomenti")}</span>
           </summary>
-          <CodeBlock code={prettyJson(request.args)} title={t("approvals.argomenti")} />
+          <CodeBlock code={prettyJson(request.args)} title={t("approvals.argomenti")} lang="json" />
         </details>
       )}
       {!decided && onRespond && (

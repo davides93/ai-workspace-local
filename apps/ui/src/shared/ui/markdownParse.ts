@@ -454,7 +454,7 @@ function parseBlockLines(lines: string[], depth: number): Block[] {
           i++;
         }
         i++; // closing fence (an unclosed fence runs to the end: streaming)
-        out.push({ t: "code", lang: info.replace(/[^\w+#.-]/g, "").slice(0, 24), v: buf.join("\n") });
+        out.push({ t: "code", lang: (info.trim().split(/\s+/)[0] ?? "").replace(/[^\w+#.-]/g, "").slice(0, 24), v: buf.join("\n") });
         continue;
       }
       const h = HEADING.exec(line);

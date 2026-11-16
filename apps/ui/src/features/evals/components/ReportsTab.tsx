@@ -1,7 +1,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Link, setQuery, useQueryParams } from "../../../app/router";
 import { Button, DataTable, EmptyState, QueryState, StatusPill, type Column } from "../../../shared/ui";
-import { formatDateTime, relTime } from "../../../shared/lib/format";
+import { formatDateTime, relTime, formatFixed } from "../../../shared/lib/format";
 import type { EvalReport, EvalSuite } from "../../../shared/api/types";
 import { pct, reportWho } from "../model/evals";
 import { ReportDetail } from "./ReportDetail";
@@ -18,7 +18,7 @@ export function ReportsTab({ reports, suites }: { reports: UseQueryResult<EvalRe
       key: "rate", header: tr("evals.riusciti_2"), className: "num", nowrap: true,
       render: (r) => (r.summary.total === 0 ? "—" : <><b>{pct(r.summary.pass_rate)}</b> <span className="faint text-xs">{r.summary.passed}/{r.summary.total}</span></>),
     },
-    { key: "score", header: tr("evals.score_2"), className: "num", render: (r) => (r.summary.total === 0 ? "—" : r.summary.score.toFixed(2).replace(".", ",")) },
+    { key: "score", header: tr("evals.score_2"), className: "num", render: (r) => (r.summary.total === 0 ? "—" : formatFixed(r.summary.score, 2)) },
     { key: "who", header: tr("evals.agente_profilo"), render: (r) => <span className="text-sm">{reportWho(r)}</span> },
     { key: "when", header: tr("evals.avviata"), nowrap: true, render: (r) => <span title={formatDateTime(r.started_at)}>{relTime(r.started_at)}</span> },
   ];

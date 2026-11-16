@@ -10,8 +10,9 @@ import type { QuestionItem, SecretItem } from "../chat/model/items";
 import { QuestionCard } from "./QuestionCard";
 import { SecretPrompt } from "./SecretPrompt";
 
-// The markup of the cards (the project has no DOM test environment: this checks the structure and the attributes the
-// keyboard and screen-reader behaviour stand on; the behaviour itself is in the end-to-end and accessibility tests).
+// The markup of the cards, rendered to a string: the structure and the attributes the keyboard and screen-reader behaviour stand on.
+// The behaviour itself (keys, focus, what is sent, what is shown when it fails) is in QuestionCard.test.tsx and SecretPrompt.test.tsx
+// (jsdom), and the whole flow in the end-to-end and accessibility tests.
 const render = (el: ReactElement) =>
   renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ApiProvider, { api: new MockTransport(), children: el })));
 

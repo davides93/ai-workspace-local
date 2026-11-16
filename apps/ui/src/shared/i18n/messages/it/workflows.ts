@@ -357,4 +357,6 @@ export const workflowsIt = {
   "workflows.save_before_run": "Salva le modifiche prima di eseguire",
   "workflows.confirm_delete": "Vuoi eliminare {name}? I suoi trigger smettono di funzionare e l'azione non si può annullare.",
   "workflows.copy_slug": "copia {name}",
+  "workflows.esempio_cartella_osservata": "~/Download",
+  "workflows.esempio_file_osservato": "~/Download/ordini.csv",
 } as const;

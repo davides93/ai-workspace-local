@@ -2,11 +2,11 @@ import { t } from "../i18n";
 import { isUiMode } from "../lib/uiMode";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, ContextCreate, ContextInfo, ContextPatch,
-  DraftStatus, EmailDraft, EmailDraftCreate, EmailDraftPatch, EmailDraftSend, MailAccount, MailAccountTest, AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView,
-  DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision, Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch,
-  KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus, BackgroundSummary, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery,
-  OptimizeRequest, PromptOptimization, SecretsAtRest,
+  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest,
+  AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision,
+  Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus,
+  BackgroundSummary, BackgroundTask, Proposal, ProposalQuery, TaskCreate, TaskQuery, TaskResume, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, SecretsAtRest, ContextCreate,
+  ContextInfo, ContextPatch, DraftStatus, EmailDraft, EmailDraftCreate, EmailDraftPatch, EmailDraftSend,
   CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
@@ -222,6 +222,18 @@ export interface Transport {
   proactiveTick(): Promise<TickResult>;
   /** The same check under a hard time budget, as the phone's operating system wakes it (POST /api/proactive/background-tick). */
   proactiveBackgroundTick(req?: BackgroundRequest): Promise<BackgroundSummary>;
+  /** Background tasks: what the assistant does while the person is elsewhere, newest first (`status` narrows it). */
+  tasks(query?: TaskQuery): Promise<BackgroundTask[]>;
+  /** Starts a task by hand (approving a proposal starts one too). */
+  createTask(body: TaskCreate): Promise<BackgroundTask>;
+  task(id: string): Promise<BackgroundTask>;
+  /** Stops between two steps: a task at work answers `stopping: true` and pauses when the step ends; one waiting for a confirmation pauses at once. */
+  pauseTask(id: string): Promise<BackgroundTask>;
+  /** 409 with a sentence when a rule prevents it (quiet hours, battery, the day's time, the task's budget): `force` / `extend` go past it. */
+  resumeTask(id: string, body?: TaskResume): Promise<BackgroundTask>;
+  /** Says something to a task: it reads it at its next step (up to `MAX_TASK_INSTRUCTION_CHARS`). */
+  sendTaskInstruction(id: string, text: string, source?: "user" | "voice"): Promise<BackgroundTask>;
+  cancelTask(id: string): Promise<BackgroundTask>;
   /**
    * The phone's side of the background checks (only the Tauri shell on iOS/Android, and the demo): what the system
    * allows, asking for the notification permission, scheduling the checks from the settings, and «Controlla adesso»
@@ -376,17 +388,19 @@ export async function createTransport(): Promise<Transport> {
   const forceMock = typeof __AIW_FORCE_MOCK__ !== "undefined" && __AIW_FORCE_MOCK__;
   if (forceMock || params.get("demo") === "1") {
     const { MockTransport } = await import("./mock");
-    const { applyMockScenario, applyMockUiMode, isMockScenario } = await import("./mock/scenario");
+    const { applyMockScenario, applyMockUiMode, isMockScenario, transportForScenario } = await import("./mock/scenario");
     // `?scenario=first-run`: a demo that starts empty (used by the end-to-end tests).
     const scenario = params.get("scenario");
-    if (isMockScenario(scenario)) applyMockScenario(scenario);
+    const named = isMockScenario(scenario) ? scenario : null;
+    if (named) applyMockScenario(named);
     // `?ui=developer`: the demo starts in Developer mode (every section); the default is the simple interface.
     const ui = params.get("ui");
     if (isUiMode(ui)) applyMockUiMode(ui);
     const demo = new MockTransport();
     // `?scope=device`: the demo as a paired device, which may not provide secrets (the end-to-end tests of the card that says so).
     if (params.get("scope") === "device") demo.secretScope = "device";
-    return demo;
+    // `?scenario=offline` and `?scenario=unpaired` change how the connection answers, not the data.
+    return transportForScenario(demo, named);
   }
   if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
     const { TauriTransport } = await import("./tauri");

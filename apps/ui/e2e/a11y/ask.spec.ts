@@ -188,10 +188,10 @@ test.describe("English", () => {
         await sayNext(page, "Aggiungi il token di Hugging Face");
         const secret = page.getByRole("form", { name: "Token di Hugging Face" });
         await expect(secret).toBeVisible();
-        await expect(secret.getByText("It will be saved in: Hugging Face (huggingface.co)")).toBeVisible();
-        await secret.getByLabel("Value of “Token di Hugging Face”").fill(WRONG_TOKEN);
+        await expect(secret.getByText("It will be saved to: Hugging Face (huggingface.co)")).toBeVisible();
+        await secret.getByLabel("Value for “Token di Hugging Face”").fill(WRONG_TOKEN);
         await secret.getByRole("button", { name: "Save" }).click();
-        await expect(secret.getByRole("alert")).toContainText("The value was not accepted");
+        await expect(secret.getByRole("alert")).toContainText("The value wasn't accepted");
         await expectNoBlockingViolations(page, info);
         await expectNoPlaceholderLeaks(page);
       });

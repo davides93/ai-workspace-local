@@ -94,7 +94,7 @@ impl Engine {
             }
         }
         let store = &self.0.store;
-        for kind in ["secret", "peer_token", "model_provider", "remote_agent", "channel", "mcp_oauth"] {
+        for kind in ["secret", "peer_token", "model_provider", "remote_agent", "channel", "mcp_oauth", "agent_credential"] {
             for doc in store.list_docs::<Value>(kind).unwrap_or_default() {
                 collect_secret_strings(&doc, &mut out);
             }

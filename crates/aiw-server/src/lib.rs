@@ -291,6 +291,9 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/agents", get(agents))
         .route("/api/agents/{id}", put(save_agent).delete(delete_agent))
         .route("/api/agents/{id}/routing", get(agent_routing).delete(reset_agent_routing))
+        // The credentials of one agent: the owner only (the `/api/agents/**` rule of `scopes.rs`), and the value goes in, never out.
+        .route("/api/agents/{id}/credentials", get(agent_credentials))
+        .route("/api/agents/{id}/credentials/{name}", put(set_agent_credential).delete(delete_agent_credential))
         .route("/api/remote-agents", get(remote_agents))
         .route("/api/remote-agents/{id}", put(save_remote_agent).delete(delete_remote_agent))
         .route("/api/teams", get(teams))
@@ -352,6 +355,12 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/proposals/{id}", get(proposal))
         .route("/api/proposals/{id}/approve", post(approve_proposal))
         .route("/api/proposals/{id}/dismiss", post(dismiss_proposal))
+        .route("/api/tasks", get(tasks).post(start_task))
+        .route("/api/tasks/{id}", get(task))
+        .route("/api/tasks/{id}/pause", post(pause_task))
+        .route("/api/tasks/{id}/resume", post(resume_task))
+        .route("/api/tasks/{id}/instructions", post(instruct_task))
+        .route("/api/tasks/{id}/cancel", post(cancel_task))
         .route("/api/channels", get(channels).post(create_channel))
         .route("/api/channels/{id}", patch(patch_channel).delete(delete_channel))
         .route("/api/channels/{id}/test", post(test_channel))
@@ -775,6 +784,20 @@ async fn save_agent(State(s): State<AppState>, Path(id): Path<String>, Json(mut 
     a.id = id;
     ok(s.engine.save_agent(a)?)
 }
+async fn agent_credentials(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<AgentCredentialInfo>> {
+    ok(s.engine.agent_credentials(&id)?)
+}
+async fn set_agent_credential(
+    State(s): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    Json(input): Json<AgentCredentialInput>,
+) -> ApiResult<AgentCredentialInfo> {
+    ok(s.engine.set_agent_credential(&id, &name, input)?)
+}
+async fn delete_agent_credential(State(s): State<AppState>, Path((id, name)): Path<(String, String)>) -> ApiResult<Value> {
+    s.engine.remove_agent_credential(&id, &name)?;
+    ok(json!({}))
+}
 async fn remote_agents(State(s): State<AppState>) -> ApiResult<Vec<RemoteAgent>> {
     ok(s.engine.remote_agents())
 }
@@ -924,6 +947,40 @@ async fn approve_proposal(State(s): State<AppState>, Path(id): Path<String>, bod
 }
 async fn dismiss_proposal(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Proposal> {
     ok(s.engine.proposal_dismiss(&id)?)
+}
+// ---- background tasks: what the assistant does while the person is elsewhere
+#[derive(Deserialize)]
+struct TasksQuery {
+    /// queued | running | paused | succeeded | failed | cancelled; absent = all.
+    status: Option<String>,
+}
+async fn tasks(State(s): State<AppState>, Query(q): Query<TasksQuery>) -> ApiResult<Vec<BackgroundTask>> {
+    ok(s.engine.tasks(q.status.as_deref())?)
+}
+async fn task(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task(&id)?)
+}
+async fn start_task(State(s): State<AppState>, Json(body): Json<TaskStart>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_start(body).await?)
+}
+/// Asks a running task to stop at its next step (a task waiting for a confirmation stops at once).
+async fn pause_task(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_pause(&id)?)
+}
+/// The body is optional: `{"force": true}` goes on in quiet hours, on battery or with the day's time used up;
+/// `{"extend": {"max_seconds": 600}}` adds room to a task that used up its limits.
+async fn resume_task(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<TaskResume>>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_resume(&id, body.map(|b| b.0).unwrap_or_default()).await?)
+}
+async fn instruct_task(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<TaskInstructionNew>,
+) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_instruct(&id, &body.text, body.source.as_deref())?)
+}
+async fn cancel_task(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<BackgroundTask> {
+    ok(s.engine.task_cancel(&id)?)
 }
 // ---- channels (Telegram, Slack, email) and the IMAP accounts of the mail connector
 async fn channels(State(s): State<AppState>) -> ApiResult<Vec<ChannelInfo>> {
@@ -1972,6 +2029,8 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_agents;
+#[cfg(test)]
 mod tests_assistant;
 #[cfg(test)]
 mod tests_backup;
@@ -2007,6 +2066,8 @@ mod tests_recommend;
 mod tests_remote;
 #[cfg(test)]
 mod tests_security;
+#[cfg(test)]
+mod tests_tasks;
 #[cfg(test)]
 mod tests_tls;
 #[cfg(test)]

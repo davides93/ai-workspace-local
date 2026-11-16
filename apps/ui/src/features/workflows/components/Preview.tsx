@@ -45,7 +45,7 @@ export function ValidationList({ issues, stepUids, onGo }: { issues: Issue[]; st
 export function JsonPreview({ json }: { json: string }) {
   return (
     <div className="json-preview">
-      <CodeBlock title="workflow.json" code={json} />
+      <CodeBlock title="workflow.json" code={json} lang="json" />
     </div>
   );
 }

@@ -11,9 +11,9 @@ import type {
   AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest,
   ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, SecretsAtRest, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, SessionImage, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  ChannelCreate, ChannelPatch, ContextCreate, ContextPatch, DraftStatus, EmailDraftCreate, EmailDraftPatch, EmailDraftSend, FoldersAdded, FoldersInfo, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo,
-  BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect, BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput,
-  BrowserState,
+  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState, ChannelCreate, ChannelPatch, FoldersAdded, FoldersInfo, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo,
+  BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect, BackgroundTask, TaskCreate, TaskQuery, TaskResume, ContextCreate, ContextPatch,
+  DraftStatus, EmailDraftCreate, EmailDraftPatch, EmailDraftSend,
 } from "../types";
 import {
   agents, appliedWorktrees, rewoundRuns, audit, catalog, compatForFormat, configLayers, configSchema, CONNECTOR_TOOLS, DEMO_SCREENSHOT_PNG, effective, hookConfigs, INTERNAL_TOOL_NAMES, maskConfigSecrets, mcp, models, nid, now, policyRules, profiles,
@@ -26,6 +26,7 @@ import * as chan from "./channels";
 import * as ctxs from "./contexts";
 import * as drafts from "./drafts";
 import { proactiveState, PROPOSAL_KINDS, PROPOSAL_STATUSES, proposals } from "./proposals";
+import { TaskStore } from "./tasks";
 import { teacherTurn } from "./teacher";
 import { DEMO_SCORES, demoPrompts, optimizations, variant } from "./optimizations";
 import { compareReports, evalReports, evalSuites, refreshSummary, suiteProblem } from "./evals";
@@ -176,6 +177,7 @@ export class MockTransport implements Transport {
   }
   async kill() {
     for (const [, p] of this.pendingApprovals) p.resolve(false);
+    this.taskStore.killSwitch();
     this.ask.cancelRun();
     this.browser.endHandover();
     audit.unshift({ id: nid("a"), ts: now(), actor: "user", action: "kill", detail: "Kill switch premuto dalla UI" });
@@ -827,6 +829,26 @@ export class MockTransport implements Transport {
     return r;
   }
 
+  // ---- background tasks: what the assistant does while the person is elsewhere (see ./tasks.ts for the rules of the demo)
+  private taskStoreInstance?: TaskStore;
+  /** Made on first use, so that a scenario (`?scenario=first-run`) applied before the first request is the one it starts from. */
+  private get taskStore(): TaskStore {
+    return (this.taskStoreInstance ??= new TaskStore());
+  }
+  async tasks(query: TaskQuery = {}): Promise<BackgroundTask[]> { return this.taskStore.list(query); }
+  async task(id: string) { return this.taskStore.get(id); }
+  async createTask(body: TaskCreate) {
+    const agentId = body.agent_id ?? "operator";
+    const { title } = TaskStore.check(body);
+    if (!agents.some((a) => a.id === agentId)) throw new ApiError(404, `agente ${agentId} non trovato`);
+    const session = await this.createSession({ agent_id: agentId, title });
+    return this.taskStore.create({ ...body, agent_id: agentId, title }, session.id);
+  }
+  async pauseTask(id: string) { return this.taskStore.pause(id); }
+  async resumeTask(id: string, body: TaskResume = {}) { return this.taskStore.resume(id, body); }
+  async sendTaskInstruction(id: string, text: string, source: "user" | "voice" = "user") { return this.taskStore.instruct(id, text, source); }
+  async cancelTask(id: string) { return this.taskStore.cancel(id); }
+
   /** The demo answers as the engine does: off = skipped with the reason, else a quiet check; no model needed. */
   async proactiveBackgroundTick(req: BackgroundRequest = {}): Promise<BackgroundSummary> {
     const level = String(effective()["proactive.level"] ?? proactiveState.level);
@@ -977,8 +999,14 @@ export class MockTransport implements Transport {
       ? ["main: server is listening on http://127.0.0.1:39281", "srv  load_model: loaded qwen3.5-35b-a3b-q4_k_m (CUDA0: 21.4 GiB)", "slot launch_slot_: id 0 | task 12 | processing task", "slot print_timing: eval time = 1912 ms / 214 tokens (112.0 tokens per second)"]
       : [];
   }
-  async approvals() { return [...this.pendingApprovals.values()].map((p) => p.req); }
+  async approvals() { return [...[...this.pendingApprovals.values()].map((p) => p.req), ...this.taskStore.waitingApprovals()]; }
   async respondApproval(id: string, decision: "allow" | "deny") {
+    // A background task's confirmation is answered the same way as a run's.
+    const asked = this.taskStore.respond(id, decision);
+    if (asked) {
+      audit.unshift({ id: nid("a"), ts: now(), run_id: asked.run_id, actor: "user", action: "approval", tool: asked.tool, decision: decision === "allow" ? "approved" : "rejected", detail: JSON.stringify(asked.args) });
+      return;
+    }
     const p = this.pendingApprovals.get(id);
     if (!p) return;
     this.pendingApprovals.delete(id);

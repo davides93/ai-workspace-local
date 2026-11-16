@@ -309,4 +309,6 @@ export const modelsIt = {
   "models.n_likes": "{n} like",
   "models.n_params": "{n} parametri",
   "models.updated_when": "aggiornato {when}",
+  "models.esempio_indirizzo_modello": "https://esempio.org/modelli/qwen3-4b-Q4_K_M.gguf",
+  "models.esempio_nome_file": "modello.gguf",
 } as const;
