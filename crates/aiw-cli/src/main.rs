@@ -637,6 +637,8 @@ async fn main() -> Result<()> {
         data_dir: cli.data.clone(),
         workspace_root: cli.workspace.clone(),
         mode: if serve_mode { "daemon".into() } else { "embedded".into() },
+        // A command that is not the server runs next to the app that may be open on the same data: the app owns the tasks.
+        no_tasks: !serve_mode,
         keychain: aiw_engine::vault::Keychain::System,
         // Only what stays up (`aiw serve`) may make the key or migrate: a one-shot command can run next to the app, which holds
         // the key in memory and would write back what it has.

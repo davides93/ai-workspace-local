@@ -2674,6 +2674,169 @@ pub struct ProactiveStatus {
     pub on_power: Option<bool>,
 }
 
+// ---------------------------------------------------------------- background tasks
+
+/// `BackgroundTask::status`. `queued` is the moment between the creation of a task and its first start.
+pub const TASK_STATUSES: [&str; 6] = ["queued", "running", "paused", "succeeded", "failed", "cancelled"];
+
+/// Why a task is paused (`BackgroundTask::pause_reason`): the person (`user`), one of the rules of the proactive
+/// assistant (`quiet_hours`, `battery`, `daily_budget`), the budget of the task itself
+/// (`task_budget`), the kill switch (`kill_switch`), a restart of the app (`restart`) or a run that could not start (`error`).
+pub const TASK_PAUSE_REASONS: [&str; 8] =
+    ["user", "quiet_hours", "battery", "daily_budget", "task_budget", "kill_switch", "restart", "error"];
+
+/// What the person told a task to do while it was going on. It reaches the agent at its next step.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskInstruction {
+    pub id: String,
+    pub text: String,
+    /// user | voice (typed, or dictated and transcribed before it was sent).
+    pub source: String,
+    pub created_at: String,
+    /// pending | delivered | blocked (a hook refused it).
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_at: Option<String>,
+    /// The segment that was running when it was delivered (internal: an instruction delivered to a segment that a restart
+    /// cut short goes back to `pending`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_in: Option<u32>,
+    /// Why it was blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One line of the history of a task (it survives a restart; the events of the runs do not).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskNote {
+    pub at: String,
+    pub text: String,
+}
+
+/// What a task has done so far.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskProgress {
+    /// Model calls over every segment.
+    pub turns: u32,
+    pub tokens: u64,
+    /// Time spent running, summed over the segments.
+    pub seconds: u64,
+    /// The tool the agent called last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// The last thing the agent said, shortened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+/// A piece of work the assistant does while the person is elsewhere: what the approval of a proposal starts, or what the
+/// person asks to be done in the background. It is a thin record on top of the runs of one session: pausing stops the
+/// agent between two steps, resuming starts a new run in the same session, and what the agent had done is in the session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundTask {
+    pub id: String,
+    pub title: String,
+    /// What the task has to do (the instruction that was approved, possibly edited).
+    pub instruction: String,
+    pub agent_id: String,
+    pub session_id: String,
+    /// proposal | user
+    pub origin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
+    /// queued | running | paused | succeeded | failed | cancelled
+    pub status: String,
+    /// Why it is paused (see [`TASK_PAUSE_REASONS`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_reason: Option<String>,
+    /// The same, in words for the person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_text: Option<String>,
+    /// It goes on by itself when what stopped it ends (quiet hours, battery, the day's budget).
+    #[serde(default)]
+    pub auto_resume: bool,
+    /// A stop was asked for and the task is finishing its current step.
+    #[serde(default)]
+    pub stopping: bool,
+    /// The person resumed it «anyway»: quiet hours, the battery and the day's budget do not stop it until it pauses again.
+    #[serde(default)]
+    pub forced: bool,
+    /// Set when the task is read (not stored): the confirmation of the agent it is waiting for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_approval: Option<ApprovalRequest>,
+    /// Runs started so far (a task is a chain of runs in one session).
+    pub segments: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_run_id: Option<String>,
+    #[serde(default)]
+    pub run_ids: Vec<String>,
+    /// What the whole task may use (all the segments together); a missing field is no limit.
+    #[serde(default)]
+    pub limits: BudgetLimits,
+    #[serde(default)]
+    pub progress: TaskProgress,
+    #[serde(default)]
+    pub instructions: Vec<TaskInstruction>,
+    #[serde(default)]
+    pub notes: Vec<TaskNote>,
+    /// The agent's last answer, when the task ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// When the running segment started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_started_at: Option<String>,
+    /// Milliseconds the running segment spent waiting for the person's confirmations (internal: waiting is not working, so it
+    /// counts neither against the limits of the task nor against the day's time).
+    #[serde(default)]
+    pub segment_wait_ms: u64,
+    /// Seconds of the running segment already added to the day's time (internal: added at every turn, so that the day's
+    /// time never counts a wait nor a step that has not ended).
+    #[serde(default)]
+    pub segment_billed_s: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+}
+
+/// Body of `POST /api/tasks`: a task the person asks for directly (the approval of a proposal makes one too).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskStart {
+    pub instruction: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Defaults to `proactive.agent`.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Limits of the whole task; what is missing comes from the agent and the `agents.budget.*` settings.
+    #[serde(default)]
+    pub limits: Option<BudgetLimits>,
+}
+
+/// Body of `POST /api/tasks/{id}/instructions`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskInstructionNew {
+    pub text: String,
+    /// user (default) | voice
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// Body of `POST /api/tasks/{id}/resume`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskResume {
+    /// Go on even in quiet hours, on battery or with the day's time used up.
+    #[serde(default)]
+    pub force: bool,
+    /// More room for a task that used up its own limits (added to them).
+    #[serde(default)]
+    pub extend: Option<BudgetLimits>,
+}
+
 // ---------------------------------------------------------------- channels (Telegram, Slack, email)
 
 /// Kinds of channel.

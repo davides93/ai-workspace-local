@@ -274,16 +274,16 @@ byte e lo `state` del client di 1 MiB (altrimenti `400`).
 `POST /agui/assistant` avvia l'agente `assistant` («Assistente»), l'agente della chat in modalità semplice
 dell'app: modalità `ask`, profilo `auto:agent`, al massimo 40 turni. È un agente predefinito come gli altri (7 in
 tutto: `operator`, `coder`, `browser`, `desktop`, `planner`, `teacher`, `assistant`); le installazioni esistenti lo
-ricevono all'avvio. Ha 25 strumenti:
+ricevono all'avvio. Ha 26 strumenti:
 
 - 7 interni: `agent` (delega ai sottoagenti), `todo`, `memory_save`, `memory_search`, `memory_update`,
   `memory_forget`, `kb_search`;
 - `ask_user`: una domanda all'utente (vedi sotto);
-- 17 strumenti `aiw_*`, che sono **strumenti del registro** e passano da policy, hook, audit e approvazioni come ogni
+- 18 strumenti `aiw_*`, che sono **strumenti del registro** e passano da policy, hook, audit e approvazioni come ogni
   altro. Senza conferma: `aiw_inspect` (stato compatto, valori segreti mai inclusi), `aiw_model_search`,
   `aiw_secret_request`. Con conferma sempre chiesta (regola `ask` incorporata nell'app, valida anche in `auto` e
   `yolo`): `aiw_model_download`, `aiw_model_use`, `aiw_runtime_control`, `aiw_setting_set`, `aiw_agent_save`,
-  `aiw_memory_review`, `aiw_secret_clear` e, mostrati come rischio alto, `aiw_model_delete`, `aiw_runtime_install`,
+  `aiw_memory_review`, `aiw_secret_clear`, `aiw_task` (lavori in background e proposte: `docs/lavori-in-background.md`) e, mostrati come rischio alto, `aiw_model_delete`, `aiw_runtime_install`,
   `aiw_setting_set_protected`, `aiw_connector_save`, `aiw_connector_remove`, `aiw_agent_delete`,
   `aiw_memory_delete`.
 

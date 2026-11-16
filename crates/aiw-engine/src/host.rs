@@ -1,8 +1,8 @@
 //! The engine side of [`aiw_agent::RunHost`] and [`aiw_workflow::WorkflowHost`].
 
 use crate::Engine;
-use aiw_agent::{narrow_sandbox, narrow_tools_delegating, AgentRunner, RunHost, RunInput, Skill};
-use aiw_core::api::{ApprovalOutcome, ApprovalRequest, AuditEntry, InferenceProfile, WorkflowDef, WorkflowRun, WorkflowStep};
+use aiw_agent::{narrow_sandbox, narrow_tools_delegating, AgentRunner, Checkpoint, RunHost, RunInput, Skill};
+use aiw_core::api::{ApprovalOutcome, ApprovalRequest, AuditEntry, ChatMessage, InferenceProfile, WorkflowDef, WorkflowRun, WorkflowStep};
 use aiw_core::events::AgEvent;
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use aiw_runtimes::{ChatBackend, ChatDelta, ChatRequest, Msg};
@@ -40,6 +40,8 @@ pub struct EngineHost {
     /// The run this host serves and the runtime router's plan for it (`runtime_id: "auto"`).
     run_id: Option<String>,
     route: Option<crate::router::RoutePlan>,
+    /// The background task this run is a segment of (see `bgtasks`).
+    task: Option<crate::bgtasks::RunCtx>,
 }
 
 impl EngineHost {
@@ -55,6 +57,7 @@ impl EngineHost {
             approval_timeout: None,
             run_id: None,
             route: None,
+            task: None,
         }
     }
     /// `first` receives the first state of the run (a resumed run has no one waiting for it).
@@ -70,6 +73,7 @@ impl EngineHost {
             approval_timeout: None,
             run_id: None,
             route: None,
+            task: None,
         }
     }
     /// The run this host serves and, when its profile runs on `auto`, the router's plan: the
@@ -77,6 +81,18 @@ impl EngineHost {
     pub fn with_route(mut self, run_id: String, route: Option<crate::router::RoutePlan>) -> Self {
         self.run_id = Some(run_id);
         self.route = route;
+        self
+    }
+    /// A background task does not count the time its run spent waiting for the person.
+    fn waited(&self, d: Duration) {
+        if let Some(ctx) = &self.task {
+            self.engine.task_waited(ctx, d);
+        }
+    }
+
+    /// The run is a segment of a background task: it stops, saves and listens at every turn boundary.
+    pub(crate) fn with_task(mut self, ctx: crate::bgtasks::RunCtx) -> Self {
+        self.task = Some(ctx);
         self
     }
     /// Confirmations expire after `t` (sub-agents inherit this).
@@ -136,10 +152,13 @@ impl RunHost for EngineHost {
         if self.deny_approvals {
             return false;
         }
-        match self.approval_timeout {
+        let started = std::time::Instant::now();
+        let answer = match self.approval_timeout {
             Some(t) => self.engine.wait_approval_outcome(req, self.session_id.clone(), Some(t)).await == ApprovalOutcome::Allowed,
             None => self.engine.wait_approval(req, self.session_id.clone()).await,
-        }
+        };
+        self.waited(started.elapsed());
+        answer
     }
 
     async fn approve_outcome(&self, req: ApprovalRequest) -> ApprovalOutcome {
@@ -147,13 +166,24 @@ impl RunHost for EngineHost {
         if self.deny_approvals {
             return ApprovalOutcome::Denied;
         }
-        self.engine
+        let started = std::time::Instant::now();
+        let outcome = self
+            .engine
             .wait_approval_outcome(req, self.session_id.clone(), self.approval_timeout.or_else(|| self.engine.approval_timeout()))
-            .await
+            .await;
+        self.waited(started.elapsed());
+        outcome
     }
 
     fn audit(&self, entry: AuditEntry) {
         let _ = self.engine.0.store.add_audit(&entry);
+    }
+
+    async fn checkpoint(&self, input: &RunInput, new_messages: &[ChatMessage]) -> Checkpoint {
+        match &self.task {
+            Some(ctx) => self.engine.task_checkpoint(ctx, input, new_messages).await,
+            None => Checkpoint::default(),
+        }
     }
 
     async fn backend(&self, profile: &InferenceProfile) -> Result<Arc<dyn ChatBackend>> {

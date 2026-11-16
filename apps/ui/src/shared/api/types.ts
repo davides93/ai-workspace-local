@@ -1878,6 +1878,102 @@ export interface ProactiveStatus {
   on_power?: boolean;
 }
 
+// ---- background tasks (what the assistant does while the person is elsewhere: a chain of runs in one chat session)
+
+export type TaskStatus = "queued" | "running" | "paused" | "succeeded" | "failed" | "cancelled";
+
+/**
+ * Why a task is paused. `user`: the person did it. `quiet_hours`, `battery`, `daily_budget`: rules of the proactive
+ * assistant; the task starts again by itself (`auto_resume`) and the person may force it. `task_budget`: it used up its own
+ * budget (resuming needs `extend`). `kill_switch`: stopped by the emergency button (not even forcing resumes it).
+ * `restart`: the app was restarted, nothing starts by itself. `error`: it could not start.
+ */
+export type TaskPauseReason = "user" | "quiet_hours" | "battery" | "daily_budget" | "task_budget" | "kill_switch" | "restart" | "error";
+
+export type TaskInstructionStatus = "pending" | "delivered" | "blocked";
+
+/** Something the person said to a running task: read at the next step (`delivered`), or refused (`blocked`, with `note`). */
+export interface TaskInstruction {
+  id: string;
+  text: string;
+  source: "user" | "voice";
+  created_at: string;
+  status: TaskInstructionStatus;
+  delivered_at?: string;
+  note?: string;
+}
+
+/** A line of the task's history (paused, resumed, instruction read, confirmation refused…). */
+export interface TaskNote {
+  at: string;
+  text: string;
+}
+
+export interface TaskProgress {
+  turns: number;
+  tokens: number;
+  seconds: number;
+  last_tool?: string;
+  /** The last thing the agent said. */
+  last_text?: string;
+  updated_at?: string;
+}
+
+export interface BackgroundTask {
+  id: string;
+  title: string;
+  instruction: string;
+  agent_id: string;
+  /** The chat session its steps (runs) go into. */
+  session_id: string;
+  origin: "proposal" | "user";
+  proposal_id?: string;
+  status: TaskStatus;
+  pause_reason?: TaskPauseReason;
+  /** The reason of the pause in a sentence for the person. */
+  pause_text?: string;
+  /** It starts again by itself when the rule ends (quiet hours, battery, the day's time). */
+  auto_resume: boolean;
+  /** A pause was asked and the current step is being finished. */
+  stopping: boolean;
+  forced: boolean;
+  /** The confirmation it waits for (the same request as in `approvals`). */
+  waiting_approval?: ApprovalRequest;
+  segments: number;
+  current_run_id?: string;
+  run_ids: string[];
+  limits: BudgetLimits;
+  progress: TaskProgress;
+  instructions: TaskInstruction[];
+  notes: TaskNote[];
+  result?: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+  finished_at?: string;
+}
+
+export interface TaskQuery {
+  status?: TaskStatus;
+}
+
+/** `POST /api/tasks` body. */
+export interface TaskCreate {
+  instruction: string;
+  title?: string;
+  agent_id?: string;
+  limits?: BudgetLimits;
+}
+
+/** `POST /api/tasks/{id}/resume` body: `force` goes past the rules of the proactive assistant, `extend` adds to the task's budget. */
+export interface TaskResume {
+  force?: boolean;
+  extend?: BudgetLimits;
+}
+
+/** Longest instruction the engine accepts for a task (in characters). */
+export const MAX_TASK_INSTRUCTION_CHARS = 4000;
+
 
 // ---- Channels (Telegram, Slack, email) and the IMAP accounts of the mail connector
 

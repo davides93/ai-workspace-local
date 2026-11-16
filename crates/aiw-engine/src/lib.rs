@@ -8,6 +8,7 @@ pub mod agui_threads;
 pub mod attachments;
 pub mod background;
 pub mod backup;
+mod bgtasks;
 mod browser_live;
 pub use browser_live::{Frame as BrowserFrame, HumanInput as BrowserInput, LiveState as BrowserState};
 pub mod channels;
@@ -91,6 +92,9 @@ pub struct EngineOptions {
     /// Mac App Store build (App Sandbox): no external programs are installed or launched, and the
     /// agents' folder is the one the shell passes (the `workspace.root` setting is ignored).
     pub sandboxed: bool,
+    /// A one-shot command next to the running app (the CLI): this process neither recovers nor resumes background tasks, which
+    /// the app that owns them does (see `bgtasks`).
+    pub no_tasks: bool,
     /// Which keychain holds the key of the secrets at rest (see [`vault`]). The default is none: secrets stay as they are
     /// and the state says so, which is what the tests and the short-lived background worker want. The app and the daemon
     /// ask for [`vault::Keychain::System`].
@@ -236,6 +240,8 @@ pub(crate) struct Inner {
     pub scheduler: Mutex<aiw_workflow::Scheduler>,
     /// The proactive assistant's heartbeat (see `proactive`).
     pub proactive: proactive::ProactiveRuntime,
+    /// Background tasks: pausable, instructable work of the assistant (see `bgtasks`).
+    pub(crate) tasks: bgtasks::TaskRuntime,
     /// Telegram, Slack and email channels (see `channels`).
     pub channels: channels::Runtime,
     /// Folders of the computer the person handed to the agents (see `access`).
@@ -401,6 +407,7 @@ impl Engine {
             workflow_runs: Default::default(),
             scheduler: Default::default(),
             proactive: Default::default(),
+            tasks: bgtasks::TaskRuntime::new(!opts.no_tasks),
             channels: Default::default(),
             folders: Default::default(),
             token,
@@ -428,6 +435,7 @@ impl Engine {
         management::register(&engine);
         browser_live::register(&engine);
         engine.seed()?;
+        engine.tasks_recover();
         engine.resume_workflows();
         if !opts.offline {
             engine.start_background();
@@ -541,6 +549,7 @@ impl Engine {
                     let _ = e.run_workflow(&id, Map::new(), "workflow").await;
                 }
                 e.proactive_pass();
+                e.tasks_pass();
                 if tick % 3 == 0 {
                     e.0.runtimes.refresh().await;
                 }
@@ -750,6 +759,8 @@ impl Engine {
         // The questions and the requests for a secret close first, each with its own outcome: the tool
         // that waits for one wakes up with `cancelled` and writes the closing event itself, before the run ends.
         let (n_questions, n_secrets) = self.close_interactions();
+        // Background tasks stop first and are marked paused, so that the runs that end next do not turn them into failures.
+        self.tasks_killed();
         let runs: Vec<CancellationToken> = self.0.runs.lock().unwrap().values().filter(|r| !r.done).map(|r| r.cancel.clone()).collect();
         for c in &runs {
             c.cancel();
@@ -1403,6 +1414,7 @@ impl Engine {
             }
             self.0.store.delete_doc("worktree", id)?;
         }
+        self.tasks_forget_session(id);
         self.0.store.delete_session(id)?;
         self.remove_attachments(id);
         self.remove_agui_threads_of(id);
@@ -1932,7 +1944,7 @@ impl Engine {
             }
             Some(other) => return Err(Error::Invalid(format!("tipo di messaggio non valido: {other}"))),
         };
-        self.start_run_inner(session_id, input, name, 0, thinking, files, origin, app_context).await
+        self.start_run_inner(session_id, input, name, 0, thinking, files, origin, app_context, None).await
     }
 
     /// Most handoffs one user message can chain before the conversation stops with a note.
@@ -1951,8 +1963,9 @@ impl Engine {
         files: Vec<attachments::Prepared>,
         origin: Option<RunOrigin>,
         app_context: Option<String>,
+        task: Option<bgtasks::Seed>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files, origin, app_context))
+        Box::pin(self.start_run_body(session_id, input, name, hops, thinking, files, origin, app_context, task))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1966,6 +1979,7 @@ impl Engine {
         files: Vec<attachments::Prepared>,
         origin: Option<RunOrigin>,
         app_context: Option<String>,
+        task: Option<bgtasks::Seed>,
     ) -> Result<String> {
         let mut session = self.0.store.session(session_id)?;
         // 404 is reserved for the session itself: a session whose agent, profile or runtime was
@@ -1974,7 +1988,15 @@ impl Engine {
             Error::NotFound(m) => Error::Conflict(format!("{m}: {what} di questa sessione non esiste più, scegline un altro in Agenti")),
             other => other,
         };
-        let (agent, team) = self.session_agent(&session.agent_id).map_err(|e| gone("l'agente o il team", e))?;
+        let (mut agent, team) = self.session_agent(&session.agent_id).map_err(|e| gone("l'agente o il team", e))?;
+        // A background task works while nobody is watching: never freer than «ask» (nothing that writes or acts without a
+        // confirmation), and with what is left of the task's own limits as the budget of this run.
+        if let Some(seed) = &task {
+            if host::mode_rank(&agent.mode) > host::mode_rank("ask") {
+                agent.mode = "ask".into();
+            }
+            agent.budget = Some(seed.remaining.clone());
+        }
         // The router (top-level runs of agents with candidate profiles) may replace the agent's own profile.
         // A team session keeps the profile of its own agent: its members run with theirs.
         let routed = if team.is_none() { self.route_profile(&agent) } else { None };
@@ -2051,9 +2073,12 @@ impl Engine {
         session.last_status = Some("running".into());
         self.0.store.upsert_session(&session)?;
         let mode = self.thinking_for(&profile, thinking);
-        let mut run_input =
-            self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, self.session_allow(session_id));
+        // «Consenti per la sessione» never covers a background task: nobody is watching, so each action is confirmed on its
+        // own, and what was allowed in the chat of the same session does not carry over either.
+        let allow = if task.is_some() { Default::default() } else { self.session_allow(session_id) };
+        let mut run_input = self.build_input(&run_id, session_id, agent, profile, history, input, cancel, 0, allow);
         run_input.thinking = mode;
+        let task_ctx = task.as_ref().map(|seed| seed.context(run_input.budget.clone()));
         if !attached.is_empty() {
             let (extra, vision_blocked) = attachments::user_extra(&self.load_attachment_files(session_id, &attached, vision), vision);
             run_input.user_extra = extra;
@@ -2097,6 +2122,10 @@ impl Engine {
         tokio::spawn(async move {
             let host = EngineHost::new(engine.clone(), Some(session.id.clone()), None).with_route(rid.clone(), route_plan);
             let host = if read_only_run { host.denying_approvals() } else { host };
+            let host = match &task_ctx {
+                Some(ctx) => host.with_task(ctx.clone()),
+                None => host,
+            };
             let host = Arc::new(if channel_kind == Some(channels::RunKind::Ask) {
                 host.with_approval_timeout(channels::APPROVAL_WAIT)
             } else {
@@ -2121,7 +2150,9 @@ impl Engine {
                     engine.emit(&rid, AgEvent::RunError { message: e.to_string(), code: None });
                 }
             }
-            let mut stored: Vec<ChatMessage> = out.new_messages.get(1..).unwrap_or(&[]).to_vec();
+            // A task's run has written its messages to the session at every step already: only the rest is left.
+            let already = task_ctx.as_ref().map_or(0, |c| c.saved.load(std::sync::atomic::Ordering::SeqCst));
+            let mut stored: Vec<ChatMessage> = out.new_messages.get(1 + already..).unwrap_or(&[]).to_vec();
             // A prompt refused by a UserPromptSubmit hook stays visible in the chat but must never
             // reach the model on a later turn.
             if engine.run_error_code(&rid).as_deref() == Some("hook_blocked") {
@@ -2155,7 +2186,15 @@ impl Engine {
             if status == "failed" || out_of_budget {
                 engine.maybe_reflect(&session.id, Some(rid.clone()), learning::ReflectTrigger::Failure);
             }
-            if let (Ok(()), Some((to, summary))) = (&res, out.handoff) {
+            if let Some(ctx) = &task_ctx {
+                // A task goes on, pauses or ends here; it does not follow a handoff (the next agent would run outside it).
+                let ended = match &res {
+                    Ok(()) => bgtasks::SegmentEnd::Done(out.ended),
+                    Err(Error::Cancelled) => bgtasks::SegmentEnd::Cancelled,
+                    Err(e) => bgtasks::SegmentEnd::Failed(e.to_string()),
+                };
+                engine.task_segment_ended(ctx, ended, &out.final_text).await;
+            } else if let (Ok(()), Some((to, summary))) = (&res, out.handoff) {
                 engine.continue_handoff(&session.id, &from_name, &from_mode, &to, &summary, hops, thinking).await;
             }
         });
@@ -2219,7 +2258,8 @@ impl Engine {
         self.audit_user("agent.handoff", &format!("{from_name} → {} (sessione {session_id})", target.name));
         let input = format!("[Passaggio da {from_name}] {summary}");
         // The next agent starts without an origin: a handoff does not carry the person's rights over.
-        if let Err(e) = self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![], None, None).await
+        if let Err(e) =
+            self.start_run_inner(session_id, input, Some(HANDOFF_MESSAGE.into()), hops + 1, thinking, vec![], None, None, None).await
         {
             note(format!("Il passaggio a «{}» non è partito: {e}", target.name));
         }
@@ -2342,7 +2382,7 @@ impl Engine {
             (approvals.remove(id).expect("the request was found above"), remember && !management)
         };
         if allow && remember {
-            if let Some(s) = &p.session_id {
+            if let Some(s) = p.session_id.as_ref().filter(|s| !self.session_is_task(s)) {
                 self.session_allow(s).lock().unwrap().insert(p.req.tool.clone());
             }
         }
@@ -3071,6 +3111,8 @@ mod tests_background;
 #[cfg(test)]
 mod tests_backup;
 #[cfg(test)]
+mod tests_brief;
+#[cfg(test)]
 mod tests_channels;
 #[cfg(test)]
 mod tests_contexts;
@@ -3111,6 +3153,8 @@ mod tests_router;
 mod tests_routing;
 #[cfg(test)]
 mod tests_search;
+#[cfg(test)]
+mod tests_tasks;
 #[cfg(test)]
 mod tests_thinking;
 #[cfg(test)]

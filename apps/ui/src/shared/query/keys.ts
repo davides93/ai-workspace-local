@@ -67,6 +67,12 @@ export const qk = {
   },
   proactive: () => ["proactive"] as const,
 
+  /** Background tasks (`features/inbox`). */
+  tasks: {
+    all: () => ["tasks"] as const,
+    list: (query?: { status?: string }) => ["tasks", "list", query?.status ?? ""] as const,
+  },
+
   memories: {
     all: () => ["memories"] as const,
     list: (query?: { status?: string; kind?: string; q?: string }) => ["memories", "list", query?.status ?? "", query?.kind ?? "", query?.q ?? ""] as const,

@@ -5,6 +5,7 @@ import { createChannel, updateChannel } from "./channels";
 import { createContext } from "./contexts";
 import { seedDraft } from "./drafts";
 import { catalog, configLayers, folderGrants, models, nid, now, runtimes, sessionMessages, sessions, system } from "./fixtures";
+import { taskScenario } from "./tasks";
 import { LONG_CHAT_ID, longChatMessages } from "./long-chat";
 
 /**
@@ -38,6 +39,8 @@ export function applyMockScenario(name: MockScenario): void {
     for (const r of runtimes) r.loaded_models = [];
     sessions.length = 0;
     for (const id of Object.keys(sessionMessages)) delete sessionMessages[id];
+    // No chat, no background task: the demo tasks live in those sessions.
+    taskScenario.empty = true;
   }
   if (name === "long-chat") {
     sessions.unshift({ id: LONG_CHAT_ID, title: "Domande di programmazione (lunga)", agent_id: "coder", created_at: now(), updated_at: now(), last_status: "succeeded" });

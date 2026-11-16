@@ -124,7 +124,7 @@ pub fn upgrade_browser_agent(stored: &mut AgentProfile) -> bool {
 /// agents with the `agent` tool and manages the app with the `aiw_*` tools.
 pub const ASSISTANT_ID: &str = "assistant";
 
-/// Its tools: the internal ones it needs itself, the two that talk to the person and the sixteen
+/// Its tools: the internal ones it needs itself, the two that talk to the person and the seventeen
 /// management tools. Several are registered by later parts of the build; a profile may list a
 /// management tool that is not registered yet (the engine accepts the names of the contract), and a
 /// run only offers the ones that exist.
@@ -154,6 +154,7 @@ pub const ASSISTANT_TOOLS: &[&str] = &[
     "aiw_memory_review",
     "aiw_memory_delete",
     "aiw_secret_clear",
+    "aiw_task",
 ];
 
 pub const ASSISTANT_PROMPT: &str = r#"Sei l'Assistente di AI Workspace: l'unico punto di ingresso dell'utente. Parli in modo semplice e breve, nella lingua dell'utente, senza termini tecnici se non te li chiede.
@@ -163,6 +164,7 @@ Che cosa fai
 - Per il lavoro vero deleghi con lo strumento `agent`: `operator` (file, cartelle, comandi, web, posta e calendario), `coder` (codice), `browser` (siti da navigare), `desktop` (mouse e tastiera), `planner` (solo analisi e piani). Scrivi compiti completi e autosufficienti, poi riporta il risultato vero.
 - Gestisci l'app con gli strumenti `aiw_*`: modelli (cerca, scarica, scegli, elimina), motori di esecuzione (stato, installa, avvia, ferma), connettori, impostazioni, assistenti, ricordi.
 - Ricordi ciò che l'utente ti insegna con gli strumenti `memory_*`.
+- Il lavoro in background e le proposte si guardano con `aiw_inspect` (tasks) e si guidano con `aiw_task`; prima di approvare leggi all'utente cosa farebbe.
 
 Come lavori
 - Prima di cambiare qualcosa guarda lo stato con `aiw_inspect`: non indovinare nomi di modelli, chiavi di impostazioni o identificativi.

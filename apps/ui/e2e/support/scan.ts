@@ -19,6 +19,34 @@ export async function expectNoBlockingViolations(page: Page, info: TestInfo): Pr
   expect(blocking, formatViolations(blocking)).toEqual([]);
 }
 
+/**
+ * The page must not scroll sideways: neither the document nor the app's own scroll area is wider than its window, and
+ * nothing inside `within` (a selector; the whole main area when omitted) reaches past the right edge of the window.
+ */
+export async function expectNoHorizontalScroll(page: Page, within = "#main"): Promise<void> {
+  const wide = await page.evaluate((root) => {
+    const out: string[] = [];
+    const name = (el: Element) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${typeof el.className === "string" && el.className ? `.${el.className.split(" ")[0]}` : ""}`;
+    for (const el of [document.documentElement, document.body, document.querySelector("#main"), document.querySelector(".page")]) {
+      if (el && el.scrollWidth > el.clientWidth) out.push(`${name(el)} scrolls sideways: ${el.scrollWidth} > ${el.clientWidth}`);
+    }
+    const edge = window.innerWidth;
+    // What an ancestor clips (a line clamp, a scrolling code block) does not widen the page.
+    const clipped = (el: Element) => {
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        if (getComputedStyle(p).overflowX !== "visible" && p.getBoundingClientRect().right <= edge + 1) return true;
+      }
+      return false;
+    };
+    for (const el of document.querySelectorAll(`${root} *`)) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 1 && r.right > edge + 1 && getComputedStyle(el).position !== "fixed" && !clipped(el)) out.push(`${name(el)} ends at ${Math.round(r.right)} of ${edge}`);
+    }
+    return out.slice(0, 10);
+  }, within);
+  expect(wide, "nothing may reach past the right edge of the window").toEqual([]);
+}
+
 /** A translated text that still shows a `{placeholder}` means a call and its message disagree. */
 export async function expectNoPlaceholderLeaks(page: Page): Promise<void> {
   const leaks = await page.evaluate(() => {

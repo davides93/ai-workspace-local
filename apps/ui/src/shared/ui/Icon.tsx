@@ -57,6 +57,7 @@ const paths = {
   thumbup: "M4 9h3v8H4zM7 9l3-6c1.4 0 2 1 2 2v3h4a1 1 0 0 1 1 1.2l-1 6A1.5 1.5 0 0 1 14.5 17H7",
   thumbdown: "M4 11h3V3H4zM7 11l3 6c1.4 0 2-1 2-2v-3h4a1 1 0 0 0 1-1.2l-1-6A1.5 1.5 0 0 0 14.5 3H7",
   cloud:"M6 15a4 4 0 0 1-.5-8 5 5 0 0 1 9.5 1A3.5 3.5 0 0 1 14.5 15z",
+  clock: "M10 3a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM10 6.5V10l2.5 1.5",
 } as const;
 
 export type IconName = keyof typeof paths;
