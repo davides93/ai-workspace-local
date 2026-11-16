@@ -5,11 +5,13 @@
 //! * [`schema`] — settings schemas used to generate configuration forms (ADR 0003).
 //! * [`config`] — layered configuration: defaults → global → device → workspace.
 //! * [`paths`] — data directories per platform.
+//! * [`confined`] — files the engine reads for itself (`AGENTS.md`, `SKILL.md` of a workspace): never one a link leads out of the workspace.
 //! * [`sealed`] — secrets at rest: the shape of a sealed value and the hook that seals and opens it.
 #![recursion_limit = "256"]
 
 pub mod api;
 pub mod config;
+pub mod confined;
 pub mod error;
 pub mod events;
 pub mod folders;

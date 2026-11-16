@@ -1651,7 +1651,9 @@ impl Engine {
         let own = if confined {
             isolation::read_regular_text(workspace, "AGENTS.md", 20_000)
         } else {
-            std::fs::read_to_string(workspace.join("AGENTS.md")).ok()
+            // The shared workspace: a link to a file inside it is common (`AGENTS.md -> CLAUDE.md`) and is read; one that leads out of it,
+            // into a place hidden from the agents, or a file with another name elsewhere is not (see `aiw_core::confined`).
+            aiw_core::confined::read_text_within(workspace, &self.shell_sandbox().hidden, &workspace.join("AGENTS.md"), 20_000)
         };
         for (label, text) in [("globali", global), ("del workspace", own)] {
             if let Some(t) = text {
@@ -1854,8 +1856,15 @@ impl Engine {
         )
     }
 
+    /// The skills of the user (`<data>/skills`, read as they are) and those the workspace brings (`<workspace>/.aiw/skills`, which
+    /// must stay inside the workspace: a link there cannot carry another file into the prompt).
     pub(crate) fn skills(&self) -> Vec<aiw_agent::Skill> {
-        aiw_agent::skills::discover(&[self.0.dirs.skills(), self.workspace_root().join(".aiw").join("skills")])
+        use aiw_agent::skills::SkillRoot;
+        let ws = self.workspace_root();
+        aiw_agent::skills::discover_in(&[
+            SkillRoot::trusted(self.0.dirs.skills()),
+            SkillRoot::confined(ws.join(".aiw").join("skills"), ws, self.shell_sandbox().hidden),
+        ])
     }
 
     /// The skills of a run that works in the folder of an agent apart: the global ones only. Neither the ones of the shared
@@ -3114,6 +3123,8 @@ mod tests_backup;
 mod tests_brief;
 #[cfg(test)]
 mod tests_channels;
+#[cfg(test)]
+mod tests_confined;
 #[cfg(test)]
 mod tests_contexts;
 #[cfg(test)]
