@@ -818,7 +818,9 @@ impl Engine {
         let prompt = format!(
             "Hai notato questo: {}\n\nPrepara una proposta per l'utente. Se serve, leggi qualcosa con gli strumenti di sola lettura. \
 Non puoi modificare nulla. Rispondi con un JSON: \"title\" (titolo breve), \"noticed\" (cosa hai notato, in una o due frasi) \
-e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire).",
+e \"instruction\" (cosa faresti, scritto come istruzione pronta da eseguire). \
+Se la cosa da fare è scrivere o rispondere a un'email, l'istruzione deve chiedere di preparare una bozza con lo strumento email_draft: \
+le email non partono da sole, la persona rivede la bozza nell'app e decide se inviarla.",
             item.text
         );
         let (run_agent, run_title) = (format!("{PROACTIVE_PREFIX}{agent_id}"), format!("Proposta: {}", short(&item.text, 40)));

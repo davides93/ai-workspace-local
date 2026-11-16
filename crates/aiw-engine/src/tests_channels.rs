@@ -10,9 +10,9 @@ use axum::extract::{Path as AxPath, State as AxState};
 use axum::routing::{get, post};
 use std::collections::VecDeque;
 
-const TOKEN: &str = "123:SEGRETO";
+pub(crate) const TOKEN: &str = "123:SEGRETO";
 
-async fn until(what: &str, f: impl Fn() -> bool) {
+pub(crate) async fn until(what: &str, f: impl Fn() -> bool) {
     for _ in 0..400 {
         if f() {
             return;
@@ -25,16 +25,16 @@ async fn until(what: &str, f: impl Fn() -> bool) {
 // ------------------------------------------------------------------------------------ fake Telegram
 
 #[derive(Default)]
-struct Tg {
-    updates: VecDeque<Value>,
-    sent: Vec<Value>,
-    offsets: Vec<i64>,
-    answered: Vec<Value>,
-    polls: usize,
-    files: HashMap<String, Vec<u8>>,
+pub(crate) struct Tg {
+    pub(crate) updates: VecDeque<Value>,
+    pub(crate) sent: Vec<Value>,
+    pub(crate) offsets: Vec<i64>,
+    pub(crate) answered: Vec<Value>,
+    pub(crate) polls: usize,
+    pub(crate) files: HashMap<String, Vec<u8>>,
 }
 
-type TgState = Arc<Mutex<Tg>>;
+pub(crate) type TgState = Arc<Mutex<Tg>>;
 
 async fn bot_call(
     AxState(st): AxState<TgState>,
@@ -80,7 +80,7 @@ async fn bot_file(AxState(st): AxState<TgState>, AxPath((_bot, path)): AxPath<(S
     st.lock().unwrap().files.get(&id).cloned().unwrap_or_default()
 }
 
-async fn fake_telegram() -> (String, TgState) {
+pub(crate) async fn fake_telegram() -> (String, TgState) {
     let st: TgState = Default::default();
     let app =
         axum::Router::new().route("/{bot}/{method}", post(bot_call)).route("/file/{bot}/{*path}", get(bot_file)).with_state(st.clone());
@@ -92,11 +92,11 @@ async fn fake_telegram() -> (String, TgState) {
     (base, st)
 }
 
-fn msg_update(id: i64, user: i64, text: &str) -> Value {
+pub(crate) fn msg_update(id: i64, user: i64, text: &str) -> Value {
     json!({"update_id": id, "message": {"message_id": id, "from": {"id": user, "first_name": "Mario", "last_name": "Rossi"}, "chat": {"id": user, "type": "private"}, "text": text}})
 }
 
-fn sent_texts(tg: &TgState) -> Vec<String> {
+pub(crate) fn sent_texts(tg: &TgState) -> Vec<String> {
     tg.lock().unwrap().sent.iter().map(|m| m["text"].as_str().unwrap_or("").to_string()).collect()
 }
 
@@ -609,13 +609,13 @@ async fn the_morning_briefing_goes_only_to_the_channels_that_asked_for_it() {
 // ------------------------------------------------------------------------------------ Slack
 
 #[derive(Default)]
-struct SlackFake {
-    posts: Vec<Value>,
-    acks: Vec<String>,
-    connections: usize,
+pub(crate) struct SlackFake {
+    pub(crate) posts: Vec<Value>,
+    pub(crate) acks: Vec<String>,
+    pub(crate) connections: usize,
 }
 
-async fn fake_slack(events: Vec<Vec<Value>>) -> (String, Arc<Mutex<SlackFake>>) {
+pub(crate) async fn fake_slack(events: Vec<Vec<Value>>) -> (String, Arc<Mutex<SlackFake>>) {
     let st: Arc<Mutex<SlackFake>> = Default::default();
     let ws_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let ws_url = format!("ws://{}", ws_listener.local_addr().unwrap());
@@ -677,7 +677,7 @@ async fn fake_slack(events: Vec<Vec<Value>>) -> (String, Arc<Mutex<SlackFake>>) 
     (api, st)
 }
 
-fn slack_event(envelope: &str, ev: Value) -> Value {
+pub(crate) fn slack_event(envelope: &str, ev: Value) -> Value {
     json!({"envelope_id": envelope, "type": "events_api", "payload": {"event": ev}})
 }
 
@@ -779,15 +779,16 @@ async fn slack_approvals_use_buttons() {
 
 // ------------------------------------------------------------------------------------ email
 
-fn raw(from: &str, subject: &str, msg_id: &str, extra: &str, body: &str) -> String {
+pub(crate) fn raw(from: &str, subject: &str, msg_id: &str, extra: &str, body: &str) -> String {
     format!("From: {from}\nTo: assistente@casa.example\nSubject: {subject}\nMessage-ID: {msg_id}\n{extra}\n{body}\n")
 }
 
-fn mail(uid: u32, raw: &str) -> ImapMessage {
+pub(crate) fn mail(uid: u32, raw: &str) -> ImapMessage {
     ImapMessage { uid, date: chrono::Local::now().format("%Y-%m-%d").to_string(), raw: raw.replace('\n', "\r\n").into_bytes() }
 }
 
-const AUTH_OK: &str = "Authentication-Results: mx.casa.example; dkim=pass header.d=example.it; spf=pass smtp.mailfrom=mario@example.it\n";
+pub(crate) const AUTH_OK: &str =
+    "Authentication-Results: mx.casa.example; dkim=pass header.d=example.it; spf=pass smtp.mailfrom=mario@example.it\n";
 
 struct EmailRig {
     e: Engine,
@@ -843,13 +844,13 @@ impl EmailRig {
     }
 }
 
-fn decoded_body(data: &str) -> String {
+pub(crate) fn decoded_body(data: &str) -> String {
     use base64::Engine as _;
     let body = data.split("\r\n\r\n").nth(1).unwrap_or("").replace("\r\n", "");
     String::from_utf8(base64::engine::general_purpose::STANDARD.decode(body).unwrap_or_default()).unwrap_or_default()
 }
 
-fn header<'a>(data: &'a str, name: &str) -> Option<&'a str> {
+pub(crate) fn header<'a>(data: &'a str, name: &str) -> Option<&'a str> {
     data.lines().find_map(|l| l.strip_prefix(&format!("{name}: ")))
 }
 

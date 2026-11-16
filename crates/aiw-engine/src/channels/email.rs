@@ -88,6 +88,17 @@ fn config(engine: &Engine, ch: &Channel) -> Result<Cfg, String> {
     })
 }
 
+/// The address an email channel sends from (the setting «Indirizzo mittente», else the SMTP or IMAP user).
+pub(super) fn sender_address(ch: &Channel) -> String {
+    let user = Some(setting_str(ch, "smtp_user")).filter(|u| !u.is_empty()).unwrap_or_else(|| setting_str(ch, "imap_user"));
+    Some(setting_str(ch, "from")).filter(|f| !f.is_empty()).unwrap_or(user)
+}
+
+/// The SMTP settings of an email channel, for the drafts the owner approves.
+pub(super) fn smtp_config(engine: &Engine, ch: &Channel) -> Result<SmtpConfig, String> {
+    config(engine, ch).map(|c| c.smtp)
+}
+
 pub(super) struct Mailer {
     smtp: Option<SmtpConfig>,
 }
@@ -113,7 +124,22 @@ impl Transport for Mailer {
         let references =
             in_reply_to.as_ref().map(|id| format!("{} {id}", to.reply["references"].as_str().unwrap_or("")).trim().to_string());
         let _ = ask; // the answer is a reply by mail: «sì» or «no» in the next message
-        smtp::send(cfg, &Outgoing { to: addr, subject, body: body.to_string(), in_reply_to, references }).await
+        smtp::send(
+            cfg,
+            &Outgoing {
+                to: vec![addr],
+                cc: vec![],
+                bcc: vec![],
+                subject,
+                body: body.to_string(),
+                in_reply_to,
+                references,
+                attachments: vec![],
+                message_id: None,
+                auto: true,
+            },
+        )
+        .await
     }
 
     fn limit(&self) -> usize {
@@ -277,6 +303,11 @@ async fn handle(engine: &Engine, ch: &Channel, cfg: &Cfg, tr: &Arc<dyn Transport
         text: body,
         files: vec![],
         reply: serde_json::json!({"to": m.from_addr, "subject": m.subject, "in_reply_to": m.message_id, "references": m.references}),
+        id: Some(m.message_id.clone()).filter(|i| !i.is_empty()).map(|i| format!("{}|{i}", m.from_addr)),
+        // «sì» or «no» in a reply is read from the body alone: `text` starts with the subject line.
+        answer: Some(text::reply_text(&m.body)),
+        // A mail goes back to its sender alone: it is a direct conversation (the sender is checked first, see `authenticated`).
+        direct: true,
     };
     engine.channel_inbound(&ch.id, tr.clone(), msg).await;
 }

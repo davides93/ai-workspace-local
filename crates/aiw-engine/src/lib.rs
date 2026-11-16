@@ -2968,6 +2968,10 @@ mod tests_backup;
 #[cfg(test)]
 mod tests_channels;
 #[cfg(test)]
+mod tests_contexts;
+#[cfg(test)]
+mod tests_drafts;
+#[cfg(test)]
 mod tests_eval;
 #[cfg(test)]
 mod tests_vault;

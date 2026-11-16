@@ -3,6 +3,8 @@ import { Button, EmptyState, Page, PageHeader, QueryState } from "../../shared/u
 import { useAgents } from "../agents/api";
 import { AddChannel } from "./components/AddChannel";
 import { ChannelCard } from "./components/ChannelCard";
+import { ContextsPanel } from "./components/ContextsPanel";
+import { DraftsPanel } from "./components/DraftsPanel";
 import { useChannels } from "./api";
 import { alwaysOnNote } from "./model/channels";
 import "./channels.css";
@@ -36,6 +38,20 @@ export function ChannelsView() {
           )
         }
       </QueryState>
+      <ChannelsExtras />
     </Page>
+  );
+}
+
+/** The two panels that depend on the channels: linked conversations and email drafts. */
+function ChannelsExtras() {
+  const channels = useChannels();
+  const list = channels.data ?? [];
+  if (list.length === 0) return null;
+  return (
+    <>
+      <ContextsPanel channels={list} />
+      <DraftsPanel channels={list} />
+    </>
   );
 }

@@ -91,7 +91,9 @@ export function SessionItem({ session, agentName, active, renaming, reflecting, 
               <span className="ws-session-agent">{agentName}</span>
               <span aria-hidden="true">·</span>
               <time dateTime={session.updated_at}>{relTime(session.updated_at)}</time>
-              {session.channel && <span className="pill neutral" title={t("chat.conversazione_che_arriva_da", { p: CHANNEL_NAME[session.channel] })}>{CHANNEL_NAME[session.channel]}</span>}
+              {session.channel === "shared" ? (
+                <span className="pill neutral" title={t("channels.contesto_condiviso_titolo")}>{t("channels.contesto_condiviso")}</span>
+              ) : session.channel && <span className="pill neutral" title={t("chat.conversazione_che_arriva_da", { p: CHANNEL_NAME[session.channel] })}>{CHANNEL_NAME[session.channel]}</span>}
               {session.worktree && <span title={t("chat.worktree", { branch: session.worktree.branch })} className="inline-flex"><Icon name="branch" size={12} /><span className="sr-only">{t("chat.worktree_isolato_2")}</span></span>}
             </span>
           </button>
