@@ -458,32 +458,35 @@ async fn the_limits_of_a_task_hold_across_pauses_and_a_resume_cannot_get_around_
 
 #[tokio::test]
 async fn working_time_counts_against_the_limit_but_the_time_spent_waiting_for_a_confirmation_does_not() {
+    // The allowance is five seconds, not one: the clock of a segment starts before the first turn, and the setting up of a run
+    // takes more than a second on a slow Windows runner, which stopped the task before its first step ever started.
     // Working: a step that takes longer than the whole allowance stops the task at the next turn.
     let r = rig(vec![hold("c1"), hold("c2"), text("Fatto.")]).await;
     let e = &r.e;
-    let one_second = Some(BudgetLimits { max_seconds: Some(1), ..Default::default() });
-    let t = e.task_start(TaskStart { limits: one_second.clone(), ..start("Lavora") }).await.unwrap();
+    let allowance = Some(BudgetLimits { max_seconds: Some(5), ..Default::default() });
+    let t = e.task_start(TaskStart { limits: allowance.clone(), ..start("Lavora") }).await.unwrap();
     step_entered(&r).await;
-    tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5500)).await;
     r.release.notify_one();
     let paused = wait_status(e, &t.id, "paused").await;
     assert_eq!((paused.pause_reason.as_deref(), paused.auto_resume), (Some("task_budget"), false), "{paused:?}");
-    assert!(paused.progress.seconds >= 1);
+    assert!(paused.progress.seconds >= 5);
     assert_eq!(requests(&r), 1, "the second step did not start");
 
     // Waiting: the same allowance, but the time goes in waiting for the person: the task is still within it.
     let r =
         rig(vec![ScriptedBackend::tool_turn("w1", "write_file", json!({"path": "nota.md", "content": "# Nota\n"})), text("Fatto.")]).await;
     let e = &r.e;
-    let t = e.task_start(TaskStart { limits: one_second, ..start("Crea una nota") }).await.unwrap();
+    let t = e.task_start(TaskStart { limits: allowance, ..start("Crea una nota") }).await.unwrap();
     wait_for("a confirmation is asked", || !e.approvals().is_empty()).await;
-    tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
-    assert!(e.tasks_seconds_today(Local::now()) < 2.0, "waiting does not eat the day's time either");
+    // Waiting for longer than the whole allowance (and than the work counted below), so that counting it would show.
+    tokio::time::sleep(std::time::Duration::from_millis(6000)).await;
+    assert!(e.tasks_seconds_today(Local::now()) < 4.0, "waiting does not eat the day's time either");
     let ask = e.approvals().remove(0);
     e.respond_approval(&ask.id, true, false).unwrap();
     let done = wait_status(e, &t.id, "succeeded").await;
     assert!(r.ws.path().join("nota.md").exists());
-    assert!(done.progress.seconds < 2, "{:?}", done.progress);
+    assert!(done.progress.seconds < 5, "{:?}", done.progress);
 }
 
 // ------------------------------------------------------------------------------------ approvals
@@ -982,10 +985,11 @@ async fn an_agents_time_setting_does_not_end_a_task_that_only_waited_for_a_confi
     let r =
         rig(vec![ScriptedBackend::tool_turn("w1", "write_file", json!({"path": "nota.md", "content": "# Nota\n"})), text("Fatto.")]).await;
     let e = &r.e;
-    set(e, "agents.budget.max_seconds", json!(1));
+    // Five seconds and not one (see the test above): the setting up of the run counts too, and takes longer on a slow runner.
+    set(e, "agents.budget.max_seconds", json!(5));
     let t = e.task_start(start("Crea una nota")).await.unwrap();
     wait_for("a confirmation is asked", || !e.approvals().is_empty()).await;
-    tokio::time::sleep(std::time::Duration::from_millis(1800)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(6000)).await;
     let ask = e.approvals().remove(0);
     e.respond_approval(&ask.id, true, false).unwrap();
     let done = wait_status(e, &t.id, "succeeded").await;
