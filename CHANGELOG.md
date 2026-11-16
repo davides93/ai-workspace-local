@@ -2,6 +2,8 @@
 
 ## Non rilasciato
 
+## 0.5.0-beta.12 - pre-release
+
 - **Lavori in background: osservare, mettere in pausa, parlare e riprendere** (issue #75; provato con test automatici, modello a copione, orologio e regole costruite nei test, doppioni per calendario, posta, IMAP e riconoscimento vocale: **mai con un modello vero, con fonti vere, sull'app compilata, su desktop e telefono veri né con voce vera**).
   - L'approvazione di una proposta (e `POST /api/tasks`) crea un **lavoro**: un record durevole sopra i run di una sessione, quindi catena di passi nella stessa chat. `GET /api/tasks`, `GET /api/tasks/{id}`, `POST /api/tasks/{id}/pause|resume|instructions|cancel` (scope `device`). Osservabile: stato, motivo di pausa in italiano, avanzamento, conferma in attesa, istruzioni con il loro stato, cronologia che sopravvive al riavvio.
   - **Pausa** a fine passo (subito se aspetta una conferma), **istruzioni durante il lavoro** consegnate al turno successivo (o come passo in più se arrivano a run finito, o alla ripresa se in pausa; passano dagli hook `UserPromptSubmit`), **ripresa** reclamata sotto lock (due richieste insieme: una sola parte), messaggi della sessione scritti a ogni turno.

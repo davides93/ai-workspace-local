@@ -1,6 +1,6 @@
 # Stato dell'app e come procedere
 
-> Aggiornamento 15 novembre 2026 · release v0.5.0-beta.11, build store 5013. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
+> Aggiornamento 16 novembre 2026 · release v0.5.0-beta.12, build store 5014. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
 
 ## Harness semplice: una sola chat agentica in modalità semplice (issue #105)
 
@@ -10,7 +10,7 @@ e circa 18 strumenti in più negli elenchi.
 
 **Che cosa c'è (verificato nel codice e con test automatici):**
 
-- **Agente `assistant`** («Assistente»): predefinito dal codice (`crates/aiw-engine/src/defaults.rs`), modalità `ask`, profilo `auto:agent`, 40 turni, 25 strumenti. Arriva
+- **Agente `assistant`** («Assistente»): predefinito dal codice (`crates/aiw-engine/src/defaults.rs`), modalità `ask`, profilo `auto:agent`, 40 turni, 26 strumenti. Arriva
   anche nelle installazioni esistenti. `agent.default` resta `operator`: è l'interfaccia semplice a creare le sessioni con `assistant`. Gli agenti predefiniti sono ora **7**
   (`operator`, `coder`, `browser`, `desktop`, `planner`, `teacher`, `assistant`).
 - **`delegate_tools`** (nuovo campo di `AgentProfile`): strumenti che un agente può concedere ai sottoagenti senza usarli. L'Assistente ha `["*"]`, quindi `browser` e
@@ -38,22 +38,21 @@ e circa 18 strumenti in più negli elenchi.
 
 **Misura del contesto** (test `the_assistant_sends_the_model_a_prompt_and_tool_schemas_of_a_size_that_is_measured_and_bounded` in `crates/aiw-engine/src/management/mod.rs`,
 da rilanciare con `cargo test -p aiw-engine the_assistant_sends -- --nocapture`): prompt del profilo 2287 caratteri; messaggio di sistema della prima chiamata 2999
-caratteri; **24 strumenti offerti** nella prima chiamata (25 elencati: `kb_search` compare solo se esiste una raccolta di documenti), con 22 509 caratteri di schemi;
-in tutto **25 508 caratteri, circa 7 300 token** (stima: caratteri / 3,5, non il conteggio di un tokenizer vero; un modello diverso conta diversamente). I più grandi:
+caratteri; **25 strumenti offerti** nella prima chiamata (26 elencati: `kb_search` compare solo se esiste una raccolta di documenti), con 22 509 caratteri di schemi;
+in tutto circa **26 500 caratteri, circa 7 600 token** (misurati 25 508 caratteri e 7 300 token prima di `aiw_task`, più circa 1 000 caratteri stimati dopo; stima: caratteri / 3,5, non il conteggio di un tokenizer vero; un modello diverso conta diversamente). I più grandi:
 `aiw_connector_save` (2 471 caratteri), `ask_user` (2 193), `aiw_agent_save` (1 712). Il calcolo che decide quando compattare la conversazione (`estimate_tokens` in
 `crates/aiw-agent/src/runner.rs`) guarda solo i messaggi, non gli schemi degli strumenti. Un profilo Ollama o un profilo «da scaricare» parte con una finestra di 8 192 token
 (`defaults.rs`): la parte fissa di una chiamata dell'Assistente ne occuperebbe circa l'89 %, prima ancora del primo messaggio. **Non è stato provato come si comportano i
-modelli locali piccoli con questi 24-25 strumenti** (se sbagliano le chiamate, se rispettano le istruzioni, se la finestra basta): se risulta insufficiente la leva è
+modelli locali piccoli con questi 25-26 strumenti** (se sbagliano le chiamate, se rispettano le istruzioni, se la finestra basta): se risulta insufficiente la leva è
 accorciare le descrizioni o unire strumenti, non togliere le conferme.
 
 **Che cosa non c'è, e i residui dell'issue #105:**
 
-- **Segreti ancora in chiaro nello store**: nessun portachiavi del sistema né cifratura a riposo. Il flusso nuovo non peggiora la situazione (stesse scritture, nessun nuovo
-  tipo di documento) ma ne aumenta l'uso. La cifratura a riposo con chiave nel portachiavi del sistema è l'issue #121 (priorità P2; il filone è in `main` dal 15 novembre 2026, il lavoro
-  sulla cifratura segue; da chiudere prima della prima versione non beta con la chat unica); #24 resta per rete locale, TLS e mDNS. Nel frattempo la scheda del segreto dice che il valore è
-  salvato su questo computer senza cifratura. Dettagli in `SECURITY.md`.
-- **Sezioni senza sostituto nella chat** (solo vista Sviluppatore, candidate a una seconda fase): raccolte di documenti, canali e posta, proposte dell'assistente proattivo,
-  aggiornamento dell'app, dispositivi e token, workflow, valutazioni, addestramento, backup, regole di sicurezza e hook. Chi usa la modalità semplice le raggiunge solo
+- **Segreti cifrati a riposo (#121, PR #126)**: dove c'è un portachiavi del sistema (macOS, Windows, Linux con Secret Service) i segreti dello store sono cifrati con una chiave
+  custodita nel portachiavi; altrove restano in chiaro e lo stato è dichiarato (`aiw doctor`, Sicurezza → Accessi, scheda del segreto). Provato con test e con i portachiavi dei runner di CI
+  (macOS, Windows, Ubuntu) e su un Mac; **non** su un PC Windows vero né con l'app macOS firmata. La cifratura non protegge da un processo dello stesso utente; `token` e chiavi TLS restano
+  in chiaro (#24). La issue #121 resta aperta fino a quella prova. Dettagli in `docs/segreti.md` e `SECURITY.md`.
+- **Sezioni senza sostituto nella chat** (solo vista Sviluppatore, candidate a una seconda fase): raccolte di documenti, canali e posta, aggiornamento dell'app, dispositivi e token, workflow, valutazioni, addestramento, backup, regole di sicurezza e hook. Chi usa la modalità semplice le raggiunge solo
   passando a Sviluppatore.
 - **Senza un modello funzionante nulla di agentico gira**: nel primo avvio e quando il modello sparisce vale solo il pannello deterministico «Per iniziare» dentro la chat.
 - **Mai provato con un modello vero, con un client AG-UI reale né con l'app compilata**: i test usano backend a copione, provider finti, il mockup nel browser e un client
@@ -92,10 +91,10 @@ accorciare le descrizioni o unire strumenti, non togliere le conferme.
 ## Aggiornamento dopo le PR #90–#97
 
 - Integrati fix delle porte sidecar, aggiornamenti Actions/UI, primo endpoint AG-UI, copia/cancellazione con checkpoint e recupero delle catture della chat dopo il ricaricamento.
-- AG-UI è un primo taglio: mapping thread in memoria; stato, contesto e tool client ignorati; nessuna prova con client AG-UI reale. Requisiti residui nella issue #69, guida in `docs/agui.md`.
+- AG-UI è provato con `@ag-ui/client` 1.0.4 e 1.0.2 e con il runtime di CopilotKit lato server (PR #128, job CI «AG-UI (real client)»): thread durevoli, stato e contesto del client, `MESSAGES_SNAPSHOT` e `STATE_DELTA`, interruzioni con `resume`. **Non** implementati i `tools` del client e la riconnessione a metà run; non provati i componenti React di CopilotKit, OpenBot e OpenDots. Requisiti residui nella issue #69, guida in `docs/agui.md`.
 - Spazi condivisi: decisione di discovery approvata, non implementazione. Prima si misurano due settimane di utilizzo; dettagli in `docs/design/spazi-condivisi.md` e follow-up #101.
 - Verifica combinata locale macOS: fmt/clippy, 1139 test Rust passati (8 ignorati), 999 test UI, typecheck/build, 8 E2E e 221 test di accessibilità. Questo non sostituisce i test con servizi/modelli/dispositivi reali.
-- Issue completate chiuse tramite merge: #8, #74 e task #98–#100. #18, #28, #69 e la roadmap #5 restano aperte per i requisiti residui.
+- Issue completate chiuse tramite merge: #8, #70, #73, #74 e task #98–#100. #18, #28, #69, #71, #72, #75, #76, #121 e la roadmap #5 restano aperte per i requisiti residui (canali e caselle veri, siti reali, dispositivi, un PC Windows vero).
 - TypeScript: l’aggiornamento a 7 (#84) è stato unito il 15 novembre 2026 (7.0.2) con la CI verde (aggiornamento successivo a questa nota).
 
 > 2026-11-03 · v0.4 · Basato su un audit del codice (non della documentazione) eseguito per layer, con
