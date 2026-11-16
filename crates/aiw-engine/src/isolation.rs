@@ -59,8 +59,8 @@ pub(crate) fn is_safe_dir_name(id: &str) -> bool {
         && !WINDOWS_RESERVED.contains(&stem.as_str())
 }
 
-/// Reads `<folder>/<name>` as text (at most `max` characters) only if it is a regular file and not a link, whatever the link points
-/// at. The engine reads these files itself, outside the sandbox, and puts them in the prompt: a link the agent made in its own
+/// Reads `<folder>/<name>` as text (at most `max` characters) only if it is a regular file with a single name, not a link (symbolic or
+/// hard), whatever the link points at. The engine reads these files itself, outside the sandbox, and puts them in the prompt: a link the agent made in its own
 /// folder (`AGENTS.md -> ../beta/workspace/nota.txt`, `-> <dati>/token`) must not carry another file in. The file is opened first
 /// and compared with what the path says (same device and inode), so it cannot be swapped for a link between the check and the read.
 pub(crate) fn read_regular_text(folder: &Path, name: &str, max: usize) -> Option<String> {
@@ -76,6 +76,11 @@ pub(crate) fn read_regular_text(folder: &Path, name: &str, max: usize) -> Option
         let opened = file.metadata().ok()?;
         if (opened.dev(), opened.ino()) != (link.dev(), link.ino()) {
             return None; // the path now leads elsewhere
+        }
+        // A hard link is a regular file under another name: `ln <dati>/token AGENTS.md` made from a shell that can reach the target
+        // would carry it in. A file of the folder that has only one name is the folder's own.
+        if opened.nlink() != 1 {
+            return None;
         }
     }
     use std::io::Read;
@@ -159,6 +164,18 @@ impl Engine {
     /// The agent has a folder of its own or credentials of its own: the conversation does not move to or from it.
     pub(crate) fn kept_apart(&self, a: &AgentProfile) -> bool {
         a.has_dedicated_workspace() || self.agent_has_credentials(&a.id)
+    }
+
+    /// A workflow keeps one session for all its agent steps. A step of another agent must not run in that session when either agent is kept
+    /// apart: the session runs with the profile of the agent it was made for (its folder, its tools, its history), so the step would
+    /// run as somebody else. Between agents that are not apart nothing changes.
+    pub(crate) fn session_not_for_step(&self, session_id: &str, step_agent: &str) -> bool {
+        let Ok(session) = self.0.store.session(session_id) else { return false };
+        if session.agent_id == step_agent {
+            return false;
+        }
+        let apart = |id: &str| self.agent(base_agent_id(id)).is_ok_and(|a| self.kept_apart(&a));
+        apart(&session.agent_id) || apart(step_agent)
     }
 
     /// What keeps an agent from being really apart on this computer, in words: empty when nothing is missing. The shell of an agent

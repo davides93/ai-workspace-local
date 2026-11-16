@@ -41,8 +41,8 @@ lavora: lo stesso meccanismo dei worktree delle sessioni isolate (`<dati>/worktr
 
 - l'agente lavora lì e scrive lì; non vede il workspace condiviso (né con i file tool né con la shell), né le cartelle che l'utente ha
   consentito (App Store), né l'`AGENTS.md` e le skill del workspace condiviso. Gli restano le skill globali e l'`AGENTS.md` globale, e
-  l'`AGENTS.md` della sua cartella solo se è un file vero (il motore lo legge fuori dalla sandbox: un collegamento fatto dall'agente nella sua
-  cartella non porta dentro il prompt il file di un altro, né il token del proprietario). Le skill nella sua cartella non si usano per la stessa ragione;
+  l'`AGENTS.md` della sua cartella solo se è un file vero con un solo nome (il motore lo legge fuori dalla sandbox: né un collegamento simbolico né un collegamento
+  rigido fatti dall'agente nella sua cartella portano dentro il prompt il file di un altro, né il token del proprietario; sotto Seatbelt il `ln` dalla sua shell viene comunque rifiutato). Le skill nella sua cartella non si usano per la stessa ragione;
 - gli altri agenti non leggono né scrivono quella cartella: non dai file tool (percorso assoluto, relativo, con `..`, tramite un
   collegamento simbolico), non dalla shell. Un agente con la sandbox `off` invece legge tutto quello che legge l'account: per
   questo un agente con workspace dedicato **non può avere la sandbox `off`** (rifiutato al salvataggio);
@@ -90,8 +90,13 @@ se le impostazioni la chiudono, e un sotto-agente non la riapre. (Non c'è invec
   memorie con ambito di un agente restano sue quando parla lui, ma un sotto-agente con quel profilo le legge anche dentro la delega di un altro agente
   (la ricerca nelle memorie usa il profilo di chi gira) e un agente dedicato che salva una memoria senza dire «solo questo agente» la scrive nell'ambito comune.
 - **Un run di un agente dedicato avviato da un client A2A, dal server MCP o da un workflow** lavora nella cartella di quell'agente (la cartella segue l'agente, non
-  chi lo avvia) ma senza le sue credenziali. Un workflow con più passi riusa la sessione del primo passo anche per gli altri agenti (comportamento
-  che c'era già): i passi successivi girano con il profilo del primo, non con il proprio.
+  chi lo avvia) ma senza le sue credenziali. Un workflow tiene una sola sessione per tutti i suoi passi agente (di serie, per poterla ispezionare): quando
+  il passo è di un altro agente e uno dei due è isolato, il passo ha una sessione sua (altrimenti girerebbe con il profilo, la cartella e la cronologia del primo);
+  tra agenti non isolati nulla cambia.
+- **Letture del motore fuori dalla sandbox nel workspace condiviso (già su `main`, non toccate).** `AGENTS.md` e le skill del workspace condiviso si leggono
+  seguendo i collegamenti simbolici: un comando di shell di un agente condiviso (o un repository clonato che porta un `AGENTS.md` che è un collegamento) può
+  far entrare nel prompt di un run successivo un file di testo che il motore sa leggere, per esempio il token del proprietario. Per un agente dedicato è chiuso (vedi sopra);
+  per il workspace condiviso serve un lavoro a parte, perché il rimedio deve lasciar passare i collegamenti dentro il workspace (`AGENTS.md -> CLAUDE.md` è comune).
 - Un indirizzo in ambito non conosce la porta né i domini pubblici condivisi (`github.io`, `amazonaws.com`): dare una credenziale a un host con sottodomini
   di terzi la rende valida anche per quelli.
 - Hook, valutatori degli eval e browser controllato non passano dalla sandbox (limite già noto di #23). Restano comuni anche la sessione e i cookie del

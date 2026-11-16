@@ -247,6 +247,18 @@ async fn the_shell_of_an_agent_apart_runs_in_its_own_folder_and_cannot_read_anot
     let out = shell(alfa.tool_ctx.clone(), format!("echo rotto > '{}'", beta_file.display())).await;
     assert!(out.is_error, "{}", out.content);
     assert_eq!(std::fs::read_to_string(&beta_file).unwrap(), BETA_FILE);
+    // A hard link made from its own shell: the sandbox may or may not stop `ln` (Seatbelt denies reads and writes on the hidden path, bubblewrap
+    // puts a different file system over it), and the engine reads `AGENTS.md` itself, outside the sandbox. Whatever `ln` does, nothing of
+    // another agent, and not the token of the owner, may get in the prompt of the next run.
+    let (token_path, beta_note) = (data.path().join("token"), folder(data.path(), "beta").join("nota.txt"));
+    for target in [&beta_note, &token_path] {
+        let _ = std::fs::remove_file(folder(data.path(), "alfa").join("AGENTS.md"));
+        let out = shell(alfa.tool_ctx.clone(), format!("ln '{}' AGENTS.md", target.display())).await;
+        eprintln!("ln {} from the shell of alfa: {}", target.display(), if out.is_error { "refused" } else { "worked" });
+        let prompt = input_of(&e, "alfa").system_extra.join("\n");
+        assert!(!prompt.contains(BETA_FILE) && !prompt.contains(e.token()), "a hard link carried a file in the prompt of alfa");
+    }
+    let _ = std::fs::remove_file(folder(data.path(), "alfa").join("AGENTS.md"));
     // The shared agent still works in the shared workspace.
     let out = shell(comune.tool_ctx.clone(), "cat condiviso.txt".into()).await;
     assert!(out.content.contains(SHARED_FILE), "{}", out.content);
@@ -763,6 +775,69 @@ fn only_a_regular_file_is_read_as_the_instructions_of_a_folder() {
     std::os::unix::fs::symlink(other.path().join("fuori.txt"), dir.path().join("AGENTS.md")).unwrap();
     assert!(crate::isolation::read_regular_text(dir.path(), "AGENTS.md", 100).is_none(), "a link is not followed");
     std::fs::remove_file(dir.path().join("AGENTS.md")).unwrap();
+    // A hard link to a file somewhere else is a regular file with the same inode as its target: it is not read either.
+    std::fs::hard_link(other.path().join("fuori.txt"), dir.path().join("AGENTS.md")).unwrap();
+    assert!(crate::isolation::read_regular_text(dir.path(), "AGENTS.md", 100).is_none(), "a hard link carried a file in");
+    std::fs::remove_file(dir.path().join("AGENTS.md")).unwrap();
     std::fs::create_dir(dir.path().join("AGENTS.md")).unwrap();
     assert!(crate::isolation::read_regular_text(dir.path(), "AGENTS.md", 100).is_none());
+}
+
+#[tokio::test]
+async fn a_workflow_step_of_another_agent_does_not_run_as_the_agent_of_the_first_step_when_one_of_them_is_apart() {
+    let backend =
+        ScriptedBackend::new(vec![ScriptedBackend::text_turn("risposta del primo"), ScriptedBackend::text_turn("risposta del secondo")]);
+    let (data, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let e = engine_at(data.path(), ws.path()).await;
+    e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
+    e.save_agent(apart("alfa", &["todo"])).unwrap();
+    e.save_agent(shared("comune", &["todo"])).unwrap();
+    e.save_agent(shared("altro", &["todo"])).unwrap();
+    let workflow = |id: &str, first: &str, second: &str| -> aiw_core::api::WorkflowDef {
+        serde_json::from_value(json!({
+            "id": id, "name": id, "enabled": false, "trigger": {"kind": "manual"}, "inputs": {},
+            "steps": [
+                {"id": "uno", "kind": "agent", "agent": first, "prompt": "primo passo"},
+                {"id": "due", "kind": "agent", "agent": second, "prompt": "secondo passo"}
+            ]
+        }))
+        .unwrap()
+    };
+    let wait = |id: String| {
+        let e = e.clone();
+        async move {
+            for _ in 0..300 {
+                if e.workflow_runs().iter().any(|r| r.id == id && r.status == "succeeded") {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            panic!("the workflow did not finish");
+        }
+    };
+    let agents_of_the_sessions = |title: &str| -> Vec<String> {
+        let mut v: Vec<String> = e.sessions().unwrap().into_iter().filter(|s| s.title.contains(title)).map(|s| s.agent_id).collect();
+        v.sort();
+        v
+    };
+    // [alfa apart, comune]: the second step runs as comune, in a session of its own.
+    e.save_workflow(workflow("misto", "alfa", "comune")).unwrap();
+    let run = e.run_workflow("misto", serde_json::Map::new(), "test").await.unwrap();
+    wait(run.id).await;
+    assert_eq!(agents_of_the_sessions("misto"), ["alfa", "comune"], "the second step ran as the agent of the first");
+    // [comune, alfa apart]: the other way round.
+    backend.requests.lock().unwrap().clear();
+    let backend2 = ScriptedBackend::new(vec![ScriptedBackend::text_turn("a"), ScriptedBackend::text_turn("b")]);
+    e.register_native_runtime("llama-embedded", Arc::new(backend2));
+    e.save_workflow(workflow("rovescio", "comune", "alfa")).unwrap();
+    let run = e.run_workflow("rovescio", serde_json::Map::new(), "test").await.unwrap();
+    wait(run.id).await;
+    assert_eq!(agents_of_the_sessions("rovescio"), ["alfa", "comune"]);
+    // Between agents that are not apart nothing changed: one session for the whole workflow, as before.
+    let backend3 = ScriptedBackend::new(vec![ScriptedBackend::text_turn("a"), ScriptedBackend::text_turn("b")]);
+    e.register_native_runtime("llama-embedded", Arc::new(backend3));
+    e.save_workflow(workflow("semplice", "comune", "altro")).unwrap();
+    let run = e.run_workflow("semplice", serde_json::Map::new(), "test").await.unwrap();
+    wait(run.id).await;
+    assert_eq!(agents_of_the_sessions("semplice"), ["comune"], "the session of the workflow is still shared between ordinary agents");
 }

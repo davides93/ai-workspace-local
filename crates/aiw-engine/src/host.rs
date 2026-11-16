@@ -345,15 +345,21 @@ impl aiw_workflow::WorkflowHost for EngineHost {
         // Each workflow keeps one session per run so the work is inspectable in the Workspace view.
         // A session runs one thing at a time: the session is taken while an agent works in it, so
         // agents that run together (foreach, parallel) each get their own.
-        let existing = self.workflow_session.lock().unwrap().take();
+        let taken = self.workflow_session.lock().unwrap().take();
+        // A step of another agent gets a session of its own when either agent is kept apart (issue #71): the session of the workflow stays
+        // for the agent it was made for.
+        let (existing, parked) = match taken {
+            Some(sid) if self.engine.session_not_for_step(&sid, agent_id) => (None, Some(sid)),
+            other => (other, None),
+        };
         let name = self.workflow.as_ref().map(|w| w.name.clone()).unwrap_or_else(|| "Workflow".into());
         match self.engine.run_agent_task(agent_id, prompt, existing.as_deref(), &format!("⚙ {name}")).await {
             Ok((text, session_id)) => {
-                self.workflow_session.lock().unwrap().get_or_insert(session_id);
+                self.workflow_session.lock().unwrap().get_or_insert(parked.unwrap_or(session_id));
                 Ok(text)
             }
             Err(e) => {
-                if let Some(s) = existing {
+                if let Some(s) = existing.or(parked) {
                     self.workflow_session.lock().unwrap().get_or_insert(s);
                 }
                 Err(e)
