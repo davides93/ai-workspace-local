@@ -79,6 +79,19 @@
 .ws-msg.ws-user { align-items: flex-end; }
 .ws-bubble-user { max-width: min(92%, 640px); padding: 10px 14px; border-radius: 14px 14px 4px 14px; background: var(--fg); color: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ws-bubble { min-width: 0; max-width: 100%; padding: 2px 0; }
+/*
+ * Long conversations. The text of a reply that is far from the end when the conversation opens (`data-cold`, set by ConversationLog: more
+ * than 40 rows from the end at that moment; a shorter conversation is not touched, and neither are the rows that arrive afterwards, with
+ * the confirmations, questions and the reply in progress) is not laid out or painted until it comes near the screen:
+ * `content-visibility: auto`. It stays in the document, so find in page, selection, the screen reader and the tab order see it (the
+ * Markdown spells out the paragraph role, which Chromium would otherwise leave out of a skipped box); rows already seen keep their measured
+ * height (`auto`), the others count as 8rem. A browser without the property shows every row, as it always did. Paint containment clips what
+ * sticks out of the box, so the padding leaves room for a focus ring and the negative margin gives the space back; `max-width` makes the
+ * content box as wide as it is without the rule.
+ */
+@supports (content-visibility: auto) {
+  .ws-bubble[data-cold] { content-visibility: auto; contain-intrinsic-block-size: auto 8rem; padding: 4px; margin: -2px -4px; max-width: calc(100% + 8px); }
+}
 /* The copy button floats in the gap under a reply: it takes no room of its own. */
 .ws-assistant { position: relative; }
 .ws-msg-tools { position: absolute; left: -4px; top: 100%; margin-top: -4px; display: flex; height: 22px; opacity: 0; pointer-events: none; transition: opacity var(--dur-fast) var(--ease); }

@@ -44,13 +44,13 @@ export function UrlPullForm() {
         <Field label={t("models.indirizzo_del_file")} htmlFor="url-address" error={shown.url} hint={t("models.per_esempio_il_link_resolve")}>
           <Input
             id="url-address" type="url" mono inputMode="url" autoComplete="off" spellCheck={false}
-            placeholder="https://esempio.org/modelli/qwen3-4b-Q4_K_M.gguf" value={values.url} onChange={set("url")}
+            placeholder={t("models.esempio_indirizzo_modello")} value={values.url} onChange={set("url")}
             aria-invalid={shown.url ? true : undefined}
           />
         </Field>
         <div className="mh-url-pair">
           <Field label={t("models.nome_del_file_facoltativo")} htmlFor="url-name" error={shown.fileName} hint={t("models.se_vuoto_si_usa_il")}>
-            <Input id="url-name" mono autoComplete="off" spellCheck={false} placeholder="modello.gguf" value={values.fileName} onChange={set("fileName")} aria-invalid={shown.fileName ? true : undefined} />
+            <Input id="url-name" mono autoComplete="off" spellCheck={false} placeholder={t("models.esempio_nome_file")} value={values.fileName} onChange={set("fileName")} aria-invalid={shown.fileName ? true : undefined} />
           </Field>
           <Field label={t("models.sha256_facoltativo")} htmlFor="url-sha" error={shown.sha256} hint={t("models.se_lo_indichi_a_fine")}>
             <Input id="url-sha" mono autoComplete="off" spellCheck={false} placeholder={t("models.64_caratteri_esadecimali")} value={values.sha256} onChange={set("sha256")} aria-invalid={shown.sha256 ? true : undefined} />

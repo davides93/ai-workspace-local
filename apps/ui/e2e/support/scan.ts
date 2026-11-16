@@ -53,7 +53,12 @@ export async function expectNoPlaceholderLeaks(page: Page): Promise<void> {
     const out: string[] = [];
     // `{{now}}` (a workflow placeholder shown as an example) is not a leak.
     const bad = /(?<!\{)\{\w+\}(?!\})/;
+    // A template written on purpose inside a code sample (`/agui/{agente}` in the guide of Integrazioni) is not a leak either:
+    // the code samples are hidden for the scan of the text around them, then shown again.
+    const samples = [...document.querySelectorAll<HTMLElement>("code, pre")].map((el) => [el, el.style.display] as const);
+    for (const [el] of samples) el.style.display = "none";
     const text = document.body.innerText.match(bad)?.[0];
+    for (const [el, display] of samples) el.style.display = display;
     if (text) out.push(`text: ${text}`);
     for (const el of document.querySelectorAll("[aria-label],[title],[placeholder],[alt]")) {
       for (const a of ["aria-label", "title", "placeholder", "alt"]) {

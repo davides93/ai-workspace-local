@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import css from "./tokens.css?raw";
+import oled from "./oled.css?raw";
 
 // WCAG 2.1 contrast of the design tokens, computed from tokens.css itself.
 
@@ -26,6 +27,8 @@ const contrast = (a: string, b: string) => {
 };
 
 const themes = { chiaro: block(":root"), scuro: block(':root[data-theme="dark"]') };
+// On touch screens the dark theme uses true black (oled.css): the code block gets darker, the syntax colors must still read.
+const oledCodeBg = /--code-bg:\s*(#[0-9a-fA-F]{6})/.exec(oled)?.[1] ?? "";
 
 describe("tokens.css", () => {
   it("has a single dark block keyed on data-theme", () => {
@@ -53,6 +56,15 @@ describe("tokens.css", () => {
       });
       it("keeps status colors readable on the surface", () => {
         for (const s of ["ok", "warn", "crit", "info", "accent-ink"]) expect(contrast(t[s], t.surface), `${s} su surface`).toBeGreaterThanOrEqual(4.5);
+      });
+      it("keeps the syntax colors of the code blocks at >= 4.5:1 on the code background and its header", () => {
+        const kinds = ["com", "str", "num", "kw", "lit", "fn", "ty", "attr", "ins", "del"];
+        const backgrounds = [t["code-bg"], t["surface-2"], ...(name === "scuro" ? [oledCodeBg] : [])];
+        expect(backgrounds.every((b) => /^#[0-9a-f]{6}$/i.test(b))).toBe(true);
+        for (const k of kinds) {
+          expect(t[`tok-${k}`], `tok-${k}`).toBeDefined();
+          for (const bg of backgrounds) expect(contrast(t[`tok-${k}`], bg), `tok-${k} su ${bg}`).toBeGreaterThanOrEqual(4.5);
+        }
       });
       it("keeps button text readable", () => {
         expect(contrast(t["on-accent"], t.accent)).toBeGreaterThanOrEqual(4.5);

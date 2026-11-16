@@ -1,9 +1,12 @@
 import type { UiMode } from "../../lib/uiMode";
+import { ApiError } from "../http";
+import type { Transport } from "../transport";
 import { createChannel, updateChannel } from "./channels";
 import { createContext } from "./contexts";
 import { seedDraft } from "./drafts";
 import { catalog, configLayers, folderGrants, models, nid, now, runtimes, sessionMessages, sessions, system } from "./fixtures";
 import { taskScenario } from "./tasks";
+import { LONG_CHAT_ID, longChatMessages } from "./long-chat";
 
 /**
  * Named starting states of the demo, picked with `?scenario=<name>` in the address of the mockup.
@@ -12,13 +15,18 @@ import { taskScenario } from "./tasks";
  *
  * - `first-run`: a runtime that is up, no model on disk, no conversation: what the first start of
  *   the simple interface looks like before "Prepara tutto".
+ * - `long-chat`: the default demo plus one very long conversation (`ses_long`, about 360 rows with code in every language of the
+ *   highlighter, tool cards, tables, lists, quotes and links): what a person who uses the app for months has. It is the first session of the list.
+ * - `offline`: the workspace does not answer (every request fails with a 503): the connection banner and the error state of every view.
+ * - `unpaired`: this browser has no token on a device that wants one (every request fails with a 401 until the pairing code `123456`
+ *   is entered): the pairing screen, then the app. A wrong code is refused.
  * - `mas`: the sandboxed Mac App Store build: the agents work in the app's own folder and the person grants more
  *   folders of the Mac (Download is already granted), so Settings shows «Cartelle consentite».
  * - `mail`: a Telegram channel and an email channel, both on, linked into one shared conversation, and four email drafts
  *   (two written by the assistant and waiting for the owner, one that failed, one already sent), so «Canali» shows the
  *   linked conversations and the review of the drafts.
  */
-export const MOCK_SCENARIOS = ["first-run", "mas", "mail"] as const;
+export const MOCK_SCENARIOS = ["first-run", "mas", "long-chat", "offline", "unpaired", "mail"] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 export const isMockScenario = (v: unknown): v is MockScenario => (MOCK_SCENARIOS as readonly unknown[]).includes(v);
@@ -33,6 +41,10 @@ export function applyMockScenario(name: MockScenario): void {
     for (const id of Object.keys(sessionMessages)) delete sessionMessages[id];
     // No chat, no background task: the demo tasks live in those sessions.
     taskScenario.empty = true;
+  }
+  if (name === "long-chat") {
+    sessions.unshift({ id: LONG_CHAT_ID, title: "Domande di programmazione (lunga)", agent_id: "coder", created_at: now(), updated_at: now(), last_status: "succeeded" });
+    sessionMessages[LONG_CHAT_ID] = longChatMessages();
   }
   if (name === "mail") {
     const tg = createChannel({ kind: "telegram", name: "Telegram", mode: "ask", allowed: ["111"], secrets: { bot_token: "123456:demo" } });
@@ -82,4 +94,34 @@ export function applyMockScenario(name: MockScenario): void {
 export function applyMockUiMode(mode: UiMode): void {
   const global = configLayers.find((l) => l.name === "global");
   if (global) global.values = { ...global.values, "ui.mode": mode };
+}
+
+/** The code the `unpaired` scenario accepts. */
+export const DEMO_PAIRING_CODE = "123456";
+
+/**
+ * The transport as a scenario wants it. Most scenarios are data (`applyMockScenario`) and the transport is the demo's; `offline` and
+ * `unpaired` are about the connection, so every request of the demo goes through a wrapper that fails the way the real one would.
+ * `subscribeRun` is the one synchronous member of the interface: it is not a request and is never refused.
+ */
+export function transportForScenario(demo: Transport, name: MockScenario | null): Transport {
+  if (name !== "offline" && name !== "unpaired") return demo;
+  let paired = name !== "unpaired";
+  const refusal = () => (name === "offline" ? new ApiError(503, "il workspace non risponde") : new ApiError(401, "serve il pairing: inserisci il codice mostrato sull'altro dispositivo"));
+  return new Proxy(demo, {
+    get(target, prop) {
+      if (name === "unpaired") {
+        if (prop === "capabilities") return { ...target.capabilities, pairing: true };
+        if (prop === "pair") {
+          return async (code: string): Promise<void> => {
+            if (code.replace(/\D/g, "") !== DEMO_PAIRING_CODE) throw new ApiError(400, "codice non valido o scaduto");
+            paired = true;
+          };
+        }
+      }
+      const value = Reflect.get(target, prop, target) as unknown;
+      if (typeof value !== "function" || prop === "subscribeRun") return typeof value === "function" ? value.bind(target) : value;
+      return (...args: unknown[]) => (paired && name === "unpaired") ? (value as (...a: unknown[]) => unknown).apply(target, args) : Promise.reject(refusal());
+    },
+  });
 }

@@ -4,7 +4,7 @@ import type { navIt } from "../it/nav";
 export const navEn: Record<keyof typeof navIt, string> = {
   "nav.home": "Home",
   "nav.home_keywords": "home, dashboard, start, overview",
-  "nav.chat": "Workspace",
+  "nav.chat": "Chat",
   "nav.chat_simple": "Chat",
   "nav.chat_keywords": "chat, workspace, conversation, sessions",
   "nav.inbox": "Suggestions",

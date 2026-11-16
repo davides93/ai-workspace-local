@@ -22,7 +22,7 @@ function Webhook({ id, secret }: { id: string; secret: string }) {
         : <p className="faint text-sm">{tr("workflows.il_segreto_viene_generato_dal")}</p>}
       <p className="faint text-xs">
         {trNode("workflows.invia_il_segreto_nell_header", { span: <span className="mono">X-AIW-Secret</span>, span2: <span className="mono">X-Hub-Signature-256</span> })}</p>
-      {url && <CodeBlock title={tr("workflows.esempio")} code={`curl -X POST ${url} \\\n  -H "X-AIW-Secret: ${tr("workflows.example_secret")}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"${tr("workflows.example_key")}": "${tr("workflows.example_value")}"}'`} />}
+      {url && <CodeBlock title={tr("workflows.esempio")} code={`curl -X POST ${url} \\\n  -H "X-AIW-Secret: ${tr("workflows.example_secret")}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"${tr("workflows.example_key")}": "${tr("workflows.example_value")}"}'`} lang="shell" />}
     </div>
   );
 }
@@ -105,7 +105,7 @@ export function TriggerEditor({ trigger, onChange, issues, workflowId, savedSecr
 
       {trigger.kind === "file" && (
         <Field label={tr("workflows.file_o_cartella")} htmlFor="wf-file" error={issue(issues, "path")?.message} hint={tr("workflows.parte_quando_la_data_di")}>
-          <Input id="wf-file" mono value={trigger.path} onChange={(e) => onChange({ kind: "file", path: e.target.value })} placeholder="~/Download/ordini.csv" aria-invalid={!!issue(issues, "path")} spellCheck={false} />
+          <Input id="wf-file" mono value={trigger.path} onChange={(e) => onChange({ kind: "file", path: e.target.value })} placeholder={tr("workflows.esempio_file_osservato")} aria-invalid={!!issue(issues, "path")} spellCheck={false} />
         </Field>
       )}
 

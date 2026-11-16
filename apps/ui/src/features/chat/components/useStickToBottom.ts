@@ -5,10 +5,12 @@ import { isNearBottom } from "../model/scroll";
  * Keeps a conversation scrolled to its end, but only for a reader who is at the end. Someone who
  * scrolled up to re-read is left alone and offered a "Nuovi messaggi" pill instead.
  *
- * Growth is detected with a ResizeObserver on the content, so streaming text, late-loading images
- * and a tool card that opens are all covered, not just changes of the item list.
+ * Following uses a ResizeObserver on the content, so streaming text, late-loading images and a tool card that
+ * opens are all covered, not just changes of the item list. The pill does not: it appears when `tail` (what the end of the
+ * conversation looks like, `tailSignature`) changes while the reader is elsewhere. The height of the list also changes while
+ * someone scrolls through a long conversation (rows far from the screen are laid out when they come near), and that is not news.
  */
-export function useStickToBottom(scrollRef: RefObject<HTMLElement | null>, contentRef: RefObject<HTMLElement | null>, resetKey: unknown) {
+export function useStickToBottom(scrollRef: RefObject<HTMLElement | null>, contentRef: RefObject<HTMLElement | null>, resetKey: unknown, tail: string) {
   const stick = useRef(true);
   const [unseen, setUnseen] = useState(false);
 
@@ -17,6 +19,14 @@ export function useStickToBottom(scrollRef: RefObject<HTMLElement | null>, conte
     stick.current = true;
     setUnseen(false);
   }, [resetKey]);
+
+  // Something new at the end while the reader is elsewhere.
+  const lastTail = useRef(tail);
+  useEffect(() => {
+    if (lastTail.current === tail) return;
+    lastTail.current = tail;
+    if (!stick.current) setUnseen(true);
+  }, [tail]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -33,13 +43,8 @@ export function useStickToBottom(scrollRef: RefObject<HTMLElement | null>, conte
     const el = scrollRef.current;
     const content = contentRef.current;
     if (!el || !content || typeof ResizeObserver === "undefined") return;
-    let last = content.offsetHeight;
     const ro = new ResizeObserver(() => {
-      const h = content.offsetHeight;
-      const grew = h > last;
-      last = h;
       if (stick.current) el.scrollTop = el.scrollHeight;
-      else if (grew) setUnseen(true);
     });
     ro.observe(content);
     return () => ro.disconnect();

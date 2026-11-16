@@ -16,11 +16,25 @@ export default defineConfig(({ mode }) => ({
     target: "es2022",
   },
   test: {
-    environment: "node",
-    include: ["src/**/*.test.ts"],
     setupFiles: ["src/test-setup.ts"],
-    // tokens.test.ts reads tokens.css as text to check the contrast of the palette.
-    css: { include: [/tokens\.css/] },
+    // tokens.test.ts reads tokens.css (and the OLED overrides in oled.css) as text to check the contrast of the palette.
+    css: { include: [/tokens\.css/, /oled\.css/] },
+    // Two kinds of test: the pure logic (`*.test.ts`, no DOM) and the views (`*.test.tsx`, rendered in jsdom against the
+    // demo transport; see `src/test-utils`).
+    projects: [
+      { extends: true, test: { name: "logic", environment: "node", include: ["src/**/*.test.ts"] } },
+      {
+        extends: true,
+        test: {
+          name: "components",
+          environment: "jsdom",
+          include: ["src/**/*.test.tsx"],
+          setupFiles: ["src/test-utils/setup-dom.ts"],
+          // The first test of a file also loads (and transforms) the lazy chunk of its view.
+          testTimeout: 20_000,
+        },
+      },
+    ],
   },
   server: {
     port: 5173,

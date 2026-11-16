@@ -95,8 +95,10 @@ async function visit(page, routePath, size, theme, lang, problems, errors, simpl
       docOverflow: document.documentElement.scrollWidth - window.innerWidth,
       pageOverflow: over(page),
       lang: document.documentElement.lang,
-      crashed: /Questa pagina non si è caricata|This page did not load/.test(document.body.innerText),
+      crashed: /Questa pagina non si è caricata|This page didn['’]t load/.test(document.body.innerText),
       empty: !document.querySelector(".page, .ws, .th, .kb, .chat, .boot"),
+      // U+FFFD in the text: a character the HTML parser could not keep (the mockup is one file with the script inline: a NUL in the code turns into it).
+      replacement: document.body.innerText.includes("\uFFFD"),
     };
   });
   const label = simple ? simple.label : routePath;
@@ -111,6 +113,7 @@ async function visit(page, routePath, size, theme, lang, problems, errors, simpl
   if (m.pageOverflow > 1) fail(`scroll orizzontale dell'area pagina (+${m.pageOverflow}px)`);
   if (m.crashed) fail("la vista mostra la schermata di errore");
   if (m.empty) fail("nessun contenuto di pagina");
+  if (m.replacement) fail("il testo contiene U+FFFD (carattere sostitutivo): un NUL nel codice, letto dal parser HTML");
   for (const e of errors) fail(e);
   if (shotsDir) {
     const file = `${(simple ? `simple-${routePath}` : routePath).replace(/\W+/g, "_").replace(/^_+|_+$/g, "") || "home"}-${size.name}-${theme}-${lang}.png`;

@@ -1,6 +1,6 @@
 import { Link, setQuery } from "../../../app/router";
 import { CopyButton, EmptyState, Icon, KeyValue, Led, Panel, QueryState, Select, Field } from "../../../shared/ui";
-import { formatDateTime, formatDuration } from "../../../shared/lib/format";
+import { formatDateTime, formatDuration, formatFixed } from "../../../shared/lib/format";
 import type { EvalReport, EvalSuite } from "../../../shared/api/types";
 import { useEvalReport } from "../api";
 import { comparableWith, isRunning, pct, progress, reportWho, taskRows, type TaskRow } from "../model/evals";
@@ -14,7 +14,7 @@ function TaskBlock({ row }: { row: TaskRow }) {
         <Icon name={row.passed === row.attempts ? "check" : "alert"} size={15} />
         <b className="mono text-sm">{row.task_id}</b>
         <span className="num text-sm">{row.passed}/{row.attempts} · {pct(row.pass_rate)}</span>
-        <span className="faint text-xs num">{tr("evals.score_token", { score: row.score.toFixed(2).replace(".", ","), tokens: Math.round(row.avg_tokens), duration: formatDuration(row.avg_duration_ms / 1000) })}</span>
+        <span className="faint text-xs num">{tr("evals.score_token", { score: formatFixed(row.score, 2), tokens: Math.round(row.avg_tokens), duration: formatDuration(row.avg_duration_ms / 1000) })}</span>
       </div>
       {row.results.map((t) => (
         <details key={t.attempt} className="ev-attempt" open={!t.passed}>
@@ -30,7 +30,7 @@ function TaskBlock({ row }: { row: TaskRow }) {
                 <Led tone={g.passed ? "ok" : "crit"} small />
                 <span className="mono text-xs">{g.kind}</span>
                 <span className="text-sm">{g.detail}</span>
-                {g.kind === "judge" && <span className="faint text-xs num">{g.score.toFixed(2).replace(".", ",")}</span>}
+                {g.kind === "judge" && <span className="faint text-xs num">{formatFixed(g.score, 2)}</span>}
               </li>
             ))}
             {t.graders.length === 0 && <li className="faint text-sm">{tr("evals.nessun_grader_applicato")}</li>}
@@ -63,7 +63,7 @@ export function ReportDetail({ reportId, reports, suites, compareWith }: { repor
               <KeyValue items={[
                 [tr("evals.stato"), <span key="s" className="row">{isRunning(r) && <Led tone="run" small />}{r.status === "running" ? tr("evals.in_corso") : r.status === "failed" ? tr("evals.interrotta") : tr("evals.completata")}</span>],
                 [tr("evals.riusciti_2"), r.summary.total ? tr("evals.passed_of_total", { passed: r.summary.passed, total: r.summary.total, rate: pct(r.summary.pass_rate) }) : "—"],
-                [tr("evals.score_medio"), r.summary.total ? r.summary.score.toFixed(2).replace(".", ",") : "—"],
+                [tr("evals.score_medio"), r.summary.total ? formatFixed(r.summary.score, 2) : "—"],
                 [tr("evals.agente_profilo"), reportWho(r)],
                 r.repeat > 1 && [tr("evals.ripetizioni"), tr("evals.repeat_per_task", { repeat: r.repeat })],
                 [tr("evals.avviata"), formatDateTime(r.started_at)],
