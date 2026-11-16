@@ -1708,7 +1708,7 @@ mod tests {
             }
         }
         assert_eq!(classes, all, "a key of the schema is in no class, or a class names a key that is not in the schema");
-        assert_eq!((secret.len(), protected.len(), forbidden.len()), (1, 6, 14));
+        assert_eq!((secret.len(), protected.len(), forbidden.len()), (1, 6, 15));
         assert_eq!(secret, BTreeSet::from(["search.brave_api_key"]));
         for key in &ordinary {
             assert_eq!(classify(&schema, key), Access::Ordinary, "{key}");
