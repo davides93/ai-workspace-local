@@ -382,6 +382,7 @@ fn agent_detail(e: &Engine, a: &AgentProfile) -> Value {
         "id": a.id, "name": a.name, "description": text(&a.description, 300), "builtin": crate::defaults::is_builtin_agent(&a.id),
         "mode": a.mode, "sandbox": a.sandbox, "max_turns": a.max_turns, "profile": a.inference_profile, "profile_detail": profile,
         "tools": a.tools, "delegate_tools": a.delegate_tools, "candidate_profiles": a.candidate_profiles, "knowledge": a.knowledge,
+        "isolation": a.isolation, "has_credentials": e.agent_has_credentials(&a.id),
         "system_prompt_chars": a.system_prompt.chars().count(), "system_prompt_start": text(&a.system_prompt, 400),
     })
 }

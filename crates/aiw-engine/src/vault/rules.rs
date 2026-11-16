@@ -16,8 +16,9 @@ use serde_json::Value;
 /// Documents that are secrets in themselves (IMAP passwords, the tokens and pins of paired devices, OAuth tokens of MCP servers).
 pub const WHOLE_KINDS: [&str; 3] = ["secret", "peer_token", "mcp_oauth"];
 
-/// Documents that carry a secret among other things (MCP servers, channels, model providers, remote agents, runtime settings).
-pub const BY_NAME_KINDS: [&str; 5] = ["mcp", "channel", "model_provider", "remote_agent", "runtime_settings"];
+/// Documents that carry a secret among other things (MCP servers, channels, model providers, remote agents, runtime settings, the
+/// credentials of one agent: who owns it, its name and the hosts it may be sent to stay readable, the `secret` is sealed).
+pub const BY_NAME_KINDS: [&str; 6] = ["mcp", "channel", "model_provider", "remote_agent", "runtime_settings", "agent_credential"];
 
 /// Documents of the vault itself (which keychain item holds the key): never in a backup, never sealed.
 pub const INTERNAL_KINDS: [&str; 1] = ["vault"];

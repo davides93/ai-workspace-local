@@ -24,6 +24,7 @@ pub fn agents() -> Vec<AgentProfile> {
         roles: None,
         knowledge: vec![],
         delegate_tools: vec![],
+        isolation: None,
     };
     let mut assistant = a(
         ASSISTANT_ID,

@@ -291,6 +291,9 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/agents", get(agents))
         .route("/api/agents/{id}", put(save_agent).delete(delete_agent))
         .route("/api/agents/{id}/routing", get(agent_routing).delete(reset_agent_routing))
+        // The credentials of one agent: the owner only (the `/api/agents/**` rule of `scopes.rs`), and the value goes in, never out.
+        .route("/api/agents/{id}/credentials", get(agent_credentials))
+        .route("/api/agents/{id}/credentials/{name}", put(set_agent_credential).delete(delete_agent_credential))
         .route("/api/remote-agents", get(remote_agents))
         .route("/api/remote-agents/{id}", put(save_remote_agent).delete(delete_remote_agent))
         .route("/api/teams", get(teams))
@@ -780,6 +783,20 @@ async fn delete_agent(State(s): State<AppState>, Path(id): Path<String>) -> ApiR
 async fn save_agent(State(s): State<AppState>, Path(id): Path<String>, Json(mut a): Json<AgentProfile>) -> ApiResult<AgentProfile> {
     a.id = id;
     ok(s.engine.save_agent(a)?)
+}
+async fn agent_credentials(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Vec<AgentCredentialInfo>> {
+    ok(s.engine.agent_credentials(&id)?)
+}
+async fn set_agent_credential(
+    State(s): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    Json(input): Json<AgentCredentialInput>,
+) -> ApiResult<AgentCredentialInfo> {
+    ok(s.engine.set_agent_credential(&id, &name, input)?)
+}
+async fn delete_agent_credential(State(s): State<AppState>, Path((id, name)): Path<(String, String)>) -> ApiResult<Value> {
+    s.engine.remove_agent_credential(&id, &name)?;
+    ok(json!({}))
 }
 async fn remote_agents(State(s): State<AppState>) -> ApiResult<Vec<RemoteAgent>> {
     ok(s.engine.remote_agents())
@@ -2011,6 +2028,8 @@ pub async fn serve(engine: Engine, port: u16, lan: bool, ui_dir: Option<PathBuf>
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_agents;
 #[cfg(test)]
 mod tests_assistant;
 #[cfg(test)]

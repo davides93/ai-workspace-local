@@ -44,6 +44,12 @@ impl DataDirs {
     pub fn checkpoints(&self) -> PathBuf {
         self.root.join("checkpoints")
     }
+    /// The folders of the agents that work apart from the others (`<agent>/workspace`), and the workspaces of the agents
+    /// that were removed (`.removed/<agent>-<timestamp>`). Inside the data folder, hidden from every agent: an agent
+    /// reaches only its own, through the exception that lets a workspace live in a hidden folder.
+    pub fn agents(&self) -> PathBuf {
+        self.root.join("agents")
+    }
     /// Git worktrees of isolated sessions (outside the user's checkout).
     pub fn worktrees(&self) -> PathBuf {
         self.root.join("worktrees")
