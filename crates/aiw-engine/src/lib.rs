@@ -1602,8 +1602,16 @@ impl Engine {
 
     fn agents_md(&self) -> String {
         let mut out = String::new();
-        for (label, p) in [("globali", self.0.dirs.root.join("AGENTS.md")), ("del workspace", self.workspace_root().join("AGENTS.md"))] {
-            if let Ok(t) = std::fs::read_to_string(&p) {
+        let workspace = self.workspace_root();
+        for (label, p) in [("globali", self.0.dirs.root.join("AGENTS.md")), ("del workspace", workspace.join("AGENTS.md"))] {
+            // The global file is in the data folder, which no agent reaches. The one of the workspace is not: an agent (or a repository
+            // it cloned) can make it a link to any file the engine reads, so it is read only if it stays inside the workspace.
+            let text = if label == "globali" {
+                std::fs::read_to_string(&p).ok()
+            } else {
+                aiw_core::confined::read_text_within(&workspace, &self.shell_sandbox().hidden, &p, 20_000)
+            };
+            if let Some(t) = text {
                 out.push_str(&format!("# Istruzioni {label} (AGENTS.md)\n{}\n\n", t.chars().take(20_000).collect::<String>()));
             }
         }
@@ -1755,8 +1763,15 @@ impl Engine {
         )
     }
 
+    /// The skills of the user (`<data>/skills`, read as they are) and those the workspace brings (`<workspace>/.aiw/skills`, which
+    /// must stay inside the workspace: a link there cannot carry another file into the prompt).
     pub(crate) fn skills(&self) -> Vec<aiw_agent::Skill> {
-        aiw_agent::skills::discover(&[self.0.dirs.skills(), self.workspace_root().join(".aiw").join("skills")])
+        use aiw_agent::skills::SkillRoot;
+        let ws = self.workspace_root();
+        aiw_agent::skills::discover_in(&[
+            SkillRoot::trusted(self.0.dirs.skills()),
+            SkillRoot::confined(ws.join(".aiw").join("skills"), ws, self.shell_sandbox().hidden),
+        ])
     }
 
     /// Starts an agent run in a session; events stream on the bus and via [`Engine::run_events`].
@@ -2967,6 +2982,8 @@ mod tests_background;
 mod tests_backup;
 #[cfg(test)]
 mod tests_channels;
+#[cfg(test)]
+mod tests_confined;
 #[cfg(test)]
 mod tests_contexts;
 #[cfg(test)]
