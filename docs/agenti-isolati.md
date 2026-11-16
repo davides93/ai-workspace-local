@@ -40,7 +40,9 @@ La cartella è `<dati>/agents/<id>/workspace`, dentro la cartella dei dati dell'
 lavora: lo stesso meccanismo dei worktree delle sessioni isolate (`<dati>/worktrees`). Quindi:
 
 - l'agente lavora lì e scrive lì; non vede il workspace condiviso (né con i file tool né con la shell), né le cartelle che l'utente ha
-  consentito (App Store), né l'`AGENTS.md` e le skill del workspace condiviso (restano le skill globali e l'`AGENTS.md` globale);
+  consentito (App Store), né l'`AGENTS.md` e le skill del workspace condiviso. Gli restano le skill globali e l'`AGENTS.md` globale, e
+  l'`AGENTS.md` della sua cartella solo se è un file vero (il motore lo legge fuori dalla sandbox: un collegamento fatto dall'agente nella sua
+  cartella non porta dentro il prompt il file di un altro, né il token del proprietario). Le skill nella sua cartella non si usano per la stessa ragione;
 - gli altri agenti non leggono né scrivono quella cartella: non dai file tool (percorso assoluto, relativo, con `..`, tramite un
   collegamento simbolico), non dalla shell. Un agente con la sandbox `off` invece legge tutto quello che legge l'account: per
   questo un agente con workspace dedicato **non può avere la sandbox `off`** (rifiutato al salvataggio);
@@ -54,9 +56,15 @@ lavora: lo stesso meccanismo dei worktree delle sessioni isolate (`<dati>/worktr
   (un testo che arriva da fuori non deve poterle usare);
 - una sessione in un git worktree non si può dare a un agente dedicato;
 - rimuovere l'agente sposta la sua cartella in `<dati>/agents/.removed/<id>-<data>` (nessun agente la raggiunge: sta nei dati) e non
-  cancella nulla: un agente creato dopo con lo stesso id parte da una cartella vuota e non eredita file né credenziali;
-- l'id deve poter essere il nome di una cartella (lettere, cifre, `- _ .`, al massimo 64 caratteri) e non differire da un altro solo
-  per maiuscole (su macOS e Windows sarebbe la stessa cartella).
+  cancella nulla; ferma i run in corso per quell'agente (best effort: una chiamata già a metà finisce) e, anche se un run resta, i suoi
+  strumenti non trovano più la cartella e non la ricreano. Un agente creato dopo con lo stesso id parte da una cartella vuota, senza
+  credenziali: se per una corsa è rimasta una cartella o una credenziale con quell'id, alla creazione la cartella va da parte e la credenziale si toglie.
+  Dalla chat dell'Assistente un agente isolato o con credenziali non si modifica né si elimina (si fa dalla vista Sviluppatore, dalla CLI, dall'API);
+- l'id deve poter essere il nome di una cartella (lettere, cifre, `- _ .`, al massimo 64 caratteri, senza punto finale né un nome riservato di
+  Windows come `con` o `nul`) e un nuovo agente non può differire da un altro solo per maiuscole (su macOS e Windows sarebbe la stessa cartella);
+  un agente si archivia solo se la sua cartella ha esattamente il suo nome;
+- i file di una cartella dedicata **non sono nel backup** (l'elenco di ciò che il backup salva non include `agents/`, come per i worktree): restano sul disco,
+  si copiano a mano se servono.
 
 Rete: `close_shell_network` chiude la rete della shell di quell'agente anche se `sandbox.shell_network` è acceso; non la apre mai
 se le impostazioni la chiudono, e un sotto-agente non la riapre. (Non c'è invece un elenco di domini per agente.)
@@ -67,13 +75,31 @@ se le impostazioni la chiudono, e un sotto-agente non la riapre. (Non c'è invec
 - **La shell legge il resto del disco**, come per ogni agente: la sandbox nasconde cartelle precise (la cartella dei dati, `sandbox.deny_read`,
   e per un agente dedicato anche il workspace condiviso), non tutto ciò che sta fuori dal workspace. Un agente dedicato non è quindi protetto da
   ciò che un agente qualsiasi può già leggere (la cartella personale fuori da `sandbox.deny_read`).
+- **Dove la shell non ha una sandbox che contenga i comandi** (Windows, Linux senza bubblewrap, Android) un agente dedicato con lo strumento `shell` non è
+  davvero da solo: il comando può leggere le cartelle degli altri agenti e la cartella dei dati, e `close_shell_network` non chiude la rete. Il salvataggio
+  non lo rifiuta (i file tool restano separati, e un agente senza `shell` è isolato quanto quelli): `aiw agents isolation` lo dice con un ATTENZIONE.
 - **Windows**: la shell non può nascondere cartelle in lettura (un token a integrità bassa limita le scritture, non le letture) e non
   chiude la rete. Lì a tenere separati gli agenti sono i file tool; un comando di shell di un agente può leggere la cartella di un altro.
   Il test con comandi veri gira solo dove c'è bubblewrap o Seatbelt e altrove si salta dicendolo.
+- **Con la rete della shell aperta** (`sandbox.shell_network` acceso e `close_shell_network` spento) i comandi di un agente raggiungono l'API locale, che
+  da questo computer senza token vale come accesso completo: potrebbero cambiare le impostazioni, il profilo dell'agente e gli host di una credenziale
+  (per questi, cambiare gli host chiede di rimandare il valore, quindi il valore salvato non si sposta). È un limite già noto dell'app e non lo
+  chiude questo lavoro; `close_shell_network` esiste per questo.
 - Le memorie globali, la base di conoscenza (`knowledge` vuoto = tutte le raccolte), le lezioni approvate in `~/.aiw/AGENTS.md`, i
   server MCP e i connettori sono **comuni** a tutti gli agenti: la cifratura per agente e la cartella per agente non li toccano. Le
-  memorie con ambito di un agente restano sue come già prima.
-- Hook, valutatori degli eval e browser controllato non passano dalla sandbox (limite già noto di #23).
+  memorie con ambito di un agente restano sue quando parla lui, ma un sotto-agente con quel profilo le legge anche dentro la delega di un altro agente
+  (la ricerca nelle memorie usa il profilo di chi gira) e un agente dedicato che salva una memoria senza dire «solo questo agente» la scrive nell'ambito comune.
+- **Un run di un agente dedicato avviato da un client A2A, dal server MCP o da un workflow** lavora nella cartella di quell'agente (la cartella segue l'agente, non
+  chi lo avvia) ma senza le sue credenziali. Un workflow con più passi riusa la sessione del primo passo anche per gli altri agenti (comportamento
+  che c'era già): i passi successivi girano con il profilo del primo, non con il proprio.
+- Un indirizzo in ambito non conosce la porta né i domini pubblici condivisi (`github.io`, `amazonaws.com`): dare una credenziale a un host con sottodomini
+  di terzi la rende valida anche per quelli.
+- Hook, valutatori degli eval e browser controllato non passano dalla sandbox (limite già noto di #23). Restano comuni anche la sessione e i cookie del
+  browser controllato, la cartella `/tmp` sotto Seatbelt e i server MCP stdio (che girano nel workspace condiviso). Una valutazione (`aiw eval`) di un
+  agente dedicato gira in una cartella di lavoro scelta dalla valutazione, non nella sua, e riceve le cartelle consentite dall'utente.
+- Un `workspace.root` impostato dentro la cartella dei dati (per esempio la cartella dei dati stessa) apre agli agenti condivisi ciò che sta dentro,
+  cartelle dedicate comprese: l'eccezione «workspace dentro una cartella nascosta» vale per qualunque workspace. È un caso già presente prima di #71 (si cambia
+  solo con lo strumento protetto e la conferma del proprietario) e non lo chiude questo lavoro.
 
 ## Credenziali per agente
 
@@ -90,13 +116,19 @@ dove il portachiavi non c'è resta in chiaro con lo stato dichiarato (vedi `docs
   pagina nell'ambito che rimanda altrove non porta la credenziale. Un'estensione senza punto (`com`) non è un host valido.
 - **Revoca immediata.** Il motore legge lo store a ogni chiamata: togliere la credenziale o l'agente la rende inutilizzabile alla
   chiamata successiva, anche per un run già in corso. Togliere l'agente toglie anche le sue credenziali.
-- **Chi la riceve.** Il run dell'agente stesso (da una persona o da un workflow). Non i run in background, non quelli dei canali, non
-  le valutazioni; un sotto-agente usa quelle del genitore.
+- **Chi la riceve.** Il run dell'agente stesso **avviato dal proprietario dalla chat** (o da un client AG-UI con accesso completo): il run deve
+  portare l'origine `owner`, controllata a ogni chiamata. Non un workflow, la riga di comando (`aiw run`), un client A2A o del server MCP (cioè testo di
+  un terzo), un telefono accoppiato, i run in background, quelli dei canali, le valutazioni; un sotto-agente usa quelle del genitore. Oggi
+  quindi un workflow o `aiw run` non possono usare credenziali: è una scelta prudente, non un'assenza.
+- **Cambiare gli host chiede il valore.** Un cambio che non tocca gli host (per esempio il prefisso) tiene il valore salvato; se gli host cambiano il valore va
+  rimandato, perché quello salvato non si sposta su un altro indirizzo.
 - **Nei backup.** Senza `--include-secrets` il valore non c'è, né in chiaro né cifrato; restano proprietario, nome e host con il valore
   vuoto (dopo un ripristino la credenziale risulta «senza valore» e va reinserita). Con `--include-secrets` il valore entra in chiaro
   nell'archivio, come ogni altro segreto (l'archivio diventa sensibile). L'elenco dei tipi deriva dalla stessa tabella del vault.
 - **Nei log e negli export.** Eventi, messaggi, audit, tracce (anche senza mascheratura), diagnostica e lista degli agenti non
-  contengono il valore (test); l'audit registra chi la imposta, la toglie e dove viene usata (`alfa/github → api.example.org`).
+  contengono il valore (test). La ripulitura della risposta del server toglie il valore tondo, percentuale (maiuscolo e minuscolo), con le sequenze di escape
+  di JSON e con le entità di HTML, **prima** di tagliare il testo alla lunghezza chiesta dal modello e anche un suo inizio rimasto in coda; non base64 né un valore spezzato.
+  `Debug` di `Doc` e `AgentCredentialInput` non stampa il valore; l'audit registra chi la imposta, la toglie e dove viene usata (`alfa/github → api.example.org`).
 
 Che cosa non copre: **la shell**. Una credenziale non finisce nell'ambiente di un comando: `env` la mostrerebbe al modello. Un agente
 che deve lanciare `git` o `curl` con un token non ha oggi una via; resta fuori da questo lavoro.
@@ -154,7 +186,10 @@ più i test del vault e del backup che derivano dalla stessa tabella):
 - le credenziali: un agente non usa quelle di un altro (nome uguale, id che inizia come un altro, sotto-agente), partono solo verso i
   loro host in https e non dopo un redirect altrove, si revocano subito (credenziale o agente, anche in un run in corso), sopravvivono
   al riavvio cifrate e non sono in chiaro su disco; nessun valore in eventi, messaggi, audit, tracce, diagnostica e backup predefinito;
-- persistenza: profilo, cartella e credenziali dopo un riavvio con lo stesso portachiavi (finto).
+- persistenza: profilo, cartella e credenziali dopo un riavvio con lo stesso portachiavi (finto);
+- i difetti trovati dalla revisione, ciascuno con un test (verificato per mutazione per i due più gravi): collegamento in `AGENTS.md`/skill, credenziali ai soli
+  run del proprietario, taglio dentro il valore, run in corso alla rimozione dell'agente, cartella o credenziale orfana, maiuscole, host con valore, handoff ricontrollato
+  al passaggio, eliminazione dalla chat, membri di team.
 
 **Non provato:** Docker o Podman veri; Windows (la shell non nasconde cartelle, il test con comandi veri non gira); Linux con
 bubblewrap (il test con comandi veri è scritto per girarci ma non l'ho eseguito); macOS con il portachiavi vero e l'app dell'App Store;

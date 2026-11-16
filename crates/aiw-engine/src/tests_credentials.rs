@@ -4,7 +4,9 @@
 //! A stand-in server on loopback records what it receives (so that "the header reached it" and "nothing reached it" are facts, not
 //! assumptions); `tests_isolation::allow_private_network_for` lets the runs of these engines reach it, which a build never does.
 
-use crate::tests_isolation::{allow_private_network_for, apart, call, denied, engine_with, input_of, shared};
+use crate::tests_isolation::{
+    allow_private_network_for, apart, call, denied, engine_with, input_of, input_of_run, register_run, shared, OWNER,
+};
 use crate::vault::{Keychain, MemoryKeyStore};
 use crate::Engine;
 use aiw_core::api::{AgentCredentialInfo, AgentCredentialInput};
@@ -119,7 +121,7 @@ async fn run(e: &Engine, agent: &str, turns: Vec<Vec<aiw_runtimes::ChatDelta>>) 
     let backend = ScriptedBackend::new(turns);
     e.register_native_runtime("llama-embedded", Arc::new(backend.clone()));
     let s = e.create_session(agent, None).unwrap();
-    let run = e.start_run(&s.id, "leggi i dati".into()).await.unwrap();
+    let run = e.start_run_from(&s.id, "leggi i dati".into(), None, None, vec![], Some(OWNER)).await.unwrap();
     crate::tests::wait_finished(e, &run).await;
     (s.id, run, backend)
 }
@@ -216,7 +218,7 @@ async fn a_value_that_cannot_be_opened_counts_as_not_set_and_the_sealed_text_is_
     assert_eq!(e.secrets_at_rest().state, "key_lost");
     let info = e.agent_credentials("alfa").unwrap();
     assert!(info.len() == 1 && !info[0].set, "a value that cannot be opened is not set: {info:?}");
-    assert!(e.credential_broker("alfa").unwrap().describe().is_empty(), "the prompt does not offer it");
+    assert!(e.credential_broker("alfa", &register_run(&e, Some(OWNER))).unwrap().describe().is_empty(), "the prompt does not offer it");
     let stand = echo().await;
     let out = call(&e, &input_of(&e, "alfa"), "web_fetch_auth", get_args(&stand.url("/x"), "github")).await;
     assert!(matches!(&out, Err(Error::Denied(m)) if m.contains("valore leggibile") && !m.contains("aiwenc1")), "{out:?}");
@@ -225,7 +227,7 @@ async fn a_value_that_cannot_be_opened_counts_as_not_set_and_the_sealed_text_is_
     e.set_agent_credential(
         "alfa",
         "github",
-        AgentCredentialInput { hosts: vec!["127.0.0.1".into(), "api.example.org".into()], ..Default::default() },
+        AgentCredentialInput { hosts: vec!["127.0.0.1".into()], prefix: Some("Bearer ".into()), ..Default::default() },
     )
     .unwrap();
     assert!(!e.agent_credentials("alfa").unwrap()[0].set);
@@ -304,7 +306,7 @@ async fn a_sub_agent_uses_the_credentials_of_its_parent_never_its_own_so_nothing
 async fn the_credential_goes_only_to_its_hosts_only_in_https_and_not_after_a_redirect_elsewhere() {
     let fx = fixture().await;
     let e = &fx.e;
-    let broker = e.credential_broker("alfa").unwrap();
+    let broker = e.credential_broker("alfa", &register_run(e, Some(OWNER))).unwrap();
     let url = |s: &str| reqwest::Url::parse(s).unwrap();
     // The scope is the host and its subdomains, in https.
     e.set_agent_credential("alfa", "api", cred("example.org", SECRET_A)).unwrap();
@@ -476,18 +478,19 @@ async fn setting_a_credential_is_for_the_owner_and_is_checked_and_never_hands_th
         )
         .unwrap();
     assert_eq!((info.header.as_str(), info.prefix.as_str(), info.set), ("PRIVATE-TOKEN", "", true));
+    // A change that keeps the hosts and brings no value (here the text before it) keeps the stored value.
     let again = e
         .set_agent_credential(
             "alfa",
             "gitlab",
-            AgentCredentialInput { hosts: vec!["gitlab.example.org".into(), "git.example.org".into()], ..Default::default() },
+            AgentCredentialInput { hosts: vec!["gitlab.example.org".into()], prefix: Some("token ".into()), ..Default::default() },
         )
         .unwrap();
-    assert_eq!(again.hosts.len(), 2);
+    assert_eq!((again.hosts.len(), again.prefix.as_str()), (1, "token "));
     assert_eq!(again.created_at, info.created_at);
-    let broker = e.credential_broker("alfa").unwrap();
-    let used = broker.authorize("gitlab", &reqwest::Url::parse("https://git.example.org/").unwrap(), false).unwrap();
-    assert_eq!((used.header.as_str(), used.value.as_str()), ("PRIVATE-TOKEN", SECRET_B), "the value kept by a change without one");
+    let broker = e.credential_broker("alfa", &register_run(e, Some(OWNER))).unwrap();
+    let used = broker.authorize("gitlab", &reqwest::Url::parse("https://gitlab.example.org/").unwrap(), false).unwrap();
+    assert_eq!((used.header.as_str(), used.value.as_str()), ("PRIVATE-TOKEN", format!("token {SECRET_B}").as_str()), "the value kept");
     // What the API shows is the metadata and the state, never the value.
     let shown = serde_json::to_string(&e.agent_credentials("alfa").unwrap()).unwrap();
     assert!(!shown.contains(SECRET_A) && !shown.contains(SECRET_B), "{shown}");
@@ -579,7 +582,107 @@ async fn an_agent_without_the_tool_is_not_offered_it_a_wildcard_does_not_cover_i
     let offered: Vec<String> = backend.requests.lock().unwrap()[0].tools.iter().map(|t| t.function.name.clone()).collect();
     assert!(offered.iter().any(|t| t == "web_fetch") && !offered.iter().any(|t| t == "web_fetch_auth"), "{offered:?}");
     // The agent that lists it is told which credentials it has: names and hosts.
-    let line = crate::Engine::credentials_prompt(&e.credential_broker("alfa").unwrap(), &["web_fetch_auth".to_string()]).unwrap();
+    let line = crate::Engine::credentials_prompt(
+        &e.credential_broker("alfa", &register_run(e, Some(OWNER))).unwrap(),
+        &["web_fetch_auth".to_string()],
+    )
+    .unwrap();
     assert!(line.contains("`github`") && line.contains("127.0.0.1") && !line.contains(SECRET_A), "{line}");
-    assert!(crate::Engine::credentials_prompt(&e.credential_broker("alfa").unwrap(), &["web_fetch".to_string()]).is_none());
+    assert!(crate::Engine::credentials_prompt(
+        &e.credential_broker("alfa", &register_run(e, Some(OWNER))).unwrap(),
+        &["web_fetch".to_string()]
+    )
+    .is_none());
+}
+
+#[tokio::test]
+async fn only_a_run_the_owner_started_gets_credentials_not_a_workflow_a_client_of_a2a_or_mcp_a_phone_or_the_command_line() {
+    let fx = fixture().await;
+    let e = &fx.e;
+    let stand = echo().await;
+    let phone = crate::RunOrigin { owner: false, questions: true, secrets: false };
+    for (who, origin) in [("a run with no origin (workflow, A2A, MCP server, command line)", None), ("a paired phone", Some(phone))] {
+        let input = input_of_run(e, "alfa", origin);
+        let out = call(e, &input, "web_fetch_auth", get_args(&stand.url("/x"), "github")).await;
+        assert!(matches!(&out, Err(Error::Denied(m)) if m.contains("solo nei run avviati dal proprietario")), "{who}: {out:?}");
+        assert!(!input.system_extra.join("\n").contains("# Credenziali di questo agente"), "{who}: the prompt offers what cannot be used");
+    }
+    assert!(stand.requests().is_empty(), "{:?}", stand.requests());
+    // End to end: the same agent, run without the origin of the owner, with a model that does ask for the credential.
+    let backend = ScriptedBackend::new(vec![
+        ScriptedBackend::tool_turn("c1", "web_fetch_auth", get_args(&stand.url("/dati"), "github")),
+        ScriptedBackend::text_turn("Non ci sono riuscito."),
+    ]);
+    e.register_native_runtime("llama-embedded", Arc::new(backend));
+    let s = e.create_session("alfa", None).unwrap();
+    let run_id = e.start_run(&s.id, "leggi".into()).await.unwrap();
+    crate::tests::wait_finished(e, &run_id).await;
+    let tool = e.messages(&s.id).unwrap().into_iter().find(|m| m.role == "tool").unwrap();
+    assert!(tool.content.contains("solo nei run avviati dal proprietario"), "{}", tool.content);
+    assert!(stand.requests().is_empty(), "a run nobody owns used a credential: {:?}", stand.requests());
+    // The owner's own run works (the other tests of this file).
+    assert!(call(e, &input_of(e, "alfa"), "web_fetch_auth", get_args(&stand.url("/ok"), "github")).await.is_ok());
+    assert_eq!(stand.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn a_cut_inside_the_value_never_shows_its_beginning_whatever_length_the_model_asks_for() {
+    let fx = fixture().await;
+    let e = &fx.e;
+    let stand = echo().await;
+    let input = input_of(e, "alfa");
+    // A long path pushes the echo of the header past the first 500 characters (the least the tool lets the model ask for).
+    let url = stand.url(&format!("/{}", "p".repeat(700)));
+    let full = call(e, &input, "web_fetch_auth", json!({"url": url, "credential": "github", "max_chars": 200000})).await.unwrap().content;
+    let header = full.find("ricevuto:").unwrap();
+    let at = full[header..].find("[credenziale]").expect("the echo is there, stripped") + header;
+    assert!(at > 500, "{at}");
+    let beginning = &SECRET_A[..4];
+    // Cuts all around the place where the value was.
+    for max in (at - header).saturating_sub(10)..(at - header + 60) {
+        let out = call(e, &input, "web_fetch_auth", json!({"url": url, "credential": "github", "max_chars": max.max(500)}))
+            .await
+            .unwrap()
+            .content;
+        assert!(!out.contains(beginning), "a cut at {max} shows the beginning of the value: ...{}", &out[out.len().saturating_sub(80)..]);
+    }
+}
+
+#[tokio::test]
+async fn a_change_of_hosts_needs_the_value_again_because_the_saved_one_does_not_move_to_another_address() {
+    let fx = fixture().await;
+    let e = &fx.e;
+    let hosts = |h: &[&str]| AgentCredentialInput { hosts: h.iter().map(|s| s.to_string()).collect(), ..Default::default() };
+    e.set_agent_credential("alfa", "api", cred("a.example.org", SECRET_A)).unwrap();
+    // The same places (in another order, or with a spelling the engine normalises) keep the value; another place does not.
+    e.set_agent_credential("alfa", "api", hosts(&["A.example.org."])).unwrap();
+    let err = e.set_agent_credential("alfa", "api", hosts(&["evil.example.net"])).unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)) && err.to_string().contains("di nuovo il valore"), "{err}");
+    let err = e.set_agent_credential("alfa", "api", hosts(&["a.example.org", "evil.example.net"])).unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err}");
+    assert_eq!(e.agent_credentials("alfa").unwrap().iter().find(|c| c.name == "api").unwrap().hosts, ["a.example.org"], "nothing changed");
+    // Giving the value again is how the owner moves it.
+    let moved = e.set_agent_credential("alfa", "api", cred("b.example.org", SECRET_B)).unwrap();
+    assert_eq!(moved.hosts, ["b.example.org"]);
+    let broker = e.credential_broker("alfa", &register_run(e, Some(OWNER))).unwrap();
+    let used = broker.authorize("api", &reqwest::Url::parse("https://b.example.org/").unwrap(), false).unwrap();
+    assert_eq!(used.value, format!("Bearer {SECRET_B}"));
+    assert!(broker.authorize("api", &reqwest::Url::parse("https://a.example.org/").unwrap(), false).is_err());
+}
+
+#[tokio::test]
+async fn the_chat_cannot_delete_an_agent_that_is_apart_or_holds_credentials() {
+    let fx = fixture().await;
+    let e = &fx.e;
+    let ctx = crate::management::test_ctx(e, Some(OWNER));
+    let delete = e.tool_registry().get("aiw_agent_delete").unwrap();
+    let err = delete.call(json!({"id": "alfa"}), &ctx).await.unwrap_err();
+    assert!(matches!(err, Error::Denied(_)) && err.to_string().contains("Sviluppatore"), "{err}");
+    assert!(e.agent("alfa").is_ok() && e.agent_credentials("alfa").unwrap().len() == 1, "nothing was removed");
+    e.save_agent(apart("beta", &["todo"])).unwrap();
+    assert!(matches!(delete.call(json!({"id": "beta"}), &ctx).await, Err(Error::Denied(_))));
+    assert!(e.agent("beta").is_ok());
+    // An agent with nothing apart is still removed from the chat, as before.
+    e.save_agent(shared("semplice", &["todo"])).unwrap();
+    assert!(delete.call(json!({"id": "semplice"}), &ctx).await.is_ok());
 }

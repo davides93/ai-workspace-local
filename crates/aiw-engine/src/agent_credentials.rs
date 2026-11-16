@@ -11,8 +11,10 @@
 //!   header ([`AgentCredentials`], a [`CredentialBroker`] bound to one agent). Read at every call, so removing the credential
 //!   or the agent stops its use at once, also for a run in progress. Only https, only the hosts it was given for (re-checked at
 //!   every redirect), and what a server echoes back is stripped of the value.
-//! * **Who gets it.** The agent's own run, started by the person or by a workflow. Not a background proposal, not a channel run
-//!   (text from outside), not an evaluation. A sub-agent uses the credentials of its parent, never its own.
+//! * **Who gets it.** The agent's own run, started by the owner from the chat (or an AG-UI client with full access): the run has to
+//!   carry the origin `owner` ([`crate::RunOrigin`]), checked at every call. Not a workflow, the command line, a client of A2A or of
+//!   the MCP server, a paired phone, a background proposal, a channel (text from outside) or an evaluation. A sub-agent uses the
+//!   credentials of its parent, never its own.
 
 use crate::isolation::{base_agent_id, is_derived_agent_id, is_safe_dir_name};
 use crate::{now_rfc3339, Engine};
@@ -34,7 +36,7 @@ const MAX_PREFIX: usize = 32;
 
 /// What is stored. The field called `secret` is the one the vault seals (a key that names a secret); the others must not name
 /// one, or they would be sealed too.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Doc {
     agent: String,
     name: String,
@@ -44,6 +46,13 @@ struct Doc {
     secret: String,
     created_at: String,
     updated_at: String,
+}
+
+impl std::fmt::Debug for Doc {
+    // Never the value: a `{:?}` in a log or a failed assertion must not print it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Doc").field("agent", &self.agent).field("name", &self.name).field("hosts", &self.hosts).finish_non_exhaustive()
+    }
 }
 
 fn doc_id(agent: &str, name: &str) -> String {
@@ -200,10 +209,24 @@ impl Engine {
         }
         let secret = match input.value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
             Some(v) => clean_value(v)?,
-            None => match stored.as_ref().map(|d| d.secret.clone()).filter(|s| !s.is_empty()) {
-                Some(s) => s,
-                None => return Err(Error::Invalid("manca il valore della credenziale".into())),
-            },
+            None => {
+                // The stored value stays only while the credential goes to the same places: a change of hosts that kept it would send
+                // what was saved to a place the person did not give it for (the same rule as the connectors of the Assistant).
+                if let Some(old) = stored.as_ref() {
+                    let (mut before, mut after) = (old.hosts.clone(), hosts.clone());
+                    before.sort();
+                    after.sort();
+                    if before != after {
+                        return Err(Error::Invalid(
+                            "cambiando gli host bisogna dare di nuovo il valore: quello salvato non si sposta su un altro indirizzo".into(),
+                        ));
+                    }
+                }
+                match stored.as_ref().map(|d| d.secret.clone()).filter(|s| !s.is_empty()) {
+                    Some(s) => s,
+                    None => return Err(Error::Invalid("manca il valore della credenziale".into())),
+                }
+            }
         };
         let now = now_rfc3339();
         let doc = Doc {
@@ -249,10 +272,13 @@ impl Engine {
         self.credential_docs(base_agent_id(agent_id)).is_ok_and(|d| !d.is_empty())
     }
 
-    /// The broker of an agent's own run. `None` for a run that is not the agent talking (a background proposal, a channel).
-    pub(crate) fn credential_broker(&self, agent_id: &str) -> Option<Arc<dyn CredentialBroker>> {
-        (!is_derived_agent_id(agent_id))
-            .then(|| Arc::new(AgentCredentials { engine: self.clone(), agent: agent_id.to_string() }) as Arc<dyn CredentialBroker>)
+    /// The broker of an agent's own run (`run_id` is the top-level run). `None` for a run that is not the agent talking (a background
+    /// proposal, a channel). Even with a broker, the credentials work only while the run carries the origin of the owner.
+    pub(crate) fn credential_broker(&self, agent_id: &str, run_id: &str) -> Option<Arc<dyn CredentialBroker>> {
+        (!is_derived_agent_id(agent_id)).then(|| {
+            Arc::new(AgentCredentials { engine: self.clone(), agent: agent_id.to_string(), run_id: run_id.to_string() })
+                as Arc<dyn CredentialBroker>
+        })
     }
 
     /// The line of the prompt that tells an agent which credentials it has (names and hosts, never a value), or `None` when
@@ -278,10 +304,22 @@ impl Engine {
 struct AgentCredentials {
     engine: Engine,
     agent: String,
+    /// The top-level run these credentials serve: its origin says whether the owner started it.
+    run_id: String,
+}
+
+impl AgentCredentials {
+    /// The run is one the owner started from the chat (or an AG-UI client with full access) and is still going.
+    fn started_by_owner(&self) -> bool {
+        self.engine.run_origin(&self.run_id).is_some_and(|o| o.owner)
+    }
 }
 
 impl CredentialBroker for AgentCredentials {
     fn describe(&self) -> Vec<(String, Vec<String>)> {
+        if !self.started_by_owner() {
+            return vec![];
+        }
         self.engine
             .credential_docs(&self.agent)
             .unwrap_or_default()
@@ -292,6 +330,11 @@ impl CredentialBroker for AgentCredentials {
     }
 
     fn authorize(&self, name: &str, url: &reqwest::Url, insecure_loopback_ok: bool) -> Result<CredentialUse> {
+        // Only a run the owner started: an agent that a client of A2A or of the MCP server (or a workflow, or the command line) runs
+        // has no credentials, because what it is asked comes from someone else.
+        if !self.started_by_owner() {
+            return Err(Error::Denied("le credenziali dell'agente si usano solo nei run avviati dal proprietario dalla chat".into()));
+        }
         // An agent that was removed has no credentials, whatever a run still in progress holds.
         if self.engine.agent(&self.agent).is_err() {
             return Err(Error::Denied("l'agente non esiste più: le sue credenziali non valgono".into()));

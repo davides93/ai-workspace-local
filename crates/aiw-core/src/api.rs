@@ -840,7 +840,7 @@ pub struct AgentCredentialInfo {
 }
 
 /// `PUT /api/agents/{id}/credentials/{name}`: what the owner sends to create or change a credential.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentCredentialInput {
     /// The hosts the credential may be sent to: at least one, bare names (`api.github.com`), no scheme, port or path.
     pub hosts: Vec<String>,
@@ -853,6 +853,18 @@ pub struct AgentCredentialInput {
     /// The secret. Required to create; absent when changing a credential that exists keeps the stored value. Never returned.
     #[serde(default)]
     pub value: Option<String>,
+}
+
+impl std::fmt::Debug for AgentCredentialInput {
+    // Never the value: a `{:?}` in a log or a failed assertion must not print it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentCredentialInput")
+            .field("hosts", &self.hosts)
+            .field("header", &self.header)
+            .field("prefix", &self.prefix)
+            .field("value", &self.value.as_ref().map(|_| "…"))
+            .finish()
+    }
 }
 
 /// The four jobs a model can have inside one agent run.

@@ -136,6 +136,9 @@ pub struct ToolContext {
     pub mcp_run: Option<Arc<dyn mcp::RunMcp>>,
     /// The credentials of the agent that is running, for the tools that send one (`web_fetch_auth`). Only the engine sets it.
     pub credentials: Option<Arc<dyn CredentialBroker>>,
+    /// The workspace is a folder that must exist for the whole run (the folder of an agent apart): when it is gone, because the
+    /// agent was removed, every path is refused instead of the folder being created again by a write.
+    pub root_must_exist: bool,
 }
 
 impl ToolContext {
@@ -157,6 +160,7 @@ impl ToolContext {
             training_jobs: Arc::default(),
             mcp_run: None,
             credentials: None,
+            root_must_exist: false,
         }
     }
 
@@ -171,6 +175,9 @@ impl ToolContext {
     pub fn resolve(&self, p: &str, write: bool) -> Result<PathBuf> {
         if p.trim().is_empty() {
             return Err(Error::Invalid("percorso vuoto".into()));
+        }
+        if self.root_must_exist && self.sandbox != SandboxMode::Off && !self.workspace_root.is_dir() {
+            return Err(Error::Denied("la cartella di lavoro di questo agente non esiste più (l'agente è stato rimosso)".into()));
         }
         let expanded = aiw_core::paths::expand_home(p.trim());
         let abs = if expanded.is_absolute() { expanded } else { self.workspace_root.join(expanded) };

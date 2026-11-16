@@ -321,16 +321,20 @@ impl Tool for WebFetchTool {
             r = fetch_following(start, |u| async move { vet_url(&u, ctx).await }) => r?,
             _ = ctx.cancel.cancelled() => return Err(Error::Cancelled),
         };
-        render_response(res, url, max).await
+        render_response(res, url, max, &[]).await
     }
 }
 
 /// The answer of a fetch as the tool shows it: URL, status, title, then the text of the page.
-async fn render_response(res: reqwest::Response, url: reqwest::Url, max: usize) -> Result<ToolOutput> {
+/// `secrets` are stripped from the whole answer **before** it is cut to `max` characters: the model chooses `max`, and a cut that fell
+/// inside a value would otherwise show its first characters (and, call after call, all of them).
+async fn render_response(res: reqwest::Response, url: reqwest::Url, max: usize, secrets: &[String]) -> Result<ToolOutput> {
     let status = res.status();
     let ctype = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     let (body, cut) = read_capped(res, MAX_BODY_BYTES).await?;
+    let body = redact_secrets(&body, secrets);
     let (title, text) = if ctype.contains("html") || body.trim_start().starts_with('<') { html_to_text(&body) } else { (None, body) };
+    let (title, text) = (title.map(|t| redact_secrets(&t, secrets)), redact_secrets(&text, secrets));
     let mut out = format!("URL: {url}\nStato: {status}\n");
     if let Some(t) = title {
         out.push_str(&format!("Titolo: {t}\n"));
@@ -338,6 +342,8 @@ async fn render_response(res: reqwest::Response, url: reqwest::Url, max: usize) 
     out.push('\n');
     let truncated = text.chars().count() > max;
     out.push_str(&text.chars().take(max).collect::<String>());
+    // The body was read only up to a limit: a value cut in two by it leaves its beginning at the end of the text.
+    out = strip_partial_tail(&out, secrets);
     if truncated {
         out.push_str("\n… [troncato]");
     }
@@ -358,17 +364,63 @@ pub fn is_loopback_host(u: &reqwest::Url) -> bool {
 /// What replaces a credential in what a server sends back.
 const REDACTED: &str = "[credenziale]";
 
-/// `text` without the secrets: each one as it is and percent-encoded (a server that echoes the request in a query string).
+/// The forms a server may give a value back in when it echoes a request: as it is, percent-encoded (upper and lower case), escaped
+/// for JSON (`\/`, `\"`, `\\`) and for HTML. Not base64 or a value cut in pieces: that is for the person to weigh when giving a host a
+/// credential. Longest first, so a form that contains another is replaced whole.
+fn secret_forms(secret: &str) -> Vec<String> {
+    let percent = |upper: bool| -> String {
+        secret
+            .bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                    (b as char).to_string()
+                } else if upper {
+                    format!("%{b:02X}")
+                } else {
+                    format!("%{b:02x}")
+                }
+            })
+            .collect()
+    };
+    let json = serde_json::to_string(secret).map(|q| q.trim_matches('"').to_string()).unwrap_or_default();
+    let mut forms = vec![
+        secret.to_string(),
+        percent(true),
+        percent(false),
+        json.clone(),
+        json.replace('/', "\\/"),
+        secret.replace('/', "\\/"),
+        secret.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;"),
+    ];
+    forms.retain(|f| f.len() >= 8);
+    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    forms.dedup();
+    forms
+}
+
+/// `text` without the secrets, in each of the forms of [`secret_forms`].
 fn redact_secrets(text: &str, secrets: &[String]) -> String {
     let mut out = text.to_string();
     for s in secrets.iter().filter(|s| s.len() >= 8) {
-        out = out.replace(s.as_str(), REDACTED);
-        let encoded: String = s
-            .bytes()
-            .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
-            .collect();
-        if encoded != *s {
-            out = out.replace(&encoded, REDACTED);
+        for form in secret_forms(s) {
+            out = out.replace(&form, REDACTED);
+        }
+    }
+    out
+}
+
+/// `text` without a beginning of a secret left at its very end (at least four characters of it): what a cut in the middle of a
+/// value leaves.
+fn strip_partial_tail(text: &str, secrets: &[String]) -> String {
+    let mut out = text.to_string();
+    for s in secrets.iter().filter(|s| s.len() >= 8) {
+        for form in secret_forms(s) {
+            for k in (4..form.len()).rev() {
+                if form.is_char_boundary(k) && out.ends_with(&form[..k]) {
+                    out.truncate(out.len() - k);
+                    break;
+                }
+            }
         }
     }
     out
@@ -426,8 +478,10 @@ impl Tool for WebFetchAuthTool {
             _ = ctx.cancel.cancelled() => return Err(Error::Cancelled),
         };
         let (res, url) = fetched?;
-        let mut out = render_response(res, url, max).await?;
-        out.content = redact_secrets(&out.content, &secrets.lock().unwrap());
+        let secrets = secrets.lock().unwrap().clone();
+        let mut out = render_response(res, url, max, &secrets).await?;
+        // The same again on what was put together (the URL line), and the answer is never longer than it was.
+        out.content = redact_secrets(&out.content, &secrets);
         Ok(out)
     }
 }
@@ -826,5 +880,29 @@ mod tests {
         // Without that permission the same URL is refused before any request is made.
         let strict = ToolContext::new("r", std::env::temp_dir());
         assert!(WebFetchTool.call(json!({"url": format!("http://127.0.0.1:{port}/")}), &strict).await.is_err());
+    }
+
+    #[test]
+    fn a_secret_is_stripped_in_the_forms_a_server_echoes_it_and_a_cut_value_leaves_nothing() {
+        let secret = "ab/cd+ef=gh&ij\"k<l>mnop".to_string();
+        let one = [secret.clone()];
+        for echoed in [
+            secret.clone(),
+            "ab%2Fcd%2Bef%3Dgh%26ij%22k%3Cl%3Emnop".to_string(),
+            "ab%2fcd%2bef%3dgh%26ij%22k%3cl%3emnop".to_string(),
+            "ab\\/cd+ef=gh&ij\\\"k<l>mnop".to_string(),
+            "ab/cd+ef=gh&amp;ij&quot;k&lt;l&gt;mnop".to_string(),
+        ] {
+            let out = redact_secrets(&format!("x {echoed} y"), &one);
+            assert_eq!(out, format!("x {REDACTED} y"), "{echoed}");
+        }
+        // A text that ends in the first characters of the value (a body read only up to a limit, or a cut) loses them.
+        for k in 4..secret.len() {
+            let cut = format!("fine della pagina {}", &secret[..k]);
+            assert_eq!(strip_partial_tail(&cut, &one), "fine della pagina ", "{k}");
+        }
+        assert_eq!(strip_partial_tail("niente da togliere ab/", &one), "niente da togliere ab/", "fewer than four characters stay");
+        // Short values are not hunted for: they would also match ordinary words.
+        assert_eq!(redact_secrets("breve breve", &["breve".to_string()]), "breve breve");
     }
 }

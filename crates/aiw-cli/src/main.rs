@@ -1118,6 +1118,9 @@ fn agents_cmd(engine: &Engine, cmd: AgentsCmd) -> Result<()> {
                 agent = engine.save_agent(agent)?;
             }
             let iso = agent.isolation.clone().unwrap_or(AgentIsolation::default());
+            for w in engine.isolation_warnings(&agent) {
+                eprintln!("ATTENZIONE: {w}");
+            }
             println!(
                 "{} ({}): workspace {}, rete della shell {}",
                 agent.name,

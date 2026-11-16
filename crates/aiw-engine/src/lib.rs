@@ -1015,7 +1015,13 @@ impl Engine {
             return Err(Error::Invalid(format!("documenti: la raccolta «{missing}» non esiste")));
         }
         let mut a = a;
+        let is_new = self.0.store.get_doc::<AgentProfile>("agent", &a.id).ok().flatten().is_none();
         self.check_isolation(&mut a)?;
+        if is_new {
+            // An agent that did not exist starts from nothing: no credential and no folder left by an agent that had this id.
+            self.remove_agent_credentials(&a.id)?;
+            self.archive_agent_workspace(&a.id)?;
+        }
         self.0.store.put_doc("agent", &a.id, &a)?;
         Ok(a)
     }
@@ -1060,12 +1066,13 @@ impl Engine {
                 teams.join(", ")
             )));
         }
-        // The folder of the agent goes out of the way first: if it cannot be moved the agent stays, and one created later with
-        // the same id never finds the files of this one.
-        // Its credentials first: whatever else fails, they are gone, and an agent created later with the same id has none.
-        self.remove_agent_credentials(id)?;
+        // The folder goes out of the way first: if it cannot be moved the agent stays. Once the profile is gone its credentials are
+        // refused at the next call whatever happens next (the broker checks that the agent exists), and a run still going finds no
+        // folder (`root_must_exist`); the credentials are removed for good right after, and again if an agent is made with this id.
         let archived = self.archive_agent_workspace(id)?;
         self.0.store.delete_doc("agent", id)?;
+        self.remove_agent_credentials(id)?;
+        self.cancel_runs_of_agent(id);
         self.0.store.reset_profile_rewards(id)?;
         self.audit_user("agent.delete", &format!("{} ({id})", agent.name));
         if archived.is_some() {
@@ -1613,15 +1620,23 @@ impl Engine {
     }
 
     fn agents_md(&self) -> String {
-        self.agents_md_in(&self.workspace_root())
+        self.agents_md_in(&self.workspace_root(), false)
     }
 
     /// The instructions of the person: the global ones and the ones in the folder an agent works in (an agent with a
-    /// folder of its own never gets the `AGENTS.md` of the shared workspace).
-    fn agents_md_in(&self, workspace: &Path) -> String {
+    /// folder of its own never gets the `AGENTS.md` of the shared workspace). `confined`: the folder is the one of an agent
+    /// apart, where the agent itself can write: its `AGENTS.md` is read only if it is a regular file, never a link to something
+    /// else (the engine reads it outside the sandbox).
+    fn agents_md_in(&self, workspace: &Path, confined: bool) -> String {
         let mut out = String::new();
-        for (label, p) in [("globali", self.0.dirs.root.join("AGENTS.md")), ("del workspace", workspace.join("AGENTS.md"))] {
-            if let Ok(t) = std::fs::read_to_string(&p) {
+        let global = std::fs::read_to_string(self.0.dirs.root.join("AGENTS.md")).ok();
+        let own = if confined {
+            isolation::read_regular_text(workspace, "AGENTS.md", 20_000)
+        } else {
+            std::fs::read_to_string(workspace.join("AGENTS.md")).ok()
+        };
+        for (label, text) in [("globali", global), ("del workspace", own)] {
+            if let Some(t) = text {
                 out.push_str(&format!("# Istruzioni {label} (AGENTS.md)\n{}\n\n", t.chars().take(20_000).collect::<String>()));
             }
         }
@@ -1703,7 +1718,11 @@ impl Engine {
         // The credentials of the agent, for its own run only: not a background proposal, not a channel run (text from outside),
         // not a run in a folder somebody chose (an evaluation). A sub-agent gets the ones of its parent (host.rs).
         if !root_given {
-            tool_ctx.credentials = self.credential_broker(&agent.id);
+            tool_ctx.credentials = self.credential_broker(&agent.id, run_id);
+        }
+        // A folder that disappears (the agent was removed) is not re-created by a tool that is still working.
+        if apart {
+            tool_ctx.root_must_exist = true;
         }
         // Tests only: a stand-in server on loopback (a build never reaches local addresses from a tool).
         #[cfg(test)]
@@ -1758,7 +1777,7 @@ impl Engine {
             tool_ctx.cancel.clone(),
         )));
         let thinking = self.thinking_for(&profile, None);
-        let mut system_extra = vec![env, if apart { self.agents_md_in(&ws) } else { self.agents_md() }, self.language_line()];
+        let mut system_extra = vec![env, if apart { self.agents_md_in(&ws, true) } else { self.agents_md() }, self.language_line()];
         // What the agent may call by name (a sub-agent is told by host.rs, once it knows whose credentials it uses).
         if depth == 0 {
             if let Some(line) = tool_ctx.credentials.as_ref().and_then(|b| Self::credentials_prompt(b, &agent.tools)) {
@@ -1821,10 +1840,11 @@ impl Engine {
         aiw_agent::skills::discover(&[self.0.dirs.skills(), self.workspace_root().join(".aiw").join("skills")])
     }
 
-    /// The skills of a run that works in the folder of an agent apart: the global ones and those of that folder, never the
-    /// ones of the shared workspace.
-    pub(crate) fn skills_in(&self, folder: &Path) -> Vec<aiw_agent::Skill> {
-        aiw_agent::skills::discover(&[self.0.dirs.skills(), folder.join(".aiw").join("skills")])
+    /// The skills of a run that works in the folder of an agent apart: the global ones only. Neither the ones of the shared
+    /// workspace nor the ones in the agent's own folder: the engine reads a skill outside the sandbox when the agent loads it, and
+    /// a folder the agent writes in could hold a link to a file of someone else.
+    pub(crate) fn global_skills(&self) -> Vec<aiw_agent::Skill> {
+        aiw_agent::skills::discover(&[self.0.dirs.skills()])
     }
 
     /// Starts an agent run in a session; events stream on the bus and via [`Engine::run_events`].
@@ -2150,6 +2170,17 @@ impl Engine {
             Ok(a) => return note(format!("Passaggio a «{}» rifiutato: ha una modalità più permissiva di quella di partenza.", a.name)),
             Err(e) => return note(format!("Passaggio a `{to}` non riuscito: {e}")),
         };
+        // The boundary of an agent that is kept apart is checked again here, when the conversation really moves.
+        let from_apart = self
+            .0
+            .store
+            .session(session_id)
+            .ok()
+            .and_then(|s| self.agent(isolation::base_agent_id(&s.agent_id)).ok())
+            .is_some_and(|a| self.kept_apart(&a));
+        if from_apart || self.kept_apart(&target) {
+            return note(format!("Passaggio a «{}» rifiutato: la conversazione non passa da o verso un agente isolato.", target.name));
+        }
         match self.0.store.session(session_id) {
             Ok(mut s) => {
                 s.agent_id = to.to_string();

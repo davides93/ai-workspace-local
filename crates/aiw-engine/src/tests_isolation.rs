@@ -82,11 +82,30 @@ pub(crate) fn shared(id: &str, tools: &[&str]) -> AgentProfile {
     AgentProfile { isolation: None, ..apart(id, tools) }
 }
 
-/// The input of a run of `agent_id` in a new session.
+/// The origin of a run the owner started from the chat.
+pub(crate) const OWNER: crate::RunOrigin = crate::RunOrigin { owner: true, questions: true, secrets: true };
+
+/// Registers a run as the server does for a chat message, with `origin`, and returns its id.
+pub(crate) fn register_run(e: &Engine, origin: Option<crate::RunOrigin>) -> String {
+    let run_id = aiw_core::ids::new_id("run");
+    e.0.runs.lock().unwrap().insert(
+        run_id.clone(),
+        crate::RunHandle { session_id: None, cancel: CancellationToken::new(), events: vec![], done: false, origin },
+    );
+    run_id
+}
+
+/// The input of a run of `agent_id` in a new session, a run the owner started from the chat.
 pub(crate) fn input_of(e: &Engine, agent_id: &str) -> RunInput {
+    input_of_run(e, agent_id, Some(OWNER))
+}
+
+/// The same with the origin you choose (`None`: a run nobody started through the server, like a workflow or an A2A client).
+pub(crate) fn input_of_run(e: &Engine, agent_id: &str, origin: Option<crate::RunOrigin>) -> RunInput {
     let s = e.create_session(agent_id, None).unwrap();
+    let run_id = register_run(e, origin);
     e.build_input_at(
-        &aiw_core::ids::new_id("run"),
+        &run_id,
         &s.id,
         e.agent(agent_id).unwrap(),
         e.profile("default").unwrap(),
@@ -197,14 +216,20 @@ async fn the_shell_of_an_agent_apart_runs_in_its_own_folder_and_cannot_read_anot
         let e = e.clone();
         async move { e.tool_registry().get("shell").unwrap().call(json!({"command": command, "timeout_s": 20}), &ctx).await.unwrap() }
     };
-    // Its own folder works: the command starts there and reads and writes there.
-    let own = shell(alfa.tool_ctx.clone(), "cat nota.txt && echo scritto > prodotto.txt".into()).await;
-    if own.is_error && !own.content.contains(ALFA_FILE) {
-        // A machine that is already inside a sandbox cannot start a second one: nothing to prove here.
-        eprintln!("skip: the sandbox cannot start on this machine: {}", own.content);
+    // A control first, in the shared workspace: if even that cannot run, this machine cannot start a sandbox (one that is already inside
+    // a sandbox cannot start a second one) and there is nothing to prove. From here on a failure is a failure, not a skip.
+    let control = shell(comune.tool_ctx.clone(), "cat condiviso.txt".into()).await;
+    if control.is_error || !control.content.contains(SHARED_FILE) {
+        eprintln!("skip: the sandbox cannot start on this machine: {}", control.content);
         return;
     }
-    assert!(own.content.contains(ALFA_FILE), "{}", own.content);
+    // Its own folder works: the command starts there and reads and writes there.
+    let own = shell(alfa.tool_ctx.clone(), "cat nota.txt && echo scritto > prodotto.txt".into()).await;
+    assert!(
+        !own.is_error && own.content.contains(ALFA_FILE),
+        "the exception for a workspace inside a hidden folder is broken: {}",
+        own.content
+    );
     assert!(folder(data.path(), "alfa").join("prodotto.txt").is_file());
     // The folder of another agent, the data folder and the shared workspace are closed to it.
     let beta_file = folder(data.path(), "beta").join("nota.txt");
@@ -306,13 +331,16 @@ async fn the_instructions_and_the_skills_of_the_shared_workspace_do_not_reach_an
     let skill_dir = ws.path().join(".aiw/skills/condivisa");
     std::fs::create_dir_all(&skill_dir).unwrap();
     std::fs::write(skill_dir.join("SKILL.md"), "---\nname: condivisa\ndescription: solo del workspace condiviso\n---\ncorpo").unwrap();
+    let global = data.path().join("skills/globale");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::write(global.join("SKILL.md"), "---\nname: globale\ndescription: per tutti\n---\ncorpo").unwrap();
     e.save_agent(apart("alfa", &["todo"])).unwrap();
     e.save_agent(shared("comune", &["todo"])).unwrap();
     let (alfa, comune) = (input_of(&e, "alfa"), input_of(&e, "comune"));
     let prompt = |i: &RunInput| i.system_extra.join("\n");
     assert!(prompt(&comune).contains("ISTRUZIONE-DEL-WORKSPACE-CONDIVISO"));
     assert!(!prompt(&alfa).contains("ISTRUZIONE-DEL-WORKSPACE-CONDIVISO"), "{}", prompt(&alfa));
-    // Its own AGENTS.md and its own skills do reach it.
+    // Its own AGENTS.md reaches it (a regular file in its own folder).
     let own = folder(data.path(), "alfa");
     std::fs::write(own.join("AGENTS.md"), "ISTRUZIONE-DI-ALFA").unwrap();
     let own_skill = own.join(".aiw/skills/mia");
@@ -322,8 +350,10 @@ async fn the_instructions_and_the_skills_of_the_shared_workspace_do_not_reach_an
     assert!(prompt(&alfa).contains("ISTRUZIONE-DI-ALFA"));
     let host = EngineHost::new(e.clone(), None, None);
     let names = |i: &RunInput| host.skills_for(i).into_iter().map(|s| s.name).collect::<Vec<_>>();
-    assert_eq!(names(&alfa), ["mia"]);
-    assert_eq!(names(&comune), ["condivisa"]);
+    // Skills: the global ones only. Not the shared workspace's, and not the ones in its own folder either: the engine reads a skill
+    // outside the sandbox when it is loaded, and a folder the agent writes in could hold a link to somebody else's file.
+    assert_eq!(names(&alfa), ["globale"]);
+    assert_eq!(names(&comune), ["condivisa", "globale"]);
 }
 
 /// A bridge that grants one folder, as the macOS panel would.
@@ -519,4 +549,220 @@ async fn the_folder_and_the_isolation_are_still_there_after_a_restart() {
     assert!(call(&e, &input, "read_file", json!({"path": "nota.txt"})).await.unwrap().content.contains(ALFA_FILE));
     let beta_file = folder(data.path(), "beta").join("nota.txt").display().to_string();
     denied(call(&e, &input, "read_file", json!({"path": beta_file})).await, "beta after a restart");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_link_in_the_folder_of_an_agent_apart_does_not_carry_another_file_into_its_prompt() {
+    // The engine reads `AGENTS.md` itself, outside the sandbox, and puts it in the prompt: a link that the agent makes in its own
+    // folder (its shell can) must not bring in the file of another agent, the token of the owner or anything else.
+    let (data, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let e = engine_at(data.path(), ws.path()).await;
+    e.save_agent(apart("alfa", &FILE_TOOLS)).unwrap();
+    e.save_agent(apart("beta", &FILE_TOOLS)).unwrap();
+    call(&e, &input_of(&e, "beta"), "write_file", json!({"path": "nota.txt", "content": BETA_FILE})).await.unwrap();
+    let (fa, fb) = (folder(data.path(), "alfa"), folder(data.path(), "beta"));
+    let prompt = |agent: &str| input_of(&e, agent).system_extra.join("\n");
+    std::fs::create_dir_all(&fa).unwrap();
+    let agents_md = fa.join("AGENTS.md");
+    for target in [fb.join("nota.txt"), data.path().join("token"), ws.path().to_path_buf()] {
+        let _ = std::fs::remove_file(&agents_md);
+        std::os::unix::fs::symlink(&target, &agents_md).unwrap();
+        let p = prompt("alfa");
+        assert!(!p.contains(BETA_FILE) && !p.contains(e.token()), "a link to {} carried something in: {p}", target.display());
+    }
+    // A hard link to a file of its own folder is the file itself: it is read. A folder called AGENTS.md is not a file.
+    let _ = std::fs::remove_file(&agents_md);
+    std::fs::create_dir(&agents_md).unwrap();
+    assert!(!prompt("alfa").contains("# Istruzioni del workspace"));
+    std::fs::remove_dir(&agents_md).unwrap();
+    std::fs::write(&agents_md, "ISTRUZIONE-DI-ALFA").unwrap();
+    assert!(prompt("alfa").contains("ISTRUZIONE-DI-ALFA"));
+    // The skills of an agent apart are the global ones: a link in its own skills folder leads nowhere.
+    let skills = fa.join(".aiw/skills");
+    std::fs::create_dir_all(&skills).unwrap();
+    std::os::unix::fs::symlink(fb.parent().unwrap(), skills.join("verso-beta")).unwrap();
+    let host = EngineHost::new(e.clone(), None, None);
+    assert!(host.skills_for(&input_of(&e, "alfa")).is_empty());
+}
+
+#[tokio::test]
+async fn removing_an_agent_stops_what_runs_for_it_and_nothing_recreates_its_folder_or_leaves_anything_to_its_namesake() {
+    let (data, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let e = engine_at(data.path(), ws.path()).await;
+    e.save_agent(apart("alfa", &FILE_TOOLS)).unwrap();
+    let running = input_of(&e, "alfa"); // a run that is going on
+    call(&e, &running, "write_file", json!({"path": "nota.txt", "content": ALFA_FILE})).await.unwrap();
+    e.delete_agent("alfa").unwrap();
+    // The tools of the run that was going cannot work any more, and the folder is not created again by a write.
+    for tool_args in
+        [("write_file", json!({"path": "nuovo.txt", "content": "x"})), ("list_dir", json!({})), ("read_file", json!({"path": "nota.txt"}))]
+    {
+        let r = call(&e, &running, tool_args.0, tool_args.1).await;
+        assert!(matches!(&r, Err(Error::Denied(m)) if m.contains("non esiste più")), "{}: {r:?}", tool_args.0);
+    }
+    assert!(!data.path().join("agents/alfa").exists(), "the folder was created again");
+    // An agent made later with the same id starts from nothing, even if a credential or a folder was left behind by a race.
+    std::fs::create_dir_all(folder(data.path(), "alfa")).unwrap();
+    std::fs::write(folder(data.path(), "alfa").join("rimasto.txt"), ALFA_FILE).unwrap();
+    e.0.store
+        .put_doc(
+            "agent_credential",
+            "alfa:orfana",
+            &json!({"agent": "alfa", "name": "orfana", "hosts": ["example.org"], "header": "Authorization", "prefix": "Bearer ", "secret": "TESTONLY-ORFANA-S3CR3T", "created_at": "t", "updated_at": "t"}),
+        )
+        .unwrap();
+    e.save_agent(apart("alfa", &FILE_TOOLS)).unwrap();
+    assert!(e.agent_credentials("alfa").unwrap().is_empty(), "an orphan credential reached the agent that took the id");
+    let fresh = input_of(&e, "alfa");
+    let listing = call(&e, &fresh, "list_dir", json!({})).await.unwrap().content;
+    assert!(!listing.contains("rimasto.txt") && !listing.contains("nota.txt"), "{listing}");
+    let archived: Vec<String> = std::fs::read_dir(data.path().join("agents/.removed"))
+        .unwrap()
+        .flatten()
+        .map(|f| f.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(archived.len(), 2, "the folder of the removed agent and the stray one are both put away: {archived:?}");
+}
+
+#[tokio::test]
+async fn a_run_waiting_for_a_confirmation_is_stopped_when_its_agent_is_removed() {
+    let backend = ScriptedBackend::new(vec![
+        ScriptedBackend::tool_turn("w1", "write_file", json!({"path": "risultato.txt", "content": ALFA_FILE})),
+        ScriptedBackend::text_turn("Fatto."),
+    ]);
+    let (data, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let e = engine_at(data.path(), ws.path()).await;
+    e.register_native_runtime("llama-embedded", Arc::new(backend));
+    e.save_agent(AgentProfile { mode: "ask".into(), ..apart("alfa", &["write_file"]) }).unwrap();
+    let s = e.create_session("alfa", None).unwrap();
+    let run = e.start_run(&s.id, "scrivi".into()).await.unwrap();
+    for _ in 0..200 {
+        if !e.approvals().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(e.approvals().len(), 1, "the run asks before writing");
+    e.delete_agent("alfa").unwrap();
+    crate::tests::wait_finished(&e, &run).await;
+    assert!(e.approvals().is_empty());
+    let status = e.sessions().unwrap().into_iter().find(|x| x.id == s.id).unwrap().last_status;
+    assert_ne!(status.as_deref(), Some("succeeded"), "the run went on after its agent was removed");
+    assert!(!data.path().join("agents/alfa").exists() && !ws.path().join("risultato.txt").exists());
+}
+
+#[tokio::test]
+async fn a_new_agent_whose_id_differs_only_by_case_is_refused_and_a_removal_moves_only_the_folder_with_its_exact_name() {
+    let (data, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let e = engine_at(data.path(), ws.path()).await;
+    e.save_agent(apart("alfa", &FILE_TOOLS)).unwrap();
+    call(&e, &input_of(&e, "alfa"), "write_file", json!({"path": "nota.txt", "content": ALFA_FILE})).await.unwrap();
+    // Whatever it asks for, a new agent that would share the folder of another on macOS and Windows is refused.
+    let err = e.save_agent(shared("ALFA", &["todo"])).unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)), "{err}");
+    assert!(e.agent("ALFA").is_err());
+    // A folder called ALFA is not the folder of the agent alfa, even where the file system would find one for the other.
+    std::fs::create_dir_all(data.path().join("agents/ALFA/workspace")).unwrap();
+    assert!(e.archive_agent_workspace("zzz").unwrap().is_none());
+    let moved = e.archive_agent_workspace("alfa").unwrap();
+    assert!(moved.is_some() && !folder(data.path(), "alfa").join("nota.txt").exists());
+    // Run again with nothing under the exact name: nothing is moved.
+    e.delete_agent("alfa").unwrap();
+    assert!(e.archive_agent_workspace("alfa").unwrap().is_none_or(|p| p.to_string_lossy().contains(".removed")));
+}
+
+#[tokio::test]
+async fn a_team_member_that_is_apart_works_in_the_folder_of_the_team_run_and_never_in_its_own() {
+    use aiw_core::api::{TeamDef, TeamMember};
+    let backend = ScriptedBackend::new(vec![
+        ScriptedBackend::tool_turn("w1", "write_file", json!({"path": "dal-membro.txt", "content": "dal membro"})),
+        ScriptedBackend::text_turn("fatto dal primo"),
+        ScriptedBackend::text_turn("fatto dal secondo"),
+    ]);
+    let (data, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let e = engine_at(data.path(), ws.path()).await;
+    e.register_native_runtime("llama-embedded", Arc::new(backend));
+    e.save_agent(apart("primo", &["write_file"])).unwrap();
+    e.save_agent(shared("secondo", &["write_file"])).unwrap();
+    e.save_team(TeamDef {
+        id: "squadra".into(),
+        name: "Squadra".into(),
+        description: String::new(),
+        strategy: "pipeline".into(),
+        supervisor: None,
+        members: ["primo", "secondo"].iter().map(|a| TeamMember { agent: a.to_string(), role: format!("ruolo di {a}") }).collect(),
+        aggregator: None,
+        budget: None,
+        output_schema: None,
+    })
+    .unwrap();
+    let s = e.create_session("team:squadra", None).unwrap();
+    let run = e.start_run(&s.id, "lavorate insieme".into()).await.unwrap();
+    crate::tests::wait_finished(&e, &run).await;
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join("dal-membro.txt")).unwrap(),
+        "dal membro",
+        "the member worked where the team run does"
+    );
+    assert!(
+        !folder(data.path(), "primo").join("dal-membro.txt").exists(),
+        "an agent apart never leaves its files in its own folder from a team"
+    );
+}
+
+#[tokio::test]
+async fn the_boundary_is_checked_again_when_a_handoff_really_moves_the_conversation() {
+    let (data, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let e = engine_at(data.path(), ws.path()).await;
+    e.save_agent(apart("alfa", &["todo"])).unwrap();
+    e.save_agent(shared("comune", &["todo"])).unwrap();
+    e.save_agent(shared("altro", &["todo"])).unwrap();
+    let agent_of = |id: &str| e.sessions().unwrap().into_iter().find(|x| x.id == id).unwrap().agent_id;
+    // To an agent that became apart between the tool call and the move.
+    let s = e.create_session("comune", None).unwrap();
+    e.continue_handoff(&s.id, "comune", "auto", "alfa", "passa", 0, None).await;
+    assert_eq!(agent_of(&s.id), "comune", "the conversation moved to an agent apart");
+    assert!(e.messages(&s.id).unwrap().iter().any(|m| m.content.contains("rifiutato") && m.content.contains("isolato")));
+    // From an agent apart.
+    let s2 = e.create_session("alfa", None).unwrap();
+    e.continue_handoff(&s2.id, "alfa", "auto", "comune", "passa", 0, None).await;
+    assert_eq!(agent_of(&s2.id), "alfa", "the conversation left an agent apart");
+}
+
+#[tokio::test]
+async fn the_warnings_say_where_a_shell_cannot_keep_an_agent_apart() {
+    let (data, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let e = engine_at(data.path(), ws.path()).await;
+    let with_shell = apart("alfa", &["shell", "read_file"]);
+    let without = apart("beta", &["read_file"]);
+    let warned = !e.isolation_warnings(&with_shell).is_empty();
+    assert_eq!(
+        warned,
+        !aiw_tools::sandbox::can_wrap_process(),
+        "a shell on a machine that cannot contain a command is said not to keep the agent apart"
+    );
+    assert!(e.isolation_warnings(&without).is_empty(), "an agent with no shell is as apart as its file tools make it");
+    assert!(e.isolation_warnings(&shared("comune", &["shell"])).is_empty());
+    if warned {
+        assert!(e.isolation_warnings(&with_shell)[0].contains("shell"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn only_a_regular_file_is_read_as_the_instructions_of_a_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    std::fs::write(other.path().join("fuori.txt"), "FUORI").unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "dentro").unwrap();
+    assert_eq!(crate::isolation::read_regular_text(dir.path(), "AGENTS.md", 100).as_deref(), Some("dentro"));
+    assert_eq!(crate::isolation::read_regular_text(dir.path(), "AGENTS.md", 3).as_deref(), Some("den"), "cut to the limit");
+    assert!(crate::isolation::read_regular_text(dir.path(), "manca.md", 100).is_none());
+    std::fs::remove_file(dir.path().join("AGENTS.md")).unwrap();
+    std::os::unix::fs::symlink(other.path().join("fuori.txt"), dir.path().join("AGENTS.md")).unwrap();
+    assert!(crate::isolation::read_regular_text(dir.path(), "AGENTS.md", 100).is_none(), "a link is not followed");
+    std::fs::remove_file(dir.path().join("AGENTS.md")).unwrap();
+    std::fs::create_dir(dir.path().join("AGENTS.md")).unwrap();
+    assert!(crate::isolation::read_regular_text(dir.path(), "AGENTS.md", 100).is_none());
 }

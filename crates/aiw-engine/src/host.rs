@@ -187,9 +187,8 @@ impl RunHost for EngineHost {
     }
 
     fn skills_for(&self, input: &RunInput) -> Vec<Skill> {
-        let root = &input.tool_ctx.workspace_root;
-        if root.starts_with(self.engine.0.dirs.agents()) {
-            self.engine.skills_in(root)
+        if input.tool_ctx.workspace_root.starts_with(self.engine.0.dirs.agents()) {
+            self.engine.global_skills()
         } else {
             self.engine.skills()
         }
@@ -304,8 +303,7 @@ impl RunHost for EngineHost {
         let target = self.engine.agent(agent_id)?;
         // The conversation does not cross the boundary of an agent that is kept apart (a folder of its own, credentials of its
         // own), in either direction: its history would carry what one side saw into the folder and the credentials of the other.
-        let apart = |a: &aiw_core::api::AgentProfile| a.has_dedicated_workspace() || self.engine.agent_has_credentials(&a.id);
-        if let Some(isolated) = [&target, &from.agent].into_iter().find(|a| apart(a)) {
+        if let Some(isolated) = [&target, &from.agent].into_iter().find(|a| self.engine.kept_apart(a)) {
             return Err(Error::Denied(format!(
                 "«{}» è un agente isolato (ha un workspace o delle credenziali sue): la conversazione non passa da o verso di lui. Scrivi direttamente a chi serve.",
                 isolated.name

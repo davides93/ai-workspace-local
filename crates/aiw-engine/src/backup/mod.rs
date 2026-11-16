@@ -9,8 +9,9 @@
 //! (and vacuumed again, with `secure_delete`, so that no deleted secret stays in free pages).
 //!
 //! **Left out, always**: model files (GGUF, safetensors, adapters: they are large, re-downloadable, and there is no option to
-//! include them), runtimes and installed tools, the browser profile, update downloads, git worktrees, evaluation and training
-//! work folders, checkpoints, caches and logs.
+//! include them), runtimes and installed tools, the browser profile, update downloads, git worktrees, the folders of the agents
+//! that work apart (`agents/`, issue #71: the files they produce are not in a backup), evaluation and training work folders,
+//! checkpoints, caches and logs.
 //!
 //! **Left out unless `include_secrets`**: TLS keys and certificates (`tls/`), the owner token (`token`), the access tokens
 //! of devices and apps (table `api_tokens`), and every secret that the app stores: IMAP passwords, channel tokens, model
