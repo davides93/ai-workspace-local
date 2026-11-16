@@ -1016,7 +1016,8 @@ pub struct Session {
     /// Set when the session works in its own git worktree instead of the shared workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeInfo>,
-    /// Set when the conversation comes from a channel: `telegram` | `slack` | `email`.
+    /// Set when the conversation comes from a channel: `telegram` | `slack` | `email`, or `shared` for the session of a
+    /// shared context (one conversation that goes on across channels).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
 }
@@ -2794,6 +2795,228 @@ pub struct ChannelPairing {
     pub expires_at: String,
     /// The message to send to the bot, e.g. `/start 123456`.
     pub command: String,
+}
+
+// ---------------------------------------------------------------- shared contexts (one conversation, several channels)
+
+/// One account that belongs to a shared context: a sender on the list of a channel (Telegram user id, Slack user id
+/// or email address, written as on the list).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextMember {
+    pub channel_id: String,
+    pub sender: String,
+}
+
+/// A conversation that goes on across channels: the same person writes from Telegram, Slack or email and the
+/// assistant answers in the same session, with the same history. Only the owner creates one, by naming the
+/// accounts (never by guessing that two accounts are the same person), and it only applies to private
+/// conversations (a direct chat, a direct message, a mail), never to groups or public channels.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChannelContext {
+    pub id: String,
+    pub name: String,
+    /// The assistant that answers on every channel of the context (the one all its channels use).
+    pub agent_id: String,
+    /// The session that holds the shared history; it is also listed in the chat of the app.
+    pub session_id: String,
+    /// At most one account per channel.
+    #[serde(default)]
+    pub members: Vec<ContextMember>,
+    pub created_at: String,
+}
+
+/// A member as the API shows it, with the channel's name and why it does not work right now (if so).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContextMemberInfo {
+    pub channel_id: String,
+    pub channel_name: String,
+    /// telegram | slack | email
+    pub kind: String,
+    pub sender: String,
+    /// In plain words: the channel is gone, the account is no longer on its list, the sender check of an email
+    /// channel is off. Empty when everything is in order; a member with a problem is skipped, never merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+}
+
+/// What the API returns for a shared context.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContextInfo {
+    #[serde(flatten)]
+    pub context: ChannelContext,
+    pub members_info: Vec<ContextMemberInfo>,
+    /// `read_only` when any channel of the context is read-only, otherwise `ask`: the context never has more
+    /// freedom than its most restricted channel.
+    pub mode: String,
+    /// Title of the shared session, for the list.
+    #[serde(default)]
+    pub session_title: String,
+}
+
+/// Body of `POST /api/contexts`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ContextCreate {
+    pub name: String,
+    pub members: Vec<ContextMember>,
+}
+
+/// Body of `PATCH /api/contexts/{id}`: only what is present changes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ContextPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub members: Option<Vec<ContextMember>>,
+}
+
+// ---------------------------------------------------------------- email drafts (reviewed by the owner, sent only after approval)
+
+/// States of a draft. `sending` and `uncertain` exist because an SMTP send cannot be undone: a failure after the
+/// message was handed over is never retried on its own.
+pub const DRAFT_STATUSES: [&str; 7] = ["draft", "sending", "sent", "failed", "uncertain", "rejected", "cancelled"];
+
+/// A file attached to a draft. The bytes are copied when it is attached and kept with the draft: what is sent is
+/// what was shown, even if the original changes afterwards.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DraftAttachment {
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    pub sha256: String,
+    /// Where it came from, as written when it was attached (a path inside the workspace).
+    #[serde(default)]
+    pub source: String,
+}
+
+/// An email waiting for the owner's review. It is **not** a reply of an email channel (those are automatic and go
+/// only to the people on the channel's list): a draft can have any recipient, and nothing leaves until the owner
+/// approves exactly this content (`content_hash`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EmailDraft {
+    pub id: String,
+    /// One of [`DRAFT_STATUSES`].
+    pub status: String,
+    /// The email channel whose SMTP server sends it (it has to be turned on).
+    pub channel_id: String,
+    /// The sender address, from that channel.
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    /// Hidden recipients: shown here for the review, never written in the headers of the message.
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    /// `Message-ID` of the mail this one answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub references: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<DraftAttachment>,
+    /// `assistant` | `user`.
+    pub created_by: String,
+    /// What it was prepared from: `mail:<message-id>`, `calendar:<event>`, `proposal:<id>`, `chat`, `user`…
+    #[serde(default)]
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// SHA-256 of everything that goes on the wire (sender, recipients, subject, body, threading, attachments).
+    /// To send, the owner sends it back as `approved_hash`: a draft changed after the review is refused.
+    pub content_hash: String,
+    /// Grows with every change of the content.
+    pub revision: u32,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at: Option<String>,
+    /// The `Message-ID` the message went out with (derived from the id of the draft: a second attempt carries the same one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    /// Why it failed, or the reason of a refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Another draft with the same content that was not refused (a duplicate to look at before sending).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<String>,
+}
+
+/// Body of `POST /api/email-drafts` (the owner writes a draft by hand).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EmailDraftCreate {
+    /// The email channel that sends it (default: the only one, or the first).
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    #[serde(default)]
+    pub references: Option<String>,
+    /// Paths inside the workspace, copied when the draft is saved.
+    #[serde(default)]
+    pub attachments: Vec<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// Body of `PATCH /api/email-drafts/{id}`: only what is present changes (only while the draft is waiting).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EmailDraftPatch {
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub to: Option<Vec<String>>,
+    #[serde(default)]
+    pub cc: Option<Vec<String>>,
+    #[serde(default)]
+    pub bcc: Option<Vec<String>>,
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    /// Paths inside the workspace to attach.
+    #[serde(default)]
+    pub add_attachments: Vec<String>,
+    /// Hashes (`sha256`) of the attachments to remove.
+    #[serde(default)]
+    pub remove_attachments: Vec<String>,
+    /// The revision the editor was showing: a draft that changed since (the assistant revised it) is refused with a 409
+    /// instead of being overwritten.
+    #[serde(default)]
+    pub expected_revision: Option<u32>,
+}
+
+/// Body of `POST /api/email-drafts/{id}/send`: the owner's approval of the content they saw.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EmailDraftSend {
+    /// The `content_hash` shown with the draft. A different one means the draft changed: nothing is sent.
+    pub approved_hash: String,
+    /// After an `uncertain` outcome (the server may have taken the message): send again anyway.
+    #[serde(default)]
+    pub resend: bool,
+}
+
+/// Body of `POST /api/email-drafts/{id}/reject`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EmailDraftReject {
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// An IMAP account of the mail connector, as the API shows it. The password is a secret: it is shown as

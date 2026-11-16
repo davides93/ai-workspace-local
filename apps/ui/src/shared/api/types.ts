@@ -780,8 +780,8 @@ export interface Session {
   last_status?: RunStatus;
   /** Present when the session works in its own git worktree (branch `aiw/<id>`). */
   worktree?: WorktreeInfo;
-  /** Present when the conversation comes from a channel: `telegram` | `slack` | `email`. */
-  channel?: ChannelKind;
+  /** Present when the conversation comes from a channel: `telegram` | `slack` | `email`, or `shared` (a shared context). */
+  channel?: ChannelKind | "shared";
 }
 
 export interface WorktreeInfo {
@@ -1962,4 +1962,133 @@ export interface MailAccountTest {
   ok: boolean;
   detail: string;
   folders: { name: string; recent: number }[];
+}
+
+// ---- shared contexts: one conversation that goes on across several channels
+
+/** An account of a shared context: a sender on the list of a channel (Telegram user id, Slack user id, email address). */
+export interface ContextMember {
+  channel_id: string;
+  sender: string;
+}
+
+export interface ContextMemberInfo {
+  channel_id: string;
+  channel_name: string;
+  kind: ChannelKind;
+  sender: string;
+  /** Why this account does not take part right now (channel gone, off the list, sender check of an email channel off). */
+  problem?: string;
+}
+
+/**
+ * The owner's statement that these accounts are the same person: their direct messages are answered in one session,
+ * with one history. Never made by guessing; applies to direct conversations only (never groups or public channels).
+ */
+export interface ChannelContext {
+  id: string;
+  name: string;
+  /** The assistant that answers on every channel of the context. */
+  agent_id: string;
+  /** The shared session, also listed in the chat. */
+  session_id: string;
+  members: ContextMember[];
+  created_at: string;
+}
+
+export interface ContextInfo extends ChannelContext {
+  members_info: ContextMemberInfo[];
+  /** `read_only` as soon as one channel is: never freer than the most restricted channel. */
+  mode: ChannelMode;
+  session_title: string;
+}
+
+export interface ContextCreate {
+  name: string;
+  members: ContextMember[];
+}
+
+export interface ContextPatch {
+  name?: string;
+  members?: ContextMember[];
+}
+
+// ---- email drafts: reviewed by the owner, sent only after they approve exactly this content
+
+export type DraftStatus = "draft" | "sending" | "sent" | "failed" | "uncertain" | "rejected" | "cancelled";
+
+export interface DraftAttachment {
+  name: string;
+  mime: string;
+  size: number;
+  sha256: string;
+  /** Where it came from (a path in the workspace). */
+  source: string;
+}
+
+/** A draft is not an automatic reply of an email channel: it can have any recipient, and nothing leaves before the owner's approval. */
+export interface EmailDraft {
+  id: string;
+  status: DraftStatus;
+  channel_id: string;
+  from: string;
+  to: string[];
+  cc: string[];
+  /** Hidden recipients: shown for the review, never in the headers of the message. */
+  bcc: string[];
+  subject: string;
+  body: string;
+  in_reply_to?: string;
+  references?: string;
+  attachments: DraftAttachment[];
+  created_by: "assistant" | "user";
+  /** `mail:<message-id>`, `calendar:<event>`, `chat`, `user`… */
+  source: string;
+  session_id?: string;
+  /** SHA-256 of everything that goes on the wire. The approval sends it back: a draft changed since is refused (409). */
+  content_hash: string;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  decided_at?: string;
+  sent_at?: string;
+  message_id?: string;
+  /** Why it failed, or the reason of a refusal. */
+  note?: string;
+  /** Another recent draft with the same content. */
+  duplicate_of?: string;
+}
+
+export interface EmailDraftCreate {
+  channel_id?: string;
+  to?: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject?: string;
+  body?: string;
+  in_reply_to?: string;
+  references?: string;
+  /** Paths inside the workspace. */
+  attachments?: string[];
+  source?: string;
+}
+
+export interface EmailDraftPatch {
+  channel_id?: string;
+  to?: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject?: string;
+  body?: string;
+  add_attachments?: string[];
+  /** `sha256` of the attachments to remove. */
+  remove_attachments?: string[];
+  /** The revision the editor was showing: a draft that changed since (the assistant revised it) is a 409, not overwritten. */
+  expected_revision?: number;
+}
+
+export interface EmailDraftSend {
+  approved_hash: string;
+  /** After an `uncertain` outcome: send again anyway. */
+  resend?: boolean;
 }

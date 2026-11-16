@@ -20,6 +20,9 @@
 //! sends into an [`Inbound`] and implement [`Transport`] to send text back. Everything that decides
 //! lives in this file.
 
+mod context;
+mod draft_tool;
+mod drafts;
 mod email;
 mod slack;
 mod smtp;
@@ -125,10 +128,68 @@ struct Entry {
     hash: String,
 }
 
+/// A message waiting its turn, with the channel it came from and the way back: the queue of a shared context holds
+/// messages of several channels.
+struct Queued {
+    channel_id: String,
+    tr: Arc<dyn Transport>,
+    msg: Inbound,
+    /// The shared context it was resolved to when it arrived (checked again when its turn comes).
+    context: Option<String>,
+}
+
 #[derive(Default)]
 struct Conv {
-    queue: VecDeque<Inbound>,
+    queue: VecDeque<Queued>,
     running: bool,
+}
+
+/// What a «sì» / «no» in a channel message came to.
+enum Answer {
+    /// It decided the confirmation that was asked here.
+    Done,
+    /// There is a confirmation, but it was asked somewhere else (the words say where).
+    Elsewhere(String),
+    /// There is nothing to answer: it is an ordinary message.
+    Nobody,
+}
+
+/// Sets [`TurnOrigin`] for a session and removes it when the turn ends, however it ends.
+struct TurnGuard<'a> {
+    engine: &'a Engine,
+    session_id: String,
+    token: String,
+}
+
+impl<'a> TurnGuard<'a> {
+    fn set(engine: &'a Engine, session_id: &str, origin: TurnOrigin) -> Self {
+        let token = origin.token.clone();
+        engine.0.channels.turns.lock().unwrap().insert(session_id.to_string(), origin);
+        Self { engine, session_id: session_id.to_string(), token }
+    }
+}
+
+impl Drop for TurnGuard<'_> {
+    /// Takes away its own record only: a later turn of the same session has set its own.
+    fn drop(&mut self) {
+        let mut turns = self.engine.0.channels.turns.lock().unwrap();
+        if turns.get(&self.session_id).is_some_and(|o| o.token == self.token) {
+            turns.remove(&self.session_id);
+        }
+    }
+}
+
+/// Who started the run that is going on in a session, so that the confirmations it opens are asked, and can be
+/// answered, only there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TurnOrigin {
+    pub(crate) channel_id: String,
+    /// The external conversation (Telegram chat, Slack channel, email thread).
+    pub(crate) conv: String,
+    /// The account that wrote (the first of the ids the connector gave), as written on the channel's list.
+    pub(crate) sender: String,
+    /// Tells this turn from the next one of the same session, so that each takes away only its own record.
+    pub(crate) token: String,
 }
 
 pub(crate) struct Pair {
@@ -153,6 +214,16 @@ pub(crate) struct Runtime {
     roots: RwLock<Vec<Vec<u8>>>,
     /// Email: replies sent per sender in the last hour.
     replies: Mutex<HashMap<String, VecDeque<Instant>>>,
+    /// Session → who started its active channel run (see [`TurnOrigin`]). Only a channel turn sets it: a run the
+    /// person starts in the app has no entry, and no channel can answer its confirmations.
+    turns: Mutex<HashMap<String, TurnOrigin>>,
+    /// External ids of the messages already handled, per channel: a platform that delivers one twice (a retry, a
+    /// reconnection) makes one run, not two.
+    seen_ids: Mutex<HashMap<String, VecDeque<(String, Instant)>>>,
+    /// Serialises the changes of the shared contexts (an account belongs to one context at most).
+    context_lock: Mutex<()>,
+    /// Drafts being sent right now, and the sends of the last hour.
+    drafts: drafts::Runtime,
 }
 
 /// A message from outside, as a connector hands it over.
@@ -168,6 +239,15 @@ pub(crate) struct Inbound {
     pub files: Vec<AttachmentUpload>,
     /// What the connector needs to answer in the same place (email headers, Slack thread).
     pub reply: Value,
+    /// The id the platform gave the message (Telegram chat and message, Slack channel and timestamp, the `Message-ID`
+    /// of a mail), when it has one: the same id arriving twice is handled once.
+    pub id: Option<String>,
+    /// The text a «sì» / «no» is read from when it is not `text` itself: the body of a mail, without the subject line
+    /// that `text` starts with.
+    pub answer: Option<String>,
+    /// A conversation between the assistant and one person (a private chat, a direct message, a mail). Only such a
+    /// message can belong to a shared context: a group or a public channel never does. Not set means not direct.
+    pub direct: bool,
 }
 
 /// Where a message goes.
@@ -473,6 +553,9 @@ impl Engine {
 
     pub fn channel_patch(&self, id: &str, p: ChannelPatch) -> Result<ChannelInfo> {
         let mut ch = self.channel_doc(id)?;
+        if let Some(a) = p.agent_id.as_deref() {
+            self.context_guard_agent(id, a)?;
+        }
         if let Some(n) = p.name {
             ch.name = n;
         }
@@ -515,6 +598,8 @@ impl Engine {
             }
         }
         self.0.store.put_doc("channel", &ch.id, &ch)?;
+        // An account that is no longer on the list leaves its shared context.
+        self.contexts_prune(&ch.id);
         if ch.enabled && !was_enabled {
             // The person is acting again: the emergency stop no longer holds.
             self.0.channels.killed.store(false, Ordering::SeqCst);
@@ -536,6 +621,7 @@ impl Engine {
             self.0.store.delete_doc("channel_conv", &conv_key(id, &c.conv))?;
         }
         self.0.channels.pair.lock().unwrap().remove(id);
+        self.contexts_prune(id);
         self.channels_sync();
         self.audit_user("channel.delete", &format!("{} «{}»", kind_label(&ch.kind), ch.name));
         Ok(())
@@ -803,12 +889,23 @@ impl Engine {
         Ok(a)
     }
 
-    /// `session id → channel kind` for the badge in the chat list.
+    /// `session id → channel kind` for the badge in the chat list (`shared` for the session of a shared context).
     pub(crate) fn channel_session_kinds(&self) -> HashMap<String, String> {
-        self.0.store.list_docs::<ConvDoc>("channel_conv").unwrap_or_default().into_iter().map(|c| (c.session_id, c.kind)).collect()
+        let mut kinds: HashMap<String, String> =
+            self.0.store.list_docs::<ConvDoc>("channel_conv").unwrap_or_default().into_iter().map(|c| (c.session_id, c.kind)).collect();
+        for c in self.contexts_raw() {
+            kinds.insert(c.session_id, "shared".into());
+        }
+        kinds
     }
 
-    fn channel_session(&self, ch: &Channel, msg: &Inbound) -> Result<String> {
+    /// The session a message belongs to: the shared one when it belongs to a shared context, the one of its own
+    /// external conversation otherwise. The restrictions of the session are set at every turn from what the channels
+    /// say now, never from what they said when it was created.
+    fn channel_session(&self, ch: &Channel, msg: &Inbound, context: Option<&ChannelContext>) -> Result<String> {
+        if let Some(ctx) = context {
+            return self.context_session(ctx);
+        }
         let key = conv_key(&ch.id, &msg.conv);
         let want = Self::channel_agent_id(ch);
         if let Some(doc) = self.0.store.get_doc::<ConvDoc>("channel_conv", &key)? {
@@ -831,6 +928,14 @@ impl Engine {
         Ok(s.id)
     }
 
+    /// The session a conversation already has, without creating one (to answer a pending confirmation).
+    fn channel_existing_session(&self, ch: &Channel, msg: &Inbound, context: Option<&ChannelContext>) -> Option<String> {
+        match context {
+            Some(ctx) => Some(ctx.session_id.clone()),
+            None => self.0.store.get_doc::<ConvDoc>("channel_conv", &conv_key(&ch.id, &msg.conv)).ok().flatten().map(|d| d.session_id),
+        }
+    }
+
     // ------------------------------------------------------------------ inbound
 
     pub(crate) fn channel_rate_ok(&self, channel_id: &str, sender: &str) -> bool {
@@ -847,6 +952,33 @@ impl Engine {
         true
     }
 
+    /// The queues that hold messages right now (tests: two channels of a context must share one).
+    #[cfg(test)]
+    pub(crate) fn channel_queue_keys(&self) -> Vec<String> {
+        self.0.channels.convs.lock().unwrap().iter().filter(|(_, c)| c.running).map(|(k, _)| k.clone()).collect()
+    }
+
+    /// Has this external id been handled already? Records it when not. A platform that delivers one message twice
+    /// (a retry, a reconnection of Slack) makes one run.
+    fn channel_seen(&self, channel_id: &str, id: &str) -> bool {
+        const KEEP: usize = 500;
+        const TTL: Duration = Duration::from_secs(6 * 3600);
+        let mut all = self.0.channels.seen_ids.lock().unwrap();
+        let q = all.entry(channel_id.to_string()).or_default();
+        let now = Instant::now();
+        while q.front().is_some_and(|(_, t)| now.duration_since(*t) > TTL) {
+            q.pop_front();
+        }
+        if q.iter().any(|(i, _)| i == id) {
+            return true;
+        }
+        q.push_back((id.to_string(), now));
+        while q.len() > KEEP {
+            q.pop_front();
+        }
+        false
+    }
+
     /// The entry point of the connectors: a message arrived on a channel.
     pub(crate) async fn channel_inbound(&self, channel_id: &str, tr: Arc<dyn Transport>, msg: Inbound) {
         let Ok(ch) = self.channel_doc(channel_id) else { return };
@@ -860,6 +992,13 @@ impl Engine {
             return;
         }
         let target = Target { conv: msg.conv.clone(), reply: msg.reply.clone() };
+        // 1b. The same message again (a retry of the platform): handled once, and it does not count as a new one.
+        if let Some(id) = msg.id.as_deref().filter(|i| !i.is_empty()) {
+            if self.channel_seen(channel_id, id) {
+                self.channel_audit(&ch, "channel.duplicate", format!("messaggio già trattato (id {}): ignorato", text::excerpt(id, 60)));
+                return;
+            }
+        }
         // 2. Not too fast.
         if !self.channel_rate_ok(channel_id, &sender) {
             let first = {
@@ -878,25 +1017,43 @@ impl Engine {
             }
             return;
         }
-        self.channel_audit(&ch, "channel.in", format!("da {sender}: {}", text::excerpt(&msg.text, 200)));
+        // Does it belong to a shared context? Only a direct conversation of an account the owner linked does.
+        let context = self.context_for_message(&ch, &msg);
+        let shared = context.as_ref().map(|c| format!(" (contesto condiviso «{}»)", c.name)).unwrap_or_default();
+        self.channel_audit(&ch, "channel.in", format!("da {sender}{shared}: {}", text::excerpt(&msg.text, 200)));
         self.channel_update_state(channel_id, |s| s.handled += 1);
-        let key = conv_key(channel_id, &msg.conv);
         // 3. An answer to a confirmation that is waiting?
         if msg.files.is_empty() {
-            if let Some(allow) = text::parse_answer(&msg.text) {
-                if self.channel_answer_pending(&ch, &key, allow) {
-                    return;
+            if let Some(allow) = text::parse_answer(msg.answer.as_deref().unwrap_or(&msg.text)) {
+                match self.channel_answer_pending(&ch, &msg, context.as_ref(), allow) {
+                    Answer::Done => return,
+                    Answer::Elsewhere(place) => {
+                        let note =
+                            format!("C'è una richiesta di permesso in attesa {place}: rispondi lì, oppure nell'app. Da qui non la decido.");
+                        self.channel_reply(&ch, &tr, &target, &note).await;
+                        return;
+                    }
+                    Answer::Nobody => {}
                 }
             }
         }
-        // 4. Queue it; one worker per conversation.
+        // 4. Queue it; one worker per conversation, or per shared context: the messages of its channels wait in turn.
+        let key = match &context {
+            Some(c) => format!("ctx|{}", c.id),
+            None => conv_key(channel_id, &msg.conv),
+        };
         let start = {
             let mut convs = self.0.channels.convs.lock().unwrap();
             let c = convs.entry(key.clone()).or_default();
             if c.queue.len() >= QUEUE_CAP {
                 None
             } else {
-                c.queue.push_back(msg);
+                c.queue.push_back(Queued {
+                    channel_id: channel_id.to_string(),
+                    tr: tr.clone(),
+                    msg,
+                    context: context.as_ref().map(|c| c.id.clone()),
+                });
                 let start = !c.running;
                 c.running = true;
                 Some(start)
@@ -906,8 +1063,7 @@ impl Engine {
             None => self.channel_reply(&ch, &tr, &target, "Ho già troppi messaggi in coda: aspetta che finisca e riscrivimi.").await,
             Some(true) => {
                 let engine = self.clone();
-                let id = channel_id.to_string();
-                tokio::spawn(async move { engine.channel_worker(id, key, tr).await });
+                tokio::spawn(async move { engine.channel_worker(key).await });
             }
             Some(false) => {}
         }
@@ -928,15 +1084,39 @@ impl Engine {
         v
     }
 
-    fn channel_answer_pending(&self, ch: &Channel, key: &str, allow: bool) -> bool {
-        let conv = key.split_once('|').map(|(_, c)| c.to_string()).unwrap_or_default();
-        let Ok(Some(doc)) = self.0.store.get_doc::<ConvDoc>("channel_conv", &conv_key(&ch.id, &conv)) else { return false };
-        let Some(req) = self.channel_pending(&doc.session_id).into_iter().next() else { return false };
-        if self.respond_approval(&req.id, allow, false).is_ok() {
-            self.channel_audit(ch, "channel.approval", format!("{} per «{}»", if allow { "consentito" } else { "negato" }, req.tool));
-            return true;
+    /// Does one of these ids belong to the account that started the turn?
+    fn is_turn_sender(kind: &str, origin: &TurnOrigin, senders: &[String]) -> bool {
+        !origin.sender.is_empty() && senders.iter().any(|s| norm(kind, s) == origin.sender)
+    }
+
+    /// A «sì» / «no» in a message. It decides only a confirmation that was asked **here**: the one of the run that
+    /// this very conversation (the same channel, the same external conversation, the same account) started. A
+    /// confirmation of a run started in the app, or from another channel of the same shared context, is not
+    /// answered from here: the person is told where to answer instead.
+    fn channel_answer_pending(&self, ch: &Channel, msg: &Inbound, context: Option<&ChannelContext>, allow: bool) -> Answer {
+        let Some(session_id) = self.channel_existing_session(ch, msg, context) else { return Answer::Nobody };
+        let Some(req) = self.channel_pending(&session_id).into_iter().next() else { return Answer::Nobody };
+        let origin = self.0.channels.turns.lock().unwrap().get(&session_id).cloned();
+        match origin {
+            Some(o) if o.channel_id == ch.id && o.conv == msg.conv && Self::is_turn_sender(&ch.kind, &o, &msg.senders) => {
+                if self.respond_approval(&req.id, allow, false).is_ok() {
+                    self.channel_audit(
+                        ch,
+                        "channel.approval",
+                        format!("{} per «{}»", if allow { "consentito" } else { "negato" }, req.tool),
+                    );
+                    Answer::Done
+                } else {
+                    Answer::Nobody
+                }
+            }
+            Some(o) if o.channel_id != ch.id => {
+                let name = self.channel_doc(&o.channel_id).map(|c| format!("«{}»", c.name)).unwrap_or_else(|_| "un altro canale".into());
+                Answer::Elsewhere(format!("su {name}"))
+            }
+            Some(_) => Answer::Elsewhere("per un altro account o in un'altra conversazione di questo canale".into()),
+            None => Answer::Elsewhere("nell'app".into()),
         }
-        false
     }
 
     /// A button was tapped. Returns the words to show next to the button.
@@ -946,19 +1126,15 @@ impl Engine {
             self.channel_note_ignored(channel_id, senders.first().map(String::as_str).unwrap_or(""));
             return String::new();
         }
-        // Only a confirmation of one of this channel's own conversations can be answered from here.
-        let own: HashSet<String> = self
-            .0
-            .store
-            .list_docs::<ConvDoc>("channel_conv")
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|c| c.channel_id == channel_id)
-            .map(|c| c.session_id)
-            .collect();
-        let mine = self.0.approvals.lock().unwrap().get(approval_id).and_then(|p| p.session_id.clone()).is_some_and(|s| own.contains(&s));
-        if !mine {
+        // Only a confirmation of the run this channel's account started can be answered from here.
+        let Some(session) = self.0.approvals.lock().unwrap().get(approval_id).map(|p| p.session_id.clone()) else {
             return "Questa richiesta non c'è più.".into();
+        };
+        let origin = session.and_then(|s| self.0.channels.turns.lock().unwrap().get(&s).cloned());
+        match origin {
+            Some(o) if o.channel_id == channel_id && Self::is_turn_sender(&ch.kind, &o, senders) => {}
+            Some(_) => return "Questa richiesta è stata fatta altrove: rispondi dove è stata chiesta, oppure nell'app.".into(),
+            None => return "Questa richiesta è nell'app: decidila lì.".into(),
         }
         match self.respond_approval(approval_id, allow, false) {
             Ok(()) => {
@@ -986,7 +1162,7 @@ impl Engine {
         self.channel_audit(ch, "channel.out", text::excerpt(&plain, 200));
     }
 
-    async fn channel_worker(&self, channel_id: String, key: String, tr: Arc<dyn Transport>) {
+    async fn channel_worker(&self, key: String) {
         loop {
             let next = {
                 let mut convs = self.0.channels.convs.lock().unwrap();
@@ -999,7 +1175,7 @@ impl Engine {
                     }
                 }
             };
-            let Some(msg) = next else { return };
+            let Some(q) = next else { return };
             if self.0.channels.killed.load(Ordering::SeqCst) {
                 if let Some(c) = self.0.channels.convs.lock().unwrap().get_mut(&key) {
                     c.queue.clear();
@@ -1007,22 +1183,34 @@ impl Engine {
                 }
                 return;
             }
-            self.channel_turn(&channel_id, &tr, msg).await;
+            self.channel_turn(&q.channel_id, &q.tr, q.msg, q.context).await;
         }
     }
 
-    /// One message: a run in the session of the conversation, and the answer back to the channel.
-    async fn channel_turn(&self, channel_id: &str, tr: &Arc<dyn Transport>, msg: Inbound) {
+    /// One message: a run in the session of the conversation, and the answer back to the channel it came from.
+    async fn channel_turn(&self, channel_id: &str, tr: &Arc<dyn Transport>, mut msg: Inbound, context_id: Option<String>) {
         let Ok(ch) = self.channel_doc(channel_id) else { return };
+        // The message may have waited in the queue: a channel turned off, or a sender taken off its list, meanwhile is not served.
+        if !ch.enabled || !self.channel_is_allowed(channel_id, &msg.senders) {
+            self.channel_audit(
+                &ch,
+                "channel.skipped",
+                "messaggio in coda non trattato: il canale è spento o il mittente non è più nella lista".into(),
+            );
+            return;
+        }
         let target = Target { conv: msg.conv.clone(), reply: msg.reply.clone() };
-        let session_id = match self.channel_session(&ch, &msg) {
+        // The context may have changed while the message waited: it is looked up again, and a message whose account
+        // left it goes to its own conversation.
+        let context = context_id.and_then(|id| self.context_for_message(&ch, &msg).filter(|c| c.id == id));
+        let session_id = match self.channel_session(&ch, &msg, context.as_ref()) {
             Ok(s) => s,
             Err(e) => return self.channel_reply(&ch, tr, &target, &format!("Non riesco ad aprire la conversazione: {e}")).await,
         };
         // Attachments: the ones that pass the app's own limits go through the same pipeline; the others get a short refusal.
         let mut uploads = Vec::new();
         let mut refused = Vec::new();
-        for f in msg.files {
+        for f in std::mem::take(&mut msg.files) {
             match attachments::prepare(vec![f.clone()]) {
                 Ok(_) => uploads.push(f),
                 Err(e) => refused.push(format!("«{}»: {e}", text::excerpt(&f.name, 40))),
@@ -1041,6 +1229,28 @@ impl Engine {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        if self.active_run(&session_id).is_some() {
+            return self
+                .channel_reply(&ch, tr, &target, "In questa conversazione c'è un lavoro in corso nell'app: riscrivimi quando finisce.")
+                .await;
+        }
+        // The restrictions are the ones of this moment, not of before the wait: a channel made read-only meanwhile counts.
+        let context = context.and_then(|c| self.context_for_message(&ch, &msg).filter(|n| n.id == c.id));
+        let session_id = match self.channel_session(&ch, &msg, context.as_ref()) {
+            Ok(s) => s,
+            Err(e) => return self.channel_reply(&ch, tr, &target, &format!("Non riesco ad aprire la conversazione: {e}")).await,
+        };
+        // From here to the end of the run, the confirmations it opens belong to this account of this conversation.
+        let origin = TurnGuard::set(
+            self,
+            &session_id,
+            TurnOrigin {
+                channel_id: ch.id.clone(),
+                conv: msg.conv.clone(),
+                sender: msg.senders.first().map(|s| norm(&ch.kind, s)).unwrap_or_default(),
+                token: new_id("trn"),
+            },
+        );
         let run_id = match self.start_run_attach(&session_id, msg.text.clone(), None, None, uploads).await {
             Ok(r) => r,
             Err(e) => return self.channel_reply(&ch, tr, &target, &format!("Non riesco a rispondere adesso: {e}")).await,
@@ -1072,6 +1282,8 @@ impl Engine {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        // The run is over: from here on a run started elsewhere in this session is not this channel's.
+        drop(origin);
         if self.0.channels.killed.load(Ordering::SeqCst) {
             return;
         }
@@ -1179,6 +1391,17 @@ impl Engine {
 
     pub(crate) fn register_channel_tool(&self) {
         tool::register(self);
+        draft_tool::register(self);
+    }
+
+    /// Is there an email channel a draft could go through?
+    pub(crate) fn draft_channel_exists(&self) -> bool {
+        self.channels_raw().iter().any(|c| c.kind == "email")
+    }
+
+    /// The session a run belongs to, while it goes on.
+    pub(crate) fn session_of_run(&self, run_id: &str) -> Option<String> {
+        self.0.runs.lock().unwrap().get(run_id).and_then(|h| h.session_id.clone())
     }
 }
 

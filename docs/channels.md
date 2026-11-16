@@ -6,6 +6,8 @@ canale come «messaggi ignorati da sconosciuti»): non ricevono risposta e il lo
 
 > Stato onesto: i canali sono stati provati solo contro server finti nei test. Non sono mai stati provati contro Telegram,
 > Slack o caselle di posta vere. Se qualcosa non torna con un servizio reale, è un difetto da segnalare.
+> Vale anche per le conversazioni collegate e per le bozze email di questa guida: provate con Telegram, Slack, IMAP e SMTP finti
+> (compresi guasti simulati), mai con un account o una casella veri.
 
 ## Prima di cominciare
 
@@ -86,6 +88,68 @@ Permette all'assistente di scrivere sul canale di sua iniziativa. Richiede un pe
 «soggetto» del permesso), manda solo a chi è nell'elenco e non è mai disponibile nei lavori di sola lettura (compresi
 quelli dei canali in «Solo lettura» e dell'assistente proattivo).
 
+## Una conversazione sola su più canali
+
+Di serie ogni conversazione esterna (una chat Telegram, un messaggio diretto Slack, un filo di posta) ha la sua sessione e niente
+passa dall'una all'altra. Se sei tu a scrivere da Telegram e da email, puoi dire all'app che sono la stessa persona:
+**Canali → Conversazioni collegate → «Collega degli account»**. Scegli un nome e, per ogni canale, il tuo account
+(uno solo per canale, preso dall'elenco di chi può scrivere). Da quel momento i messaggi diretti di quegli account vanno in
+**una sola conversazione**, con una sola cronologia, che compare anche nella chat dell'app con l'etichetta «Condivisa».
+Chi ti risponde risponde sul canale da cui hai scritto.
+
+Regole, tutte verificate dai test:
+
+- **Lo decidi solo tu.** Non si collega mai nulla da solo e non si indovina che due account siano la stessa persona. Serve
+  l'accesso completo (un telefono accoppiato non può). Le conversazioni che avevi già restano separate: collegare non le unisce.
+- **Solo le conversazioni dirette.** Un messaggio in un gruppo, o la menzione del bot in un canale Slack, resta nella conversazione
+  del suo canale: la risposta andrebbe a tutti quelli che la leggono e porterebbe con sé la cronologia privata. Su Telegram si collega
+  la persona, mai un gruppo.
+- **Posta: solo se il canale controlla il mittente** (DKIM/SPF). Il controllo prova il dominio, non la casella: non collegare indirizzi di domini che usi con altre persone. Con il controllo spento un `From` falsificato potrebbe leggere la
+  cronologia degli altri canali: l'account non si collega, e se lo spegni dopo smette di partecipare (la scheda dice perché).
+- **Mai più libertà del canale più restrittivo.** Se un canale è in «Solo lettura» lo è tutta la conversazione, ricalcolato a ogni messaggio.
+  Tutti i canali di un contesto usano lo stesso assistente: il campo «Assistente che risponde» di un canale collegato ad altri non si cambia finché resta collegato.
+- **Le richieste di permesso si decidono dove sono state fatte.** Una richiesta aperta da un messaggio su Telegram si approva su
+  Telegram (o nell'app); un «sì» che arriva dalla posta, dallo stesso contesto, non vale e riceve un rimando. Lo stesso vale per un
+  lavoro che hai avviato tu nell'app: un canale non ne approva le conferme. Le modifiche di gestione restano del proprietario.
+- **Messaggi in coda per contesto, senza doppioni.** Due messaggi di due canali aspettano il proprio turno nella stessa coda (nessun errore
+  di «lavoro già in corso»); lo stesso messaggio consegnato due volte dalla piattaforma (un nuovo tentativo di Telegram, una riconnessione di Slack,
+  lo stesso `Message-ID`) fa partire un solo lavoro.
+- **Un account esce da solo** se lo togli dall'elenco del canale o elimini il canale. Eliminare il contesto lascia la cronologia nella chat.
+
+La voce non è cambiata: la dettatura e la lettura ad alta voce lavorano sulla chat aperta nell'app, quindi con la conversazione condivisa aperta
+usano la sua cronologia (non provato con il microfono). Non c'è un canale vocale esterno.
+
+Dettagli del modello (mappa identità → canale → sessione, concorrenza, conferme): `docs/design/canali-contesto-e-bozze.md`.
+
+## Bozze email: scrivi, rivedi, invia
+
+Sono un'altra cosa dalle risposte automatiche del canale Email (quelle vanno solo a chi è nell'elenco, nello stesso filo, con
+l'intestazione «risposta automatica»). Una **bozza** è un'email che l'assistente prepara (o che scrivi tu) e che **non parte mai da sola**:
+la trovi in **Canali → Bozze email**, con mittente, destinatari (anche le copie nascoste), oggetto, testo intero, allegati e origine
+(una mail, un evento del calendario, la chat).
+
+1. **Come nasce.** Chiedi all'assistente «rispondi a questa mail» (o approvi una proposta dell'assistente proattivo che lo dice):
+   usa lo strumento `email_draft` e lascia la bozza in revisione. Lo strumento **non può inviare** e non è offerto ai lavori di sola
+   lettura (l'assistente proattivo, i canali in «Solo lettura»): la proposta proattiva resta un suggerimento, e diventa una bozza solo quando
+   la approvi. Puoi anche scrivere una bozza a mano. Serve un canale di tipo Email (con i server di posta scritti: è lui a conoscere quello di invio) per preparare una bozza, e acceso per inviarla.
+2. **La revisione.** Guarda con attenzione chi la riceve e il testo: **una bozza può avere qualunque destinatario**, e se nasce da una mail,
+   una pagina o un file di altri potrebbe contenere ciò che quel testo ha suggerito. La tua revisione è l'unica barriera.
+3. **L'approvazione.** «Approva e invia» chiede di nuovo, con i destinatari, e approva *esattamente quel contenuto*: se la bozza cambia dopo
+   la tua revisione (testo, destinatari, allegati o mittente) l'invio è rifiutato e la riguardi. Un telefono accoppiato può leggere e rifiutare,
+   non inviare.
+4. **Una volta sola.** Premere due volte, o ripetere la richiesta, non manda due email. Se il server dice di no *prima* di prendere il messaggio la bozza
+   risulta «Non partita» (non è partito nulla) e si può ripetere; se la connessione cade *dopo* la consegna, o la risposta non arriva, è «Esito incerto»:
+   controlla Posta inviata, e solo se vuoi puoi inviarla comunque (potrebbe arrivare due volte, con lo stesso `Message-ID`).
+5. **Rifiuto e annullamento.** «Rifiuta» (con un motivo se vuoi) e «Annulla la bozza» non inviano niente. Una bozza chiusa si toglie dall'elenco.
+6. **Allegati.** Sono file del workspace o delle cartelle consentite (stesse regole degli strumenti di file: niente fuori da lì, niente cartella dei dati o credenziali; con il
+   contenimento spento per scelta tua il confine del workspace non c'è, come per gli strumenti di file, ma i dati dell'app e le credenziali restano esclusi),
+   copiati nel momento in cui li aggiungi: se il file cambia dopo, la bozza resta com'era. Al massimo 5, 5 MB l'uno, 10 MB in tutto.
+7. **Interruttore d'emergenza e canale spento** fermano i nuovi invii (non uno già partito). Il registro riporta chi l'ha scritta, chi l'ha approvata e a chi è andata
+   (destinatari, oggetto, nomi degli allegati), mai il testo del messaggio.
+
+Limiti: al massimo 20 destinatari e 20 invii all'ora; 50 bozze in attesa. Le bozze (e i loro allegati) sono salvate nel database come le chat,
+senza cifratura. I messaggi inviati non sono firmati da AIW: valgono le regole del tuo server di posta.
+
 ## Posta IMAP per il riepilogo e le domande
 
 È un'altra cosa: in Impostazioni → «Calendario e posta» → «Account di posta (IMAP)» l'assistente legge la posta dal server,
@@ -96,5 +160,5 @@ quelli dei canali in «Solo lettura» e dell'assistente proattivo).
 
 ## Che cosa manca
 
-WhatsApp, Discord, Matrix, i webhook, l'accesso con OAuth per Gmail e Microsoft, gli allegati su Slack. I canali non sono
-mai stati provati contro i servizi veri.
+WhatsApp, Discord, Matrix, i webhook, l'accesso con OAuth per Gmail e Microsoft (valutato in `docs/design/oauth-posta.md`), gli allegati su
+Slack, un canale vocale esterno. I canali non sono mai stati provati contro i servizi veri.
