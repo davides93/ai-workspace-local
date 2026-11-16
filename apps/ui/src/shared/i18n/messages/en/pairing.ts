@@ -2,7 +2,7 @@
 import type { pairingIt } from "../it/pairing";
 
 export const pairingEn: Record<keyof typeof pairingIt, string> = {
-  "pairing.questo_carrier_non_supporta_il": "This transport does not support pairing",
+  "pairing.questo_carrier_non_supporta_il": "This transport doesn't support pairing.",
   "pairing.dispositivo_accoppiato": "Device paired",
   "pairing.accoppia_questo_dispositivo": "Pair this device",
   "pairing.dispositivi": "Devices",

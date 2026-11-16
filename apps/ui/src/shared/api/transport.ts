@@ -376,17 +376,19 @@ export async function createTransport(): Promise<Transport> {
   const forceMock = typeof __AIW_FORCE_MOCK__ !== "undefined" && __AIW_FORCE_MOCK__;
   if (forceMock || params.get("demo") === "1") {
     const { MockTransport } = await import("./mock");
-    const { applyMockScenario, applyMockUiMode, isMockScenario } = await import("./mock/scenario");
+    const { applyMockScenario, applyMockUiMode, isMockScenario, transportForScenario } = await import("./mock/scenario");
     // `?scenario=first-run`: a demo that starts empty (used by the end-to-end tests).
     const scenario = params.get("scenario");
-    if (isMockScenario(scenario)) applyMockScenario(scenario);
+    const named = isMockScenario(scenario) ? scenario : null;
+    if (named) applyMockScenario(named);
     // `?ui=developer`: the demo starts in Developer mode (every section); the default is the simple interface.
     const ui = params.get("ui");
     if (isUiMode(ui)) applyMockUiMode(ui);
     const demo = new MockTransport();
     // `?scope=device`: the demo as a paired device, which may not provide secrets (the end-to-end tests of the card that says so).
     if (params.get("scope") === "device") demo.secretScope = "device";
-    return demo;
+    // `?scenario=offline` and `?scenario=unpaired` change how the connection answers, not the data.
+    return transportForScenario(demo, named);
   }
   if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
     const { TauriTransport } = await import("./tauri");

@@ -4,8 +4,9 @@ import type { AgentProfile, InferenceProfile } from "../../../shared/api/types";
 import { useAgentRouting, useResetRouting } from "../api";
 
 import { t, tNode } from "../../../shared/i18n";
+import { formatFixed } from "../../../shared/lib/format";
 /** "0,75" for a reward mean; "—" while nothing was rewarded. */
-const meanText = (m: number | undefined): string => (m === undefined ? "—" : m.toFixed(2).replace(".", ","));
+const meanText = (m: number | undefined): string => (m === undefined ? "—" : formatFixed(m, 2));
 
 interface Props {
   agent: AgentProfile;

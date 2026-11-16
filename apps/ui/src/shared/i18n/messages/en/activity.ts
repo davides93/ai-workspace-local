@@ -20,7 +20,7 @@ export const activityEn: Record<keyof typeof activityIt, string> = {
   "activity.senza_decisione": "No decision",
   "activity.tool": "Tool",
   "activity.tutti": "All",
-  "activity.azzera_i_filtri": "Reset the filters",
+  "activity.azzera_i_filtri": "Reset filters",
   "activity.apri_la_sessione_di_questo": "Open the chat of this run",
   "activity.audit_trail": "Audit trail",
   "activity.quando": "When",
@@ -47,7 +47,7 @@ export const activityEn: Record<keyof typeof activityIt, string> = {
   "activity.conferma_richiesta": "Approval requested",
   "activity.negato": "Denied",
   "activity.rifiutato": "Rejected",
-  "activity.il_workspace_restituisce_soltanto_le": "The workspace only returns the {latest} of the audit: older history can't be reached from this page.",
+  "activity.il_workspace_restituisce_soltanto_le": "The workspace only returns the {latest} of the audit: older history can't be accessed from this page.",
   "activity.righe_da_a_di_totale": "Rows {range} of {total}",
   "activity.audit_export_source": "AI Workspace Local audit trail (latest {BACKEND_LIMIT} entries)",
 };

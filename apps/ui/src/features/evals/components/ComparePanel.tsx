@@ -1,12 +1,12 @@
 import { DataTable, QueryState, type Column } from "../../../shared/ui";
-import { formatCompact, formatDuration } from "../../../shared/lib/format";
+import { formatCompact, formatDuration, formatFixed } from "../../../shared/lib/format";
 import type { EvalComparison, EvalSide, EvalTaskDelta } from "../../../shared/api/types";
 import { useEvalComparison } from "../api";
 import { deltaTone, pct, pointsDelta, scoreDelta } from "../model/evals";
 
 import { t as tr, t } from "../../../shared/i18n";
 const side = (s: EvalSide | null | undefined) =>
-  s ? <><b>{pct(s.pass_rate)}</b> <span className="faint text-xs">{s.passed}/{s.attempts} · {s.score.toFixed(2).replace(".", ",")}</span></> : <span className="faint">{tr("evals.non_eseguito")}</span>;
+  s ? <><b>{pct(s.pass_rate)}</b> <span className="faint text-xs">{s.passed}/{s.attempts} · {formatFixed(s.score, 2)}</span></> : <span className="faint">{tr("evals.non_eseguito")}</span>;
 
 const delta = (d: number | null | undefined, text: string) => <span className="ev-delta" data-tone={deltaTone(d) ?? "none"}>{text}</span>;
 
@@ -26,7 +26,7 @@ export function ComparePanel({ a, b }: { a: string; b: string }) {
         <div className="stack ev-compare">
           <div className="ev-totals" role="group" aria-label={tr("evals.totali_del_confronto")}>
             <div><span className="faint text-xs">{tr("evals.riusciti_a_b")}</span><b>{pct(c.total_a.pass_rate)} → {pct(c.total_b.pass_rate)}</b>{delta(c.pass_rate_delta, pointsDelta(c.pass_rate_delta))}</div>
-            <div><span className="faint text-xs">{tr("evals.score_a_b")}</span><b>{c.total_a.score.toFixed(2).replace(".", ",")} → {c.total_b.score.toFixed(2).replace(".", ",")}</b>{delta(c.score_delta, scoreDelta(c.score_delta))}</div>
+            <div><span className="faint text-xs">{tr("evals.score_a_b")}</span><b>{formatFixed(c.total_a.score, 2)} → {formatFixed(c.total_b.score, 2)}</b>{delta(c.score_delta, scoreDelta(c.score_delta))}</div>
             <div><span className="faint text-xs">{tr("evals.token_medi_per_prova")}</span><b>{formatCompact(c.total_a.avg_tokens)} → {formatCompact(c.total_b.avg_tokens)}</b></div>
             <div><span className="faint text-xs">{tr("evals.durata_media")}</span><b>{formatDuration(c.total_a.avg_duration_ms / 1000)} → {formatDuration(c.total_b.avg_duration_ms / 1000)}</b></div>
           </div>

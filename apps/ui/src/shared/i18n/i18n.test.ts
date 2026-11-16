@@ -4,6 +4,7 @@ import { it as itCatalog } from "./it";
 import { forceLocale, localeFromBrowser, resolveLocale } from "./locale";
 import { formatMessage, labelMap, t, tFields, tNode } from "./t";
 import { formatBytes, formatDuration, formatNumber, relTime } from "../lib/format";
+import smokeScript from "../../../scripts/smoke.mjs?raw";
 
 afterEach(() => forceLocale("it"));
 
@@ -30,6 +31,34 @@ describe("catalogs", () => {
       if (a !== b) bad.push(`${k}: it {${a}} vs en {${b}}`);
     }
     expect(bad).toEqual([]);
+  });
+});
+
+describe("English catalog quality", () => {
+  it("has no Italian left in it: no Italian function words, no accented letters", () => {
+    // Words that are Italian and not English ("per", "come", "se" are English words too, so they are not on the list).
+    const italian = /(?<![\w'-])(il|lo|gli|di|del|della|dei|delle|che|non|con|una|uno|sono|più|già|perché|nel|nella|nei|dal|dalla|alla|sul|sulla|questo|questa|quando|anche|ma|dove|tutti|tutte|ogni|senza|prima|dopo)(?![\w'-])/i;
+    const accented = /[àèéìòù]/i;
+    const bad: string[] = [];
+    for (const [k, v] of Object.entries(en)) {
+      const text = v.replace(/\{[^}]*\}/g, "");
+      if (italian.test(text) || accented.test(text)) bad.push(`${k}: ${v}`);
+    }
+    expect(bad).toEqual([]);
+  });
+  it("uses the single-character ellipsis (…), never three dots", () => {
+    const bad = Object.entries(en).filter(([, v]) => v.includes("...")).map(([k]) => k);
+    expect(bad).toEqual([]);
+  });
+  it("keeps the texts that the smoke and end-to-end scripts look for (they match the visible words, in both languages)", () => {
+    // scripts/smoke.mjs finds a crashed view by its text; e2e/support waits for the loading skeleton by its name.
+    const crashed = /crashed: (\/.+\/)\.test\(/.exec(smokeScript)?.[1];
+    expect(crashed, "the crash pattern in smoke.mjs").toBeDefined();
+    const re = new RegExp((crashed as string).slice(1, -1));
+    expect(re.test(itCatalog["shell.questa_pagina_non_si_e"])).toBe(true);
+    expect(re.test(en["shell.questa_pagina_non_si_e"])).toBe(true);
+    expect(/^(Caricamento|Loading)$/.test(itCatalog["ui.caricamento"])).toBe(true);
+    expect(/^(Caricamento|Loading)$/.test(en["ui.caricamento"])).toBe(true);
   });
 });
 

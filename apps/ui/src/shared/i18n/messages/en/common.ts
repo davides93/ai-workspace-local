@@ -8,5 +8,5 @@ export const commonEn: Record<keyof typeof commonIt, string> = {
   "common.language_auto_short": "Automatic",
   "common.language_hint": "Automatic follows the language of your device. It also sets the language of the assistants' replies in new conversations.",
   "common.error_unknown": "Unknown error",
-  "common.error_network": "Cannot reach the workspace: check the connection.",
+  "common.error_network": "Couldn't reach the workspace. Check your connection.",
 };

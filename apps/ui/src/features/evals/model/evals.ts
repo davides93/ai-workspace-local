@@ -1,5 +1,6 @@
 import type { EvalComparison, EvalReport, EvalSuite, EvalTaskResult } from "../../../shared/api/types";
 import { t } from "../../../shared/i18n";
+import { formatFixed } from "../../../shared/lib/format";
 
 /** The report is still being filled in: the page polls it. */
 export const isRunning = (r: Pick<EvalReport, "status">): boolean => r.status === "running";
@@ -94,7 +95,7 @@ export function pointsDelta(delta: number | null | undefined): string {
 export function scoreDelta(delta: number | null | undefined): string {
   if (delta === null || delta === undefined) return "—";
   const v = Math.round(delta * 100) / 100;
-  return v === 0 ? "0,00" : `${v > 0 ? "+" : "−"}${Math.abs(v).toFixed(2).replace(".", ",")}`;
+  return v === 0 ? formatFixed(0, 2) : `${v > 0 ? "+" : "−"}${formatFixed(Math.abs(v), 2)}`;
 }
 
 /** The comparison says something about every task both reports ran, or only some. */

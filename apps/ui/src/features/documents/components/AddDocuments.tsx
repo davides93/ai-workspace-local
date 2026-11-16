@@ -61,7 +61,7 @@ export function AddDocuments({ collectionId, jobs, developer }: Props) {
       {developer && (
         <form className="kb-path" onSubmit={(e) => { e.preventDefault(); if (path.trim()) addPath.mutate({ collectionId, path }, { onSuccess: () => setPath("") }); }}>
           <Field label={t("documents.aggiungi_una_cartella_o_un")} htmlFor="kb-path" hint={t("documents.percorso_assoluto_ad_esempio_home")} error={addPath.isError ? errorMessage(addPath.error) : undefined}>
-            <Input id="kb-path" mono value={path} placeholder="/home/nome/Documenti" onChange={(e) => setPath(e.target.value)} />
+            <Input id="kb-path" mono value={path} placeholder={t("documents.esempio_cartella")} onChange={(e) => setPath(e.target.value)} />
           </Field>
           <div className="kb-path-actions">
             <Button type="submit" icon="file" disabled={!path.trim() || addPath.isPending}>{t("documents.aggiungi_cartella")}</Button>
