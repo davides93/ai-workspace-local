@@ -15,6 +15,6 @@
     "ios:build": "tauri ios build"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.12.4"
+    "@tauri-apps/cli": "^2.12.5"
   }
 }
