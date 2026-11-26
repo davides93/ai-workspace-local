@@ -17,7 +17,7 @@ const finePointer = () => typeof window !== "undefined" && !!window.matchMedia?.
  * ring is drawn on the box (`:focus-within`), the textarea grows with its text, and the box takes
  * the focus back when a session opens or a run ends (on touch screens it never pops the keyboard).
  */
-export function Composer({ value, onChange, onSend, onStop, running, disabled, placeholder, modelLabel, focusKey, voice, thinking, attachments, onMcpPrompt }: {
+export function Composer({ value, onChange, onSend, onStop, running, disabled, placeholder, modelLabel, focusKey, voice, thinking, attachments, onMcpPrompt, simple }: {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
@@ -38,6 +38,8 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
   attachments?: { items: PendingFile[]; onAdd: (files: File[], opts?: { pasted?: boolean }) => void; onRemove: (key: string) => void };
   /** Opens the «Prompt MCP» picker (developer mode, when a connected server has prompts). */
   onMcpPrompt?: () => void;
+  /** Simple interface: dictation is a labelled button, not a bare icon. */
+  simple?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -141,7 +143,18 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
         />
         {voice && voice.supported && (
           <>
-            <IconButton
+            {simple ? (
+              <Button
+                variant="default" icon={voice.dictation === "busy" ? "more" : "mic"}
+                className={`ws-mic ws-mic-labelled ${voice.dictation}`}
+                aria-pressed={voice.dictation === "rec"}
+                title={!voice.available ? t("chat.voce_non_disponibile", { p: voice.status?.detail ?? "" }) : undefined}
+                disabled={disabled || voice.dictation === "busy" || converse}
+                style={voice.dictation === "rec" ? { "--mic-level": voice.level } as CSSProperties : undefined}
+                onClick={voice.toggleDictation}
+              >{voice.dictation === "rec" ? t("chat.dettatura_ferma") : t("chat.dettatura_detta")}</Button>
+            ) : (
+              <IconButton
               icon={voice.dictation === "busy" ? "more" : "mic"}
               className={`ws-mic ${voice.dictation}`}
               aria-label={voice.dictation === "rec" ? t("chat.ferma_la_dettatura") : t("chat.detta_il_messaggio")}
@@ -151,6 +164,7 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
               style={voice.dictation === "rec" ? { "--mic-level": voice.level } as CSSProperties : undefined}
               onClick={voice.toggleDictation}
             />
+            )}
             <IconButton
               icon="wave"
               className={`ws-talk ${converse ? "on" : ""}`}

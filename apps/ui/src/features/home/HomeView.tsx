@@ -10,6 +10,7 @@ import { LessonsPanel } from "../learning/components/LessonsPanel";
 import { useConfig } from "../settings/api";
 import { useApprovals } from "../approvals/api";
 import { useLessons } from "../learning/api";
+import { profileRoleLabel } from "../../shared/lib/modelRole";
 import { AssistantCard } from "./components/AssistantCard";
 import { ApprovalsPanel } from "./components/ApprovalsPanel";
 import { BriefingPanel } from "../inbox/components/BriefingPanel";
@@ -87,7 +88,7 @@ export function HomeView() {
       {showFirstRun && mode === "developer" && <FirstRun steps={steps} runtimes={runtimes.data!} models={models.data!} profile={profile} device={system.data?.device} onDismiss={dismiss} />}
       {mode === "simple" ? (
         <div className="hm-grid">
-          {show.assistant && <AssistantCard name={modelName!} />}
+          {show.assistant && <AssistantCard name={modelName!} role={profileRoleLabel(profile, models.data ?? [])} />}
           <BriefingPanel />
           {show.approvals && <ApprovalsPanel />}
           {show.recent && <RecentSessions simple />}
