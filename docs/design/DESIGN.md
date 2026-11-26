@@ -73,7 +73,7 @@ segmented control, tabelle dati con numeri tabulari.
 
 ## 6. Accessibilità
 
-Focus visibile (`:focus-visible` in ambra), `aria-current` su navigazione e sessioni, ruoli
+Focus visibile (`:focus-visible` in azzurro), `aria-current` su navigazione e sessioni, ruoli
 `dialog`/`alert`/`meter`, `prefers-reduced-motion` rispettato, contrasto verificato in entrambi i
 temi, target di almeno 32 px.
 
