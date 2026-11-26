@@ -21,7 +21,7 @@ p { margin: 0; }
 a { color: var(--accent-ink); text-underline-offset: 2px; }
 code, pre, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 kbd {
-  font-family: var(--font-mono); font-size: var(--fs-xs); padding: 1px 6px; border-radius: 4px;
+  font-family: var(--font-mono); font-size: var(--fs-xs); padding: 1px 6px; border-radius: var(--r-xs);
   border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--fg-muted);
 }
 .num { font-variant-numeric: tabular-nums; }

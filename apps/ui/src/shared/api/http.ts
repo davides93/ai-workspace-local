@@ -6,7 +6,7 @@ import type {
   Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundSummary,
   BackgroundTask, Proposal, ProposalQuery, TaskCreate, TaskQuery, TaskResume, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, SecretsAtRest, ContextCreate, ContextInfo,
   ContextPatch, DraftStatus, EmailDraft, EmailDraftCreate, EmailDraftPatch, EmailDraftSend,
-  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, FoldersInfo,
+  DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ContainerStatus, FoldersInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState,
@@ -95,6 +95,7 @@ export class HttpTransport implements Transport {
   }
 
   system = () => this.req<SystemInfo>("GET", "/system");
+  containers = () => this.req<ContainerStatus>("GET", "/containers");
   folders = () => this.req<FoldersInfo>("GET", "/folders");
   kill = () => this.req<void>("POST", "/kill");
 

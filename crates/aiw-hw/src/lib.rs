@@ -7,7 +7,10 @@
 use aiw_core::api::{Accelerator, CpuInfo, DeviceProfile};
 use std::time::Duration;
 
+mod containers;
 mod probes;
+
+pub use containers::{container_cli, container_cli_dir, probe_containers, probe_with as probe_containers_with};
 
 /// Detects the current device. Takes up to a few seconds the first time (external tools).
 pub fn probe() -> DeviceProfile {
@@ -279,7 +282,15 @@ pub(crate) fn run(cmd: &str, args: &[&str], timeout: Duration) -> Option<String>
     {
         use std::io::Read;
         use std::process::{Command, Stdio};
-        let mut child = Command::new(cmd).args(args).stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null()).spawn().ok()?;
+        let mut command = Command::new(cmd);
+        command.args(args).stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null());
+        // From a windowed app a probe must not flash a console window.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let mut child = command.spawn().ok()?;
         let mut stdout = child.stdout.take()?;
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
