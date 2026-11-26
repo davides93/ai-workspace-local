@@ -344,6 +344,11 @@ pub struct CatalogModel {
     /// the value the adviser derives from their capabilities and size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suitability: Option<TaskScores>,
+    /// Whether the licence allows commercial use: `Some(false)` for non-commercial weights (CC BY-NC),
+    /// `Some(true)` when it does, `None` when the entry does not say. Only recorded for now: the app
+    /// does not act on it yet (decision pending).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commercial_use: Option<bool>,
 }
 
 /// Coarse ordinal suitability of a model for each task of the model adviser:

@@ -19,10 +19,10 @@
 
 | Token | Chiaro | Scuro | Uso |
 |---|---|---|---|
-| `--bg` | `#f3f4f1` | `#131617` | fondo, ardesia con lieve dominante verde |
-| `--surface` | `#ffffff` | `#1a1e1f` | pannelli, rail |
-| `--accent` | `#c77700` | `#f2a93b` | **ambra da LED di stato**: azione primaria, elemento attivo, run in corso |
-| `--ok` / `--warn` / `--crit` / `--info` | verde / ocra / rosso / blu | versioni luminose | solo semantica (stato, rischio) |
+| `--bg` | `#f2f6f9` | `#111a22` | fondo, ardesia con lieve dominante azzurra |
+| `--surface` | `#ffffff` | `#17222c` | pannelli, rail |
+| `--accent` | `#1d70a8` | `#5bb0ea` | **azzurro cielo**: azione primaria, elemento attivo, run in corso (testo sul pulsante: `--on-accent`) |
+| `--ok` / `--warn` / `--crit` / `--info` | verde / ocra / rosso / indaco | versioni luminose | solo semantica (stato, rischio); `info` è indaco per non confondersi con l'accento |
 | Display | Bricolage Grotesque 650–750 | | titoli, nomi di runtime |
 | Body | IBM Plex Sans 400–600 | | testo |
 | Mono | IBM Plex Mono | | modelli, quantizzazioni, endpoint, argomenti dei tool |

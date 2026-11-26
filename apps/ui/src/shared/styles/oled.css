@@ -3,11 +3,11 @@
 @media (pointer: coarse) and (hover: none) {
   :root[data-theme="dark"] {
     --bg: #000000;
-    --surface: #0a0c0c;
-    --surface-2: #131617;
-    --surface-3: #1c2022;
-    --line: #23292b;
-    --code-bg: #070909;
+    --surface: #090d11;
+    --surface-2: #10171e;
+    --surface-3: #18222c;
+    --line: #1f2b36;
+    --code-bg: #060a0d;
   }
   html:not([data-theme]) { background: #000000; }
 }
