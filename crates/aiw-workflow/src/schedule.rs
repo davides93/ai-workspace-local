@@ -3,6 +3,7 @@
 use aiw_core::api::{WorkflowDef, WorkflowTrigger};
 use aiw_core::datetime::{DateTime, Local};
 use aiw_core::{Error, Result};
+use jiff_cron::jiff::{tz::AmbiguousOffset, Zoned};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::SystemTime;
@@ -38,6 +39,18 @@ pub fn parse_cron(expr: &str) -> Result<jiff_cron::Schedule> {
     jiff_cron::Schedule::from_str(&six).map_err(|e| Error::Invalid(format!("cron `{expr}`: {e}")))
 }
 
+fn next_cron(s: &jiff_cron::Schedule, after: Zoned) -> Option<Zoned> {
+    let next = s.after(after).next()?;
+    let local = next.time_zone().to_ambiguous_zoned(next.datetime());
+    // A daily wall-clock trigger runs once on a repeated time. Use the standard-time
+    // occurrence, as observed on the previous macOS scheduler, rather than firing an hour early.
+    if matches!(local.offset(), AmbiguousOffset::Fold { .. }) {
+        local.later().ok()
+    } else {
+        Some(next)
+    }
+}
+
 /// Decides which workflows are due. Call [`Scheduler::due`] periodically (e.g. every 20 s).
 #[derive(Default)]
 pub struct Scheduler {
@@ -54,7 +67,7 @@ impl Scheduler {
                 WorkflowTrigger::Manual | WorkflowTrigger::Webhook { .. } => false,
                 WorkflowTrigger::Interval { seconds } => (now - last).num_seconds() >= (*seconds).max(30) as i64,
                 WorkflowTrigger::Cron { expr } => match parse_cron(expr) {
-                    Ok(s) => s.after(last.zoned()).next().map(|next| next.timestamp() <= now.instant()).unwrap_or(false),
+                    Ok(s) => next_cron(&s, last.zoned()).is_some_and(|next| next.timestamp() <= now.instant()),
                     Err(e) => {
                         tracing::warn!(workflow = %wf.id, "{e}");
                         false
@@ -102,14 +115,16 @@ mod tests {
     }
 
     #[test]
-    fn cron_does_not_shift_a_spring_gap_and_preserves_the_autumn_fold() {
+    fn cron_skips_a_spring_gap_and_uses_one_autumn_occurrence() {
         use jiff_cron::jiff::civil::date;
         let s = parse_cron("30 2 * * *").unwrap();
         let at_midnight = |m, d| date(2026, m, d).at(0, 0, 0, 0).in_tz("Europe/Rome").unwrap();
-        let next = s.after(at_midnight(3, 29)).next().unwrap();
+        let next = next_cron(&s, at_midnight(3, 29)).unwrap();
         assert_eq!(next.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string(), "2026-03-30T02:30:00+02:00");
-        let next: Vec<_> = s.after(at_midnight(10, 25)).take(2).map(|z| z.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string()).collect();
-        assert_eq!(next, ["2026-10-25T02:30:00+02:00", "2026-10-25T02:30:00+01:00"]);
+        let first = next_cron(&s, at_midnight(10, 25)).unwrap();
+        assert_eq!(first.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string(), "2026-10-25T02:30:00+01:00");
+        let next = next_cron(&s, first).unwrap();
+        assert_eq!(next.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string(), "2026-10-26T02:30:00+01:00");
     }
 
     #[test]
