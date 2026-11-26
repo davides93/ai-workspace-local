@@ -970,7 +970,7 @@ le email non partono da sole, la persona rivede la bozza nell'app e decide se in
             let picks = adviser::plan_auto_roles(
                 &self.device(),
                 &self.live_local_models(),
-                &aiw_models::builtin_catalog(),
+                &self.catalog_entries(),
                 &defaults::Availability::from_runtimes(&self.0.runtimes.list()),
                 &MainModel { runtime_id: main.runtime_id.clone(), model: main.model.clone() },
                 None,

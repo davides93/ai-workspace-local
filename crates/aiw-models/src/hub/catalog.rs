@@ -13,22 +13,34 @@ use std::time::Duration;
 
 pub struct CatalogProvider {
     hf: Arc<HfProvider>,
-    entries: Vec<CatalogModel>,
+    /// The built-in entries plus the person's overlay; replaced when the overlay is read again.
+    entries: std::sync::RwLock<Vec<CatalogModel>>,
 }
 
 impl CatalogProvider {
     pub fn new(hf: Arc<HfProvider>) -> Self {
-        Self { hf, entries: crate::builtin_catalog() }
+        Self { hf, entries: std::sync::RwLock::new(crate::builtin_catalog()) }
     }
 
-    fn entry(&self, id: &str) -> Result<&CatalogModel> {
-        self.entries.iter().find(|c| c.id == id).ok_or_else(|| Error::NotFound(format!("modello `{id}` non trovato nel catalogo")))
+    /// Replaces the entries (the built-in catalog merged with the overlay file).
+    pub fn set_entries(&self, entries: Vec<CatalogModel>) {
+        *self.entries.write().unwrap() = entries;
+    }
+
+    fn entry(&self, id: &str) -> Result<CatalogModel> {
+        self.entries
+            .read()
+            .unwrap()
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("modello `{id}` non trovato nel catalogo")))
     }
 
     /// `(repo, file)` of a downloadable entry; `file` is empty for whole-repository entries (MLX).
     pub fn target(&self, id: &str) -> Result<(String, String)> {
-        match &self.entry(id)?.source {
-            ModelSource::Hf { repo, file } => Ok((repo.clone(), file.clone())),
+        match self.entry(id)?.source {
+            ModelSource::Hf { repo, file } => Ok((repo, file)),
             ModelSource::System { .. } => Err(Error::Invalid("i modelli di sistema non si scaricano: sono già nel dispositivo".into())),
         }
     }
@@ -107,8 +119,8 @@ impl ModelProvider for CatalogProvider {
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage> {
         let words: Vec<String> = q.q.split_whitespace().map(str::to_lowercase).collect();
         let fmt = q.format.as_deref().map(str::to_lowercase).filter(|f| !f.is_empty());
-        let all: Vec<RemoteModel> = self
-            .entries
+        let entries = self.entries.read().unwrap().clone();
+        let all: Vec<RemoteModel> = entries
             .iter()
             .filter(|c| c.format != "system" && fmt.as_ref().map(|f| *f == c.format).unwrap_or(true))
             .filter(|c| {
@@ -140,10 +152,10 @@ impl ModelProvider for CatalogProvider {
     async fn detail(&self, model: &str, revision: Option<&str>) -> Result<RemoteModelDetail> {
         let c = self.entry(model)?;
         let (repo, file) = self.target(model)?;
-        let mut m = self.remote_model(c);
+        let mut m = self.remote_model(&c);
         if c.format == "piper" {
             // The voices repository holds hundreds of voices: no listing, the entry names the two files.
-            return Ok(RemoteModelDetail { model: m, revision: "main".into(), variants: vec![piper_variant(c, &file)] });
+            return Ok(RemoteModelDetail { model: m, revision: "main".into(), variants: vec![piper_variant(&c, &file)] });
         }
         // Real listing (sha256, shards, mmproj) when the Hub answers; the entry's own file otherwise.
         let listing = tokio::time::timeout(Duration::from_secs(12), self.hf.detail(&repo, revision)).await;
@@ -259,11 +271,12 @@ mod tests {
         // The fake repository serves GGUF files: the entry's file picks its variant (and the projector).
         let fake = new_fake(None);
         let base = start(fake.clone()).await;
-        let mut p = provider(&base);
-        p.entries.push(CatalogModel {
+        let p = provider(&base);
+        let first = p.entries.read().unwrap()[0].clone();
+        p.entries.write().unwrap().push(CatalogModel {
             id: "tiny".into(),
             source: ModelSource::Hf { repo: REPO.into(), file: "tiny-Q8_0-00001-of-00002.gguf".into() },
-            ..p.entries[0].clone()
+            ..first
         });
         let d = p.detail("tiny", None).await.unwrap();
         assert_eq!(d.variants.len(), 1);
