@@ -17,6 +17,7 @@ import { Button, Drawer, Icon, ModalShell, Sheet, SkeletonLines } from "../../sh
 import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
 import { useModels, useRecommend } from "../models/api";
+import { profileRoleLabel } from "../../shared/lib/modelRole";
 import { autoProfileFromAdvice } from "../models/model/adviser";
 import { canReason } from "../../shared/lib/thinking";
 import { useLessons } from "../learning/api";
@@ -35,6 +36,7 @@ import { ChatEmpty } from "./components/ChatEmpty";
 import { BROWSER_BUTTON_ID, ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { DownloadsStrip } from "./components/DownloadsStrip";
+import { DraftsStrip } from "./components/DraftsStrip";
 import { SecretWarning } from "./components/SecretWarning";
 import { NoSessionState, SimpleEmpty } from "./components/SimpleEmpty";
 import { useAttachments } from "./useAttachments";
@@ -307,7 +309,7 @@ export function ChatView() {
 
       <section className="ws-main" aria-label={tr("chat.workspace")}>
         <ChatHeader
-          session={active} agent={agent} profile={profile} running={conv.running} simple={simple}
+          session={active} agent={agent} profile={profile} role={simple ? profileRoleLabel(profile, models.data ?? []) : undefined} running={conv.running} simple={simple}
           onOpenMenu={simple ? openMenu : undefined} sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
           inspectorOpen={inspectorVisible} onToggleInspector={toggleInspector} onOpenWorktree={panel.show} onOpenBrowser={browserButton}
           browserLive={browser ? { open: browserShown, onToggle: toggleBrowser, status: shortStatus(browser), attention: browser.handover !== null && !browserShown, overlay: mode !== "inline" } : undefined}
@@ -346,6 +348,7 @@ export function ChatView() {
           </div>
         )}
         {simple && !noSessions && <DownloadsStrip />}
+        {simple && !noSessions && <DraftsStrip />}
         {/* Simple interface only. The protected field is a tool (`aiw_secret_request`): the button that asks for it is shown only when the
             agent of this session has it (an old session of the Coder or the Operatore has not, and the button would ask for something
             it cannot do); the warning is shown anyway. */}
@@ -359,7 +362,7 @@ export function ChatView() {
           attachments={{ items: attachments.files, onAdd: attachments.add, onRemove: attachments.remove }}
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}
           onMcpPrompt={developer && (mcpPrompts.data?.length ?? 0) > 0 ? () => setPromptPicker(true) : undefined}
-          focusKey={`${openId}:${focusTick}`} voice={voice} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined}
+          focusKey={`${openId}:${focusTick}`} voice={voice} simple={simple} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined}
           modelLabel={profile ? `${profile.runtime_id} · ${profile.model || t("chat.nessun_modello")}` : undefined}
           placeholder={!openId ? tr("chat.crea_una_sessione_per_iniziare") : logState.status === "loading" ? tr("chat.carico_la_conversazione") : tr("chat.scrivi_a", { p: agent?.name ?? "l'agente" })}
         />

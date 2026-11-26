@@ -20,6 +20,8 @@
 .hm-action.is-primary .hm-action-hint { color: color-mix(in srgb, var(--on-accent) 92%, var(--accent)); }
 .hm-actions-simple { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .hm-assistant { display: flex; align-items: center; gap: var(--space-3); }
+.hm-assistant-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.hm-assistant-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hm-assistant-name { flex: 1 1 auto; min-width: 0; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 1100px) { .hm-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 520px) {
