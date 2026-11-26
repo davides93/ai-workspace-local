@@ -23,7 +23,7 @@ test("first run: recommended model, simulated download, first streamed chat", as
 
   // When the model is on disk the app opens the first conversation by itself.
   await expect(page).toHaveURL(/#\/chat\/ses_/, { timeout: 40_000 });
-  await expect(page.getByRole("heading", { name: "Cosa facciamo, in locale?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cosa vuoi fare?" })).toBeVisible();
 
   const box = page.getByRole("textbox", { name: "Messaggio" });
   await box.fill("Ciao! Cosa sai fare?");

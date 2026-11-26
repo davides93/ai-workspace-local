@@ -36,12 +36,17 @@ describe("chat, simple interface", () => {
   it("a new chat is the Assistente's and says how it works in words: the approval mode, no sandbox, the model as text", async () => {
     const { user } = await renderApp({ route: "/chat/ses_pdf", mode: "simple" });
     await user.click(screen.getByRole("button", { name: "Nuova" }));
-    await screen.findByRole("heading", { name: "Cosa facciamo, in locale?" });
+    await screen.findByRole("heading", { name: "Cosa vuoi fare?" });
     expect(within(screen.getByRole("navigation", { name: "Elenco delle sessioni" })).getByRole("button", { name: /^Nuova sessione.*Assistente/ })).toBeInTheDocument();
     const meta = screen.getByRole("list", { name: "Come lavora questa sessione" });
     expect(meta).toHaveTextContent("Approvazione: Chiedi");
     expect(within(meta).queryByText("Sandbox")).toBeNull();
     expect(within(meta).queryAllByRole("link")).toHaveLength(0);
+    // It starts from tasks of everyday life: a card puts its sentence in the message box without sending it.
+    const ideas = screen.getByRole("list", { name: "Idee per iniziare" });
+    expect(within(ideas).getAllByRole("button")).toHaveLength(6);
+    await user.click(within(ideas).getByRole("button", { name: /Prepara la mia giornata/ }));
+    expect(box()).toHaveValue("Guarda il mio calendario di oggi e preparami un piano della giornata.");
   });
 
   it("a failed run ends the history with a note that offers to ask the Assistente, not the runtime page", async () => {
