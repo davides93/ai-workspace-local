@@ -37,7 +37,7 @@ impl Engine {
                 let auto = adviser::plan_auto_roles(
                     &self.device(),
                     &self.live_local_models(),
-                    &aiw_models::builtin_catalog(),
+                    &self.catalog_entries(),
                     &defaults::Availability::from_runtimes(&self.0.runtimes.list()),
                     &main,
                     self.peer_planner().as_ref(),
