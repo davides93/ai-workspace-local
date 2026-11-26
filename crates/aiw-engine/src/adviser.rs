@@ -188,6 +188,8 @@ struct Candidate {
     tools_cap: bool,
     reasoning_cap: bool,
     scores: TaskScores,
+    /// The catalog entry carries the `preferred` tag: wins a tie of scores for agent and reasoning (see [`compare`]).
+    preferred: bool,
     catalog_id: Option<String>,
 }
 
@@ -201,6 +203,10 @@ fn catalog_file(c: &CatalogModel) -> Option<&str> {
 
 fn file_name(m: &LocalModel) -> Option<&str> {
     m.path.as_deref().and_then(|p| p.rsplit(['/', '\\']).next())
+}
+
+fn is_preferred(c: &CatalogModel) -> bool {
+    c.tags.iter().any(|t| t == "preferred")
 }
 
 fn catalog_scores(c: &CatalogModel) -> TaskScores {
@@ -243,6 +249,7 @@ fn local_candidate(m: &LocalModel, device: &DeviceProfile, avail: &Availability,
         tools_cap: has(&m.capabilities, "tools"),
         reasoning_cap: has(&m.capabilities, "reasoning"),
         scores,
+        preferred: from_catalog.is_some_and(is_preferred),
         catalog_id: from_catalog.map(|c| c.id.clone()),
     })
 }
@@ -273,12 +280,17 @@ fn ollama_candidate(name: &str) -> Candidate {
         tools_cap: has(&caps, "tools"),
         reasoning_cap: has(&caps, "reasoning"),
         scores: derive_scores(&caps, params_b, &[]),
+        preferred: false,
         catalog_id: None,
     }
 }
 
 fn download_candidate(c: &CatalogModel, device: &DeviceProfile, avail: &Availability) -> Option<Candidate> {
     if c.format == "system" || matches!(c.source, ModelSource::System { .. }) {
+        return None;
+    }
+    // Non-commercial weights (CC BY-NC) are never proposed on their own: the person picks them in Models.
+    if c.commercial_use == Some(false) {
         return None;
     }
     let fit = Fit::from_label(&aiw_models::fit(c, device).0);
@@ -306,6 +318,7 @@ fn download_candidate(c: &CatalogModel, device: &DeviceProfile, avail: &Availabi
         tools_cap: has(&c.capabilities, "tools"),
         reasoning_cap: has(&c.capabilities, "reasoning"),
         scores: catalog_scores(c),
+        preferred: is_preferred(c),
         catalog_id: Some(c.id.clone()),
     })
 }
@@ -332,7 +345,14 @@ fn compare(task: AdviserTask, a: &Candidate, b: &Candidate) -> Ordering {
                 }
             })
             .then_with(|| b.size_bytes.cmp(&a.size_bytes)),
-        AdviserTask::Agent | AdviserTask::Reasoning | AdviserTask::Vision => ordering
+        AdviserTask::Agent | AdviserTask::Reasoning => ordering
+            .then(sa.cmp(&sb))
+            // Equal scores: the entry the catalog prefers (tag `preferred`), as long as it fits (`best` only offers those that do).
+            .then(a.preferred.cmp(&b.preferred))
+            .then(a.fit.cmp(&b.fit))
+            .then_with(|| tenths(a.params_b).cmp(&tenths(b.params_b)))
+            .then_with(|| a.size_bytes.cmp(&b.size_bytes)),
+        AdviserTask::Vision => ordering
             .then(sa.cmp(&sb))
             .then(a.fit.cmp(&b.fit))
             .then_with(|| tenths(a.params_b).cmp(&tenths(b.params_b)))
@@ -773,7 +793,7 @@ mod tests {
     #[test]
     fn nothing_installed_recommends_a_download_that_fits_for_each_class() {
         let expected_agent =
-            [("xs", "llama-3.2-3b"), ("s", "llama-3.2-3b"), ("m", "qwen3-8b"), ("l", "gpt-oss-20b"), ("xl", "llama-3.3-70b")];
+            [("xs", "llama-3.2-3b"), ("s", "llama-3.2-3b"), ("m", "qwen3-8b"), ("l", "inkling-2-mini"), ("xl", "inkling-2-mini")];
         for (tier, d) in classes() {
             let rec = advise(&d, &[], &catalog(), &avail());
             assert!(rec.agent.installed.is_none(), "{tier}");
@@ -781,6 +801,17 @@ mod tests {
             assert!(dl.fit == "great" || dl.fit == "ok", "{tier}: {}", dl.fit);
             assert_eq!(dl.catalog_id.as_deref(), expected_agent.iter().find(|(t, _)| *t == tier).map(|(_, m)| *m), "{tier}");
             assert!(!dl.reason.is_empty());
+        }
+    }
+
+    #[test]
+    fn non_commercial_weights_are_never_proposed_on_their_own() {
+        for (tier, d) in classes() {
+            let rec = advise(&d, &[], &catalog(), &avail());
+            for (task, a) in [("chat", &rec.chat), ("agent", &rec.agent), ("reasoning", &rec.reasoning), ("vision", &rec.vision)] {
+                let id = a.download.as_ref().and_then(|c| c.catalog_id.clone()).unwrap_or_default();
+                assert!(!id.starts_with("underdog-"), "{tier}/{task}: {id}");
+            }
         }
     }
 
