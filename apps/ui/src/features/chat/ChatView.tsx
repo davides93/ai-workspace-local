@@ -359,7 +359,7 @@ export function ChatView() {
           attachments={{ items: attachments.files, onAdd: attachments.add, onRemove: attachments.remove }}
           value={input} onChange={setInput} onSend={send} onStop={conv.stop} running={conv.running} disabled={!openId || logState.status !== "ready"}
           onMcpPrompt={developer && (mcpPrompts.data?.length ?? 0) > 0 ? () => setPromptPicker(true) : undefined}
-          focusKey={`${openId}:${focusTick}`} voice={voice} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined}
+          focusKey={`${openId}:${focusTick}`} voice={voice} simple={simple} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined}
           modelLabel={profile ? `${profile.runtime_id} · ${profile.model || t("chat.nessun_modello")}` : undefined}
           placeholder={!openId ? tr("chat.crea_una_sessione_per_iniziare") : logState.status === "loading" ? tr("chat.carico_la_conversazione") : tr("chat.scrivi_a", { p: agent?.name ?? "l'agente" })}
         />
