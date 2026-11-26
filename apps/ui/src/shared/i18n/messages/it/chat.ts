@@ -313,6 +313,8 @@ export const chatIt = {
   "chat.cartella_fuori_workspace": "Quella cartella è fuori dal workspace. Se vuoi che l'agente ci lavori, consentila tu:",
   "chat.cartella_fuori_workspace_link": "Impostazioni → Cartelle consentite",
   "chat.cartella_fuori_workspace_mostra": "Mostra tutte le sezioni → Impostazioni → Cartelle consentite",
+  "chat.dettatura_detta": "Detta",
+  "chat.dettatura_ferma": "Smetti",
   "chat.bozze_da_rivedere_titolo": "Bozze di posta da rivedere",
   "chat.bozze_da_rivedere": "{n, plural, one {# bozza di posta da rivedere} other {# bozze di posta da rivedere}}",
   "chat.bozze_da_rivedere_nota": "L'assistente le ha preparate, ma non è partito nulla: una bozza si invia solo quando la approvi tu.",
