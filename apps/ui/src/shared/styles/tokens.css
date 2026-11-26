@@ -71,9 +71,11 @@
   --space-8: 2.5rem;
 
   /* Radii */
+  --r-xs: 4px;
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
+  --r-pill: 999px;
 
   /* Stacking: content < inspector < banner < overlay < palette < toast */
   --z-inspector: 30;

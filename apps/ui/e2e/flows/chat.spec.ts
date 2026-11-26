@@ -10,7 +10,7 @@ test.describe("chat", () => {
     await expect(page.getByLabel("Agente della nuova sessione")).toHaveCount(0);
     await expect(page.getByText("Isola in un worktree git")).toHaveCount(0);
     await page.getByRole("button", { name: "Nuova", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Cosa facciamo, in locale?" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Cosa vuoi fare?" })).toBeVisible();
     const list = page.getByRole("navigation", { name: "Elenco delle sessioni" });
     await expect(list.getByRole("button", { name: /^Nuova sessione.*Assistente/ })).toBeVisible();
     // The header says who and how without the technical details: the model as text (not a link), the approval mode; no sandbox.
@@ -45,7 +45,7 @@ test.describe("chat", () => {
     // The session was named after the first message; a new one starts empty.
     await expect(list.getByRole("button", { name: /^Che cosa c'è in questo file\?/ })).toBeVisible();
     await page.getByRole("button", { name: "Nuova", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Cosa facciamo, in locale?" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Cosa vuoi fare?" })).toBeVisible();
     await expect(log.getByText("Ordina i PDF in Downloads", { exact: true })).toBeHidden();
   });
 });

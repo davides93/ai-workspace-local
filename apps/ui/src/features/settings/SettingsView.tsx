@@ -13,6 +13,7 @@ import { LayerBar } from "./components/LayerBar";
 import { MailAccountsEditor } from "../channels/components/MailAccountsEditor";
 import { BackupPanel } from "./components/BackupPanel";
 import { FoldersPanel } from "./components/FoldersPanel";
+import { PrivacyPanel } from "./components/PrivacyPanel";
 import { UpdatePanel } from "./components/UpdatePanel";
 import { SettingRow } from "./components/SettingRow";
 import { changesSchedule, isPhoneOs, shouldAskNotifications } from "./model/background";
@@ -89,6 +90,7 @@ export function SettingsView() {
         <LanguageSelect />
       </div>
 
+      <PrivacyPanel />
       <UpdatePanel />
       {system.data?.folder_access && <FoldersPanel workspace={system.data.workspace_root} />}
       <BackupPanel />
