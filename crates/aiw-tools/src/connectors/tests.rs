@@ -1,7 +1,7 @@
 //! The connector tools end to end, on fixture files.
 
 use super::*;
-use chrono::NaiveDate;
+use aiw_core::datetime::NaiveDate;
 
 fn day(offset: i64) -> NaiveDate {
     Local::now().date_naive() + Duration::days(offset)

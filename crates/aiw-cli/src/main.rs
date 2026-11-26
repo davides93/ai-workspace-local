@@ -1581,7 +1581,7 @@ fn backup_cmd(data: Option<PathBuf>, cmd: BackupCmd) -> Result<()> {
     match cmd {
         BackupCmd::Create { output, include_secrets } => {
             let out = output.unwrap_or_else(|| {
-                let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                let stamp = aiw_core::datetime::Local::now().format("%Y%m%d-%H%M%S");
                 PathBuf::from(format!("aiw-backup-{stamp}{}.tar.gz", if include_secrets { "-con-segreti" } else { "" }))
             });
             // What this computer keeps sealed is opened with the key of the keychain: with secrets the archive is portable (they go

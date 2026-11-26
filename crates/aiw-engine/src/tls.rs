@@ -83,7 +83,7 @@ struct Meta {
     leaf_not_after: String,
 }
 
-use chrono::{DateTime, Datelike, Utc};
+use aiw_core::datetime::{DateTime, Utc};
 
 /// A date for a certificate (day precision).
 macro_rules! cert_date {
@@ -184,8 +184,8 @@ pub fn ensure_self_signed(dir: &Path, names: &[String], now: DateTime<Utc>) -> R
             let key = KeyPair::generate().map_err(|e| tls_err("chiave dell'autorità", e))?;
             let mut meta = Meta {
                 ca_cn: format!("AIW Local CA {}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
-                ca_not_before: (now - chrono::Duration::days(1)).to_rfc3339(),
-                ca_not_after: (now + chrono::Duration::days(CA_DAYS)).to_rfc3339(),
+                ca_not_before: (now - aiw_core::datetime::Duration::days(1)).to_rfc3339(),
+                ca_not_after: (now + aiw_core::datetime::Duration::days(CA_DAYS)).to_rfc3339(),
                 ca_fingerprint: String::new(),
                 leaf_sans: vec![],
                 leaf_not_after: String::new(),
@@ -212,18 +212,18 @@ pub fn ensure_self_signed(dir: &Path, names: &[String], now: DateTime<Utc>) -> R
     let renew = !leaf_pem_f.exists()
         || !leaf_key_f.exists()
         || meta.leaf_sans != wanted
-        || leaf_expiry.is_none_or(|e| e - now < chrono::Duration::days(RENEW_BEFORE_DAYS));
+        || leaf_expiry.is_none_or(|e| e - now < aiw_core::datetime::Duration::days(RENEW_BEFORE_DAYS));
     if renew {
         let key = KeyPair::generate().map_err(|e| tls_err("chiave del server", e))?;
         let ca_end = DateTime::parse_from_rfc3339(&meta.ca_not_after).map(|d| d.with_timezone(&Utc)).unwrap_or(now);
-        let not_after = (now + chrono::Duration::days(LEAF_DAYS)).min(ca_end);
+        let not_after = (now + aiw_core::datetime::Duration::days(LEAF_DAYS)).min(ca_end);
         let mut p = CertificateParams::default();
         p.distinguished_name.push(DnType::CommonName, wanted.first().cloned().unwrap_or_else(|| "localhost".into()));
         p.distinguished_name.push(DnType::OrganizationName, "AI Workspace Local");
         p.subject_alt_names = sans(&wanted)?;
         p.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         p.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-        p.not_before = cert_date!(now - chrono::Duration::days(1));
+        p.not_before = cert_date!(now - aiw_core::datetime::Duration::days(1));
         p.not_after = cert_date!(not_after);
         let leaf = p.signed_by(&key, &issuer, &ca_key).map_err(|e| tls_err("certificato del server", e))?;
         write_private(&leaf_key_f, &key.serialize_pem())?;

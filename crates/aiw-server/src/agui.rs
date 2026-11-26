@@ -556,7 +556,7 @@ impl Follow {
             return;
         }
         let Some(pc) = self.pause.as_ref() else { return };
-        let ts = chrono::Utc::now().timestamp_millis();
+        let ts = aiw_core::datetime::Utc::now().timestamp_millis();
         // The client refuses `RUN_FINISHED` while a subagent is open: they are closed as suspended (the spec's outcome for a
         // subagent that waits for outside input) and announced again, with the same ids, when the run is resumed.
         for data in self.wire.suspend_subagents(&waiting, ts) {
@@ -630,7 +630,7 @@ fn frames_response(frames: Vec<Value>, headers: &[(&'static str, String)]) -> Re
 
 /// A refusal that the protocol wants as an event (`RUN_ERROR`), after a `RUN_STARTED` so that the stream is a valid run.
 fn run_error(input: &RunAgentInput, code: &str, message: &str, headers: &[(&'static str, String)]) -> Response {
-    let ts = chrono::Utc::now().timestamp_millis();
+    let ts = aiw_core::datetime::Utc::now().timestamp_millis();
     frames_response(
         vec![
             json!({"type": "RUN_STARTED", "threadId": input.thread_id, "runId": input.run_id, "timestamp": ts}),
@@ -810,7 +810,7 @@ pub(crate) async fn run_agent(
     let mut follow = follow_run(&s, &run_id, 0, wire, false, Some(pause_ctx(&s, &thread, declared, HashSet::new())), true);
     if needs_snapshot {
         let messages = agui_wire::history_messages(&stored, &thread.user_ids, Some(&server_user));
-        follow.after_started.extend(agui_wire::history_snapshots(messages, chrono::Utc::now().timestamp_millis()));
+        follow.after_started.extend(agui_wire::history_snapshots(messages, aiw_core::datetime::Utc::now().timestamp_millis()));
     }
     Ok(stream_response(follow, &thread.session_id, &run_id))
 }
@@ -827,15 +827,15 @@ fn abandon_new_session(s: &AppState, session_id: &str, thread_id: &str) {
 }
 
 /// When a confirmation stops being answerable, as an RFC 3339 time: `seconds` after `now`, `None` for no limit (0).
-fn expiry_after(now: chrono::DateTime<chrono::Utc>, seconds: u64) -> Option<String> {
+fn expiry_after(now: aiw_core::datetime::DateTime<aiw_core::datetime::Utc>, seconds: u64) -> Option<String> {
     let secs = i64::try_from(seconds).ok().filter(|s| *s > 0)?;
-    Some((now + chrono::Duration::seconds(secs)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    Some((now + aiw_core::datetime::Duration::seconds(secs)).to_rfc3339_opts(aiw_core::datetime::SecondsFormat::Secs, true))
 }
 
 /// The `expiresAt` of a confirmation: the setting `approvals.timeout_s` (0, the default, is no limit).
 fn approval_expiry(engine: &Engine) -> Option<String> {
     let secs = engine.config().effective.get("approvals.timeout_s").and_then(Value::as_u64)?;
-    expiry_after(chrono::Utc::now(), secs)
+    expiry_after(aiw_core::datetime::Utc::now(), secs)
 }
 
 /// Adds a run to the thread record, read again under the lock so that two requests of one thread do not lose each other's run.
@@ -880,7 +880,7 @@ fn replay_run(s: &AppState, input: &RunAgentInput, declared: Declared, thread: A
     let mut follow = follow_run(s, &run.run_id, 0, wire, false, Some(pause_ctx(s, &thread, declared, HashSet::new())), !done);
     let stored = s.engine.messages(&thread.session_id).unwrap_or_default();
     let messages = agui_wire::history_messages(&stored, &thread.user_ids, Some(&run.user_server_id));
-    follow.after_started.extend(agui_wire::history_snapshots(messages, chrono::Utc::now().timestamp_millis()));
+    follow.after_started.extend(agui_wire::history_snapshots(messages, aiw_core::datetime::Utc::now().timestamp_millis()));
     stream_response(follow, &thread.session_id, &run.run_id)
 }
 
@@ -1052,7 +1052,7 @@ async fn resume_run(
     let mut wire = pause.wire.resumed(&input.run_id, &input.state);
     let managed: HashSet<String> = pause.interrupts.iter().map(|i| i.id.clone()).collect();
     let done = s.engine.run_done(&pause.run_id);
-    let ts = chrono::Utc::now().timestamp_millis();
+    let ts = aiw_core::datetime::Utc::now().timestamp_millis();
     let again = wire.resume_subagents(ts);
     let mut follow = follow_run(s, &pause.run_id, pause.next_seq, wire, true, Some(pause_ctx(s, &thread, declared, managed)), !done);
     follow.out.push_back(Frame {
@@ -1876,7 +1876,7 @@ mod tests {
 
     #[test]
     fn a_confirmation_expires_only_when_the_setting_says_so() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-11-15T10:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let now = aiw_core::datetime::DateTime::parse_from_rfc3339("2026-11-15T10:00:00Z").unwrap().with_timezone(&aiw_core::datetime::Utc);
         assert_eq!(expiry_after(now, 0), None);
         assert_eq!(expiry_after(now, 300).as_deref(), Some("2026-11-15T10:05:00Z"));
     }

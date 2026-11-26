@@ -622,7 +622,7 @@ pub fn create(dirs: &DataDirs, opts: &BackupOptions, out: &Path) -> Result<Backu
     let written = (|| -> Result<()> {
         let mut f = std::fs::File::create(&partial)?;
         restrict(&partial, 0o600);
-        let mtime = chrono::Utc::now().timestamp().max(0) as u64;
+        let mtime = aiw_core::datetime::Utc::now().timestamp().max(0) as u64;
         let mode = if opts.include_secrets { 0o600 } else { 0o644 };
         let mut w = tar::Writer::new(GzEncoder::new(std::io::BufWriter::new(&mut f), Compression::default()));
         w.bytes(MANIFEST_NAME, 0o644, mtime, &serde_json::to_vec_pretty(&manifest)?)?;
@@ -869,8 +869,11 @@ pub fn restore(dirs: &DataDirs, archive: &Path) -> Result<RestoreReport> {
         let backups = dirs.root.join("backups");
         std::fs::create_dir_all(&backups)?;
         restrict(&backups, 0o700);
-        let name =
-            format!("prima-del-ripristino-{}-{}.tar.gz", chrono::Local::now().format("%Y%m%d-%H%M%S"), &aiw_core::ids::new_id("r")[14..]);
+        let name = format!(
+            "prima-del-ripristino-{}-{}.tar.gz",
+            aiw_core::datetime::Local::now().format("%Y%m%d-%H%M%S"),
+            &aiw_core::ids::new_id("r")[14..]
+        );
         let path = backups.join(name);
         create(dirs, &BackupOptions { include_secrets: true, codec: None }, &path)
             .map_err(|e| Error::Other(format!("copia di sicurezza dei dati attuali non riuscita, non ho toccato nulla: {e}")))?;

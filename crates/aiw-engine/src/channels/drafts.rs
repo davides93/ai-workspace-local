@@ -358,11 +358,11 @@ impl Engine {
 
     /// Another draft with the same content that was not refused and is recent: worth a look before sending.
     fn draft_twin(d: &EmailDraft, all: &[EmailDraft]) -> Option<String> {
-        let now = chrono::Utc::now();
+        let now = aiw_core::datetime::Utc::now();
         all.iter()
             .filter(|o| o.id != d.id && matches!(o.status.as_str(), "draft" | "sending" | "sent" | "uncertain"))
             .filter(|o| {
-                chrono::DateTime::parse_from_rfc3339(&o.created_at)
+                aiw_core::datetime::DateTime::parse_from_rfc3339(&o.created_at)
                     .is_ok_and(|t| (now - t.to_utc()).to_std().is_ok_and(|age| age < DUPLICATE_WINDOW))
             })
             .find(|o| o.content_hash == d.content_hash)
@@ -375,9 +375,9 @@ impl Engine {
     fn drafts_recover(&self) {
         let inflight = self.0.channels.drafts.inflight.lock().unwrap().clone();
         for d in self.drafts_raw().into_iter().filter(|d| d.status == "sending" && !inflight.contains(&d.id)) {
-            let stale = chrono::DateTime::parse_from_rfc3339(&d.updated_at)
+            let stale = aiw_core::datetime::DateTime::parse_from_rfc3339(&d.updated_at)
                 .ok()
-                .is_some_and(|t| (chrono::Utc::now() - t.to_utc()).to_std().is_ok_and(|age| age > STUCK_AFTER));
+                .is_some_and(|t| (aiw_core::datetime::Utc::now() - t.to_utc()).to_std().is_ok_and(|age| age > STUCK_AFTER));
             if stale {
                 let _ = self.draft_transition(&d.id, &["sending"], |d| {
                     d.status = "uncertain".into();

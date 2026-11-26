@@ -45,7 +45,7 @@ pub(crate) struct PendingAuth {
 }
 
 fn now_s() -> i64 {
-    chrono::Utc::now().timestamp()
+    aiw_core::datetime::Utc::now().timestamp()
 }
 
 /// The token values stored, for the redaction of exports.

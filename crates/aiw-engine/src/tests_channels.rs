@@ -784,7 +784,7 @@ pub(crate) fn raw(from: &str, subject: &str, msg_id: &str, extra: &str, body: &s
 }
 
 pub(crate) fn mail(uid: u32, raw: &str) -> ImapMessage {
-    ImapMessage { uid, date: chrono::Local::now().format("%Y-%m-%d").to_string(), raw: raw.replace('\n', "\r\n").into_bytes() }
+    ImapMessage { uid, date: aiw_core::datetime::Local::now().format("%Y-%m-%d").to_string(), raw: raw.replace('\n', "\r\n").into_bytes() }
 }
 
 pub(crate) const AUTH_OK: &str =
@@ -1015,7 +1015,7 @@ async fn imap_accounts_keep_the_password_out_of_the_settings_and_the_api() {
             "INBOX",
             vec![imap_message(
                 1,
-                &chrono::Local::now().format("%Y-%m-%d").to_string(),
+                &aiw_core::datetime::Local::now().format("%Y-%m-%d").to_string(),
                 "Anna <anna@example.org>",
                 "Fattura",
                 "Ti mando la fattura",
@@ -1057,7 +1057,9 @@ async fn imap_accounts_keep_the_password_out_of_the_settings_and_the_api() {
     e.set_config("global", "connectors.mail.enabled", json!(true)).unwrap();
     let out = e.execute_tool("r", "test", "test", "mail_search", json!({"query": "fattura"})).await.unwrap();
     assert!(out.content.contains("Fattura"), "{}", out.content);
-    let ctx = e.connector_context(chrono::Local::now(), chrono::Local::now() - chrono::Duration::hours(24)).await;
+    let ctx = e
+        .connector_context(aiw_core::datetime::Local::now(), aiw_core::datetime::Local::now() - aiw_core::datetime::Duration::hours(24))
+        .await;
     assert_eq!(ctx.mail.len(), 1);
     // Removing the account removes the password.
     e.set_mail_accounts(vec![]).unwrap();

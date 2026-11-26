@@ -111,7 +111,7 @@ fn from_resolved(info: &ResolvedService) -> Option<Discovered> {
         tier: info.get_property_val_str("tier").unwrap_or_default().to_string(),
         version: info.get_property_val_str("ver").unwrap_or_default().to_string(),
         address: format!("{}://{ip}:{}", if info.get_property_val_str("tls") == Some("1") { "https" } else { "http" }, info.get_port()),
-        last_seen: chrono::Utc::now().to_rfc3339(),
+        last_seen: aiw_core::datetime::Utc::now().to_rfc3339(),
     })
 }
 

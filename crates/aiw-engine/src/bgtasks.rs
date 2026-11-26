@@ -34,8 +34,8 @@ use aiw_agent::{Checkpoint, RunBudget, RunEnd, RunInput};
 use aiw_core::api::{
     AgentProfile, BackgroundTask, BudgetLimits, ChatMessage, Proposal, TaskInstruction, TaskNote, TaskResume, TaskStart, TASK_STATUSES,
 };
+use aiw_core::datetime::{DateTime, Local};
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
-use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};

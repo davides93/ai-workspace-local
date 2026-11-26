@@ -163,8 +163,8 @@ mod tests {
     use crate::tests::{engine, wait_finished};
     use crate::RunOrigin;
     use aiw_core::api::Proposal;
+    use aiw_core::datetime::Local;
     use aiw_runtimes::ScriptedBackend;
-    use chrono::Local;
     use std::time::Duration;
 
     const OWNER: RunOrigin = RunOrigin { owner: true, questions: true, secrets: true };
@@ -181,7 +181,7 @@ mod tests {
             agent_id: "operator".into(),
             status: "open".into(),
             created_at: now.to_rfc3339(),
-            expires_at: (now + chrono::Duration::days(7)).to_rfc3339(),
+            expires_at: (now + aiw_core::datetime::Duration::days(7)).to_rfc3339(),
             decided_at: None,
             run_id: None,
             session_id: None,
@@ -200,7 +200,11 @@ mod tests {
         let (e, _d, _w) = engine(vec![]).await;
         let quiet = {
             let n = Local::now();
-            format!("{}-{}", (n - chrono::Duration::hours(1)).format("%H:%M"), (n + chrono::Duration::hours(1)).format("%H:%M"))
+            format!(
+                "{}-{}",
+                (n - aiw_core::datetime::Duration::hours(1)).format("%H:%M"),
+                (n + aiw_core::datetime::Duration::hours(1)).format("%H:%M")
+            )
         };
         e.set_config("global", "proactive.quiet_hours", json!(quiet)).unwrap();
         // Nobody asked in a chat, or not the owner: refused before anything happens.

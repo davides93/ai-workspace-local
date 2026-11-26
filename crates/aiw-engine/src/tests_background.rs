@@ -5,8 +5,8 @@ use super::background::{normalize_reason, run_background_blocking};
 use super::tests::engine;
 use super::*;
 use aiw_core::api::{BackgroundRequest, PeerDevice, PeerHardware};
+use aiw_core::datetime::{DateTime, Duration as D, Local};
 use aiw_runtimes::{ChatBackend, ScriptedBackend};
-use chrono::{DateTime, Duration as D, Local, TimeZone};
 use std::time::Duration;
 
 fn at(h: u32, m: u32) -> DateTime<Local> {

@@ -2,7 +2,7 @@
 
 use super::super::testing::*;
 use super::super::*;
-use chrono::Local;
+use aiw_core::datetime::Local;
 
 fn today() -> String {
     Local::now().format("%Y-%m-%d").to_string()

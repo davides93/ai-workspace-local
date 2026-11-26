@@ -650,8 +650,8 @@ impl Engine {
         Ok(ChannelPairing {
             command: format!("/start {code}"),
             code,
-            expires_at: (chrono::Utc::now() + chrono::Duration::from_std(PAIR_TTL).unwrap())
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            expires_at: (aiw_core::datetime::Utc::now() + aiw_core::datetime::Duration::from_std(PAIR_TTL).unwrap())
+                .to_rfc3339_opts(aiw_core::datetime::SecondsFormat::Secs, true),
         })
     }
 

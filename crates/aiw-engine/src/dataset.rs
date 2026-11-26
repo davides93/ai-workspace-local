@@ -337,7 +337,9 @@ impl Engine {
                 continue;
             }
             if since.is_some() || until.is_some() {
-                let Ok(updated) = chrono::DateTime::parse_from_rfc3339(&s.updated_at).map(|t| t.with_timezone(&chrono::Utc)) else {
+                let Ok(updated) =
+                    aiw_core::datetime::DateTime::parse_from_rfc3339(&s.updated_at).map(|t| t.with_timezone(&aiw_core::datetime::Utc))
+                else {
                     continue;
                 };
                 if since.is_some_and(|b| updated < b) || until.is_some_and(|b| updated > b) {
