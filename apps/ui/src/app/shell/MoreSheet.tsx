@@ -8,6 +8,7 @@ import { GROUPS, ROUTES, routeHref, type RouteId } from "../routes";
 import { useUiMode } from "../useUiMode";
 import { InboxBadge } from "../../features/inbox/components/InboxBadge";
 import { LanguageSelect } from "../LanguageSelect";
+import { PrivacyPanel } from "../../features/settings/components/PrivacyPanel";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
 import { ContainerSetup } from "../../features/containers/ContainerSetup";
@@ -53,6 +54,7 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
             </div>
           </div>
         ))}
+        <PrivacyPanel />
         <div className="stack stack-sm">
           <span className="eyebrow">{t("shell.modalita_dell_interfaccia")}</span>
           <Segmented label={t("shell.modalita_dell_interfaccia")} value={mode} onChange={setMode} options={UI_MODES.map((m) => ({ id: m, label: UI_MODE_LABEL[m] }))} />
