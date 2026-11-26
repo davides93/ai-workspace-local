@@ -41,6 +41,51 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --no-fail-fast
 
+  # The container pieces that differ by system (where the Docker client is, paths, line endings, the compose file) on the two systems the
+  # app is used on. Neither runner can start a Linux container (macOS runners have no Docker; Windows ones are in Windows-containers
+  # mode), so the real start is the Linux job below.
+  containers-desktop:
+    name: Contenitori, parti per sistema (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p aiw-hw containers
+      - run: cargo test -p aiw-engine agent_computer
+
+  # The computer of an agent against a real Docker: builds the image, starts the container, asks the browser's debugging port and
+  # stops it. The only place the image and the compose file are really run.
+  containers-docker:
+    name: Computer dell'agente con Docker vero (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p aiw-cli
+      - name: Avvia, interroga, ferma
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AIW_HOME="$(mktemp -d)"
+          aiw=./target/debug/aiw
+          $aiw containers
+          trap '$aiw containers down browser || true' EXIT
+          $aiw containers up browser | tee up.txt
+          grep -q "browser · running" up.txt
+          url="$(grep -o 'http://127.0.0.1:[0-9]*' up.txt | head -1)"
+          echo "browser su $url"
+          for i in $(seq 1 20); do curl -fsS "$url/json/version" && break || sleep 2; done
+          curl -fsS "$url/json/version" | grep -q Chrom
+          # published on the loopback only
+          ! ss -ltn | grep -E ':(0\.0\.0\.0|\*|\[::\]):'"${url##*:}"'\b'
+
   # The tests of the secrets at rest that talk to the real keychain of the runner (`#[ignore]`: a headless machine has none, and
   # `cargo test` never touches one). Windows Credential Manager, macOS Keychain, and the Secret Service of Linux (gnome-keyring
   # on a D-Bus session, and a session without one). They use a service name of their own and remove what they make.

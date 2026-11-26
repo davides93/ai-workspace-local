@@ -93,10 +93,24 @@ fn real_runner() -> Box<Runner> {
     Box::new(|cmd, args, env, cwd, timeout| {
         use std::io::Read;
         use std::process::{Command, Stdio};
-        let mut c = Command::new(cmd);
+        // The client by its full path when a short PATH (an app opened from Finder or Explorer) does not have it, and its folder
+        // in front of PATH so the helpers next to it (`docker-credential-desktop`, `docker-compose`) are found by a build.
+        let cli = aiw_hw::container_cli(cmd);
+        let mut c = Command::new(&cli);
         c.args(args).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        if let Some(dir) = aiw_hw::container_cli_dir(&cli) {
+            let rest = std::env::var_os("PATH").unwrap_or_default();
+            if let Ok(joined) = std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&rest))) {
+                c.env("PATH", joined);
+            }
+        }
         for (k, v) in env {
             c.env(k, v);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
         let mut child = c.spawn().ok()?;
         let (mut out, mut err) = (child.stdout.take()?, child.stderr.take()?);
@@ -171,7 +185,8 @@ impl Engine {
             .map_err(|e| Error::Runtime(format!("cartella del computer non creata: {e}")))?;
         let file = dir.join("compose.yml");
         for (name, body) in [("Dockerfile", DOCKERFILE), ("compose.yml", COMPOSE)] {
-            std::fs::write(dir.join(name), body).map_err(|e| Error::Runtime(format!("{name} non scritto: {e}")))?;
+            // A Windows checkout may turn the line endings of these files into CRLF: a Dockerfile line ending in `\\` and CRLF breaks.
+            std::fs::write(dir.join(name), body.replace("\r\n", "\n")).map_err(|e| Error::Runtime(format!("{name} non scritto: {e}")))?;
         }
         let mut env = vec![("AIW_WORKSPACE".to_string(), ws.display().to_string())];
         // On Linux the container writes the workspace as the folder's owner, so the person can read and delete what it makes.
@@ -357,7 +372,7 @@ mod tests {
     fn the_compose_file_is_closed() {
         assert!(COMPOSE.contains("127.0.0.1::9222"), "published on the loopback only");
         assert!(COMPOSE.contains("cap_drop: [ALL]") && COMPOSE.contains("no-new-privileges:true") && COMPOSE.contains("read_only: true"));
-        assert!(COMPOSE.contains("${AIW_WORKSPACE}:/workspace"));
+        assert!(COMPOSE.contains("source: ${AIW_WORKSPACE}") && COMPOSE.contains("target: /workspace"));
         assert!(!COMPOSE.lines().any(|l| l.trim_start().starts_with("environment:")), "no environment passes into the container");
         assert!(!COMPOSE.contains("privileged") && !COMPOSE.contains("docker.sock") && !COMPOSE.contains("network_mode: host"));
         assert!(DOCKERFILE.contains("USER 1000:1000"));

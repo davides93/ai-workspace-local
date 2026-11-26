@@ -20,7 +20,10 @@ services:
     # the engine (`docker compose port`), so two agents never fight over one.
     ports:
       - "127.0.0.1::9222"
+    # Long syntax: a Windows path (`C:\Users\…`) has a colon that the short `host:container` form would misread.
     volumes:
-      - "${AIW_WORKSPACE}:/workspace"
+      - type: bind
+        source: ${AIW_WORKSPACE}
+        target: /workspace
     # No environment on purpose: no token, key or secret of AIW or of the person goes into the container.
     restart: "no"

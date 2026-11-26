@@ -6,13 +6,65 @@
 
 use crate::run;
 use aiw_core::api::{ContainerEngine, ContainerStatus};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const T: Duration = Duration::from_secs(6);
 
 /// Asks the real engines. Takes up to a few seconds when a daemon is stuck (timeouts), never fails.
 pub fn probe_containers() -> ContainerStatus {
-    probe_with(&crate::normalized_os(), &mut |cmd, args| run(cmd, args, T))
+    probe_with(&crate::normalized_os(), &mut |cmd, args| run(&container_cli(cmd), args, T))
+}
+
+/// Where the command-line client of an engine (`docker`, `podman`) is. An app opened from Finder or the Start menu does not
+/// have the PATH of a terminal: Docker Desktop's `docker` may be only in its own folder. The PATH comes first; then the
+/// folders where each system's installer puts it; at last the bare name (and the command fails as «not installed»).
+pub fn container_cli(name: &str) -> String {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    find_cli(name, std::env::split_paths(&path), &known_dirs(name), &|p| p.is_file())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// The folder to put at the front of PATH when running the resolved client: Docker Desktop's helpers (`docker-credential-desktop`,
+/// `docker-compose`) live next to `docker`, and a build that pulls an image needs them.
+pub fn container_cli_dir(cli: &str) -> Option<PathBuf> {
+    let p = Path::new(cli);
+    p.is_absolute().then(|| p.parent().map(Path::to_path_buf)).flatten()
+}
+
+fn find_cli(name: &str, path_dirs: impl Iterator<Item = PathBuf>, known: &[PathBuf], exists: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    let file = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+    path_dirs.chain(known.iter().cloned()).map(|d| d.join(&file)).find(|p| exists(p))
+}
+
+fn known_dirs(name: &str) -> Vec<PathBuf> {
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    let mut v: Vec<PathBuf> = vec![];
+    if cfg!(target_os = "macos") {
+        v.extend(
+            ["/usr/local/bin", "/opt/homebrew/bin", "/opt/podman/bin", "/Applications/Docker.app/Contents/Resources/bin"]
+                .map(PathBuf::from),
+        );
+        if let Some(h) = env("HOME") {
+            v.push(h.join(".docker/bin"));
+        }
+    } else if cfg!(windows) {
+        for var in ["ProgramFiles", "ProgramW6432"] {
+            if let Some(pf) = env(var) {
+                v.push(pf.join("Docker").join("Docker").join("resources").join("bin"));
+                v.push(pf.join("RedHat").join("Podman"));
+            }
+        }
+        if let Some(l) = env("LOCALAPPDATA") {
+            v.push(l.join("Programs").join("Docker").join("Docker").join("resources").join("bin"));
+            v.push(l.join("Programs").join("Podman"));
+        }
+    } else {
+        v.extend(["/usr/local/bin", "/usr/bin", "/opt/podman/bin"].map(PathBuf::from));
+    }
+    let _ = name;
+    v
 }
 
 /// `runner(command, args)` returns stdout when the command ran and succeeded, `None` otherwise (missing, failed, timeout).
@@ -117,6 +169,34 @@ mod tests {
         assert_eq!(parse_version("command not found"), None);
         assert_eq!(parse_info("27.3.1|8|8217579520|false\n"), (Some("27.3.1".into()), Some(8), Some(7836), Some(false)));
         assert_eq!(parse_info("<no value>||0|<no value>"), (None, None, None, None));
+    }
+
+    #[test]
+    fn finds_the_client_on_the_path_then_in_the_known_folders() {
+        let file = if cfg!(windows) { "docker.exe" } else { "docker" };
+        let only = |want: PathBuf| move |p: &Path| p == want;
+        let known = [PathBuf::from("known")];
+        let on_path =
+            find_cli("docker", [PathBuf::from("a"), PathBuf::from("b")].into_iter(), &known, &only(PathBuf::from("b").join(file)));
+        assert_eq!(on_path, Some(PathBuf::from("b").join(file)));
+        // A Finder/Explorer launch has a short PATH: the installer's folder is tried next.
+        let in_known = find_cli("docker", [PathBuf::from("a")].into_iter(), &known, &only(PathBuf::from("known").join(file)));
+        assert_eq!(in_known, Some(PathBuf::from("known").join(file)));
+        assert_eq!(find_cli("docker", std::iter::empty(), &known, &|_| false), None);
+    }
+
+    #[test]
+    fn the_known_folders_are_the_ones_of_each_system() {
+        let d = known_dirs("docker");
+        if cfg!(target_os = "macos") {
+            assert!(d.iter().any(|p| p.ends_with("Docker.app/Contents/Resources/bin")));
+        } else if cfg!(windows) {
+            // Without ProgramFiles in the environment there is nothing to add: never a made-up path.
+            assert!(d.iter().all(|p| p.is_absolute() || p.as_os_str().is_empty() || p.has_root()));
+        } else {
+            assert!(d.contains(&PathBuf::from("/usr/bin")));
+        }
+        assert_eq!(container_cli_dir("docker"), None, "a bare name has no folder");
     }
 
     #[test]

@@ -34,6 +34,27 @@ la cartella `<dati>/agents/<id>/workspace` se manca (la stessa degli agenti isol
   (un test lo verifica sul file).
 - Il profilo del browser (cookie, accessi) sta in `/workspace/.browser-profile`: sopravvive al riavvio e un altro agente non lo vede.
 
+## Windows e macOS
+
+Il requisito è che funzioni su entrambi. Cosa è coperto nel codice, e cosa no:
+
+- **Dove sta `docker`**: un'app aperta da Finder o da Esplora risorse non ha il PATH di un terminale. Il client si cerca nel PATH e poi dove lo mettono gli
+  installatori (macOS: `/usr/local/bin`, `/opt/homebrew/bin`, `/Applications/Docker.app/Contents/Resources/bin`, `~/.docker/bin`; Windows:
+  `%ProgramFiles%\Docker\Docker\resources\bin`, `%LOCALAPPDATA%\Programs\Docker\...`, Podman in `%ProgramFiles%\RedHat\Podman`). La sua cartella va
+  in testa al PATH del comando, perché `docker build` cerca `docker-credential-desktop` accanto a `docker`.
+- **Percorsi**: la cartella dell'agente è montata con la sintassi lunga di Compose (`type: bind`), perché un percorso Windows (`C:\Users\...`) ha i due punti.
+  Docker Desktop deve poter condividere `~/.aiw` (di norma la cartella personale lo è già).
+- **Finestre**: su Windows i comandi partono senza far comparire una console.
+- **Fine riga**: Dockerfile e compose si scrivono con `\n` anche se il checkout Windows li ha convertiti in CRLF.
+- **Windows richiede Docker Desktop in modalità container Linux (WSL 2)**; l'immagine è `debian:bookworm-slim` e Chromium di Debian, che esistono per x86-64 e Arm
+  (Mac Apple Silicon, Windows Arm).
+- **Podman**: il rilevamento lo riconosce, ma l'avvio del computer è stato scritto per Docker Compose (`ps --format json`, `port`); con solo Podman può non
+  funzionare. Non provato.
+
+CI: i test dei pezzi che cambiano per sistema girano su `windows-latest` e `macos-latest` (job «Contenitori, parti per sistema»), e l'avvio vero (costruzione,
+container, porta del browser, solo loopback) gira su `ubuntu-latest` con un Docker vero (job «Computer dell'agente con Docker vero»). **Su Windows e macOS l'avvio vero non gira in CI**
+(i runner macOS non hanno Docker, quelli Windows sono in modalità container Windows): resta da provare a mano con Docker Desktop.
+
 ## Cosa NON è (ancora)
 
 - **Mai provato con un Docker o un Podman che gira**: l'autore aveva Docker installato ma spento. Le righe di comando sono provate contro un
