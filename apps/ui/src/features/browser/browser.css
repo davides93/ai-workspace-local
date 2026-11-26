@@ -56,3 +56,7 @@
   .bl .btn, .bl .input { min-height: 44px; }
   .bl .btn.sm { min-height: 44px; }
 }
+
+/* A phone looking at the browser (read-only) and the bar on the computer that says someone does. */
+.view-frame { display: block; width: 100%; height: auto; border-radius: var(--radius-md, 8px); border: 1px solid var(--border, currentColor); background: var(--surface-2, transparent); }
+.view-bar { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 40; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: var(--radius-md, 8px); background: var(--surface, Canvas); color: var(--text, CanvasText); border: 1px solid var(--border, currentColor); box-shadow: 0 4px 16px rgb(0 0 0 / 0.18); }

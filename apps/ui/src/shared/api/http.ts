@@ -9,7 +9,7 @@ import type {
   DownloadProgress, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ContainerStatus, FoldersInfo,
   ToolInfo, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
-  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState,
+  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState, BrowserViewRequests, BrowserViewStatus,
   ModelProviderInfo, ModelSearchParams, PullRequest, RemoteModelDetail, SearchPage,
   CommandAnalysis, PolicyRule, HookConfig, VoiceStatus, Transcript, Speech, SpeakRequest, InstallJob, InstallPlan, UpdateStatus, ThinkingMode, BackupFile, BackupInspect,
 } from "./types";
@@ -228,6 +228,12 @@ export class HttpTransport implements Transport {
   answerQuestion = (id: string, reply: QuestionReply) => this.req<void>("POST", `/questions/${enc(id)}`, reply);
   browserState = () => this.req<BrowserState>("GET", "/browser");
   browserFrame = () => this.req<BrowserFrame>("GET", "/browser/frame");
+  browserViewRequest = () => this.req<BrowserViewStatus>("POST", "/browser/view/request");
+  browserViewStatus = () => this.req<BrowserViewStatus>("GET", "/browser/view");
+  browserViewFrame = () => this.req<BrowserFrame>("GET", "/browser/view/frame");
+  browserViewRequests = () => this.req<BrowserViewRequests>("GET", "/browser/view/requests");
+  browserViewDecide = (id: string, approve: boolean) => this.req<void>("POST", `/browser/view/requests/${encodeURIComponent(id)}/${approve ? "approve" : "deny"}`);
+  browserViewRevoke = () => this.req<void>("POST", "/browser/view/revoke");
   browserControl = (action: BrowserControlAction) => this.req<BrowserState>("POST", "/browser/control", { action });
   browserInput = (input: BrowserInput) => this.req<void>("POST", "/browser/input", input);
   browserDialog = (reply: BrowserDialogReply) => this.req<void>("POST", "/browser/dialog", reply);

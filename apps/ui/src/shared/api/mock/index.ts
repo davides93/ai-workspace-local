@@ -7,6 +7,7 @@ import { mockRecommend } from "./recommend";
 import { mockRoute } from "./route";
 import { mockSpeak, mockTtsStatus } from "./voice";
 import { MAX_FEEDBACK_NOTE_CHARS, SECRET_MASK } from "../types";
+import type { BrowserViewRequests, BrowserViewStatus } from "../types";
 import type {
   AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest,
   ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, SecretsAtRest, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
@@ -1064,6 +1065,29 @@ export class MockTransport implements Transport {
   }
   async browserInput(input: BrowserInput): Promise<void> { this.browserOwnerOnly(); this.browser.input(input); }
   async browserDialog(reply: BrowserDialogReply): Promise<void> { this.browserOwnerOnly(); this.browser.answerDialog(reply); }
+  /** The demo of a phone looking at the browser: one request, a yes from the computer's side lasting ten minutes, frames only. */
+  private view: { state: "none" | "pending" | "granted"; until: number } = { state: "none", until: 0 };
+  private viewStatus(): BrowserViewStatus {
+    if (this.view.state === "granted" && Date.now() >= this.view.until) this.view = { state: "none", until: 0 };
+    return { state: this.view.state, seconds_left: this.view.state === "granted" ? Math.max(0, Math.round((this.view.until - Date.now()) / 1000)) : this.view.state === "pending" ? 120 : 0 };
+  }
+  async browserViewRequest(): Promise<BrowserViewStatus> { if (this.view.state === "none") this.view = { state: "pending", until: 0 }; return this.viewStatus(); }
+  async browserViewStatus(): Promise<BrowserViewStatus> { return this.viewStatus(); }
+  async browserViewFrame(): Promise<BrowserFrame> {
+    if (this.viewStatus().state !== "granted") throw new ApiError(403, "il computer non ha ancora dato il permesso di vedere il browser");
+    return this.browser.frame();
+  }
+  async browserViewRequests(): Promise<BrowserViewRequests> {
+    this.browserOwnerOnly();
+    const s = this.viewStatus().state;
+    return { requests: s === "pending" ? [{ id: "vw_demo", device: "iPhone di Dave", expires_in_s: 120 }] : [], viewers: s === "granted" ? ["iPhone di Dave"] : [] };
+  }
+  async browserViewDecide(id: string, approve: boolean): Promise<void> {
+    this.browserOwnerOnly();
+    if (this.view.state !== "pending" || id !== "vw_demo") throw new ApiError(404, "la richiesta non c'è più");
+    this.view = approve ? { state: "granted", until: Date.now() + 10 * 60_000 } : { state: "none", until: 0 };
+  }
+  async browserViewRevoke(): Promise<void> { this.browserOwnerOnly(); this.view = { state: "none", until: 0 }; }
   /** An action of the agent on the browser: it waits while the person has it, and the person's input waits while it runs. */
   private async agentBrowser<T>(fn: () => Promise<T>): Promise<T> {
     await this.browser.gate();

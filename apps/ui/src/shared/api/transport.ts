@@ -2,7 +2,7 @@ import { t } from "../i18n";
 import { isUiMode } from "../lib/uiMode";
 import { safeStorage, serverOrigin, storedToken, storeToken } from "./tokens";
 import type {
-  AgEvent, AgentProfile, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest,
+  AgEvent, AgentProfile, BrowserViewRequests, BrowserViewStatus, ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, ChannelCreate, ChannelInfo, ChannelPairing, ChannelPatch, ChannelStatus, ChannelTestResult, MailAccount, MailAccountTest,
   AttachmentData, AttachmentUpload, RoutingStats, TeamDef, AuditEntry, CatalogModel, ChatMessage, ConfigView, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Recommendations, RouteDecision,
   Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus,
   BackgroundSummary, BackgroundTask, Proposal, ProposalQuery, TaskCreate, TaskQuery, TaskResume, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, SecretsAtRest, ContextCreate,
@@ -286,6 +286,15 @@ export interface Transport {
   browserInput(input: BrowserInput): Promise<void>;
   /** The person answers a window of the site (only while they drive). */
   browserDialog(reply: BrowserDialogReply): Promise<void>;
+  /** A paired phone asks to look at the browser, and follows its request (`device` token; the computer has to say yes). */
+  browserViewRequest(): Promise<BrowserViewStatus>;
+  browserViewStatus(): Promise<BrowserViewStatus>;
+  /** One frame for a phone that has the computer's yes (403 without it). Read-only: nothing else of the browser opens. */
+  browserViewFrame(): Promise<BrowserFrame>;
+  /** On the computer (owner only): the requests waiting for a yes, the answer to one, and «Basta» for all. */
+  browserViewRequests(): Promise<BrowserViewRequests>;
+  browserViewDecide(id: string, approve: boolean): Promise<void>;
+  browserViewRevoke(): Promise<void>;
 
   workflows(): Promise<WorkflowDef[]>;
   saveWorkflow(w: WorkflowDef): Promise<WorkflowDef>;

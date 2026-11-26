@@ -10,6 +10,8 @@ import { InboxBadge } from "../../features/inbox/components/InboxBadge";
 import { LanguageSelect } from "../LanguageSelect";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
+import { PhoneBrowserView } from "../../features/browser/PhoneBrowserView";
+import { useSystem } from "../../shared/query/system";
 import { ContainerSetup } from "../../features/containers/ContainerSetup";
 
 import { t } from "../../shared/i18n";
@@ -23,12 +25,21 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
   const [mode, setMode] = useUiMode();
   const sections = hasNavigation(ROUTES, mode);
   const [containers, setContainers] = useState(false);
+  const [watch, setWatch] = useState(false);
+  // Talking to another computer (the phone paired with the desktop): it may ask to look at the agent's browser.
+  const remote = useSystem().data?.mode === "daemon";
   const simple = mode === "simple";
   return (
     <>
     <Sheet title={sections ? t("shell.altre_sezioni") : t("shell.menu")} onClose={onClose} footer={<KillSwitch variant="sheet" />}>
       <div className="stack stack-lg more-sheet">
         <DeviceChip onNavigate={onClose} />
+        {mode === "simple" && remote && (
+          <button type="button" className="rail-search" onClick={() => setWatch(true)}>
+            <Icon name="globe" size={16} />
+            <span>{t("browser.view_title")}</span>
+          </button>
+        )}
         <button type="button" className="rail-search" onClick={() => { onClose(); onOpenPalette(); }}>
           <Icon name="search" size={16} />
           <span>{t("shell.cerca_e_comandi_2")}</span>
@@ -67,6 +78,7 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
         </div>
       </div>
     </Sheet>
+    {watch && <PhoneBrowserView onClose={() => setWatch(false)} />}
     {containers && <ContainerSetup onClose={() => setContainers(false)} />}
     </>
   );
