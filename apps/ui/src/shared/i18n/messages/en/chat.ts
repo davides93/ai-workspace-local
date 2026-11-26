@@ -315,4 +315,7 @@ export const chatEn: Record<keyof typeof chatIt, string> = {
   "chat.cartella_fuori_workspace": "That folder is outside the workspace. If you want the agent to work there, allow it yourself:",
   "chat.cartella_fuori_workspace_link": "Settings → Allowed folders",
   "chat.cartella_fuori_workspace_mostra": "Show all sections → Settings → Allowed folders",
+  "chat.bozze_da_rivedere_titolo": "Email drafts to review",
+  "chat.bozze_da_rivedere": "{n, plural, one {# email draft to review} other {# email drafts to review}}",
+  "chat.bozze_da_rivedere_nota": "The assistant prepared them, but nothing has been sent: a draft goes out only when you approve it.",
 };

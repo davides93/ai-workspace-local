@@ -35,6 +35,7 @@ import { ChatEmpty } from "./components/ChatEmpty";
 import { BROWSER_BUTTON_ID, ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { DownloadsStrip } from "./components/DownloadsStrip";
+import { DraftsStrip } from "./components/DraftsStrip";
 import { SecretWarning } from "./components/SecretWarning";
 import { NoSessionState, SimpleEmpty } from "./components/SimpleEmpty";
 import { useAttachments } from "./useAttachments";
@@ -346,6 +347,7 @@ export function ChatView() {
           </div>
         )}
         {simple && !noSessions && <DownloadsStrip />}
+        {simple && !noSessions && <DraftsStrip />}
         {/* Simple interface only. The protected field is a tool (`aiw_secret_request`): the button that asks for it is shown only when the
             agent of this session has it (an old session of the Coder or the Operatore has not, and the button would ask for something
             it cannot do); the warning is shown anyway. */}
