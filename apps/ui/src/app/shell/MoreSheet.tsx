@@ -8,6 +8,7 @@ import { GROUPS, ROUTES, routeHref, type RouteId } from "../routes";
 import { useUiMode } from "../useUiMode";
 import { InboxBadge } from "../../features/inbox/components/InboxBadge";
 import { LanguageSelect } from "../LanguageSelect";
+import { CollaboratorsSheet } from "../../features/collaborators/CollaboratorsSheet";
 import { PrivacyPanel } from "../../features/settings/components/PrivacyPanel";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
@@ -25,6 +26,7 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
   const [theme, setTheme] = useTheme();
   const [mode, setMode] = useUiMode();
   const sections = hasNavigation(ROUTES, mode);
+  const [collab, setCollab] = useState(false);
   const [containers, setContainers] = useState(false);
   const [watch, setWatch] = useState(false);
   // Talking to another computer (the phone paired with the desktop): it may ask to look at the agent's browser.
@@ -39,6 +41,10 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
           <button type="button" className="rail-search" onClick={() => setWatch(true)}>
             <Icon name="globe" size={16} />
             <span>{t("browser.view_title")}</span>
+        {mode === "simple" && (
+          <button type="button" className="rail-search" onClick={() => setCollab(true)}>
+            <Icon name="sparkle" size={16} />
+            <span>{t("collab.open")}</span>
           </button>
         )}
         <button type="button" className="rail-search" onClick={() => { onClose(); onOpenPalette(); }}>
@@ -81,6 +87,7 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
       </div>
     </Sheet>
     {watch && <PhoneBrowserView onClose={() => setWatch(false)} />}
+    {collab && <CollaboratorsSheet onClose={() => setCollab(false)} />}
     {containers && <ContainerSetup onClose={() => setContainers(false)} />}
     </>
   );
