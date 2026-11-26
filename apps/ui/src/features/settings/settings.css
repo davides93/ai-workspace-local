@@ -68,3 +68,8 @@
 .bkp { gap: var(--space-3); padding: var(--space-4); }
 .bkp-check { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .bkp-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.set-privacy { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) var(--space-4); }
+.set-privacy-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.set-privacy-state { margin: 0; }
+.set-privacy-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-sm); }

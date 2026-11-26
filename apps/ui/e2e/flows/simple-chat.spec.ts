@@ -244,6 +244,32 @@ test.describe("the assistant from the chat", () => {
   });
 });
 
+test.describe("email drafts of the assistant", () => {
+  test("a strip above the message box opens the drafts to review, which are the same cards as in Canali, and sends nothing by itself", async ({ page }) => {
+    await openApp(page, "/chat", { scenario: "mail" });
+    await page.getByRole("button", { name: "Nuova", exact: true }).click();
+    const strip = page.getByRole("region", { name: "Bozze di posta da rivedere" });
+    // Two drafts wait for the owner and one failed to send: three need a decision, the sent one does not.
+    await expect(strip.getByRole("button", { name: /3 bozze di posta da rivedere/ })).toBeVisible();
+    await strip.getByRole("button", { name: /bozze di posta da rivedere/ }).click();
+    const sheet = page.getByRole("dialog", { name: "Bozze di posta da rivedere" });
+    await expect(sheet).toBeVisible();
+    await expect(sheet.getByText("Nulla è partito").or(sheet.getByText("non è partito nulla")).first()).toBeVisible();
+    await expect(sheet.getByRole("article", { name: /Preventivo per il cantiere/ })).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "Approva e invia" }).first()).toBeVisible();
+    expect(linksOutsideChat(await appLinks(page)), "drafts").toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+  });
+
+  test("with no draft waiting there is no strip", async ({ page }) => {
+    await openApp(page, "/chat");
+    await page.getByRole("button", { name: "Nuova", exact: true }).click();
+    await expect(messageBox(page)).toBeVisible();
+    await expect(page.getByRole("region", { name: "Bozze di posta da rivedere" })).toHaveCount(0);
+  });
+});
+
 test.describe("a secret typed in the message box", () => {
   test("raises a warning that is announced, offers the protected field and never blocks sending", async ({ page }) => {
     // The protected field is a tool of the Assistente: in its session (a new one) the button is there.

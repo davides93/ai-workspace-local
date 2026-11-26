@@ -33,6 +33,26 @@ export interface DeviceProfile {
   tier: DeviceTier;
 }
 
+/** Docker/Podman of the computer (GET /api/containers). Read-only facts; `hint` is the one next step. */
+export interface ContainerEngine {
+  engine: "docker" | "podman";
+  installed: boolean;
+  version?: string | null;
+  running: boolean;
+  compose: boolean;
+  rootless?: boolean | null;
+  cpus?: number | null;
+  memory_mb?: number | null;
+}
+export type ContainerState = "ready" | "compose_missing" | "engine_stopped" | "not_installed" | "unsupported";
+export interface ContainerStatus {
+  state: ContainerState;
+  engine?: "docker" | "podman" | null;
+  hint: "none" | "install_docker" | "start_docker" | "install_compose";
+  engines: ContainerEngine[];
+  os: string;
+}
+
 export interface SystemInfo {
   version: string;
   mode: "embedded" | "daemon" | "demo";
@@ -457,6 +477,8 @@ export interface CatalogModel {
   downloadable: boolean;
   /** How well it suits each task, 0 (not suited) to 3 (very good). */
   suitability?: TaskScores;
+  /** Licence allows commercial use: false for CC BY-NC weights, absent when the entry does not say. */
+  commercial_use?: boolean;
 }
 
 export interface TaskScores {

@@ -18,6 +18,7 @@ import { channelsEn } from "./messages/en/channels";
 import { chatEn } from "./messages/en/chat";
 import { collabEn } from "./messages/en/collab";
 import { commonEn } from "./messages/en/common";
+import { containersEn } from "./messages/en/containers";
 import { devicesEn } from "./messages/en/devices";
 import { documentsEn } from "./messages/en/documents";
 import { evalsEn } from "./messages/en/evals";
@@ -51,6 +52,7 @@ export const en: Record<MessageKey, string> = {
   ...chatEn,
   ...collabEn,
   ...commonEn,
+  ...containersEn,
   ...devicesEn,
   ...documentsEn,
   ...evalsEn,

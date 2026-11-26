@@ -23,6 +23,7 @@ const ALLOWED_HOSTS = [
   [/^[^.]+$/, "single-label hosts (placeholders)"],
   [/^(huggingface\.co|hf-mirror\.com|www\.modelscope\.cn|ollama\.com|registry\.ollama\.ai)$/, "model hubs: link targets and default mirrors the person triggers explicitly"],
   [/^github\.com$/, "release / project links opened on click"],
+  [/^(www|docs)\.docker\.com$/, "Docker install pages: link targets of the guided setup, opened on click"],
 ];
 const BANNED = /(googleapis|gstatic|googleusercontent|jsdelivr|unpkg|cdnjs|cloudflare|fontawesome|typekit|bootstrapcdn|fonts\.)/i;
 

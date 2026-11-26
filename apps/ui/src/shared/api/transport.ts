@@ -7,7 +7,7 @@ import type {
   Feedback, Lesson, LessonStatus, Memory, KbAddResult, KbCollection, KbCollectionCreate, KbCollectionPatch, KbDocument, KbSearchBody, KbSearchResult, KbStatus, ProactiveStatus, BackgroundRequest, BackgroundStatus,
   BackgroundSummary, BackgroundTask, Proposal, ProposalQuery, TaskCreate, TaskQuery, TaskResume, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, SecretsAtRest, ContextCreate,
   ContextInfo, ContextPatch, DraftStatus, EmailDraft, EmailDraftCreate, EmailDraftPatch, EmailDraftSend,
-  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ToolInfo,
+  CommandAnalysis, InferenceProfile, LocalModel, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest, RuntimeInfo, Session, SessionImage, SystemInfo, ContainerStatus, ToolInfo,
   WorkflowDef, WorkflowRun, ApprovalRequest, WorktreeStatus, CheckpointInfo, RewindResult, MeshState, PeerDevice, RemoteAgent,
   AdapterInfo, DatasetInfo, DatasetSpec, TrainDoctor, TrainJob, TrainJobRequest,
   BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState,
@@ -52,6 +52,8 @@ export interface Transport {
   removeFolder?(id: string): Promise<FoldersInfo>;
 
   system(): Promise<SystemInfo>;
+  /** Docker/Podman on the computer: installed, running, with compose (read-only: GET /api/containers). */
+  containers(): Promise<ContainerStatus>;
   /** The folders of the computer handed to the agents besides the workspace (read-only: GET /api/folders). */
   folders(): Promise<FoldersInfo>;
   kill(): Promise<void>;
