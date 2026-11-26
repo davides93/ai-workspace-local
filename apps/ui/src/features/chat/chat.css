@@ -77,7 +77,7 @@
 .ws-log-inner { width: 100%; max-width: 820px; margin-inline: auto; display: flex; flex-direction: column; gap: var(--space-4); }
 .ws-msg { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; }
 .ws-msg.ws-user { align-items: flex-end; }
-.ws-bubble-user { max-width: min(92%, 640px); padding: 10px 14px; border-radius: 14px 14px 4px 14px; background: var(--fg); color: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ws-bubble-user { max-width: min(92%, 640px); padding: 10px 14px; border-radius: 14px 14px 4px 14px; background: var(--accent-soft); color: var(--accent-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ws-bubble { min-width: 0; max-width: 100%; padding: 2px 0; }
 /*
  * Long conversations. The text of a reply that is far from the end when the conversation opens (`data-cold`, set by ConversationLog: more
