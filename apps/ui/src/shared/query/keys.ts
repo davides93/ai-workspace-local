@@ -55,6 +55,8 @@ export const qk = {
   secretRequests: () => ["secret-requests"] as const,
   /** The state of the controlled browser (`features/browser`): who drives it and the page in front. Never a frame: those live in the component. */
   browser: () => ["browser"] as const,
+  /** Who asks to look at the browser, and who looks (`features/browser/view`). Status and requests only, never a frame. */
+  browserView: () => ["browser-view"] as const,
   runEvents: (runId: string) => ["runs", "events", runId] as const,
 
   lessons: {

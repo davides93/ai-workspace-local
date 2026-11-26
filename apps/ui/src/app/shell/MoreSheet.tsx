@@ -12,6 +12,8 @@ import { CollaboratorsSheet } from "../../features/collaborators/CollaboratorsSh
 import { PrivacyPanel } from "../../features/settings/components/PrivacyPanel";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
+import { PhoneBrowserView } from "../../features/browser/PhoneBrowserView";
+import { useSystem } from "../../shared/query/system";
 import { ContainerSetup } from "../../features/containers/ContainerSetup";
 
 import { t } from "../../shared/i18n";
@@ -26,12 +28,19 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
   const sections = hasNavigation(ROUTES, mode);
   const [collab, setCollab] = useState(false);
   const [containers, setContainers] = useState(false);
+  const [watch, setWatch] = useState(false);
+  // Talking to another computer (the phone paired with the desktop): it may ask to look at the agent's browser.
+  const remote = useSystem().data?.mode === "daemon";
   const simple = mode === "simple";
   return (
     <>
     <Sheet title={sections ? t("shell.altre_sezioni") : t("shell.menu")} onClose={onClose} footer={<KillSwitch variant="sheet" />}>
       <div className="stack stack-lg more-sheet">
         <DeviceChip onNavigate={onClose} />
+        {mode === "simple" && remote && (
+          <button type="button" className="rail-search" onClick={() => setWatch(true)}>
+            <Icon name="globe" size={16} />
+            <span>{t("browser.view_title")}</span>
         {mode === "simple" && (
           <button type="button" className="rail-search" onClick={() => setCollab(true)}>
             <Icon name="sparkle" size={16} />
@@ -77,6 +86,7 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
         </div>
       </div>
     </Sheet>
+    {watch && <PhoneBrowserView onClose={() => setWatch(false)} />}
     {collab && <CollaboratorsSheet onClose={() => setCollab(false)} />}
     {containers && <ContainerSetup onClose={() => setContainers(false)} />}
     </>

@@ -350,6 +350,12 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
         // The live view of the controlled browser and the human takeover: the owner's (see `scopes.rs`).
         .route("/api/browser", get(browser_state))
         .route("/api/browser/frame", get(browser_frame))
+        .route("/api/browser/view", get(browser_view_status))
+        .route("/api/browser/view/request", post(browser_view_request))
+        .route("/api/browser/view/frame", get(browser_view_frame))
+        .route("/api/browser/view/requests", get(browser_view_requests))
+        .route("/api/browser/view/requests/{id}/{decision}", post(browser_view_decide))
+        .route("/api/browser/view/revoke", post(browser_view_revoke))
         .route("/api/browser/control", post(browser_control))
         .route("/api/browser/input", post(browser_input).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/browser/dialog", post(browser_dialog).layer(DefaultBodyLimit::max(16 * 1024)))
@@ -1321,6 +1327,10 @@ async fn browser_state(State(s): State<AppState>) -> Result<Response, ApiError> 
 /// One frame of the page as a data URL (the in-app IPC carries JSON only). Never stored, never cached: `{"running":false}` when
 /// no browser runs (this route never starts one), 409 while a window of the site waits for an answer.
 async fn browser_frame(State(s): State<AppState>) -> Result<Response, ApiError> {
+    browser_frame_response(&s).await
+}
+
+async fn browser_frame_response(s: &AppState) -> Result<Response, ApiError> {
     use base64::Engine as _;
     let body = match s.engine.browser_frame().await? {
         None => json!({"running": false}),
@@ -1346,6 +1356,58 @@ async fn browser_control(State(s): State<AppState>, body: axum::body::Bytes) -> 
     let action = b.get("action").and_then(Value::as_str).ok_or_else(|| ApiError(Error::Invalid("manca `action`".into())))?;
     let state = s.engine.browser_control(action).await?;
     Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(state)).into_response())
+}
+
+/// The token of a paired device (and its name), for the routes a phone uses to look. This computer without a token has no use for them.
+fn viewer(ctx: &AuthContext) -> Result<(String, String), ApiError> {
+    ctx.token.as_ref().map(|t| (t.id.clone(), t.name.clone())).ok_or_else(|| {
+        ApiError(Error::Invalid("serve un dispositivo accoppiato: da questo computer il browser si vede già dall'app".into()))
+    })
+}
+
+/// A phone asks to look at the browser; the computer has to say yes (`browser_view_requests`).
+async fn browser_view_request(State(s): State<AppState>, axum::Extension(ctx): axum::Extension<AuthContext>) -> ApiResult<Value> {
+    let (id, name) = viewer(&ctx)?;
+    ok(json!(s.engine.browser_view_request(&id, &name)?))
+}
+
+/// Where the phone's request stands: `none`, `pending` or `granted`, and the seconds left.
+async fn browser_view_status(State(s): State<AppState>, axum::Extension(ctx): axum::Extension<AuthContext>) -> Result<Response, ApiError> {
+    let (id, _) = viewer(&ctx)?;
+    Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(json!(s.engine.browser_view_status(&id)))).into_response())
+}
+
+/// One frame for a phone that has the computer's yes; 403 otherwise. The same frame as the owner's, never kept.
+async fn browser_view_frame(State(s): State<AppState>, axum::Extension(ctx): axum::Extension<AuthContext>) -> Result<Response, ApiError> {
+    let (id, _) = viewer(&ctx)?;
+    if !s.engine.browser_view_allowed(&id) {
+        return Err(ApiError(Error::Denied("il computer non ha ancora dato il permesso di vedere il browser".into())));
+    }
+    browser_frame_response(&s).await
+}
+
+/// The requests waiting for a yes on this computer, and the devices that can look now.
+async fn browser_view_requests(State(s): State<AppState>) -> Result<Response, ApiError> {
+    let body = json!({"requests": s.engine.browser_view_requests(), "viewers": s.engine.browser_view_grants()});
+    Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(body)).into_response())
+}
+
+async fn browser_view_decide(
+    State(s): State<AppState>,
+    axum::extract::Path((id, decision)): axum::extract::Path<(String, String)>,
+) -> ApiResult<Value> {
+    let approve = match decision.as_str() {
+        "approve" => true,
+        "deny" => false,
+        _ => return Err(ApiError(Error::Invalid("la risposta è `approve` o `deny`".into()))),
+    };
+    s.engine.browser_view_decide(&id, approve)?;
+    ok(json!({}))
+}
+
+/// «Basta»: ends every yes and forgets the requests.
+async fn browser_view_revoke(State(s): State<AppState>) -> ApiResult<Value> {
+    ok(json!({"ended": s.engine.browser_view_revoke_all()}))
 }
 
 /// Click, scroll, key or text of the person in the page. Accepted only while they drive; never logged, never kept.

@@ -1602,6 +1602,21 @@ export interface BrowserState {
 /** `GET /api/browser/frame`: the image is a JPEG data URL (the IPC carries JSON only); width and height are the page's CSS pixels. */
 export type BrowserFrame = { running: false } | { running: true; image: string; width: number; height: number };
 
+/**
+ * A paired phone looking at the browser (`/api/browser/view/*`): it asks, the computer says yes, the phone then gets frames and nothing else.
+ * `none`: no request; `pending`: waiting for the computer; `granted`: it may look for `seconds_left` more seconds.
+ */
+export interface BrowserViewStatus {
+  state: "none" | "pending" | "granted";
+  seconds_left: number;
+}
+
+/** What the computer shows the person: who asks to look, and who looks now. */
+export interface BrowserViewRequests {
+  requests: { id: string; device: string; expires_in_s: number }[];
+  viewers: string[];
+}
+
 /** Body of `POST /api/browser/control`; `resume` is only for a pause. */
 export type BrowserControlAction = "pause" | "resume" | "take" | "give_back";
 
