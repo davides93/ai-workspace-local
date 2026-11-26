@@ -2,6 +2,10 @@
 
 > Aggiornamento 16 novembre 2026 · release v0.5.0-beta.12, build store 5014. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
 
+## Catalogo: Inkling 2 Mini, Saluki e Poodle (scritto, non provato)
+
+Nel catalogo ci sono Inkling 2 Mini (Apache 2.0, tag `preferred`), Underdog Saluki 27B e Underdog Poodle 4B (CC BY-NC 4.0, `commercial_use: false`, mai proposti dal consigliere). **Provato**: test automatici del catalogo e del consigliere. **Non provato**: nessun download, nessun avvio con un runtime vero; non è verificato che il llama.cpp incorporato carichi l'architettura `inkling2_loop`; la parte per le immagini di Inkling (`mmproj`) non è nel catalogo; la quantizzazione di Poodle è di terzi. Il campo `commercial_use` è solo registrato: nessuna regola o schermata lo usa finché Dave non decide sulla licenza commerciale.
+
 ## Harness semplice: una sola chat agentica in modalità semplice (issue #105)
 
 Stato: **unito in `main` il 15 novembre 2026 (PR #113–#120, issue #105–#112 chiuse), non ancora in una release** (l'ultima, v0.5.0-beta.11, è precedente). Il filone porta la modalità semplice a una sola

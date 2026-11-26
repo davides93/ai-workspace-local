@@ -43,4 +43,8 @@ export const libIt = {
   "lib.risponde_subito_senza_pensarci_su": "Risponde subito, senza pensarci su.",
   "lib.ragiona_all_inizio_e_quando": "Ragiona all'inizio e quando qualcosa non va, poi procede veloce.",
   "lib.ragiona_sempre_e_piu_a": "Ragiona sempre e più a lungo: più lento, più accurato.",
+  "lib.ruolo_integrato": "Integrato",
+  "lib.ruolo_leggero": "Leggero",
+  "lib.ruolo_veloce": "Veloce",
+  "lib.ruolo_intelligente": "Intelligente",
 } as const;
