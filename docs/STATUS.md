@@ -1,6 +1,6 @@
 # Stato dell'app e come procedere
 
-> Aggiornamento 16 novembre 2026 · release v0.5.0-beta.12, build store 5014. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
+> Aggiornamento 26 novembre 2026 · release v0.5.0-beta.13, build store 5015. Le sezioni storiche v0.4 sotto restano riferimenti alla prima beta.
 
 ## Catalogo: Inkling 2 Mini, Saluki e Poodle (scritto, non provato)
 

@@ -2,6 +2,8 @@
 
 ## Non rilasciato
 
+## 0.5.0-beta.13 - pre-release
+
 - **Telefono come «cloud personale»: i collaboratori dicono dove lavorano.** Quando il telefono è accoppiato a un computer (modalità `daemon`), «I tuoi collaboratori» spiega che il lavoro gira sul computer «nome», che il telefono mostra l'andamento e chiede i sì, e che il computer deve restare acceso. Nessuna rotta nuova: il token del dispositivo già vale per `/api/tasks`. Provato con test automatici; **non su un telefono accoppiato vero**.
 
 - **Modalità Semplice: «I tuoi collaboratori»** (menu della chat). Un form per dire cosa deve fare un collaboratore (nome facoltativo) e, sotto, i lavori in background già esistenti con pausa, istruzioni e conferme. Riusa `POST /api/tasks`: stessi limiti, orari di silenzio e conferme di ogni altro lavoro, nessuna rotta nuova. Provato con test automatici e dati dimostrativi; **non con un motore e un modello veri, né su un dispositivo**.
