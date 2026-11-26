@@ -41,6 +41,8 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
           <button type="button" className="rail-search" onClick={() => setWatch(true)}>
             <Icon name="globe" size={16} />
             <span>{t("browser.view_title")}</span>
+          </button>
+        )}
         {mode === "simple" && (
           <button type="button" className="rail-search" onClick={() => setCollab(true)}>
             <Icon name="sparkle" size={16} />
