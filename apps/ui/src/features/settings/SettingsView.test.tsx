@@ -29,6 +29,19 @@ describe("Settings view", () => {
     expect(screen.queryByRole("heading", { name: "Impostazioni", level: 1 })).toBeNull();
   });
 
+  it("«Solo locale» turns off web search and update checks together, and says what it does not stop", async () => {
+    const { user, api } = await renderApp({ route: "/settings", mode: "developer" });
+    const save = vi.spyOn(api, "setConfig");
+    const panel = await screen.findByTestId("privacy-panel");
+    expect(within(panel).getByText("Solo locale: spento")).toBeInTheDocument();
+    expect(within(panel).getByText(/Non blocca: il download dei modelli/)).toBeInTheDocument();
+    await user.click(within(panel).getByRole("switch", { name: "Solo locale" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith("global", "update.auto_download", false));
+    expect(save).toHaveBeenCalledWith("global", "search.provider", "off");
+    expect(save).toHaveBeenCalledWith("global", "update.auto_check", false);
+    await waitFor(() => expect(within(screen.getByTestId("privacy-panel")).getByText("Solo locale: attivo")).toBeInTheDocument());
+  });
+
   it("the theme is a choice that applies at once and is kept on the device", async () => {
     const { user } = await renderApp({ route: "/settings", mode: "developer" });
     const theme = group("Tema");
