@@ -159,6 +159,21 @@ mod tests {
     }
 
     #[test]
+    fn licences_of_the_new_models_are_recorded() {
+        let c = builtin_catalog();
+        let get = |id: &str| c.iter().find(|m| m.id == id).unwrap_or_else(|| panic!("{id}"));
+        assert_eq!(get("inkling-2-mini").commercial_use, Some(true));
+        assert_eq!(get("underdog-saluki-27b").commercial_use, Some(false));
+        assert_eq!(get("underdog-poodle-4b").commercial_use, Some(false));
+        // An entry with a non-commercial licence says so in the field too.
+        for m in &c {
+            if m.license.to_ascii_uppercase().contains("-NC") {
+                assert_eq!(m.commercial_use, Some(false), "{}", m.id);
+            }
+        }
+    }
+
+    #[test]
     fn fit_depends_on_device() {
         let c = builtin_catalog();
         let big = c.iter().find(|m| m.id == "llama-3.3-70b").unwrap();
