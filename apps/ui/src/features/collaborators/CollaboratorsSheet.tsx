@@ -1,8 +1,9 @@
 import { useId, useState } from "react";
+import { useSystem } from "../../shared/query/system";
 import { Button, Field, Input, Sheet, Textarea } from "../../shared/ui";
 import { TasksPanel } from "../inbox/components/TasksPanel";
 import { useCreateCollaborator } from "./api";
-import { problem, toTask } from "./model";
+import { problem, remoteComputer, toTask } from "./model";
 
 import { t } from "../../shared/i18n";
 /**
@@ -16,6 +17,9 @@ export function CollaboratorsSheet({ onClose }: { onClose: () => void }) {
   const [shown, setShown] = useState(false);
   const create = useCreateCollaborator(() => { setName(""); setJob(""); setShown(false); });
   const id = useId();
+  const { data: system } = useSystem();
+  // This screen talks to another computer's AIW (the phone paired with the desktop): the work runs there, not on the phone.
+  const remote = remoteComputer(system);
   const bad = shown ? problem({ name, job }) : undefined;
   const submit = () => {
     if (problem({ name, job })) { setShown(true); return; }
@@ -24,7 +28,7 @@ export function CollaboratorsSheet({ onClose }: { onClose: () => void }) {
   return (
     <Sheet title={t("collab.title")} onClose={onClose}>
       <div className="stack stack-lg">
-        <p className="muted">{t("collab.intro")}</p>
+        <p className="muted">{remote ? t("collab.intro_remote", { device: remote }) : t("collab.intro")}</p>
         <form className="stack" onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <Field label={t("collab.name")} htmlFor={`${id}-name`}>
             <Input id={`${id}-name`} value={name} maxLength={60} placeholder={t("collab.name_placeholder")} onChange={(e) => setName(e.target.value)} />
