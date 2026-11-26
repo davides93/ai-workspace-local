@@ -28,10 +28,12 @@ function Meta({ icon, label, tone = "neutral", title, children }: { icon: string
  * approval mode; the agent only when it is not the Assistente, and neither sandbox nor worktree. On a phone it
  * has a «Menu» button, since there is no tab bar.
  */
-export function ChatHeader({ session, agent, profile, running, simple = false, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser, browserLive, onOpenMenu }: {
+export function ChatHeader({ session, agent, profile, role, running, simple = false, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser, browserLive, onOpenMenu }: {
   session: Session | null;
   agent: AgentProfile | null;
   profile: InferenceProfile | null;
+  /** Simple interface: the role of the model («Intelligente»), shown before the model's own name; absent when unknown. */
+  role?: string;
   running: boolean;
   /** The simple interface: fewer details, nothing that leads to a hidden section. */
   simple?: boolean;
@@ -80,7 +82,7 @@ export function ChatHeader({ session, agent, profile, running, simple = false, s
           {profile && (
             <Meta icon="cube" label={t("chat.modello")} title={t("chat.profilo", { name: profile.name, runtime_id: profile.runtime_id, p: profile.model || "nessun modello" })}>
               {simple
-                ? <span className="ws-meta-text">{profile.name}</span>
+                ? <span className="ws-meta-text">{role ?? profile.name}</span>
                 : <Link className="ws-meta-text" to="/models/profiles" title={t("chat.gestisci_i_profili_di_inferenza")}>{profile.name}</Link>}
               {profile.model && <span className="mono ws-meta-model">{profile.model}</span>}
             </Meta>

@@ -17,6 +17,7 @@ import { Button, Drawer, Icon, ModalShell, Sheet, SkeletonLines } from "../../sh
 import { useMediaQuery } from "../../shared/lib/useMediaQuery";
 import { useAgents, useProfiles } from "../agents/api";
 import { useModels, useRecommend } from "../models/api";
+import { profileRoleLabel } from "../../shared/lib/modelRole";
 import { autoProfileFromAdvice } from "../models/model/adviser";
 import { canReason } from "../../shared/lib/thinking";
 import { useLessons } from "../learning/api";
@@ -307,7 +308,7 @@ export function ChatView() {
 
       <section className="ws-main" aria-label={tr("chat.workspace")}>
         <ChatHeader
-          session={active} agent={agent} profile={profile} running={conv.running} simple={simple}
+          session={active} agent={agent} profile={profile} role={simple ? profileRoleLabel(profile, models.data ?? []) : undefined} running={conv.running} simple={simple}
           onOpenMenu={simple ? openMenu : undefined} sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
           inspectorOpen={inspectorVisible} onToggleInspector={toggleInspector} onOpenWorktree={panel.show} onOpenBrowser={browserButton}
           browserLive={browser ? { open: browserShown, onToggle: toggleBrowser, status: shortStatus(browser), attention: browser.handover !== null && !browserShown, overlay: mode !== "inline" } : undefined}
