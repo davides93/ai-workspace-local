@@ -4,10 +4,6 @@ import { Button, Field, Input, Sheet, Textarea } from "../../shared/ui";
 import { TasksPanel } from "../inbox/components/TasksPanel";
 import { useCreateCollaborator } from "./api";
 import { problem, remoteComputer, toTask } from "./model";
-import { Button, Field, Input, Sheet, Textarea } from "../../shared/ui";
-import { TasksPanel } from "../inbox/components/TasksPanel";
-import { useCreateCollaborator } from "./api";
-import { problem, toTask } from "./model";
 
 import { t } from "../../shared/i18n";
 /**
