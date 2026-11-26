@@ -75,6 +75,11 @@ jobs:
           set -euo pipefail
           export AIW_HOME="$(mktemp -d)"
           aiw=./target/debug/aiw
+          # The state of Docker on this runner, in words, before anything else (a daemon that is off here is a finding, not a mystery).
+          docker version || true
+          docker info >/dev/null 2>&1 || { echo "docker info fallisce, provo ad avviare il servizio"; sudo systemctl start docker || true; sleep 5; }
+          docker info >/dev/null 2>&1 || sudo chmod 666 /var/run/docker.sock || true
+          docker info 2>&1 | head -5
           $aiw containers
           trap '$aiw containers down browser || true' EXIT
           $aiw containers up browser | tee up.txt

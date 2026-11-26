@@ -136,17 +136,15 @@ pub(crate) fn parse_info(s: &str) -> (Option<String>, Option<u32>, Option<u64>, 
 }
 
 fn decide(os: &str, engines: Vec<ContainerEngine>) -> ContainerStatus {
-    // Preference: a running engine with compose (Docker first: it is what OpenBot/OpenDots document), then a running
-    // one without compose, then an installed but stopped one, then nothing.
-    let pick = |f: &dyn Fn(&ContainerEngine) -> bool| engines.iter().find(|e| f(e)).map(|e| e.engine.clone());
-    let (state, engine, hint) = if let Some(e) = pick(&|e| e.running && e.compose) {
-        ("ready", Some(e), "none")
-    } else if let Some(e) = pick(&|e| e.running) {
-        ("compose_missing", Some(e), "install_compose")
-    } else if let Some(e) = pick(&|e| e.installed) {
-        ("engine_stopped", Some(e), "start_docker")
-    } else {
-        ("not_installed", None, "install_docker")
+    // The agent's computer is built on Docker Compose. Podman is listed (so the person can see it was found) but does not decide
+    // the state: `podman compose` hands over to an external provider that needs Podman's socket, and a real run on a Linux
+    // runner failed exactly there. A person with only Podman is told Docker is what is needed, not that it is ready.
+    let docker = engines.iter().find(|e| e.engine == "docker");
+    let (state, engine, hint) = match docker {
+        Some(e) if e.running && e.compose => ("ready", Some(e.engine.clone()), "none"),
+        Some(e) if e.running => ("compose_missing", Some(e.engine.clone()), "install_compose"),
+        Some(e) if e.installed => ("engine_stopped", Some(e.engine.clone()), "start_docker"),
+        _ => ("not_installed", None, "install_docker"),
     };
     ContainerStatus { state: state.into(), engine, hint: hint.into(), engines, os: os.into() }
 }
@@ -230,12 +228,13 @@ mod tests {
     }
 
     #[test]
-    fn running_without_compose_and_podman_fallback() {
+    fn running_without_compose_and_podman_alone() {
         let s = probe_with(
             "linux",
             &mut fake(&[("docker --version", "Docker version 24.0.0, build x"), ("docker info", "24.0.0|2|4294967296|false")]),
         );
         assert_eq!((s.state.as_str(), s.hint.as_str()), ("compose_missing", "install_compose"));
+        // Podman alone is found and described, but it does not make the computer «ready» (Docker Compose is what runs it).
         let s = probe_with(
             "linux",
             &mut fake(&[
@@ -244,8 +243,8 @@ mod tests {
                 ("podman compose version", "podman-compose 1.2"),
             ]),
         );
-        assert_eq!((s.state.as_str(), s.engine.as_deref()), ("ready", Some("podman")));
-        assert_eq!(s.engines[1].rootless, Some(true));
+        assert_eq!((s.state.as_str(), s.engine.as_deref(), s.hint.as_str()), ("not_installed", None, "install_docker"));
+        assert_eq!((s.engines[1].running, s.engines[1].compose, s.engines[1].rootless), (true, true, Some(true)));
     }
 
     #[test]

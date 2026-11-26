@@ -48,8 +48,9 @@ Il requisito è che funzioni su entrambi. Cosa è coperto nel codice, e cosa no:
 - **Fine riga**: Dockerfile e compose si scrivono con `\n` anche se il checkout Windows li ha convertiti in CRLF.
 - **Windows richiede Docker Desktop in modalità container Linux (WSL 2)**; l'immagine è `debian:bookworm-slim` e Chromium di Debian, che esistono per x86-64 e Arm
   (Mac Apple Silicon, Windows Arm).
-- **Podman**: il rilevamento lo riconosce, ma l'avvio del computer è stato scritto per Docker Compose (`ps --format json`, `port`); con solo Podman può non
-  funzionare. Non provato.
+- **Podman non è supportato**: lo riconosciamo e lo mostriamo, ma non rende «pronto» il computer. Una prova reale su un runner Linux con Podman 5.7 e senza
+  demone Docker ha fallito: `podman compose` passa il lavoro a un provider esterno (`docker-compose`) che cerca il socket di Podman e non lo trova. Con solo
+  Podman, `aiw containers up` dice che serve Docker.
 
 CI: i test dei pezzi che cambiano per sistema girano su `windows-latest` e `macos-latest` (job «Contenitori, parti per sistema»), e l'avvio vero (costruzione,
 container, porta del browser, solo loopback) gira su `ubuntu-latest` con un Docker vero (job «Computer dell'agente con Docker vero»). **Su Windows e macOS l'avvio vero non gira in CI**

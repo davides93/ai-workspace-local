@@ -154,8 +154,27 @@ fn real_runner() -> Box<Runner> {
     })
 }
 
+/// Colour codes that compose prints when it thinks it talks to a terminal.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            for n in chars.by_ref() {
+                if n.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// The few lines of a failure worth showing: the last non-empty ones, no longer than a short message.
 fn failure_words(text: &str) -> String {
+    let text = strip_ansi(text);
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     let tail = lines.iter().rev().take(3).rev().copied().collect::<Vec<_>>().join(" · ");
     let t: String = tail.chars().take(300).collect();
@@ -232,7 +251,8 @@ impl Engine {
         if !file.exists() {
             return Ok(out);
         }
-        let engine = engine.map(String::from).or_else(|| aiw_hw::probe_containers().engine).unwrap_or_else(|| "docker".into());
+        // The computer is built on Docker Compose: no other engine is asked.
+        let engine = engine.map(String::from).unwrap_or_else(|| "docker".into());
         out.engine = Some(engine.clone());
         let ps = run(&engine, &compose_args(&project, &file, &["ps", "-a", "--format", "json"]), &[], &dir, T_QUICK);
         let Some(ps) = ps.filter(|p| p.ok) else {
@@ -259,7 +279,11 @@ impl Engine {
         self.agent(agent_id)?;
         let status = self.containers_status().await;
         let Some(engine) = status.engine.clone().filter(|_| status.state == "ready") else {
+            let podman_only = status.state == "not_installed" && status.engines.iter().any(|e| e.engine == "podman" && e.installed);
             return Err(Error::Conflict(match status.state.as_str() {
+                _ if podman_only => {
+                    "Per ora il computer dell'agente funziona solo con Docker: Podman c'è ma non è ancora supportato".into()
+                }
                 "engine_stopped" => "Docker è installato ma spento: avvialo e riprova".into(),
                 "compose_missing" => "manca Docker Compose".into(),
                 "unsupported" => "su questo dispositivo non si possono avviare container".into(),
@@ -307,7 +331,7 @@ impl Engine {
         let file = dir.join("compose.yml");
         ops().lock().unwrap().remove(agent_id);
         if file.exists() {
-            let engine = aiw_hw::probe_containers().engine.unwrap_or_else(|| "docker".into());
+            let engine = "docker".to_string();
             let args = compose_args(&project_name(agent_id), &file, &["down", "--remove-orphans"]);
             let d = dir.clone();
             let r = tokio::task::spawn_blocking(move || real_runner()(&engine, &args, &[], &d, T_QUICK * 3))
@@ -358,6 +382,11 @@ mod tests {
         assert_eq!(parse_port("nonsense"), None);
         assert_eq!(parse_port(""), None);
         assert_eq!(parse_port("127.0.0.1:0"), None);
+    }
+
+    #[test]
+    fn colour_codes_are_dropped_from_a_failure() {
+        assert_eq!(failure_words("\u{1b}[4mpull access denied\u{1b}[0m"), "pull access denied");
     }
 
     #[test]
