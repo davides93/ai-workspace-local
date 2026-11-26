@@ -8,6 +8,7 @@ import { GROUPS, ROUTES, routeHref, type RouteId } from "../routes";
 import { useUiMode } from "../useUiMode";
 import { InboxBadge } from "../../features/inbox/components/InboxBadge";
 import { LanguageSelect } from "../LanguageSelect";
+import { CollaboratorsSheet } from "../../features/collaborators/CollaboratorsSheet";
 import { PrivacyPanel } from "../../features/settings/components/PrivacyPanel";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
@@ -23,6 +24,7 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
   const [theme, setTheme] = useTheme();
   const [mode, setMode] = useUiMode();
   const sections = hasNavigation(ROUTES, mode);
+  const [collab, setCollab] = useState(false);
   const [containers, setContainers] = useState(false);
   const simple = mode === "simple";
   return (
@@ -30,6 +32,12 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
     <Sheet title={sections ? t("shell.altre_sezioni") : t("shell.menu")} onClose={onClose} footer={<KillSwitch variant="sheet" />}>
       <div className="stack stack-lg more-sheet">
         <DeviceChip onNavigate={onClose} />
+        {mode === "simple" && (
+          <button type="button" className="rail-search" onClick={() => setCollab(true)}>
+            <Icon name="sparkle" size={16} />
+            <span>{t("collab.open")}</span>
+          </button>
+        )}
         <button type="button" className="rail-search" onClick={() => { onClose(); onOpenPalette(); }}>
           <Icon name="search" size={16} />
           <span>{t("shell.cerca_e_comandi_2")}</span>
@@ -69,6 +77,7 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
         </div>
       </div>
     </Sheet>
+    {collab && <CollaboratorsSheet onClose={() => setCollab(false)} />}
     {containers && <ContainerSetup onClose={() => setContainers(false)} />}
     </>
   );

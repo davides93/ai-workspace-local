@@ -7,6 +7,7 @@ import { browserIt } from "./messages/it/browser";
 import { capabilitiesIt } from "./messages/it/capabilities";
 import { channelsIt } from "./messages/it/channels";
 import { chatIt } from "./messages/it/chat";
+import { collabIt } from "./messages/it/collab";
 import { commonIt } from "./messages/it/common";
 import { containersIt } from "./messages/it/containers";
 import { devicesIt } from "./messages/it/devices";
@@ -40,6 +41,7 @@ export const it = {
   ...capabilitiesIt,
   ...channelsIt,
   ...chatIt,
+  ...collabIt,
   ...commonIt,
   ...containersIt,
   ...devicesIt,
