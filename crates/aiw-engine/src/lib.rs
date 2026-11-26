@@ -11,7 +11,9 @@ pub mod background;
 pub mod backup;
 mod bgtasks;
 mod browser_live;
+mod browser_view;
 pub use browser_live::{Frame as BrowserFrame, HumanInput as BrowserInput, LiveState as BrowserState};
+pub use browser_view::{ViewRequest as BrowserViewRequest, ViewStatus as BrowserViewStatus};
 pub mod channels;
 mod dataset;
 pub mod defaults;
@@ -206,6 +208,8 @@ pub(crate) struct Inner {
     /// What the settings say about the web search (read by `web_search`).
     pub search: aiw_tools::search::Shared,
     pub browser: Arc<BrowserManager>,
+    /// The yes of the computer to a phone that wants to look at the browser (memory only, see [`browser_view`]).
+    pub(crate) view_grants: std::sync::Mutex<browser_view::ViewGrants>,
     pub native_stt: RwLock<Option<Arc<dyn voice::NativeStt>>>,
     /// One speech synthesis at a time (see [`tts`]).
     pub tts_gate: tokio::sync::Mutex<()>,
@@ -386,6 +390,7 @@ impl Engine {
             connectors,
             search,
             browser,
+            view_grants: Default::default(),
             native_stt: Default::default(),
             tts_gate: Default::default(),
             route_failures: Default::default(),
@@ -788,6 +793,7 @@ impl Engine {
         self.proactive_killed();
         let channels_stopped = self.channels_killed();
         let sidecars = self.0.runtimes.stop_all().await;
+        self.browser_view_revoke_all();
         let browser = self.0.browser.close().await;
         let detail = format!(
             "{} run, {} conferme, {} domande, {} richieste di segreti, {} addestramenti, {} canali, {} sidecar fermati{}",

@@ -2,6 +2,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { PairingScreen } from "../features/pairing/PairingScreen";
 import { ApprovalsCenter } from "../features/approvals/ApprovalsCenter";
 import { AskCenter } from "../features/ask/AskCenter";
+import { ViewRequestPrompt } from "../features/browser/ViewRequestPrompt";
 import { McpElicitationCenter } from "../features/mcp/McpElicitationCenter";
 import { useDownloadsWatcher } from "../features/models/api";
 import { rememberChatSession } from "../shared/lib/navMemory";
@@ -111,6 +112,7 @@ export function App() {
       <TabBar current={current} moreOpen={moreOpen} onMore={() => setMoreOpen(true)} />
       {moreOpen && <MoreSheet current={current} onClose={() => setMoreOpen(false)} onOpenPalette={() => setPaletteOpen(true)} />}
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
+      <ViewRequestPrompt />
       <ToastHost />
     </div>
   );

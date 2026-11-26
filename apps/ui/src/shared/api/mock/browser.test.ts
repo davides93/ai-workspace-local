@@ -245,4 +245,28 @@ describe("the demo of the live view (MockTransport)", () => {
     const api = new MockTransport();
     await expect(api.browserInput({ type: "text", text: "x" })).rejects.toMatchObject({ status: 409, message: "prima prendi il controllo del browser" });
   });
+
+  it("a phone looks only after the computer says yes, and the computer can end it", async () => {
+    const api = new MockTransport();
+    await expect(api.browserViewFrame()).rejects.toMatchObject({ status: 403 });
+    expect(await api.browserViewRequest()).toMatchObject({ state: "pending" });
+    await expect(api.browserViewFrame()).rejects.toMatchObject({ status: 403 });
+    const { requests } = await api.browserViewRequests();
+    expect(requests).toHaveLength(1);
+    await api.browserViewDecide(requests[0].id, true);
+    expect(await api.browserViewStatus()).toMatchObject({ state: "granted" });
+    await expect(api.browserViewFrame()).resolves.toBeDefined(); // the demo browser is not open without a task: `{ running: false }`, not a 403
+    expect((await api.browserViewRequests()).viewers).toHaveLength(1);
+    await api.browserViewRevoke();
+    await expect(api.browserViewFrame()).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("a phone cannot answer its own request", async () => {
+    const api = new MockTransport();
+    await api.browserViewRequest();
+    api.secretScope = "device";
+    await expect(api.browserViewRequests()).rejects.toMatchObject({ status: 403 });
+    await expect(api.browserViewDecide("vw_demo", true)).rejects.toMatchObject({ status: 403 });
+    await expect(api.browserViewRevoke()).rejects.toMatchObject({ status: 403 });
+  });
 });

@@ -202,3 +202,51 @@ async fn nothing_the_person_types_or_sees_reaches_the_logs_and_the_addresses_in_
     assert!(text.contains("request blocked by network policy") && text.contains("127.0.0.1:9/cb"), "the block is logged:\n{text}");
     drop(e);
 }
+
+#[tokio::test]
+async fn a_phone_looks_only_after_the_computer_says_yes_and_only_looks() {
+    let (app, e, _fake, _a, _b) = running().await;
+    let dev = token(&e, "device");
+    let other = token(&e, "device");
+    let gw = token(&e, "gateway");
+
+    // Without a yes: no frame; the state says there is no request. A gateway token is no device.
+    let (st, v) = as_token(&app, &dev, "GET", "/api/browser/view", None).await;
+    assert_eq!((st, v["state"].as_str()), (StatusCode::OK, Some("none")), "{v}");
+    let (st, v) = as_token(&app, &dev, "GET", "/api/browser/view/frame", None).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(as_token(&app, &gw, "POST", "/api/browser/view/request", None).await.0, StatusCode::FORBIDDEN);
+
+    // Asking is not a yes, and the phone cannot answer for itself: the answering routes are the computer's.
+    let (st, v) = as_token(&app, &dev, "POST", "/api/browser/view/request", None).await;
+    assert_eq!((st, v["state"].as_str()), (StatusCode::OK, Some("pending")), "{v}");
+    assert_eq!(as_token(&app, &dev, "GET", "/api/browser/view/frame", None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(as_token(&app, &dev, "GET", "/api/browser/view/requests", None).await.0, StatusCode::FORBIDDEN);
+    let (_, v) = dispatch(app.clone(), "GET", "/api/browser/view/requests", None).await;
+    let id = v["requests"][0]["id"].as_str().expect("the computer sees the request").to_string();
+    assert_eq!(as_token(&app, &dev, "POST", &format!("/api/browser/view/requests/{id}/approve"), None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(as_token(&app, &dev, "POST", "/api/browser/view/revoke", None).await.0, StatusCode::FORBIDDEN);
+
+    // The computer says yes: this phone gets frames, another phone does not, and nothing else opens.
+    let (st, _) = dispatch(app.clone(), "POST", &format!("/api/browser/view/requests/{id}/approve"), None).await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, v) = as_token(&app, &dev, "GET", "/api/browser/view/frame", None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(v["image"].as_str().is_some_and(|i| i.starts_with("data:image/jpeg;base64,")), "{v}");
+    assert_eq!(as_token(&app, &other, "GET", "/api/browser/view/frame", None).await.0, StatusCode::FORBIDDEN);
+    for (method, path, body) in [
+        ("GET", "/api/browser", None),
+        ("GET", "/api/browser/frame", None),
+        ("POST", "/api/browser/control", Some(json!({"action": "take"}))),
+        ("POST", "/api/browser/input", Some(json!({"type": "text", "text": "x"}))),
+        ("POST", "/api/browser/dialog", Some(json!({"action": "accept"}))),
+    ] {
+        assert_eq!(as_token(&app, &dev, method, path, body).await.0, StatusCode::FORBIDDEN, "{method} {path}");
+    }
+    assert_eq!(e.browser_state().await.control.mode, aiw_tools::browser::Mode::Agent, "looking does not move the agent");
+
+    // «Basta» on the computer ends it at once.
+    let (st, _) = dispatch(app.clone(), "POST", "/api/browser/view/revoke", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(as_token(&app, &dev, "GET", "/api/browser/view/frame", None).await.0, StatusCode::FORBIDDEN);
+}

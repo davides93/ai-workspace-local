@@ -119,6 +119,11 @@ const RULES: &[(&str, &str, Required)] = &[
     // The live view of the controlled browser and the human takeover: the page may show a logged-in session (mail, bank),
     // so the owner only. A paired device does not see it nor drive it (the questions it may answer, above, do not give it).
     ("*", "/api/browser", FULL),
+    // The one exception: a phone may ASK to look and, once the computer said yes (a `full` route below), get frames of
+    // the page. Read-only: no input, no control, no dialog. See `aiw_engine::browser_view`.
+    ("GET", "/api/browser/view", DEVICE),
+    ("POST", "/api/browser/view/request", DEVICE),
+    ("GET", "/api/browser/view/frame", DEVICE),
     ("*", "/api/browser/**", FULL),
     ("*", "/api/proposals", DEVICE),
     ("*", "/api/proposals/**", DEVICE),
