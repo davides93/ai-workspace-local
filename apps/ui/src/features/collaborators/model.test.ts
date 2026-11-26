@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MAX_TASK_INSTRUCTION_CHARS } from "../../shared/api/types";
+import { problem, remoteComputer, toTask } from "./model";
 import { problem, toTask } from "./model";
 
 describe("collaborators model", () => {
@@ -14,5 +15,11 @@ describe("collaborators model", () => {
   it("builds the task, leaving the title to the engine when no name is given", () => {
     expect(toTask({ name: "  Posta ", job: " Leggi la posta " })).toEqual({ instruction: "Leggi la posta", title: "Posta" });
     expect(toTask({ name: " ", job: "Leggi" })).toEqual({ instruction: "Leggi" });
+  });
+  it("names the computer only when the work runs on another one", () => {
+    const device = { name: "MacBook di Dave" } as never;
+    expect(remoteComputer({ mode: "daemon", device })).toBe("MacBook di Dave");
+    expect(remoteComputer({ mode: "embedded", device })).toBeUndefined();
+    expect(remoteComputer(undefined)).toBeUndefined();
   });
 });

@@ -5,6 +5,7 @@ export const collabEn: Record<keyof typeof collabIt, string> = {
   "collab.open": "Your collaborators",
   "collab.title": "Your collaborators",
   "collab.intro": "A collaborator works for you even when you are away. Say what it should do: if it needs your yes before acting, it asks you here.",
+  "collab.intro_remote": "These collaborators work on your computer “{device}”: the phone shows how they are doing and tells you when they need your yes. The computer has to stay on and reachable.",
   "collab.name": "Name (optional)",
   "collab.name_placeholder": "For example: Morning mail",
   "collab.job": "What it should do",

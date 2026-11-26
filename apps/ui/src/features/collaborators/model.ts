@@ -1,3 +1,4 @@
+import { MAX_TASK_INSTRUCTION_CHARS, type SystemInfo, type TaskCreate } from "../../shared/api/types";
 import { MAX_TASK_INSTRUCTION_CHARS, type TaskCreate } from "../../shared/api/types";
 
 export type CollaboratorProblem = "no_job" | "too_long";
@@ -20,4 +21,9 @@ export function problem(d: CollaboratorDraft): CollaboratorProblem | undefined {
 export function toTask(d: CollaboratorDraft): TaskCreate {
   const name = d.name.trim();
   return { instruction: d.job.trim(), ...(name ? { title: name.slice(0, 60) } : {}) };
+}
+
+/** Name of the computer the work runs on when this screen talks to another one (the phone paired with the desktop); nothing when it is this device. */
+export function remoteComputer(system: Pick<SystemInfo, "mode" | "device"> | undefined): string | undefined {
+  return system?.mode === "daemon" ? system.device.name : undefined;
 }
