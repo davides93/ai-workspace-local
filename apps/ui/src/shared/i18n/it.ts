@@ -8,6 +8,7 @@ import { capabilitiesIt } from "./messages/it/capabilities";
 import { channelsIt } from "./messages/it/channels";
 import { chatIt } from "./messages/it/chat";
 import { commonIt } from "./messages/it/common";
+import { containersIt } from "./messages/it/containers";
 import { devicesIt } from "./messages/it/devices";
 import { documentsIt } from "./messages/it/documents";
 import { evalsIt } from "./messages/it/evals";
@@ -40,6 +41,7 @@ export const it = {
   ...channelsIt,
   ...chatIt,
   ...commonIt,
+  ...containersIt,
   ...devicesIt,
   ...documentsIt,
   ...evalsIt,
