@@ -21,6 +21,103 @@ pub fn builtin_catalog() -> Vec<CatalogModel> {
     serde_json::from_str(include_str!("../catalog/models.json")).expect("catalog JSON is valid")
 }
 
+/// Name of the file in the data folder where the person (or a later update) adds models to the catalog.
+pub const CATALOG_OVERLAY_FILE: &str = "catalog-overlay.json";
+
+/// What an overlay did: how many entries were added, how many replaced a built-in one, and why the others were skipped.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct OverlayReport {
+    pub added: usize,
+    pub replaced: usize,
+    pub skipped: Vec<String>,
+}
+
+/// The built-in catalog with the overlay file merged in (missing file: the built-in catalog alone).
+/// Never fails: a broken file or entry is reported and left out, the rest still applies.
+pub fn catalog_with_overlay(file: Option<&std::path::Path>) -> (Vec<CatalogModel>, OverlayReport) {
+    let base = builtin_catalog();
+    let Some(file) = file else { return (base, OverlayReport::default()) };
+    match std::fs::read_to_string(file) {
+        Ok(text) => merge_overlay(base, &text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (base, OverlayReport::default()),
+        Err(e) => (base, OverlayReport { skipped: vec![format!("{}: {e}", file.display())], ..Default::default() }),
+    }
+}
+
+/// Merges a JSON array of catalog entries into `base`: an entry with a known id replaces it, a new id is appended.
+/// Only downloadable Hugging Face entries are accepted (system models come from the operating system, not from a file),
+/// and each is checked on its own so that one bad entry does not cost the others.
+pub fn merge_overlay(mut base: Vec<CatalogModel>, json: &str) -> (Vec<CatalogModel>, OverlayReport) {
+    let mut report = OverlayReport::default();
+    let items: Vec<serde_json::Value> = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            report.skipped.push(format!("file non valido: {e}"));
+            return (base, report);
+        }
+    };
+    for (i, item) in items.into_iter().enumerate() {
+        let entry: CatalogModel = match serde_json::from_value(item) {
+            Ok(m) => m,
+            Err(e) => {
+                report.skipped.push(format!("voce {}: {e}", i + 1));
+                continue;
+            }
+        };
+        if let Err(why) = check_overlay_entry(&entry) {
+            report.skipped.push(format!("{}: {why}", if entry.id.is_empty() { format!("voce {}", i + 1) } else { entry.id.clone() }));
+            continue;
+        }
+        match base.iter().position(|c| c.id == entry.id) {
+            Some(at) if matches!(base[at].source, ModelSource::System { .. }) => {
+                report.skipped.push(format!("{}: è un modello di sistema", entry.id))
+            }
+            Some(at) => {
+                base[at] = entry;
+                report.replaced += 1;
+            }
+            None => {
+                base.push(entry);
+                report.added += 1;
+            }
+        }
+    }
+    (base, report)
+}
+
+fn check_overlay_entry(c: &CatalogModel) -> Result<(), String> {
+    let safe =
+        |s: &str, extra: &str| !s.is_empty() && s.len() <= 128 && s.chars().all(|ch| ch.is_ascii_alphanumeric() || extra.contains(ch));
+    if !safe(&c.id, "._-") {
+        return Err("id non valido (lettere, cifre, . _ -)".into());
+    }
+    if c.name.trim().is_empty() || c.family.trim().is_empty() || c.publisher.trim().is_empty() || c.license.trim().is_empty() {
+        return Err("mancano nome, famiglia, editore o licenza".into());
+    }
+    if runtimes_for_format(&c.format).is_empty() {
+        return Err(format!("formato sconosciuto `{}`", c.format));
+    }
+    match &c.source {
+        ModelSource::Hf { repo, file } => {
+            let mut parts = repo.split('/');
+            let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+                return Err("il repository deve essere `autore/nome`".into());
+            };
+            if !safe(owner, "._-") || !safe(name, "._-") || owner.starts_with('.') || name.starts_with('.') {
+                return Err("nome del repository non valido".into());
+            }
+            if file.starts_with('/') || file.contains("..") || file.contains('\\') {
+                return Err("percorso del file non valido".into());
+            }
+        }
+        ModelSource::System { .. } => return Err("i modelli di sistema non si aggiungono da un file".into()),
+    }
+    if c.size_bytes == 0 || c.params_b <= 0.0 || c.context_length == 0 || c.min_memory_mb == 0 {
+        return Err("dimensione, parametri, contesto e memoria minima devono essere maggiori di zero".into());
+    }
+    Ok(())
+}
+
 /// Runtimes able to load a given format (ordered by preference).
 ///
 /// Only a fallback for callers without a runtime registry: the engine derives the real answer
@@ -254,5 +351,51 @@ mod tests {
         assert_eq!(parse_params("8x7B"), Some(7.0));
         assert_eq!(parse_params("600M"), Some(0.6));
         assert_eq!(parse_params("abc"), None);
+    }
+
+    fn entry(id: &str) -> serde_json::Value {
+        let mut v =
+            serde_json::to_value(builtin_catalog().into_iter().find(|c| matches!(c.source, ModelSource::Hf { .. })).unwrap()).unwrap();
+        v["id"] = id.into();
+        v["name"] = id.into();
+        v
+    }
+
+    #[test]
+    fn overlay_adds_replaces_and_skips_one_by_one() {
+        let known = builtin_catalog().into_iter().find(|c| matches!(c.source, ModelSource::Hf { .. })).unwrap();
+        let mut replacing = entry(&known.id);
+        replacing["name"] = "Rinominato".into();
+        let mut bad_repo = entry("brutto");
+        bad_repo["source"] = serde_json::json!({ "kind": "hf", "repo": "../etc", "file": "x.gguf" });
+        let mut zero = entry("senza-peso");
+        zero["size_bytes"] = 0.into();
+        let json = serde_json::to_string(&vec![entry("nuovo-1"), replacing, bad_repo, zero]).unwrap();
+        let before = builtin_catalog().len();
+        let (all, report) = merge_overlay(builtin_catalog(), &json);
+        assert_eq!((report.added, report.replaced, report.skipped.len()), (1, 1, 2), "{report:?}");
+        assert_eq!(all.len(), before + 1);
+        assert_eq!(all.iter().find(|c| c.id == known.id).unwrap().name, "Rinominato");
+    }
+
+    #[test]
+    fn overlay_never_replaces_a_system_model_or_adds_one() {
+        let system = builtin_catalog().into_iter().find(|c| matches!(c.source, ModelSource::System { .. }));
+        if let Some(sys) = system {
+            let mut v = entry(&sys.id);
+            v["source"] = serde_json::json!({ "kind": "hf", "repo": "a/b", "file": "x.gguf" });
+            let (all, report) = merge_overlay(builtin_catalog(), &serde_json::to_string(&vec![v]).unwrap());
+            assert_eq!(report.skipped.len(), 1);
+            assert!(matches!(all.iter().find(|c| c.id == sys.id).unwrap().source, ModelSource::System { .. }));
+        }
+    }
+
+    #[test]
+    fn broken_overlay_leaves_the_built_in_catalog_alone() {
+        let (all, report) = merge_overlay(builtin_catalog(), "{ non json");
+        assert_eq!(all.len(), builtin_catalog().len());
+        assert_eq!(report.skipped.len(), 1);
+        let none = std::path::Path::new("/nonexistent/aiw/catalog-overlay.json");
+        assert_eq!(catalog_with_overlay(Some(none)).1, OverlayReport::default());
     }
 }

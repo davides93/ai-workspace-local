@@ -939,7 +939,7 @@ impl Engine {
     pub(crate) fn live_recommendations(&self) -> aiw_core::api::Recommendations {
         let local = self.live_local_models();
         let avail = defaults::Availability::from_runtimes(&self.0.runtimes.list());
-        adviser::advise(&self.device(), &local, &aiw_models::builtin_catalog(), &avail)
+        adviser::advise(&self.device(), &local, &self.catalog_entries(), &avail)
     }
     /// What `auto:<task>` stands for right now. Looks at the models already known (no disk scan:
     /// this runs at the start of every run) and the runtimes' current state.

@@ -141,6 +141,9 @@ impl Engine {
 
     // ------------------------------------------------------------------ search and remote models
     pub async fn search_models(&self, provider: &str, q: SearchQuery) -> Result<SearchPage> {
+        if provider == "catalog" {
+            self.catalog_entries();
+        }
         self.0.hub.search(provider, &q).await
     }
 
@@ -236,7 +239,7 @@ impl Engine {
         let os = self.device().os;
         let runtimes = self.0.runtimes.list();
         let compatible = runtime_compat(&runtimes, &os, "system");
-        for model in aiw_models::builtin_catalog() {
+        for model in self.catalog_entries() {
             let ModelSource::System { runtime } = model.source else { continue };
             let Some(compat) = compatible.iter().find(|c| c.id == runtime && c.available) else { continue };
             found.push(LocalModel {
@@ -265,12 +268,23 @@ impl Engine {
         self.rescan_models()
     }
 
+    /// The built-in catalog plus the person's `catalog-overlay.json`, so the adviser and the router see models that came out
+    /// after this build. A broken file or entry is left out (the rest applies). The download side learns the same entries.
+    pub(crate) fn catalog_entries(&self) -> Vec<CatalogModel> {
+        let (entries, report) = aiw_models::catalog_with_overlay(Some(&self.0.dirs.root.join(aiw_models::CATALOG_OVERLAY_FILE)));
+        for why in &report.skipped {
+            tracing::warn!("catalog-overlay.json: {why}");
+        }
+        self.0.hub.catalog().set_entries(entries.clone());
+        entries
+    }
+
     pub fn catalog(&self) -> Vec<CatalogModel> {
         let device = self.device();
         let infos = self.0.runtimes.list();
         let index = aiw_models::installed_index(&self.0.models_dir);
         let local = self.0.models.read().unwrap().clone();
-        aiw_models::builtin_catalog()
+        self.catalog_entries()
             .into_iter()
             .map(|mut c| {
                 let (fit, detail) = aiw_models::fit(&c, &device);
@@ -303,6 +317,7 @@ impl Engine {
                 (format!("{provider}:{} ({vid})", detail.model.id), self.0.hub.prepare(&provider, &detail, &vid)?)
             }
             PullRequest::Catalog { id } => {
+                self.catalog_entries();
                 self.0.hub.catalog().target(&id)?;
                 let detail = self.remote_model("catalog", &id, None).await?;
                 let vid = pick_variant(&detail, "")?;
@@ -920,6 +935,26 @@ mod tests {
         record(&models.join("hf/Qwen/Qwen3-4B-GGUF"), "Qwen/Qwen3-4B-GGUF", "Q4_K_M", "gguf", &["Qwen3-4B-Q4_K_M.gguf"]);
         e.models();
         assert!(e.catalog().iter().find(|c| c.id == "qwen3-4b").unwrap().installed);
+    }
+
+    #[tokio::test]
+    async fn catalog_overlay_in_the_data_folder_adds_models_the_hub_can_pull() {
+        let d = tempfile::tempdir().unwrap();
+        let e = engine_in(d.path()).await;
+        let mut v = serde_json::to_value(aiw_models::builtin_catalog().into_iter().find(|c| c.id == "qwen3-0.6b").unwrap()).unwrap();
+        v["id"] = "nuovo-leggero".into();
+        v["name"] = "Nuovo leggero".into();
+        v["source"] = serde_json::json!({ "kind": "hf", "repo": "acme/nuovo-GGUF", "file": "nuovo-Q4_K_M.gguf" });
+        std::fs::write(
+            d.path().join(aiw_models::CATALOG_OVERLAY_FILE),
+            serde_json::to_string(&vec![v, serde_json::json!({ "id": "rotto" })]).unwrap(),
+        )
+        .unwrap();
+        let cat = e.catalog();
+        let added = cat.iter().find(|c| c.id == "nuovo-leggero").expect("overlay entry is listed");
+        assert!(added.downloadable && !added.runtime_compat.is_empty());
+        assert!(!cat.iter().any(|c| c.id == "rotto"));
+        assert_eq!(e.0.hub.catalog().target("nuovo-leggero").unwrap(), ("acme/nuovo-GGUF".to_string(), "nuovo-Q4_K_M.gguf".to_string()));
     }
 
     #[tokio::test]
