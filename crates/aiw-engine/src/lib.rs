@@ -595,6 +595,16 @@ impl Engine {
     pub fn subscribe(&self) -> broadcast::Receiver<RunEventMsg> {
         self.0.bus.subscribe()
     }
+    /// Docker/Podman on this computer: installed, running, with compose. Read-only (nothing is installed, started or
+    /// pulled); the probe launches the engines' command line with timeouts, so it runs off the async threads.
+    pub async fn containers_status(&self) -> aiw_core::api::ContainerStatus {
+        tokio::task::spawn_blocking(aiw_hw::probe_containers).await.unwrap_or_else(|_| aiw_core::api::ContainerStatus {
+            state: "not_installed".into(),
+            hint: "install_docker".into(),
+            os: aiw_hw::normalized_os(),
+            ..Default::default()
+        })
+    }
     pub fn device(&self) -> DeviceProfile {
         self.0.device.read().unwrap().clone()
     }

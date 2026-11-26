@@ -7,7 +7,10 @@
 use aiw_core::api::{Accelerator, CpuInfo, DeviceProfile};
 use std::time::Duration;
 
+mod containers;
 mod probes;
+
+pub use containers::{probe_containers, probe_with as probe_containers_with};
 
 /// Detects the current device. Takes up to a few seconds the first time (external tools).
 pub fn probe() -> DeviceProfile {

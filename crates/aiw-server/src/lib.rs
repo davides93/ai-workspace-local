@@ -244,6 +244,7 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
     let st = AppState { engine, agui: Default::default() };
     let api = Router::new()
         .route("/api/system", get(system))
+        .route("/api/containers", get(containers))
         .route("/api/kill", post(kill))
         // Read-only on purpose: a folder is added by the person in the macOS panel, through the shell
         // (see `aiw_engine::Engine::add_folders`), never through a route.
@@ -513,6 +514,11 @@ async fn method_not_allowed() -> Response {
 async fn system(State(s): State<AppState>, req: Request) -> ApiResult<SystemInfo> {
     // The pairing code is only shown to the device itself.
     ok(s.engine.system(is_local(&req)))
+}
+/// Docker/Podman of this computer, read-only. A paired phone reads it too: it only says whether the computer can host the
+/// agents' containers.
+async fn containers(State(s): State<AppState>) -> ApiResult<aiw_core::api::ContainerStatus> {
+    ok(s.engine.containers_status().await)
 }
 async fn folders(State(s): State<AppState>) -> ApiResult<aiw_core::folders::FoldersInfo> {
     ok(s.engine.folders())

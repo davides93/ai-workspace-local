@@ -37,6 +37,12 @@ enum Cmd {
     },
     /// Mostra hardware rilevato e stato dei runtime
     Doctor,
+    /// Controlla se Docker o Podman sono installati e attivi (sola lettura: non installa e non avvia nulla)
+    Containers {
+        /// Stampa il JSON invece del testo
+        #[arg(long)]
+        json: bool,
+    },
     /// Gestisce i runtime di inferenza
     Runtimes {
         #[command(subcommand)]
@@ -700,6 +706,16 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Doctor => doctor(&engine).await,
+        Cmd::Containers { json } => {
+            let st = engine.containers_status().await;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&st)?);
+            } else {
+                for l in containers_lines(&st) {
+                    println!("{l}");
+                }
+            }
+        }
         Cmd::Runtimes { cmd } => match cmd.unwrap_or(RtCmd::List) {
             RtCmd::List => {
                 for r in engine.runtimes() {
@@ -1870,6 +1886,34 @@ async fn doctor(engine: &Engine) {
     }
     println!("\nModelli locali: {}", engine.models().len());
     println!("Workspace: {}", engine.workspace_root().display());
+}
+
+/// The text of `aiw containers`: one line per engine and the next step in words.
+fn containers_lines(st: &aiw_core::api::ContainerStatus) -> Vec<String> {
+    let mut out = vec![];
+    for e in &st.engines {
+        let state = match (e.installed, e.running) {
+            (false, _) => "non installato".to_string(),
+            (true, false) => "installato, non attivo".to_string(),
+            (true, true) => format!(
+                "attivo{}{}",
+                if e.compose { ", con compose" } else { ", senza compose" },
+                match (e.cpus, e.memory_mb) {
+                    (Some(c), Some(m)) => format!(" · {c} CPU · {:.1} GB", m as f64 / 1024.0),
+                    _ => String::new(),
+                }
+            ),
+        };
+        out.push(format!("{:<7} {}{}", e.engine, e.version.as_deref().map(|v| format!("{v} · ")).unwrap_or_default(), state));
+    }
+    out.push(match st.hint.as_str() {
+        "none" if st.state == "ready" => format!("Pronto: si usa {}.", st.engine.as_deref().unwrap_or("?")),
+        "none" => "Nessun contenitore su questo dispositivo.".into(),
+        "start_docker" => "Avvia Docker Desktop (o la macchina di Podman) e riprova.".into(),
+        "install_compose" => "Manca «compose»: installa il plugin Docker Compose.".into(),
+        _ => "Docker non c'è: installa Docker Desktop (macOS/Windows) o Docker Engine/Podman (Linux).".into(),
+    });
+    out
 }
 
 fn aiw_engine_sandbox() -> &'static str {

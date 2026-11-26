@@ -63,6 +63,7 @@ async fn the_scope_matrix_over_the_real_router() {
     // (method, path, body, who may: owner over TLS, device, gateway, gateway+mcp, owner over plain HTTP from the LAN)
     let rows: &[(&str, &str, Option<Value>, [bool; 5])] = &[
         ("GET", "/api/system", None, [true, true, false, false, true]),
+        ("GET", "/api/containers", None, [true, true, false, false, true]),
         ("GET", "/api/sessions", None, [true, true, false, false, true]),
         ("POST", "/api/sessions", Some(json!({"agent_id": "planner"})), [true, true, false, false, true]),
         ("GET", "/api/approvals", None, [true, true, false, false, true]),

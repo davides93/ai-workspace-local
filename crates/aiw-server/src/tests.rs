@@ -41,6 +41,20 @@ pub(crate) async fn app_on(device: Option<DeviceProfile>) -> (Router, Engine, te
     (router(e.clone(), None), e, data, ws)
 }
 
+/// `GET /api/containers` always answers with a state the UI knows, whatever is installed on the machine running the test.
+#[tokio::test]
+async fn containers_status_has_a_known_state() {
+    let (app, _e, _d, _w) = app().await;
+    let (st, body) = dispatch(app, "GET", "/api/containers", None).await;
+    assert_eq!(st, 200, "{body}");
+    let state = body["state"].as_str().unwrap();
+    assert!(["ready", "compose_missing", "engine_stopped", "not_installed"].contains(&state), "{body}");
+    let hint = body["hint"].as_str().unwrap();
+    assert!(["none", "install_docker", "start_docker", "install_compose"].contains(&hint), "{body}");
+    assert_eq!(body["engines"].as_array().unwrap().len(), 2);
+    assert!(body["os"].is_string());
+}
+
 #[tokio::test]
 async fn rest_run_and_gateway_roundtrip() {
     let (app, e, _d, _w) = app().await;

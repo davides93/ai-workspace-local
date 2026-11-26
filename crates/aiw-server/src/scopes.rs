@@ -56,6 +56,7 @@ const RULES: &[(&str, &str, Required)] = &[
     ("POST", "/agui/*", DEVICE),
     // System.
     ("GET", "/api/system", DEVICE),
+    ("GET", "/api/containers", DEVICE),
     // The folders of this computer handed to the agents: paths of this computer, so the owner only. Read-only:
     // a folder is added in the macOS panel by the shell, there is no route that does it.
     ("*", "/api/folders", FULL),
