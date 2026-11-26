@@ -82,14 +82,15 @@ fn docker(r: &mut dyn FnMut(&str, &[&str]) -> Option<String>) -> ContainerEngine
     let Some(v) = r("docker", &["--version"]) else { return e };
     e.installed = true;
     e.version = parse_version(&v);
-    if let Some(info) = r("docker", &["info", "--format", "{{.ServerVersion}}|{{.NCPU}}|{{.MemTotal}}|{{.Host.Security.Rootless}}"]) {
-        e.running = true;
+    if let Some(info) = r("docker", &["info", "--format", "{{.ServerVersion}}|{{.NCPU}}|{{.MemTotal}}|{{.SecurityOptions}}"]) {
         let (server, cpus, mem, rootless) = parse_info(&info);
+        // An engine that is not there can still print the client's half of `info`: running means it named its own version.
+        e.running = server.is_some();
         e.version = server.or(e.version);
         e.cpus = cpus;
         e.memory_mb = mem;
         e.rootless = rootless;
-        e.compose = r("docker", &["compose", "version", "--short"]).is_some();
+        e.compose = e.running && r("docker", &["compose", "version", "--short"]).is_some();
     }
     e
 }
@@ -102,13 +103,14 @@ fn podman(r: &mut dyn FnMut(&str, &[&str]) -> Option<String>) -> ContainerEngine
     if let Some(info) =
         r("podman", &["info", "--format", "{{.Version.Version}}|{{.Host.CPUs}}|{{.Host.MemTotal}}|{{.Host.Security.Rootless}}"])
     {
-        e.running = true;
         let (server, cpus, mem, rootless) = parse_info(&info);
+        // An engine that is not there can still print the client's half of `info`: running means it named its own version.
+        e.running = server.is_some();
         e.version = server.or(e.version);
         e.cpus = cpus;
         e.memory_mb = mem;
         e.rootless = rootless;
-        e.compose = r("podman", &["compose", "version"]).is_some();
+        e.compose = e.running && r("podman", &["compose", "version"]).is_some();
     }
     e
 }
@@ -127,9 +129,12 @@ pub(crate) fn parse_info(s: &str) -> (Option<String>, Option<u32>, Option<u64>, 
     let version = f.next().filter(|v| !v.is_empty() && !v.contains("no value")).map(String::from);
     let cpus = f.next().and_then(|v| v.parse::<u32>().ok()).filter(|n| *n > 0);
     let mem = f.next().and_then(|v| v.parse::<u64>().ok()).filter(|n| *n > 0).map(|b| b / (1024 * 1024));
+    // Podman answers `true`/`false`; Docker has no such field and lists its security options (`[name=seccomp,profile=builtin
+    // name=rootless]`): rootless is in the list or it is not.
     let rootless = f.next().and_then(|v| match v {
         "true" => Some(true),
         "false" => Some(false),
+        v if v.starts_with('[') => Some(v.contains("name=rootless")),
         _ => None,
     });
     (version, cpus, mem, rootless)
@@ -167,6 +172,9 @@ mod tests {
         assert_eq!(parse_version("command not found"), None);
         assert_eq!(parse_info("27.3.1|8|8217579520|false\n"), (Some("27.3.1".into()), Some(8), Some(7836), Some(false)));
         assert_eq!(parse_info("<no value>||0|<no value>"), (None, None, None, None));
+        // What `docker info` prints for the security options: a list, rootless when it names it.
+        assert_eq!(parse_info("27.3.1|8|8217579520|[name=seccomp,profile=builtin name=cgroupns]").3, Some(false));
+        assert_eq!(parse_info("27.3.1|8|8217579520|[name=seccomp,profile=builtin name=rootless]").3, Some(true));
     }
 
     #[test]
@@ -218,7 +226,7 @@ mod tests {
             "linux",
             &mut fake(&[
                 ("docker --version", "Docker version 27.3.1, build x"),
-                ("docker info", "27.3.1|8|8217579520|false"),
+                ("docker info", "27.3.1|8|8217579520|[name=seccomp,profile=builtin]"),
                 ("docker compose version", "2.29.7"),
             ]),
         );
