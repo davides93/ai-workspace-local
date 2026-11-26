@@ -457,6 +457,8 @@ export interface CatalogModel {
   downloadable: boolean;
   /** How well it suits each task, 0 (not suited) to 3 (very good). */
   suitability?: TaskScores;
+  /** Licence allows commercial use: false for CC BY-NC weights, absent when the entry does not say. */
+  commercial_use?: boolean;
 }
 
 export interface TaskScores {
