@@ -1,5 +1,4 @@
 import { MAX_TASK_INSTRUCTION_CHARS, type SystemInfo, type TaskCreate } from "../../shared/api/types";
-import { MAX_TASK_INSTRUCTION_CHARS, type TaskCreate } from "../../shared/api/types";
 
 export type CollaboratorProblem = "no_job" | "too_long";
 
