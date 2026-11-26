@@ -1,7 +1,7 @@
 /* AI Workspace Local — design tokens
    Layout concept: an instrument rack. A fixed left rail of "modules" (or a bottom bar on phones),
    a working surface in the middle, and an inspector that reads like a device status panel.
-   Accent = amber status LED. Neutrals = slate with a slight green bias.
+   Accent = sky blue (azzurro). Neutrals = slate with a slight blue bias. `info` is indigo so it never reads as the accent.
 
    Themes: light is the base; dark is ONE block keyed on [data-theme="dark"]. The theme module
    (shared/lib/theme.ts) always resolves "system" to light or dark and writes it to <html>, so no
@@ -12,19 +12,19 @@
 :root {
   color-scheme: light;
 
-  --bg: #f3f4f1;
+  --bg: #f2f6f9;
   --surface: #ffffff;
-  --surface-2: #ebede8;
-  --surface-3: #e1e4dd;
-  --line: #d6dad2;
-  --line-strong: #b9bfb5;
-  --fg: #171a18;
-  --fg-muted: #4c544d;
-  --fg-faint: #5f675f;
-  --accent: #c77700;
-  --accent-ink: #8a4f00;
-  --accent-soft: #fbe8c8;
-  --on-accent: #1d1200;
+  --surface-2: #e8eff4;
+  --surface-3: #dce6ee;
+  --line: #cfdbe5;
+  --line-strong: #aebfce;
+  --fg: #14202b;
+  --fg-muted: #44566a;
+  --fg-faint: #566a7e;
+  --accent: #1d70a8;
+  --accent-ink: #135a8a;
+  --accent-soft: #d9ebf7;
+  --on-accent: #ffffff;
   --ok: #1a6f43;
   --ok-soft: #dcefe3;
   --warn: #8a5800;
@@ -32,9 +32,9 @@
   --crit: #b3261e;
   --crit-soft: #f6dcd9;
   --on-crit: #ffffff;
-  --info: #2c5e8a;
-  --info-soft: #dce8f3;
-  --code-bg: #f0f1ec;
+  --info: #4a4fa0;
+  --info-soft: #e4e5f6;
+  --code-bg: #e8eff4;
   /* Syntax colors of the code blocks (comment, string, number, keyword, literal, function, type, property, added, removed): >= 4.5:1 on --code-bg, checked by tokens.test.ts. */
   --tok-com: #5a6258;
   --tok-str: #1a6f43;
@@ -71,9 +71,11 @@
   --space-8: 2.5rem;
 
   /* Radii */
+  --r-xs: 4px;
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
+  --r-pill: 999px;
 
   /* Stacking: content < inspector < banner < overlay < palette < toast */
   --z-inspector: 30;
@@ -97,19 +99,19 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #131617;
-  --surface: #1a1e1f;
-  --surface-2: #212628;
-  --surface-3: #2a3032;
-  --line: #2e3436;
-  --line-strong: #434b4d;
-  --fg: #e7ebe6;
-  --fg-muted: #a1aaa3;
-  --fg-faint: #939d95;
-  --accent: #f2a93b;
-  --accent-ink: #f6bd66;
-  --accent-soft: #3a2a10;
-  --on-accent: #1d1200;
+  --bg: #111a22;
+  --surface: #17222c;
+  --surface-2: #1e2b37;
+  --surface-3: #273846;
+  --line: #2a3a48;
+  --line-strong: #3d5163;
+  --fg: #e6eef5;
+  --fg-muted: #9fb1c2;
+  --fg-faint: #8fa3b5;
+  --accent: #5bb0ea;
+  --accent-ink: #8cc8f2;
+  --accent-soft: #14304a;
+  --on-accent: #04202f;
   --ok: #4cc38a;
   --ok-soft: #173326;
   --warn: #e8b04a;
@@ -117,9 +119,9 @@
   --crit: #f2786e;
   --crit-soft: #3d1c19;
   --on-crit: #1d0a08;
-  --info: #79acd9;
-  --info-soft: #182a3a;
-  --code-bg: #101314;
+  --info: #a3a7ee;
+  --info-soft: #232647;
+  --code-bg: #0d151c;
   --tok-com: #939d95;
   --tok-str: #4cc38a;
   --tok-num: #e8b04a;
@@ -138,6 +140,6 @@
 @media (prefers-color-scheme: dark) {
   html:not([data-theme]) {
     color-scheme: dark;
-    background: #131617;
+    background: #111a22;
   }
 }

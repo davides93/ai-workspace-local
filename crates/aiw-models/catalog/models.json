@@ -246,6 +246,120 @@
   }
  },
  {
+  "id": "inkling-2-mini",
+  "name": "Inkling 2 Mini",
+  "family": "Inkling",
+  "publisher": "Thinking Machines",
+  "description": "Agentico e potente, pensato per girare in locale: MoE da 26B con solo 3,4B attivi per token. Serve un computer con 32 GB o più.",
+  "params_b": 26.4,
+  "active_params_b": 3.4,
+  "format": "gguf",
+  "quant": "UD-Q4_K_M",
+  "size_bytes": 16610544608,
+  "context_length": 1048576,
+  "capabilities": [
+   "chat",
+   "tools",
+   "reasoning"
+  ],
+  "license": "Apache-2.0",
+  "source": {
+   "kind": "hf",
+   "repo": "unsloth/Inkling-2-Mini-GGUF",
+   "file": "Inkling-2-Mini-UD-Q4_K_M.gguf"
+  },
+  "min_memory_mb": 18125,
+  "tags": [
+   "agent",
+   "moe",
+   "desktop",
+   "32gb",
+   "preferred"
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 3,
+   "reasoning": 3,
+   "vision": 0,
+   "embeddings": 0
+  },
+  "commercial_use": true
+ },
+ {
+  "id": "underdog-saluki-27b",
+  "name": "Underdog Saluki 27B",
+  "family": "Underdog",
+  "publisher": "Underdog (ConwayResearch)",
+  "description": "Qwen3.8 27B compresso a 2 bit (meno di 8 GB) e rifinito per il tool calling. Licenza CC BY-NC: solo uso non commerciale.",
+  "params_b": 27,
+  "format": "gguf",
+  "quant": "IQ2-mix",
+  "size_bytes": 7898369152,
+  "context_length": 32768,
+  "capabilities": [
+   "chat",
+   "tools",
+   "reasoning"
+  ],
+  "license": "CC-BY-NC-4.0",
+  "source": {
+   "kind": "hf",
+   "repo": "ConwayResearch/Underdog-Saluki-27B-1.0",
+   "file": "Underdog-Saluki-27B-1.0-IQ2-mix.gguf"
+  },
+  "min_memory_mb": 8985,
+  "tags": [
+   "agent",
+   "non-commercial",
+   "underdog"
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 3,
+   "reasoning": 3,
+   "vision": 0,
+   "embeddings": 0
+  },
+  "commercial_use": false
+ },
+ {
+  "id": "underdog-poodle-4b",
+  "name": "Underdog Poodle 4B",
+  "family": "Underdog",
+  "publisher": "Underdog (ConwayResearch)",
+  "description": "Veloce, 4B su base Qwen3.5, con tool calling. Il file GGUF è una quantizzazione di terzi (mradermacher). Licenza CC BY-NC: solo uso non commerciale.",
+  "params_b": 4.7,
+  "format": "gguf",
+  "quant": "Q4_K_M",
+  "size_bytes": 2783447424,
+  "context_length": 32768,
+  "capabilities": [
+   "chat",
+   "tools"
+  ],
+  "license": "CC-BY-NC-4.0",
+  "source": {
+   "kind": "hf",
+   "repo": "mradermacher/Underdog-Poodle-4B-GGUF",
+   "file": "Underdog-Poodle-4B.Q4_K_M.gguf"
+  },
+  "min_memory_mb": 3619,
+  "tags": [
+   "agent",
+   "fast",
+   "non-commercial",
+   "underdog"
+  ],
+  "suitability": {
+   "chat": 3,
+   "agent": 2,
+   "reasoning": 0,
+   "vision": 0,
+   "embeddings": 0
+  },
+  "commercial_use": false
+ },
+ {
   "id": "gemma-3-4b",
   "name": "Gemma 3 4B",
   "family": "Gemma 3",

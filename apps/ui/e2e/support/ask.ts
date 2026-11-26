@@ -24,7 +24,7 @@ export async function chatWith(page: Page, text: string, opts: OpenOptions & { q
     await expect(page.getByRole("log", { name: /^(Conversazione|Conversation)$/ })).toBeVisible();
   } else {
     await page.getByRole("button", { name: /^(Nuova|New)$/ }).first().click();
-    await expect(page.getByRole("heading", { name: /^(Cosa facciamo, in locale\?|What shall we do, locally\?)$/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /^(Cosa facciamo, in locale\?|What shall we do, locally\?|Cosa vuoi fare\?|What would you like to do\?)$/ })).toBeVisible();
   }
   const box = page.locator("#composer");
   await expect(box).toBeEnabled();
