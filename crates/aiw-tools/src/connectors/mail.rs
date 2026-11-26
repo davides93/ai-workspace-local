@@ -5,8 +5,8 @@
 //! (or the tags are stripped from an HTML one), transfer encodings base64 and quoted-printable are
 //! undone, and charsets other than UTF-8 are read as Latin-1/Windows-1252.
 
+use aiw_core::datetime::{DateTime, Local};
 use base64::Engine as _;
-use chrono::{DateTime, Local};
 use std::path::{Path, PathBuf};
 
 /// Bytes of one message looked at.
@@ -404,7 +404,7 @@ fn strip_comment(d: &str) -> String {
 // ------------------------------------------------------------------------------------ sources
 
 fn mtime(p: &Path) -> DateTime<Local> {
-    std::fs::metadata(p).and_then(|m| m.modified()).map(DateTime::<Local>::from).unwrap_or_else(|_| Local::now())
+    std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| DateTime::try_from(t).ok()).unwrap_or_else(Local::now)
 }
 
 fn read_capped(p: &Path, cap: u64) -> Option<Vec<u8>> {
@@ -496,7 +496,7 @@ pub fn read_source(spec: &Path, not_older_than: Option<DateTime<Local>>) -> Resu
         if let Some(limit) = not_older_than {
             // Only single-message files: an mbox keeps growing and is always looked at.
             let is_mbox = f.extension().is_some_and(|e| e == "mbox");
-            if !is_mbox && modified < limit - chrono::Duration::days(2) {
+            if !is_mbox && modified < limit - aiw_core::datetime::Duration::days(2) {
                 continue;
             }
         }
@@ -518,10 +518,10 @@ pub fn read_source(spec: &Path, not_older_than: Option<DateTime<Local>>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Datelike, TimeZone, Utc};
+    use aiw_core::datetime::Utc;
 
     fn fallback() -> DateTime<Local> {
-        Local.from_utc_datetime(&chrono::NaiveDate::from_ymd_opt(2030, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap())
+        Local.from_utc_datetime(&aiw_core::datetime::NaiveDate::from_ymd_opt(2030, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap())
     }
 
     #[test]

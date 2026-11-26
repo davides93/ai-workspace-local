@@ -8,16 +8,16 @@ use super::proactive::Wake;
 use super::tests::engine;
 use super::*;
 use aiw_core::api::MailAccount;
+use aiw_core::datetime::{DateTime, Duration as D, Local, Utc, Weekday};
 use aiw_runtimes::ScriptedBackend;
 use aiw_tools::connectors::testing::{FakeImap, ImapMessage, ImapOptions, Security};
-use chrono::{DateTime, Datelike, Duration as D, Local, TimeZone, Utc, Weekday};
 use std::path::Path;
 
 fn at(h: u32, m: u32) -> DateTime<Local> {
     Local.from_local_datetime(&Local::now().date_naive().and_hms_opt(h, m, 0).unwrap()).earliest().unwrap()
 }
 
-fn day(offset: i64) -> chrono::NaiveDate {
+fn day(offset: i64) -> aiw_core::datetime::NaiveDate {
     Local::now().date_naive() + D::days(offset)
 }
 

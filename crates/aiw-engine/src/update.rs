@@ -404,7 +404,7 @@ impl Updater {
         }
         let found = self.fetch_releases().await;
         let mut i = self.inner.lock().unwrap();
-        i.checked_at = Some(chrono::Utc::now().to_rfc3339());
+        i.checked_at = Some(aiw_core::datetime::Utc::now().to_rfc3339());
         match found {
             Ok(releases) => {
                 let rel = pick_release(&releases, current, channel, &self.os, &self.arch);

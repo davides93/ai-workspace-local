@@ -15,8 +15,12 @@ async fn wait_status(app: &Router, id: &str, status: &str) -> Value {
 }
 
 fn quiet_now() -> String {
-    let n = chrono::Local::now();
-    format!("{}-{}", (n - chrono::Duration::hours(1)).format("%H:%M"), (n + chrono::Duration::hours(1)).format("%H:%M"))
+    let n = aiw_core::datetime::Local::now();
+    format!(
+        "{}-{}",
+        (n - aiw_core::datetime::Duration::hours(1)).format("%H:%M"),
+        (n + aiw_core::datetime::Duration::hours(1)).format("%H:%M")
+    )
 }
 
 #[tokio::test]

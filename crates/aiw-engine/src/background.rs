@@ -18,8 +18,8 @@
 use crate::proactive::Wake;
 use crate::{Engine, EngineOptions};
 use aiw_core::api::{BackgroundRequest, BackgroundSummary, LocalNotice, Proposal};
+use aiw_core::datetime::{DateTime, Local};
 use aiw_core::{Error, Result};
-use chrono::{DateTime, Local};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;

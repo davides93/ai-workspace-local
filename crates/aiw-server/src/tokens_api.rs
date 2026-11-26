@@ -42,9 +42,9 @@ pub(crate) fn end_with_token(res: Response, engine: Engine, auth: TokenAuth, mut
         }
     };
     let until_expired = async move {
-        match auth.expires_at.as_deref().and_then(|e| chrono::DateTime::parse_from_rfc3339(e).ok()) {
+        match auth.expires_at.as_deref().and_then(|e| aiw_core::datetime::DateTime::parse_from_rfc3339(e).ok()) {
             Some(at) => {
-                let wait = (at.with_timezone(&chrono::Utc) - chrono::Utc::now()).to_std().unwrap_or_default();
+                let wait = (at.with_timezone(&aiw_core::datetime::Utc) - aiw_core::datetime::Utc::now()).to_std().unwrap_or_default();
                 tokio::time::sleep(wait).await
             }
             None => std::future::pending::<()>().await,

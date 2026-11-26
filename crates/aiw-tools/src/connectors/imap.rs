@@ -12,7 +12,7 @@
 //!   fetched at most `max_bytes` long.
 
 use super::tls::{self, BoxIo, NetError};
-use chrono::{DateTime, Local, NaiveDate};
+use aiw_core::datetime::{DateTime, Local, NaiveDate};
 use std::fmt;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};

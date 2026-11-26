@@ -24,7 +24,7 @@ use std::time::Duration;
 pub const PROTOCOL_VERSION: &str = "1.0";
 
 fn now() -> String {
-    chrono::Utc::now().to_rfc3339()
+    aiw_core::datetime::Utc::now().to_rfc3339()
 }
 
 /// `GET /.well-known/agent-card.json`

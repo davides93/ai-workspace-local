@@ -294,8 +294,12 @@ impl Engine {
     fn write_memory_lesson(&self, l: &Lesson) -> Result<String> {
         let path = self.0.dirs.root.join("AGENTS.md");
         let current = std::fs::read_to_string(&path).unwrap_or_default();
-        let entry =
-            format!("### {} ({})\n{}\n", one_line(&l.title, MAX_TITLE_CHARS), chrono::Local::now().format("%Y-%m-%d"), l.content.trim());
+        let entry = format!(
+            "### {} ({})\n{}\n",
+            one_line(&l.title, MAX_TITLE_CHARS),
+            aiw_core::datetime::Local::now().format("%Y-%m-%d"),
+            l.content.trim()
+        );
         let updated = match current.lines().position(|line| line.trim_end() == MEMORY_HEADING) {
             None => {
                 let sep = if current.trim().is_empty() { "" } else { "\n" };

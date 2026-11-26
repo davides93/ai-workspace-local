@@ -86,7 +86,7 @@ fn msg(uid: u32, date: &str, text: &str) -> ImapMessage {
 
 /// A message with the headers a mail client would show.
 pub fn imap_message(uid: u32, date: &str, from: &str, subject: &str, body: &str) -> ImapMessage {
-    let now = chrono::Local::now().to_rfc2822();
+    let now = aiw_core::datetime::Local::now().to_rfc2822();
     msg(
         uid,
         date,
@@ -184,9 +184,9 @@ async fn imap_session(
                 let newest = msgs.iter().map(|m| m.uid).max();
                 msgs.iter().filter(|m| m.uid >= from || Some(m.uid) == newest).map(|m| m.uid.to_string()).collect()
             } else if upper.starts_with("UID SEARCH SINCE ") {
-                let since = chrono::NaiveDate::parse_from_str(cmd["UID SEARCH SINCE ".len()..].trim(), "%d-%b-%Y").ok();
+                let since = aiw_core::datetime::NaiveDate::parse_from_str(cmd["UID SEARCH SINCE ".len()..].trim(), "%d-%b-%Y").ok();
                 msgs.iter()
-                    .filter(|m| match (since, chrono::NaiveDate::parse_from_str(&m.date, "%Y-%m-%d")) {
+                    .filter(|m| match (since, aiw_core::datetime::NaiveDate::parse_from_str(&m.date, "%Y-%m-%d")) {
                         (Some(s), Ok(md)) => md >= s,
                         _ => true,
                     })
@@ -204,7 +204,7 @@ async fn imap_session(
             for uid in set.split(',').filter_map(|u| u.parse::<u32>().ok()) {
                 if let Some(m) = msgs.iter().find(|m| m.uid == uid) {
                     let body = &m.raw[..m.raw.len().min(limit)];
-                    let date = chrono::NaiveDate::parse_from_str(&m.date, "%Y-%m-%d")
+                    let date = aiw_core::datetime::NaiveDate::parse_from_str(&m.date, "%Y-%m-%d")
                         .map(|d| d.format("%d-%b-%Y").to_string())
                         .unwrap_or_default();
                     io.get_mut().write_all(out.as_bytes()).await?;

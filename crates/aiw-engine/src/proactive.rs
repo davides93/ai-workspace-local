@@ -24,10 +24,10 @@
 use crate::adviser::{self, MainModel};
 use crate::{defaults, Engine};
 use aiw_core::api::{AdviserTask, AgentProfile, BudgetLimits, InferenceProfile, ProactiveStatus, Proposal, TickResult, WorkflowDef};
+use aiw_core::datetime::{DateTime, Duration as WallDuration, Local, NaiveTime};
 use aiw_core::{ids::new_id, now_rfc3339, Error, Result};
 use aiw_runtimes::{ChatDelta, ChatRequest, Msg};
 use aiw_tools::Risk;
-use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveTime, TimeZone, Timelike};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -165,7 +165,6 @@ pub(crate) fn short(s: &str, n: usize) -> String {
 
 /// Files in `folders` (two levels deep, no hidden ones, at most 400 entries looked at) modified after `since`, newest first.
 fn new_files(folders: &[String], since: DateTime<Local>) -> Vec<(String, PathBuf, DateTime<Local>)> {
-    let since: std::time::SystemTime = since.into();
     let mut out = Vec::new();
     let mut seen = 0usize;
     for f in folders {
@@ -186,8 +185,8 @@ fn new_files(folders: &[String], since: DateTime<Local>) -> Vec<(String, PathBuf
                     if depth < 1 {
                         stack.push((e.path(), depth + 1));
                     }
-                } else if let Ok(m) = meta.modified().map(DateTime::<Local>::from) {
-                    if std::time::SystemTime::from(m) > since {
+                } else if let Some(m) = meta.modified().ok().and_then(|t| DateTime::try_from(t).ok()) {
+                    if m > since {
                         out.push((f.clone(), e.path(), m));
                     }
                 }
@@ -439,11 +438,11 @@ impl Engine {
     }
 
     fn next_wake(&self, st: &State, now: DateTime<Local>) -> DateTime<Local> {
-        let every = ChronoDuration::minutes(self.cfg_u64("proactive.interval_minutes", 30).max(5) as i64);
+        let every = WallDuration::minutes(self.cfg_u64("proactive.interval_minutes", 30).max(5) as i64);
         let last = st.last_tick_at.as_deref().and_then(|t| DateTime::parse_from_rfc3339(t).ok()).map(|t| t.with_timezone(&Local));
         let interval = last.map(|l| l + every).filter(|t| *t > now).unwrap_or(now + every);
         let today = Local.from_local_datetime(&now.date_naive().and_time(self.briefing_time())).earliest().unwrap_or(now);
-        let briefing = if today > now { today } else { today + ChronoDuration::days(1) };
+        let briefing = if today > now { today } else { today + WallDuration::days(1) };
         interval.min(briefing)
     }
 
@@ -684,7 +683,7 @@ impl Engine {
         self.refresh_proposals(now);
         let mut created: Vec<String> = vec![];
         let agent_id = self.cfg_str("proactive.agent", "operator");
-        let expires = (now + ChronoDuration::days(PROPOSAL_DAYS)).to_rfc3339();
+        let expires = (now + WallDuration::days(PROPOSAL_DAYS)).to_rfc3339();
         let new_proposal = |kind: &str, title: String, noticed: String, instruction: String, source: String, status: &str| Proposal {
             id: new_id("prp"),
             kind: kind.into(),
@@ -706,7 +705,7 @@ impl Engine {
             .as_deref()
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
             .map(|t| t.with_timezone(&Local))
-            .unwrap_or(now - ChronoDuration::days(1));
+            .unwrap_or(now - WallDuration::days(1));
         let folders: Vec<String> =
             self.0.config.get("proactive.watch_folders").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
 
@@ -883,7 +882,7 @@ le email non partono da sole, la persona rivede la bozza nell'app e decide se in
         let mut ctx = ConnectorCtx::default();
         if c.calendar_enabled() {
             let midnight_next = Local
-                .from_local_datetime(&(now.date_naive() + ChronoDuration::days(1)).and_hms_opt(0, 0, 0).unwrap())
+                .from_local_datetime(&(now.date_naive() + WallDuration::days(1)).and_hms_opt(0, 0, 0).unwrap())
                 .earliest()
                 .unwrap_or(now);
             let (events, notes) = c.calendar_events(now, midnight_next).await;
@@ -921,7 +920,7 @@ le email non partono da sole, la persona rivede la bozza nell'app e decide se in
                 m.due_at
                     .as_deref()
                     .and_then(|d| DateTime::parse_from_rfc3339(d).ok())
-                    .is_some_and(|d| d > now && d <= now + ChronoDuration::hours(24))
+                    .is_some_and(|d| d > now && d <= now + WallDuration::hours(24))
             })
             .map(|m| short(&m.text, 60))
             .collect();
@@ -936,7 +935,7 @@ le email non partono da sole, la persona rivede la bozza nell'app e decide se in
             lines.push(format!("Proposte in attesa: {open}."));
         }
         let (ran, failed) =
-            self.0.store.run_counts_between(&(day_start - ChronoDuration::days(1)).to_rfc3339(), &day_start.to_rfc3339()).unwrap_or((0, 0));
+            self.0.store.run_counts_between(&(day_start - WallDuration::days(1)).to_rfc3339(), &day_start.to_rfc3339()).unwrap_or((0, 0));
         if ran > 0 {
             lines.push(if failed > 0 {
                 format!("Ieri: {ran} lavori, {failed} non riusciti.")
@@ -944,7 +943,7 @@ le email non partono da sole, la persona rivede la bozza nell'app e decide se in
                 format!("Ieri: {ran} lavori, tutti riusciti.")
             });
         }
-        let files = new_files(folders, now - ChronoDuration::hours(24));
+        let files = new_files(folders, now - WallDuration::hours(24));
         if !files.is_empty() {
             let names = files
                 .iter()

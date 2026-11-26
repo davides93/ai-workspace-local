@@ -257,7 +257,7 @@ pub(crate) fn build(cfg: &SmtpConfig, m: &Outgoing) -> String {
         h.push(fold("Cc", &addrs(&m.cc)));
     }
     h.push(fold("Subject", &encode_header(&m.subject)));
-    h.push(format!("Date: {}", chrono::Local::now().to_rfc2822()));
+    h.push(format!("Date: {}", aiw_core::datetime::Local::now().to_rfc2822()));
     h.push(format!("Message-ID: <{message_id}>"));
     if let Some(r) = m.in_reply_to.as_deref().map(clean).filter(|r| !r.is_empty()) {
         h.push(fold("In-Reply-To", &r));

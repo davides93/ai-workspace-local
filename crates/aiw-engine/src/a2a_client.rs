@@ -214,8 +214,8 @@ impl Engine {
 
     /// Tasks served to other agents over A2A (kept in SQLite for a day).
     pub fn a2a_put_task(&self, task: &Value, session: Option<&str>) -> Result<()> {
-        let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
-        let _ = self.0.store.a2a_cleanup(&cutoff.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        let cutoff = aiw_core::datetime::Utc::now() - aiw_core::datetime::Duration::hours(24);
+        let _ = self.0.store.a2a_cleanup(&cutoff.to_rfc3339_opts(aiw_core::datetime::SecondsFormat::Millis, true));
         self.0.store.a2a_put(task, session)
     }
     pub fn a2a_task(&self, id: &str) -> Result<Option<(Value, Option<String>)>> {

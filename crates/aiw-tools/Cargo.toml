@@ -35,7 +35,6 @@ webpki-roots.workspace = true
 rustls-native-certs.workspace = true
 tracing.workspace = true
 which.workspace = true
-chrono.workspace = true
 xcap = { version = "0.9", optional = true }
 enigo = { version = "0.6", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }

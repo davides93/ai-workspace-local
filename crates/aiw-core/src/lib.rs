@@ -12,6 +12,7 @@
 pub mod api;
 pub mod config;
 pub mod confined;
+pub mod datetime;
 pub mod error;
 pub mod events;
 pub mod folders;
@@ -33,5 +34,5 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Current UTC time as RFC 3339 string (the wire format for timestamps).
 pub fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    crate::datetime::Utc::now().to_rfc3339_opts(crate::datetime::SecondsFormat::Millis, true)
 }

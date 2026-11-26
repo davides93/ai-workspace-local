@@ -345,8 +345,8 @@ fn question_result(outcome: QuestionOutcome, answer: Option<&QuestionAnswer>) ->
 
 /// The moment the engine stops waiting, as the events show it (RFC 3339, to the second).
 fn expires_at(wait: Duration) -> String {
-    let wait = chrono::Duration::from_std(wait).unwrap_or_else(|_| chrono::Duration::seconds(300));
-    (chrono::Utc::now() + wait).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    let wait = aiw_core::datetime::Duration::from_std(wait).unwrap_or_else(|_| aiw_core::datetime::Duration::seconds(300));
+    (aiw_core::datetime::Utc::now() + wait).to_rfc3339_opts(aiw_core::datetime::SecondsFormat::Secs, true)
 }
 
 /// Takes a question out of the map when the wait ends for any reason (answered, expired, cancelled, or
@@ -1343,8 +1343,8 @@ mod tests {
         assert_eq!(event["run_id"], run);
         assert!(q.id.starts_with("ask_") && run.starts_with("run_"));
         let expires = event["expires_at"].as_str().unwrap().to_string();
-        let at = chrono::DateTime::parse_from_rfc3339(&expires).expect("RFC 3339");
-        let left = (at.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds();
+        let at = aiw_core::datetime::DateTime::parse_from_rfc3339(&expires).expect("RFC 3339");
+        let left = (at.with_timezone(&aiw_core::datetime::Utc) - aiw_core::datetime::Utc::now()).num_seconds();
         assert!((290..=300).contains(&left), "five minutes by default: {left}");
         assert!(expires.ends_with('Z'));
         event["id"] = json!("ID");
@@ -1501,8 +1501,11 @@ mod tests {
         e.set_config("global", "approvals.timeout_s", json!(1)).unwrap();
         let started = std::time::Instant::now();
         let (ctx, task, q) = ask_in_background(&e, OWNER, models()).await;
-        let at = chrono::DateTime::parse_from_rfc3339(q.expires_at.as_deref().unwrap()).unwrap();
-        assert!((at.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds() <= 1, "the limit of the setting, not five minutes");
+        let at = aiw_core::datetime::DateTime::parse_from_rfc3339(q.expires_at.as_deref().unwrap()).unwrap();
+        assert!(
+            (at.with_timezone(&aiw_core::datetime::Utc) - aiw_core::datetime::Utc::now()).num_seconds() <= 1,
+            "the limit of the setting, not five minutes"
+        );
         assert_eq!(finished(task).await, json!({"outcome": "timeout"}));
         assert!(started.elapsed() >= Duration::from_millis(900), "it waited for the limit");
         assert!(e.questions().is_empty(), "an expired question is withdrawn");

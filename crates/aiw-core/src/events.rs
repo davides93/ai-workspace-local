@@ -117,7 +117,7 @@ pub struct TimedEvent {
 
 impl TimedEvent {
     pub fn now(event: AgEvent) -> Self {
-        Self { event, timestamp: chrono::Utc::now().timestamp_millis() }
+        Self { event, timestamp: crate::datetime::Utc::now().timestamp_millis() }
     }
 }
 

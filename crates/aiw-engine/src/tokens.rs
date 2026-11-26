@@ -234,11 +234,11 @@ fn visible_prefix(token: &str) -> String {
     token.chars().take(VISIBLE).collect()
 }
 
-fn parse_time(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&chrono::Utc))
+fn parse_time(s: &str) -> Option<aiw_core::datetime::DateTime<aiw_core::datetime::Utc>> {
+    aiw_core::datetime::DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&aiw_core::datetime::Utc))
 }
 
-fn is_expired(expires_at: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> bool {
+fn is_expired(expires_at: Option<&str>, now: aiw_core::datetime::DateTime<aiw_core::datetime::Utc>) -> bool {
     expires_at.and_then(parse_time).is_some_and(|t| t <= now)
 }
 
@@ -348,7 +348,7 @@ impl Engine {
             if r.revoked_at.is_some() {
                 return TokenCheck::Revoked { id: r.id, name: r.name };
             }
-            if is_expired(r.expires_at.as_deref(), chrono::Utc::now()) {
+            if is_expired(r.expires_at.as_deref(), aiw_core::datetime::Utc::now()) {
                 return TokenCheck::Expired { id: r.id, name: r.name };
             }
             self.touch(&r.id, ip, || None);
@@ -434,7 +434,7 @@ impl Engine {
             .token_get(id)
             .ok()
             .flatten()
-            .is_some_and(|r| r.revoked_at.is_none() && !is_expired(r.expires_at.as_deref(), chrono::Utc::now()))
+            .is_some_and(|r| r.revoked_at.is_none() && !is_expired(r.expires_at.as_deref(), aiw_core::datetime::Utc::now()))
     }
 
     // ------------------------------------------------------------------ management
@@ -485,8 +485,10 @@ impl Engine {
         if expires_in_days == Some(0) || expires_in_days.is_some_and(|d| d > 3650) {
             return Err(Error::Invalid("la scadenza va da 1 giorno a 10 anni".into()));
         }
-        let expires_at = expires_in_days
-            .map(|d| (chrono::Utc::now() + chrono::Duration::days(d as i64)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        let expires_at = expires_in_days.map(|d| {
+            (aiw_core::datetime::Utc::now() + aiw_core::datetime::Duration::days(d as i64))
+                .to_rfc3339_opts(aiw_core::datetime::SecondsFormat::Secs, true)
+        });
         let device_id = match (kind, device_id) {
             (TokenKind::Device, Some(d)) => {
                 Some(clean_device_id(d).ok_or_else(|| Error::Invalid("identificativo del dispositivo non valido".into()))?)
@@ -547,7 +549,7 @@ impl Engine {
                 self.audit_system("token_replace", &format!("il dispositivo {d} si è accoppiato di nuovo: {n} token precedenti revocati"));
             }
         }
-        let fallback = format!("Dispositivo accoppiato il {}", chrono::Local::now().format("%d/%m/%Y %H:%M"));
+        let fallback = format!("Dispositivo accoppiato il {}", aiw_core::datetime::Local::now().format("%d/%m/%Y %H:%M"));
         let name = clean_name(name.unwrap_or_default(), &fallback);
         self.create_api_token(&name, "device", device_id.as_deref(), None, None)
     }

@@ -297,7 +297,7 @@ async fn a_send_the_app_never_finished_is_uncertain_after_a_restart() {
     // The state a crash in the middle of a send leaves behind.
     let mut stuck = r.e.draft_doc(&d.id).unwrap();
     stuck.status = "sending".into();
-    stuck.updated_at = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    stuck.updated_at = (aiw_core::datetime::Utc::now() - aiw_core::datetime::Duration::minutes(10)).to_rfc3339();
     r.e.0.store.put_doc("email_draft", &stuck.id, &stuck).unwrap();
     let after = r.e.email_draft(&d.id).unwrap();
     assert_eq!(after.status, "uncertain");
@@ -494,9 +494,10 @@ async fn a_proactive_suggestion_becomes_a_draft_only_through_the_owner_twice() {
     let inbox = r.ws.path().join("Posta");
     std::fs::create_dir(&inbox).unwrap();
     r.e.set_config("global", "proactive.watch_folders", json!([inbox.display().to_string()])).unwrap();
-    r.e.proactive_tick_at(Wake::Interval, chrono::Local::now() - chrono::Duration::seconds(5)).await.unwrap();
+    r.e.proactive_tick_at(Wake::Interval, aiw_core::datetime::Local::now() - aiw_core::datetime::Duration::seconds(5)).await.unwrap();
     std::fs::write(inbox.join("richiesta-anna.txt"), "preventivo per favore").unwrap();
-    let tick = r.e.proactive_tick_at(Wake::Interval, chrono::Local::now() + chrono::Duration::seconds(5)).await.unwrap();
+    let tick =
+        r.e.proactive_tick_at(Wake::Interval, aiw_core::datetime::Local::now() + aiw_core::datetime::Duration::seconds(5)).await.unwrap();
     assert_eq!(tick.outcome, "proposed", "{tick:?}");
     // The assistant is told how an email gets written, and its read-only run has no way to write one.
     {

@@ -8,7 +8,7 @@
 //! A rule using anything else (`BYSETPOS`, `BYMONTHDAY`, ordinals in `BYDAY`…) is not guessed at: the
 //! first occurrence is shown and the rest is left out.
 
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Weekday};
+use aiw_core::datetime::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 use std::collections::HashSet;
 
 /// One occurrence of an event, in the computer's local time.
@@ -679,8 +679,6 @@ mod tests {
         let got: Vec<(u32, u32, &str)> = ev.iter().map(|e| (e.start.day(), e.start.hour(), e.summary.as_str())).collect();
         assert_eq!(got, [(10, 9, "Serie"), (12, 15, "Serie spostata"), (13, 9, "Serie")]);
     }
-
-    use chrono::Timelike;
 
     #[test]
     fn an_alarm_inside_an_event_and_a_duration_are_understood() {

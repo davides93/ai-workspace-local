@@ -459,7 +459,10 @@ impl Engine {
         let s = &self.0.store;
         self.fail_interrupted_train_jobs()?;
         // Tasks served to other agents expire after a day.
-        let _ = s.a2a_cleanup(&(chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        let _ = s.a2a_cleanup(
+            &(aiw_core::datetime::Utc::now() - aiw_core::datetime::Duration::hours(24))
+                .to_rfc3339_opts(aiw_core::datetime::SecondsFormat::Millis, true),
+        );
         // Nothing can be running yet: whatever says so was interrupted by a crash or a kill.
         if s.fail_interrupted_runs()? > 0 {
             for mut session in s.sessions()?.into_iter().filter(|x| x.last_status.as_deref() == Some("running")) {
@@ -549,7 +552,7 @@ impl Engine {
                 tokio::time::sleep(Duration::from_secs(20)).await;
                 tick += 1;
                 let wfs: Vec<WorkflowDef> = e.0.store.list_docs("workflow").unwrap_or_default();
-                let due = e.0.scheduler.lock().unwrap().due(&wfs, chrono::Local::now());
+                let due = e.0.scheduler.lock().unwrap().due(&wfs, aiw_core::datetime::Local::now());
                 for id in due {
                     tracing::info!(workflow = %id, "scheduled trigger");
                     let _ = e.run_workflow(&id, Map::new(), "workflow").await;
@@ -1784,7 +1787,7 @@ impl Engine {
         let folders_line = if apart { String::new() } else { self.folders_env_line().unwrap_or_default() };
         let env = format!(
             "# Ambiente\n- Data e ora: {}\n- Dispositivo: {} ({} {}, classe {})\n- Cartella di lavoro: {}{isolated}{folders_line}\n- Inferenza locale: runtime `{}`, modello `{}`",
-            chrono::Local::now().format("%A %d %B %Y, %H:%M"),
+            aiw_core::datetime::Local::now().format("%A %d %B %Y, %H:%M"),
             device.name,
             device.os,
             device.arch,

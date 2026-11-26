@@ -38,7 +38,7 @@ pub struct CompletionBody {
 }
 
 fn chunk(id: &str, model: &str, delta: Value, finish: Option<&str>) -> Value {
-    json!({"id": id, "object": "chat.completion.chunk", "created": chrono::Utc::now().timestamp(), "model": model, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
+    json!({"id": id, "object": "chat.completion.chunk", "created": aiw_core::datetime::Utc::now().timestamp(), "model": model, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
 }
 
 pub async fn chat_completions(State(s): State<AppState>, Json(b): Json<CompletionBody>) -> Result<Response, ApiError> {
@@ -133,7 +133,7 @@ pub async fn chat_completions(State(s): State<AppState>, Json(b): Json<Completio
     if !calls.is_empty() {
         message["tool_calls"] = json!(calls.into_values().enumerate().map(|(i, (id, name, args))| json!({"id": if id.is_empty() { format!("call_{i}") } else { id }, "type": "function", "function": {"name": name, "arguments": args}})).collect::<Vec<_>>());
     }
-    Ok(Json(json!({"id": id, "object": "chat.completion", "created": chrono::Utc::now().timestamp(), "model": shown_model, "choices": [{"index": 0, "message": message, "finish_reason": finish}], "usage": usage})).into_response())
+    Ok(Json(json!({"id": id, "object": "chat.completion", "created": aiw_core::datetime::Utc::now().timestamp(), "model": shown_model, "choices": [{"index": 0, "message": message, "finish_reason": finish}], "usage": usage})).into_response())
 }
 
 /// Most texts in one embeddings request, and most characters across all of them.

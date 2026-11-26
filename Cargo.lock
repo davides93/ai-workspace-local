@@ -70,7 +70,6 @@ dependencies = [
  "aiw-runtimes",
  "aiw-tools",
  "async-trait",
- "chrono",
  "criterion",
  "futures",
  "globset",
@@ -95,7 +94,6 @@ dependencies = [
  "aiw-runtimes",
  "aiw-server",
  "anyhow",
- "chrono",
  "clap",
  "serde_json",
  "tokio",
@@ -107,8 +105,8 @@ dependencies = [
 name = "aiw-core"
 version = "0.5.0-beta.13"
 dependencies = [
- "chrono",
  "dirs 6.0.0",
+ "jiff",
  "libc",
  "rustls",
  "serde",
@@ -160,7 +158,6 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "chrono",
  "criterion",
  "dirs 6.0.0",
  "flate2",
@@ -273,7 +270,6 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "chrono",
  "criterion",
  "futures",
  "http-body-util",
@@ -307,7 +303,6 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "chrono",
  "enigo",
  "futures",
  "globset",
@@ -347,9 +342,8 @@ version = "0.5.0-beta.13"
 dependencies = [
  "aiw-core",
  "async-trait",
- "chrono",
- "cron",
  "futures",
+ "jiff-cron",
  "regex",
  "serde",
  "serde_json",
@@ -1108,10 +1102,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
- "js-sys",
  "num-traits",
  "serde",
- "wasm-bindgen",
  "windows-link 0.2.1",
 ]
 
@@ -1420,17 +1412,6 @@ checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
 dependencies = [
  "cast",
  "itertools 0.10.5",
-]
-
-[[package]]
-name = "cron"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5877d3fbf742507b66bc2a1945106bd30dd8504019d596901ddd012a4dd01740"
-dependencies = [
- "chrono",
- "once_cell",
- "winnow 0.6.26",
 ]
 
 [[package]]
@@ -3165,6 +3146,17 @@ checksum = "5e52fe76043ccecc9005d2305ebaadf7d7fc0cc89ca6baa10a94d6bc68c7128c"
 dependencies = [
  "defmt",
  "log",
+]
+
+[[package]]
+name = "jiff-cron"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa4804a5e6441082f7b8f2e840c639e489902aba5533c1e95c2fb7f0ab23d96c"
+dependencies = [
+ "jiff",
+ "phf",
+ "winnow 1.0.4",
 ]
 
 [[package]]
@@ -7791,15 +7783,6 @@ name = "winnow"
 version = "0.5.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f593a95398737aeed53e489c785df13f3618e41dbcd6718c6addbf1395aa6876"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "winnow"
-version = "0.6.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e90edd2ac1aa278a5c4599b1d89cf03074b610800f866d4026dc199d7929a28"
 dependencies = [
  "memchr",
 ]

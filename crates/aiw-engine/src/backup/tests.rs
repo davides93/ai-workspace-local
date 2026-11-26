@@ -191,7 +191,7 @@ fn a_backup_holds_the_data_and_leaves_out_models_logs_caches_and_secrets() {
     assert!(!m.sensitive && m.format == FORMAT && m.app_version == aiw_core::VERSION && m.schema_version == SCHEMA_VERSION);
     assert!(m.excluded.iter().any(|e| e.contains("modelli") && e.contains("mai")), "{:?}", m.excluded);
     assert!(m.excluded.iter().any(|e| e.contains("TLS")) && m.excluded.iter().any(|e| e.contains("segreti")));
-    assert!(chrono::DateTime::parse_from_rfc3339(&m.created_at).is_ok());
+    assert!(aiw_core::datetime::DateTime::parse_from_rfc3339(&m.created_at).is_ok());
     // The archive checks out and says the same thing.
     assert_eq!(inspect(&out).unwrap(), m);
     assert_eq!(read_manifest(&out).unwrap(), m);

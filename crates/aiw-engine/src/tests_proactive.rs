@@ -4,8 +4,8 @@
 use super::proactive::Wake;
 use super::tests::{engine, wait_finished};
 use super::*;
+use aiw_core::datetime::{DateTime, Duration as D, Local};
 use aiw_runtimes::{ChatDelta, ScriptedBackend};
-use chrono::{DateTime, Duration as D, Local, TimeZone};
 
 fn at(h: u32, m: u32) -> DateTime<Local> {
     Local.from_local_datetime(&Local::now().date_naive().and_hms_opt(h, m, 0).unwrap()).earliest().unwrap()

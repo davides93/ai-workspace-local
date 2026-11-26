@@ -265,7 +265,8 @@ impl Tool for ListDir {
             let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
             let modified = meta
                 .and_then(|m| m.modified().ok())
-                .map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M").to_string())
+                .and_then(|t| aiw_core::datetime::DateTime::try_from(t).ok())
+                .map(|t| t.format("%Y-%m-%d %H:%M"))
                 .unwrap_or_default();
             rows.push((is_dir, name, size, modified));
         }

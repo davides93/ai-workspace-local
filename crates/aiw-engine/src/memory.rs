@@ -323,7 +323,7 @@ impl Engine {
     fn check_due(due: Option<&str>) -> Result<Option<String>> {
         match due.map(str::trim) {
             None | Some("") => Ok(None),
-            Some(d) => chrono::DateTime::parse_from_rfc3339(d)
+            Some(d) => aiw_core::datetime::DateTime::parse_from_rfc3339(d)
                 .map(|t| Some(t.to_rfc3339()))
                 .map_err(|_| Error::Invalid(format!("data non valida «{d}»: usa il formato 2026-12-31T09:00:00+01:00"))),
         }

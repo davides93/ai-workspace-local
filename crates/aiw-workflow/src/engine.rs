@@ -115,7 +115,7 @@ pub fn render_ctx(template: &str, ctx: &RenderCtx) -> String {
             };
         }
         if path == "now" {
-            return chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+            return aiw_core::datetime::Local::now().format("%Y-%m-%d %H:%M").to_string();
         }
         c[0].to_string()
     })

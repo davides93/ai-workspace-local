@@ -1,14 +1,14 @@
 //! Trigger scheduler: cron (5-field, standard day-of-week), fixed intervals and file changes.
 
 use aiw_core::api::{WorkflowDef, WorkflowTrigger};
+use aiw_core::datetime::{DateTime, Local};
 use aiw_core::{Error, Result};
-use chrono::{DateTime, Local};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::SystemTime;
 
 /// Converts a standard 5-field cron expression (0/7 = Sunday) to the 6-field form used by the
-/// `cron` crate, translating numeric weekdays to names to avoid numbering ambiguities.
+/// `jiff-cron` crate, translating numeric weekdays to names to avoid numbering ambiguities.
 pub fn cron_to_six_fields(expr: &str) -> Result<String> {
     let f: Vec<&str> = expr.split_whitespace().collect();
     let fields: Vec<String> = match f.len() {
@@ -33,9 +33,9 @@ pub fn cron_to_six_fields(expr: &str) -> Result<String> {
     Ok(fields.join(" "))
 }
 
-pub fn parse_cron(expr: &str) -> Result<cron::Schedule> {
+pub fn parse_cron(expr: &str) -> Result<jiff_cron::Schedule> {
     let six = cron_to_six_fields(expr)?;
-    cron::Schedule::from_str(&six).map_err(|e| Error::Invalid(format!("cron `{expr}`: {e}")))
+    jiff_cron::Schedule::from_str(&six).map_err(|e| Error::Invalid(format!("cron `{expr}`: {e}")))
 }
 
 /// Decides which workflows are due. Call [`Scheduler::due`] periodically (e.g. every 20 s).
@@ -54,7 +54,7 @@ impl Scheduler {
                 WorkflowTrigger::Manual | WorkflowTrigger::Webhook { .. } => false,
                 WorkflowTrigger::Interval { seconds } => (now - last).num_seconds() >= (*seconds).max(30) as i64,
                 WorkflowTrigger::Cron { expr } => match parse_cron(expr) {
-                    Ok(s) => s.after(&last).next().map(|next| next <= now).unwrap_or(false),
+                    Ok(s) => s.after(last.zoned()).next().map(|next| next.timestamp() <= now.instant()).unwrap_or(false),
                     Err(e) => {
                         tracing::warn!(workflow = %wf.id, "{e}");
                         false
@@ -79,7 +79,6 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Datelike, TimeZone};
     use serde_json::json;
 
     #[test]
@@ -88,9 +87,29 @@ mod tests {
         let s = parse_cron("0 8 * * 1-5").unwrap();
         // 2026-10-31 is a Saturday: next run is Monday 2 November at 08:00.
         let sat = Local.with_ymd_and_hms(2026, 10, 31, 9, 0, 0).unwrap();
-        let next = s.after(&sat).next().unwrap();
-        assert_eq!((next.weekday().to_string().as_str(), next.day()), ("Mon", 2));
+        let next = s.after(sat.zoned()).next().unwrap();
+        assert_eq!((next.strftime("%a").to_string().as_str(), next.day()), ("Mon", 2));
         assert!(cron_to_six_fields("bad").is_err());
+    }
+
+    #[test]
+    fn cron_keeps_seconds_year_and_day_constraints() {
+        let base = jiff_cron::jiff::civil::date(2026, 10, 30).at(0, 0, 0, 0).in_tz("Europe/Rome").unwrap();
+        let s = parse_cron("15 30 8 2 Nov Mon 2026").unwrap();
+        let next = s.after(base).next().unwrap();
+        assert_eq!(next.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string(), "2026-11-02T08:30:15+01:00");
+        assert!(s.after(next).next().is_none());
+    }
+
+    #[test]
+    fn cron_does_not_shift_a_spring_gap_and_preserves_the_autumn_fold() {
+        use jiff_cron::jiff::civil::date;
+        let s = parse_cron("30 2 * * *").unwrap();
+        let at_midnight = |m, d| date(2026, m, d).at(0, 0, 0, 0).in_tz("Europe/Rome").unwrap();
+        let next = s.after(at_midnight(3, 29)).next().unwrap();
+        assert_eq!(next.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string(), "2026-03-30T02:30:00+02:00");
+        let next: Vec<_> = s.after(at_midnight(10, 25)).take(2).map(|z| z.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string()).collect();
+        assert_eq!(next, ["2026-10-25T02:30:00+02:00", "2026-10-25T02:30:00+01:00"]);
     }
 
     #[test]
@@ -110,13 +129,13 @@ mod tests {
         let mut s = Scheduler::default();
         let t0 = Local::now();
         assert!(s.due(&wfs, t0).is_empty());
-        assert_eq!(s.due(&wfs, t0 + chrono::Duration::seconds(61)), vec!["i".to_string()]);
+        assert_eq!(s.due(&wfs, t0 + aiw_core::datetime::Duration::seconds(61)), vec!["i".to_string()]);
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(&f, "changed").unwrap();
         let filetime = std::fs::metadata(&f).unwrap().modified().unwrap();
         // ensure the mtime differs on coarse filesystems
         let _ = filetime;
-        let due = s.due(&wfs, t0 + chrono::Duration::seconds(62));
+        let due = s.due(&wfs, t0 + aiw_core::datetime::Duration::seconds(62));
         assert!(due.contains(&"f".to_string()) || due.is_empty());
     }
 }

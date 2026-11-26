@@ -54,7 +54,7 @@ fn ips(l: &[&str]) -> Vec<IpAddr> {
 fn self_signed_files_have_private_keys_and_follow_the_addresses() {
     let d = tempfile::tempdir().unwrap();
     let tls = d.path().join("tls");
-    let now = chrono::Utc::now();
+    let now = aiw_core::datetime::Utc::now();
     let names = certificate_names("Studio PC", &ips(&["192.168.1.20"]));
     let a = ensure_self_signed(&tls, &names, now).unwrap();
     assert_eq!(a.fingerprint_of, "ca");
@@ -75,7 +75,9 @@ fn self_signed_files_have_private_keys_and_follow_the_addresses() {
     assert_eq!(moved.fingerprint, a.fingerprint);
     assert!(moved.names.contains(&"10.0.0.7".to_string()) && !moved.names.contains(&"192.168.1.20".to_string()));
     // Near expiry: renewed too.
-    let later = ensure_self_signed(&tls, &certificate_names("Studio PC", &ips(&["10.0.0.7"])), now + chrono::Duration::days(380)).unwrap();
+    let later =
+        ensure_self_signed(&tls, &certificate_names("Studio PC", &ips(&["10.0.0.7"])), now + aiw_core::datetime::Duration::days(380))
+            .unwrap();
     assert_ne!(later.chain_pem, moved.chain_pem);
     assert_eq!(later.fingerprint, a.fingerprint);
 }
@@ -111,8 +113,8 @@ async fn handshake(server: rustls::ServerConfig, client: rustls::ClientConfig, n
 async fn the_pinned_client_trusts_the_pin_and_nothing_else() {
     let d = tempfile::tempdir().unwrap();
     let names = certificate_names("Studio PC", &ips(&["192.168.1.20"]));
-    let mine = ensure_self_signed(&d.path().join("a"), &names, chrono::Utc::now()).unwrap();
-    let other = ensure_self_signed(&d.path().join("b"), &names, chrono::Utc::now()).unwrap();
+    let mine = ensure_self_signed(&d.path().join("a"), &names, aiw_core::datetime::Utc::now()).unwrap();
+    let other = ensure_self_signed(&d.path().join("b"), &names, aiw_core::datetime::Utc::now()).unwrap();
     let srv = || server_config(&mine).unwrap();
 
     // Right pin (the authority): connects, by name and by address; a name outside the certificate does not.
@@ -146,8 +148,8 @@ async fn the_pinned_client_trusts_the_pin_and_nothing_else() {
 fn a_key_that_does_not_belong_to_the_certificate_is_refused() {
     let d = tempfile::tempdir().unwrap();
     let names = certificate_names("x", &[]);
-    let a = ensure_self_signed(&d.path().join("a"), &names, chrono::Utc::now()).unwrap();
-    let b = ensure_self_signed(&d.path().join("b"), &names, chrono::Utc::now()).unwrap();
+    let a = ensure_self_signed(&d.path().join("a"), &names, aiw_core::datetime::Utc::now()).unwrap();
+    let b = ensure_self_signed(&d.path().join("b"), &names, aiw_core::datetime::Utc::now()).unwrap();
     std::fs::write(d.path().join("c.pem"), &a.chain_pem).unwrap();
     std::fs::write(d.path().join("k.pem"), &b.key_pem).unwrap();
     let err = crate::tls::load_files(d.path().join("c.pem").to_str().unwrap(), d.path().join("k.pem").to_str().unwrap());
