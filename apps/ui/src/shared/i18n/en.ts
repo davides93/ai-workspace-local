@@ -16,6 +16,7 @@ import { browserEn } from "./messages/en/browser";
 import { capabilitiesEn } from "./messages/en/capabilities";
 import { channelsEn } from "./messages/en/channels";
 import { chatEn } from "./messages/en/chat";
+import { collabEn } from "./messages/en/collab";
 import { commonEn } from "./messages/en/common";
 import { devicesEn } from "./messages/en/devices";
 import { documentsEn } from "./messages/en/documents";
@@ -48,6 +49,7 @@ export const en: Record<MessageKey, string> = {
   ...capabilitiesEn,
   ...channelsEn,
   ...chatEn,
+  ...collabEn,
   ...commonEn,
   ...devicesEn,
   ...documentsEn,
