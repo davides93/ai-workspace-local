@@ -192,6 +192,13 @@ button.ws-note-link { border: 0; background: none; padding: 0; font: inherit; fo
 .ws-hero { align-self: center; width: 100%; max-width: 560px; margin-top: var(--space-7); display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-6); border: 1px dashed var(--line-strong); border-radius: var(--r-lg); background: var(--surface); }
 .ws-suggestions { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .ws-suggestions .btn { width: 100%; justify-content: flex-start; white-space: normal; text-align: left; }
+.ws-tasks { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--space-2); }
+.ws-task { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--surface); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.ws-task:hover { background: var(--surface-2, var(--surface)); border-color: var(--accent, var(--line-strong)); }
+.ws-task:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 2px; }
+.ws-task-title { font-weight: 600; }
+.ws-task-hint { font-size: var(--fs-xs); color: var(--fg-muted); }
+.ws-tasks-note { margin: var(--space-1) 0 0; font-size: var(--fs-xs); }
 .ws-nosession { flex: 1; min-height: 0; overflow-y: auto; display: grid; place-items: center; padding: var(--space-6); }
 /* The «Per iniziare» panel where an empty conversation would be (simple interface). */
 .ws-firstrun { align-self: center; width: 100%; max-width: 560px; margin-top: var(--space-6); }
