@@ -45,4 +45,8 @@ export const libEn: Record<keyof typeof libIt, string> = {
   "lib.risponde_subito_senza_pensarci_su": "Answers right away, without thinking it over.",
   "lib.ragiona_all_inizio_e_quando": "Thinks at the start and when something goes wrong, then moves fast.",
   "lib.ragiona_sempre_e_piu_a": "Always thinks, and for longer: slower, more accurate.",
+  "lib.ruolo_integrato": "Built-in",
+  "lib.ruolo_leggero": "Light",
+  "lib.ruolo_veloce": "Fast",
+  "lib.ruolo_intelligente": "Smart",
 };

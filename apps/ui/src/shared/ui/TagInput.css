@@ -6,12 +6,12 @@
 .taginput:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .taginput.is-disabled { opacity: 0.6; cursor: not-allowed; }
 .ti-tag {
-  display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 1px 2px 1px 8px; border-radius: 5px;
+  display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 1px 2px 1px 8px; border-radius: var(--r-xs);
   border: 1px solid var(--line); background: var(--surface-2); color: var(--fg); font-size: 0.78rem;
 }
 .ti-text { overflow: hidden; text-overflow: ellipsis; white-space: pre; min-width: 0; }
 .ti-x {
-  display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px;
+  display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--r-xs);
   background: transparent; color: var(--fg-muted); cursor: pointer; flex: none;
 }
 .ti-x:hover:not(:disabled) { background: var(--surface-3); color: var(--fg); }

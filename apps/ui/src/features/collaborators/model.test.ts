@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MAX_TASK_INSTRUCTION_CHARS } from "../../shared/api/types";
 import { problem, remoteComputer, toTask } from "./model";
+import { problem, toTask } from "./model";
 
 describe("collaborators model", () => {
   it("asks for what the collaborator should do", () => {

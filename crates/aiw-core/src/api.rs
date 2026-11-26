@@ -344,6 +344,11 @@ pub struct CatalogModel {
     /// the value the adviser derives from their capabilities and size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suitability: Option<TaskScores>,
+    /// Whether the licence allows commercial use: `Some(false)` for non-commercial weights (CC BY-NC),
+    /// `Some(true)` when it does, `None` when the entry does not say. Only recorded for now: the app
+    /// does not act on it yet (decision pending).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commercial_use: Option<bool>,
 }
 
 /// Coarse ordinal suitability of a model for each task of the model adviser:
@@ -3293,4 +3298,58 @@ pub struct TlsStatus {
     pub ca_available: bool,
     /// Plain HTTP beyond this computer: the warning of the Security page.
     pub warning: bool,
+}
+
+// ------------------------------------------------------------------ containers
+
+/// One container engine found (or not) on this computer: Docker or Podman. Read-only facts, never an action.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerEngine {
+    /// `docker` | `podman`
+    pub engine: String,
+    /// The command-line client answers (`--version`).
+    pub installed: bool,
+    pub version: Option<String>,
+    /// The engine itself answers (Docker daemon up; Podman machine started on macOS/Windows).
+    pub running: bool,
+    /// `docker compose` / `podman compose` available.
+    pub compose: bool,
+    /// Runs without root privileges (Podman rootless). `None` when the engine does not say.
+    #[serde(default)]
+    pub rootless: Option<bool>,
+    /// CPUs and memory the engine can use (on macOS/Windows: the VM of Docker Desktop / the Podman machine).
+    #[serde(default)]
+    pub cpus: Option<u32>,
+    #[serde(default)]
+    pub memory_mb: Option<u64>,
+}
+
+/// What this computer can do about containers. `state` is the one thing a screen needs:
+/// `ready` (an engine runs and has compose) | `compose_missing` | `engine_stopped` | `not_installed` | `unsupported`
+/// (phones: no container engine). `engine` is the one to use when `state` is `ready`; `hint` names, in a stable code
+/// the UI turns into words, the one next step (`install_docker` | `start_docker` | `install_compose` | `none`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerStatus {
+    pub state: String,
+    pub engine: Option<String>,
+    pub hint: String,
+    pub engines: Vec<ContainerEngine>,
+    /// `macos` | `windows` | `linux` | `ios` | `android`: the install page differs.
+    pub os: String,
+}
+
+/// The container that is one agent's computer (its browser, for now): see `aiw_engine::agent_computer`.
+/// `state`: `absent` (never started) | `starting` (image being built or container starting) | `running` | `stopped` | `error`
+/// (`detail` says why, in words). `cdp_url` is the loopback address of the browser's debugging port while it runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentComputer {
+    pub agent_id: String,
+    pub project: String,
+    pub state: String,
+    #[serde(default)]
+    pub engine: Option<String>,
+    #[serde(default)]
+    pub cdp_url: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
 }

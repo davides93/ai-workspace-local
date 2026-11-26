@@ -4,6 +4,10 @@ import { Button, Field, Input, Sheet, Textarea } from "../../shared/ui";
 import { TasksPanel } from "../inbox/components/TasksPanel";
 import { useCreateCollaborator } from "./api";
 import { problem, remoteComputer, toTask } from "./model";
+import { Button, Field, Input, Sheet, Textarea } from "../../shared/ui";
+import { TasksPanel } from "../inbox/components/TasksPanel";
+import { useCreateCollaborator } from "./api";
+import { problem, toTask } from "./model";
 
 import { t } from "../../shared/i18n";
 /**
@@ -29,6 +33,7 @@ export function CollaboratorsSheet({ onClose }: { onClose: () => void }) {
     <Sheet title={t("collab.title")} onClose={onClose}>
       <div className="stack stack-lg">
         <p className="muted">{remote ? t("collab.intro_remote", { device: remote }) : t("collab.intro")}</p>
+        <p className="muted">{t("collab.intro")}</p>
         <form className="stack" onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <Field label={t("collab.name")} htmlFor={`${id}-name`}>
             <Input id={`${id}-name`} value={name} maxLength={60} placeholder={t("collab.name_placeholder")} onChange={(e) => setName(e.target.value)} />

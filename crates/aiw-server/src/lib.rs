@@ -244,6 +244,10 @@ pub fn router(engine: Engine, ui_dir: Option<PathBuf>) -> Router {
     let st = AppState { engine, agui: Default::default() };
     let api = Router::new()
         .route("/api/system", get(system))
+        .route("/api/containers", get(containers))
+        .route("/api/containers/computers/{agent}", get(agent_computer))
+        .route("/api/containers/computers/{agent}/up", post(agent_computer_up))
+        .route("/api/containers/computers/{agent}/down", post(agent_computer_down))
         .route("/api/kill", post(kill))
         // Read-only on purpose: a folder is added by the person in the macOS panel, through the shell
         // (see `aiw_engine::Engine::add_folders`), never through a route.
@@ -513,6 +517,22 @@ async fn method_not_allowed() -> Response {
 async fn system(State(s): State<AppState>, req: Request) -> ApiResult<SystemInfo> {
     // The pairing code is only shown to the device itself.
     ok(s.engine.system(is_local(&req)))
+}
+/// Docker/Podman of this computer, read-only. A paired phone reads it too: it only says whether the computer can host the
+/// agents' containers.
+async fn containers(State(s): State<AppState>) -> ApiResult<aiw_core::api::ContainerStatus> {
+    ok(s.engine.containers_status().await)
+}
+/// The container that is one agent's computer. Owner only: it starts and stops programs on this computer and shows the address of
+/// the browser's debugging port.
+async fn agent_computer(State(s): State<AppState>, Path(agent): Path<String>) -> ApiResult<aiw_core::api::AgentComputer> {
+    ok(s.engine.agent_computer(&agent).await?)
+}
+async fn agent_computer_up(State(s): State<AppState>, Path(agent): Path<String>) -> ApiResult<aiw_core::api::AgentComputer> {
+    ok(s.engine.agent_computer_up(&agent).await?)
+}
+async fn agent_computer_down(State(s): State<AppState>, Path(agent): Path<String>) -> ApiResult<aiw_core::api::AgentComputer> {
+    ok(s.engine.agent_computer_down(&agent).await?)
 }
 async fn folders(State(s): State<AppState>) -> ApiResult<aiw_core::folders::FoldersInfo> {
     ok(s.engine.folders())

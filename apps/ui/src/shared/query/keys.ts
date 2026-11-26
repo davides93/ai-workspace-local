@@ -8,6 +8,7 @@ import type { ModelSearchParams } from "../api/types";
  */
 export const qk = {
   system: () => ["system"] as const,
+  containers: () => ["containers"] as const,
   folders: () => ["folders"] as const,
 
   runtimes: {
