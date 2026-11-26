@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTheme } from "../../shared/lib/theme";
 import { UI_MODE_LABEL, UI_MODES } from "../../shared/lib/uiMode";
 import { Icon, Segmented, Sheet } from "../../shared/ui";
@@ -10,6 +11,7 @@ import { LanguageSelect } from "../LanguageSelect";
 import { PrivacyPanel } from "../../features/settings/components/PrivacyPanel";
 import { DeviceChip } from "./DeviceChip";
 import { KillSwitch } from "./KillSwitch";
+import { ContainerSetup } from "../../features/containers/ContainerSetup";
 
 import { t } from "../../shared/i18n";
 /**
@@ -21,7 +23,10 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
   const [theme, setTheme] = useTheme();
   const [mode, setMode] = useUiMode();
   const sections = hasNavigation(ROUTES, mode);
+  const [containers, setContainers] = useState(false);
+  const simple = mode === "simple";
   return (
+    <>
     <Sheet title={sections ? t("shell.altre_sezioni") : t("shell.menu")} onClose={onClose} footer={<KillSwitch variant="sheet" />}>
       <div className="stack stack-lg more-sheet">
         <DeviceChip onNavigate={onClose} />
@@ -29,6 +34,12 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
           <Icon name="search" size={16} />
           <span>{t("shell.cerca_e_comandi_2")}</span>
         </button>
+        {simple && (
+          <button type="button" className="rail-search" aria-haspopup="dialog" onClick={() => setContainers(true)}>
+            <Icon name="chip" size={16} />
+            <span>{t("containers.voce_menu")}</span>
+          </button>
+        )}
         {sections && navGroups(GROUPS, ROUTES, mode).map(({ group, label, routes }) => (
           <div key={group.id} className="stack stack-sm">
             {label && <span className="eyebrow">{label}</span>}
@@ -58,5 +69,7 @@ export function MoreSheet({ current, onClose, onOpenPalette }: { current?: Route
         </div>
       </div>
     </Sheet>
+    {containers && <ContainerSetup onClose={() => setContainers(false)} />}
+    </>
   );
 }

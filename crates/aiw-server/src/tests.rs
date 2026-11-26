@@ -41,6 +41,34 @@ pub(crate) async fn app_on(device: Option<DeviceProfile>) -> (Router, Engine, te
     (router(e.clone(), None), e, data, ws)
 }
 
+/// `GET /api/containers` always answers with a state the UI knows, whatever is installed on the machine running the test.
+#[tokio::test]
+async fn containers_status_has_a_known_state() {
+    let (app, _e, _d, _w) = app().await;
+    let (st, body) = dispatch(app, "GET", "/api/containers", None).await;
+    assert_eq!(st, 200, "{body}");
+    let state = body["state"].as_str().unwrap();
+    assert!(["ready", "compose_missing", "engine_stopped", "not_installed"].contains(&state), "{body}");
+    let hint = body["hint"].as_str().unwrap();
+    assert!(["none", "install_docker", "start_docker", "install_compose"].contains(&hint), "{body}");
+    assert_eq!(body["engines"].as_array().unwrap().len(), 2);
+    assert!(body["os"].is_string());
+}
+
+/// The computer of an agent: an unknown agent is 404, a bad id is not a folder, and a computer never started is `absent`.
+#[tokio::test]
+async fn agent_computer_routes() {
+    let (app, _e, _d, _w) = app().await;
+    let (st, _) = dispatch(app.clone(), "GET", "/api/containers/computers/nessuno", None).await;
+    assert_eq!(st, 404);
+    let (st, body) = dispatch(app.clone(), "GET", "/api/containers/computers/planner", None).await;
+    assert_eq!(st, 200, "{body}");
+    assert_eq!((body["state"].as_str(), body["project"].as_str()), (Some("absent"), Some("aiw-computer-planner")));
+    // Starting needs a Docker that runs with Compose: where there is none (CI, this test) the answer says why and nothing is written.
+    let (st, body) = dispatch(app, "POST", "/api/containers/computers/planner/up", None).await;
+    assert!(st == 409 || st == 200, "{st} {body}");
+}
+
 #[tokio::test]
 async fn rest_run_and_gateway_roundtrip() {
     let (app, e, _d, _w) = app().await;

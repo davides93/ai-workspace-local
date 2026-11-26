@@ -11,7 +11,7 @@ import type {
   AgEvent, AgentProfile, AiwImage, Attachment,AttachmentData, AttachmentUpload, RoutingCandidate, RoutingStats, ApprovalRequest, DownloadProgress, EvalComparison, EvalReport, EvalRunRequest, EvalSuite, Feedback, HookConfig, Lesson, LessonStatus, Memory, ProactiveStatus, Proposal, ProposalQuery, TickResult, MemoryCreate, MemoryPatch, MemoryQuery, OptimizeRequest, PromptOptimization, InferenceProfile, McpServer, McpPromptInfo, McpPromptResult, McpElicitation, McpElicitationAnswer, Question, QuestionReply, SecretReply, SecretRequest,
   ApiTokenCreate, ApiTokenCreated, ApiTokenInfo, TlsStatus, SecretsAtRest, MeshState, ModelProviderInfo, ModelSearchParams, ModelVariant, PolicyRule, PullRequest, RemoteAgent, RemoteFile, RemoteModel, RemoteModelDetail, RunState,
   SearchPage, Session, SessionImage, TeamDef, Transcript, VoiceStatus, Speech, SpeakRequest, WorkflowDef, WorkflowRun, WorktreeStatus, CheckpointInfo, RewindResult, InstallJob, InstallPlan, UpdateStatus,
-  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState, ChannelCreate, ChannelPatch, FoldersAdded, FoldersInfo, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo,
+  BrowserControlAction, BrowserDialogReply, BrowserFrame, BrowserInput, BrowserState, ChannelCreate, ChannelPatch, FoldersAdded, FoldersInfo, ContainerStatus, MailAccount, DatasetSpec, TrainJobRequest, ThinkingMode, ToolInfo,
   BackgroundRequest, BackgroundStatus, BackgroundSummary, KbCollectionCreate, KbCollectionPatch, KbSearchBody, BackupFile, BackupInspect, BackgroundTask, TaskCreate, TaskQuery, TaskResume, ContextCreate, ContextPatch,
   DraftStatus, EmailDraftCreate, EmailDraftPatch, EmailDraftSend,
 } from "../types";
@@ -160,6 +160,16 @@ export class MockTransport implements Transport {
   }
 
   async system() { return structuredClone(system); }
+  /** Demo: Docker installed but not running, the case the guided setup is for. */
+  async containers(): Promise<ContainerStatus> {
+    return {
+      state: "engine_stopped", engine: "docker", hint: "start_docker", os: "macos",
+      engines: [
+        { engine: "docker", installed: true, version: "27.3.1", running: false, compose: false },
+        { engine: "podman", installed: false, running: false, compose: false },
+      ],
+    };
+  }
   async folders(): Promise<FoldersInfo> { return { supported: system.folder_access === true, folders: structuredClone(folderGrants) }; }
   /** Demo of the macOS panel: the next of a few folders of the demo user, never the same twice. */
   async addFolders(_message: string, _prompt: string): Promise<FoldersAdded> {
