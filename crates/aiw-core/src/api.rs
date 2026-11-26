@@ -3332,3 +3332,19 @@ pub struct ContainerStatus {
     /// `macos` | `windows` | `linux` | `ios` | `android`: the install page differs.
     pub os: String,
 }
+
+/// The container that is one agent's computer (its browser, for now): see `aiw_engine::agent_computer`.
+/// `state`: `absent` (never started) | `starting` (image being built or container starting) | `running` | `stopped` | `error`
+/// (`detail` says why, in words). `cdp_url` is the loopback address of the browser's debugging port while it runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentComputer {
+    pub agent_id: String,
+    pub project: String,
+    pub state: String,
+    #[serde(default)]
+    pub engine: Option<String>,
+    #[serde(default)]
+    pub cdp_url: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
+}

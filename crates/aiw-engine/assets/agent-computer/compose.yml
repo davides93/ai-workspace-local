@@ -1,0 +1,26 @@
+# One agent's computer. Written by AIW next to the agent's folder; started with `docker compose -p aiw-computer-<agent>`.
+# Variables come from the process that starts it (never from a file with secrets): AIW_WORKSPACE, AIW_UID, AIW_GID, AIW_MEM, AIW_CPUS.
+services:
+  browser:
+    build: .
+    image: aiw/agent-computer:local
+    init: false
+    user: "${AIW_UID:-1000}:${AIW_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${AIW_MEM:-2g}
+    cpus: ${AIW_CPUS:-2}
+    shm_size: 512m
+    # Host side is the loopback address only: nothing else on the network can reach the browser. The host port is chosen by
+    # the engine (`docker compose port`), so two agents never fight over one.
+    ports:
+      - "127.0.0.1::9222"
+    volumes:
+      - "${AIW_WORKSPACE}:/workspace"
+    # No environment on purpose: no token, key or secret of AIW or of the person goes into the container.
+    restart: "no"

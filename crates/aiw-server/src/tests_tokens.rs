@@ -64,6 +64,8 @@ async fn the_scope_matrix_over_the_real_router() {
     let rows: &[(&str, &str, Option<Value>, [bool; 5])] = &[
         ("GET", "/api/system", None, [true, true, false, false, true]),
         ("GET", "/api/containers", None, [true, true, false, false, true]),
+        ("GET", "/api/containers/computers/planner", None, [true, false, false, false, false]),
+        ("POST", "/api/containers/computers/planner/down", None, [true, false, false, false, false]),
         ("GET", "/api/sessions", None, [true, true, false, false, true]),
         ("POST", "/api/sessions", Some(json!({"agent_id": "planner"})), [true, true, false, false, true]),
         ("GET", "/api/approvals", None, [true, true, false, false, true]),

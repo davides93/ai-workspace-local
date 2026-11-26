@@ -3,6 +3,7 @@
 pub mod a2a_client;
 mod access;
 pub mod adviser;
+mod agent_computer;
 mod agent_credentials;
 pub mod agui_threads;
 pub mod attachments;

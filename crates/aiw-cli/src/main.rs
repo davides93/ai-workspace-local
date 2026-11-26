@@ -42,6 +42,8 @@ enum Cmd {
         /// Stampa il JSON invece del testo
         #[arg(long)]
         json: bool,
+        #[command(subcommand)]
+        cmd: Option<ContainersCmd>,
     },
     /// Gestisce i runtime di inferenza
     Runtimes {
@@ -528,6 +530,16 @@ enum TracesCmd {
 }
 
 #[derive(Subcommand)]
+enum ContainersCmd {
+    /// Avvia il computer di un agente (un container con il suo browser). La prima volta costruisce l'immagine: può richiedere minuti
+    Up { agent: String },
+    /// Ferma e rimuove il container di un agente (la sua cartella di lavoro resta)
+    Down { agent: String },
+    /// Dice a che punto è il computer di un agente
+    Status { agent: String },
+}
+
+#[derive(Subcommand)]
 enum RtCmd {
     List,
     Start {
@@ -706,7 +718,36 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Doctor => doctor(&engine).await,
-        Cmd::Containers { json } => {
+        Cmd::Containers { cmd: Some(sub), .. } => {
+            let c = match sub {
+                ContainersCmd::Up { agent } => {
+                    let c = engine.agent_computer_up(&agent).await?;
+                    eprintln!(
+                        "Avvio in corso: la prima volta costruisce l'immagine e può volerci qualche minuto. Resto qui finché non è pronto."
+                    );
+                    // The command is the person's own: wait for the end, up to the engine's limit.
+                    let mut last = c;
+                    for _ in 0..(30 * 60 / 2) {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        last = engine.agent_computer(&agent).await?;
+                        if last.state != "starting" {
+                            break;
+                        }
+                    }
+                    last
+                }
+                ContainersCmd::Down { agent } => engine.agent_computer_down(&agent).await?,
+                ContainersCmd::Status { agent } => engine.agent_computer(&agent).await?,
+            };
+            println!(
+                "{} · {}{}{}",
+                c.agent_id,
+                c.state,
+                c.cdp_url.map(|u| format!(" · browser su {u}")).unwrap_or_default(),
+                c.detail.map(|d| format!(" · {d}")).unwrap_or_default()
+            );
+        }
+        Cmd::Containers { json, .. } => {
             let st = engine.containers_status().await;
             if json {
                 println!("{}", serde_json::to_string_pretty(&st)?);

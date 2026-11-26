@@ -55,6 +55,20 @@ async fn containers_status_has_a_known_state() {
     assert!(body["os"].is_string());
 }
 
+/// The computer of an agent: an unknown agent is 404, a bad id is not a folder, and a computer never started is `absent`.
+#[tokio::test]
+async fn agent_computer_routes() {
+    let (app, _e, _d, _w) = app().await;
+    let (st, _) = dispatch(app.clone(), "GET", "/api/containers/computers/nessuno", None).await;
+    assert_eq!(st, 404);
+    let (st, body) = dispatch(app.clone(), "GET", "/api/containers/computers/planner", None).await;
+    assert_eq!(st, 200, "{body}");
+    assert_eq!((body["state"].as_str(), body["project"].as_str()), (Some("absent"), Some("aiw-computer-planner")));
+    // Starting needs a Docker that runs with Compose: where there is none (CI, this test) the answer says why and nothing is written.
+    let (st, body) = dispatch(app, "POST", "/api/containers/computers/planner/up", None).await;
+    assert!(st == 409 || st == 200, "{st} {body}");
+}
+
 #[tokio::test]
 async fn rest_run_and_gateway_roundtrip() {
     let (app, e, _d, _w) = app().await;
