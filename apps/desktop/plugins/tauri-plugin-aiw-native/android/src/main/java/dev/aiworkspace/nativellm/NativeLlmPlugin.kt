@@ -18,6 +18,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,7 +59,10 @@ class GenerateArgs {
  */
 @TauriPlugin(permissions = [Permission(strings = [Manifest.permission.POST_NOTIFICATIONS], alias = "notifications")])
 class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // An error nobody caught in a coroutine would end the whole app: log it instead (every command answers in its own try/catch).
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> android.util.Log.e("AIWNative", "coroutine failed", e) },
+    )
     private val gemini by lazy { GeminiNanoBackend(activity) }
     private val litert by lazy { LiteRtLmBackend(activity) }
     private val browser by lazy { AgentBrowser(activity) }
@@ -90,13 +94,20 @@ class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun availability(invoke: Invoke) {
         scope.launch {
+            // Rust waits for this answer while the app starts: whatever goes wrong (AICore missing, a native library that
+            // does not load) the answer is «nothing available», never a crash and never silence.
             val runtimes = JSArray()
-            val geminiReady = gemini.available()
-            val geminiInfo = runtimeInfo("gemini-nano", gemini.status(), geminiReady.map { it.id })
-            geminiReady.firstOrNull()?.let { v -> gemini.tokenLimit(v)?.let { geminiInfo.put("contextTokens", it) } }
-            runtimes.put(geminiInfo)
-            val files = modelsDir().listFiles { f -> f.name.endsWith(".litertlm") }?.map { it.name } ?: emptyList()
-            runtimes.put(runtimeInfo("litert-lm", if (files.isEmpty()) "Nessun file .litertlm in ${modelsDir()}" else null, files))
+            try {
+                val geminiReady = try { gemini.available() } catch (e: Throwable) { emptyList() }
+                val geminiStatus = try { gemini.status() } catch (e: Throwable) { "Gemini Nano non disponibile: ${e.message ?: e}" }
+                val geminiInfo = runtimeInfo("gemini-nano", geminiStatus, geminiReady.map { it.id })
+                geminiReady.firstOrNull()?.let { v -> gemini.tokenLimit(v)?.let { geminiInfo.put("contextTokens", it) } }
+                runtimes.put(geminiInfo)
+                val files = modelsDir().listFiles { f -> f.name.endsWith(".litertlm") }?.map { it.name } ?: emptyList()
+                runtimes.put(runtimeInfo("litert-lm", if (files.isEmpty()) "Nessun file .litertlm in ${modelsDir()}" else null, files))
+            } catch (e: Throwable) {
+                android.util.Log.w("AIWNative", "availability failed", e)
+            }
             invoke.resolve(JSObject().put("runtimes", runtimes))
         }
     }
@@ -128,7 +139,8 @@ class NativeLlmPlugin(private val activity: Activity) : Plugin(activity) {
                 }
                 args.onEvent.send(JSObject().put("type", "done"))
                 invoke.resolve()
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // Throwable: a model that does not fit in memory or a native library that does not load must end this run, not the app.
                 args.onEvent.send(JSObject().put("type", "error").put("message", e.message ?: e.toString()))
                 invoke.reject(e.message ?: "errore di inferenza")
             }
