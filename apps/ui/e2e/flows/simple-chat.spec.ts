@@ -225,14 +225,11 @@ test.describe("the assistant from the chat", () => {
   });
 
   for (const size of [{ name: "1440", width: 1440, height: 900 }, { name: "390", width: 390, height: 844 }]) {
-    test(`${size.name}: the run panel, open, leads to the chat only`, async ({ page }) => {
+    test(`${size.name}: the simple interface has no run panel and leads to the chat only`, async ({ page }) => {
       await page.setViewportSize({ width: size.width, height: size.height });
       await openApp(page, "/chat/ses_pdf");
-      const toggle = page.getByRole("button", { name: "Pannello del run" });
-      // Open on a wide screen to begin with, a sheet on a phone that has to be asked for.
-      if ((await toggle.getAttribute("aria-pressed")) !== "true") await toggle.click();
-      await expect(toggle).toHaveAttribute("aria-pressed", "true");
-      await expect(page.getByRole("complementary", { name: "Pannello del run" }).or(page.getByRole("dialog", { name: "Pannello del run" }))).toBeVisible();
+      await expect(page.getByRole("button", { name: "Pannello del run" })).toHaveCount(0);
+      await expect(page.getByRole("complementary", { name: "Pannello del run" })).toHaveCount(0);
       expect(linksOutsideChat(await appLinks(page))).toEqual([]);
     });
   }

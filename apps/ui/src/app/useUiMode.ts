@@ -5,6 +5,8 @@ import { setStoredUiMode, useStoredUiMode, type UiMode } from "../shared/lib/uiM
 import { configModeOf, type ConfigMode } from "./routeGate";
 
 import { t } from "../shared/i18n";
+/** The last value the configuration reported for `ui.mode` (shared by every consumer of the hook). */
+let lastFromConfig: UiMode | undefined;
 /**
  * The interface mode, a setter and what the configuration says. The configuration (`ui.mode`) decides;
  * the last known value is kept on the device so the shell does not flash the wrong sections while the
@@ -21,8 +23,13 @@ export function useUiMode(): [UiMode, (mode: UiMode) => void, ConfigMode] {
 
   // Follow the configuration when it says something else (another device changed it, or the
   // value was edited in the Impostazioni list).
+  // Only when the configuration *changes*: a consumer that mounts later (the rail draws the device card in Developer
+  // mode only) must not drag the mode back to a configuration value that has not caught up with a switch yet.
   useEffect(() => {
-    if (fromConfig) setStoredUiMode(fromConfig);
+    if (fromConfig && fromConfig !== lastFromConfig) {
+      lastFromConfig = fromConfig;
+      setStoredUiMode(fromConfig);
+    }
   }, [fromConfig]);
 
   const view = cfg.data;
