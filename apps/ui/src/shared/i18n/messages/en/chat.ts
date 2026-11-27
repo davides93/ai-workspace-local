@@ -338,7 +338,6 @@ export const chatEn: Record<keyof typeof chatIt, string> = {
   "chat.compito_pdf_dettaglio": "By year, with an index.",
   "chat.compito_memoria_dettaglio": "What I remember and how you can teach me.",
   "chat.opzioni_conversazione": "Conversation options",
-  "chat.opzioni_aria": "Conversation options: model {p}",
   "chat.opz_modello": "Model",
   "chat.opz_modello_hint": "The model that answers in this conversation.",
   "chat.opz_approvazione_hint": "When the assistant asks your permission before acting.",

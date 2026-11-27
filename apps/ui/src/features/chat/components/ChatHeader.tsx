@@ -85,9 +85,10 @@ export function ChatHeader({ session, agent, profile, role, running, simple = fa
             <li>
               <button
                 type="button" className="pill neutral pill-btn ws-model-btn" aria-haspopup="dialog" onClick={onOpenOptions}
-                aria-label={t("chat.opzioni_aria", { p: role ?? profile.name })} title={t("chat.opzioni_conversazione")}
+                title={t("chat.opzioni_conversazione")}
               >
                 <Icon name="cube" size={13} />
+                <span className="sr-only">{t("chat.opzioni_conversazione")}: </span>
                 <span className="ws-meta-text">{role ?? profile.name}</span>
                 {profile.model && <span className="mono ws-meta-model">{profile.model}</span>}
                 <Icon name="settings" size={13} />

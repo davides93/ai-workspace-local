@@ -336,7 +336,6 @@ export const chatIt = {
   "chat.compito_pdf_dettaglio": "Per anno, con un indice.",
   "chat.compito_memoria_dettaglio": "Cosa ricordo e come puoi insegnarmi.",
   "chat.opzioni_conversazione": "Opzioni della conversazione",
-  "chat.opzioni_aria": "Opzioni della conversazione: modello {p}",
   "chat.opz_modello": "Modello",
   "chat.opz_modello_hint": "Il modello che risponde in questa conversazione.",
   "chat.opz_approvazione_hint": "Quando l'assistente chiede il tuo permesso prima di agire.",
