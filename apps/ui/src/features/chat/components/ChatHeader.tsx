@@ -1,6 +1,5 @@
 import { Link } from "../../../app/router";
 import type { ReactNode } from "react";
-import { SIMPLE_AGENT_ID } from "../../../shared/lib/agents";
 import { Button, Icon, IconButton, Led, Pill, type PillTone } from "../../../shared/ui";
 import type { AgentProfile, InferenceProfile, Session } from "../../../shared/api/types";
 import { modeInfo, RUN_STATUS_LABEL, sandboxInfo } from "../model/labels";
@@ -25,7 +24,7 @@ function Meta({ icon, label, tone = "neutral", title, children }: { icon: string
  * Header of the conversation: title and controls, then who works on it (agent, profile and model,
  * approval mode, sandbox, worktree) so the safety setup is never out of sight.
  * The simple interface keeps the title, the state, the model (as text: the profiles page is not there) and the
- * approval mode; the agent only when it is not the Assistente, and neither sandbox nor worktree. On a phone it
+ * approval mode; neither the agent, nor the run panel, nor sandbox or worktree. On a phone it
  * has a «Menu» button, since there is no tab bar.
  */
 export function ChatHeader({ session, agent, profile, role, running, simple = false, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser, browserLive, onOpenMenu }: {
@@ -73,12 +72,12 @@ export function ChatHeader({ session, agent, profile, role, running, simple = fa
           </Button>
         )}
         {onOpenBrowser && <IconButton aria-label={t("chat.browser_dell_agente")} title={t("chat.apri_il_browser_dell_agente")} icon="globe" onClick={onOpenBrowser} />}
-        <IconButton aria-label={t("chat.pannello_del_run")} aria-pressed={inspectorOpen} icon="panel" onClick={onToggleInspector} className={inspectorOpen ? "is-on" : undefined} />
+        {!simple && <IconButton aria-label={t("chat.pannello_del_run")} aria-pressed={inspectorOpen} icon="panel" onClick={onToggleInspector} className={inspectorOpen ? "is-on" : undefined} />}
         {onOpenMenu && <IconButton aria-label={t("shell.menu")} icon="more" aria-haspopup="dialog" className="ws-menu-btn" onClick={onOpenMenu} />}
       </div>
       {session && agent && (
         <ul className="ws-head-meta" aria-label={t("chat.come_lavora_questa_sessione")}>
-          {(!simple || agent.id !== SIMPLE_AGENT_ID) && <Meta icon="agent" label={t("chat.agente")} title={agent.description || agent.name}>{agent.name}</Meta>}
+          {!simple && <Meta icon="agent" label={t("chat.agente")} title={agent.description || agent.name}>{agent.name}</Meta>}
           {profile && (
             <Meta icon="cube" label={t("chat.modello")} title={t("chat.profilo", { name: profile.name, runtime_id: profile.runtime_id, p: profile.model || "nessun modello" })}>
               {simple

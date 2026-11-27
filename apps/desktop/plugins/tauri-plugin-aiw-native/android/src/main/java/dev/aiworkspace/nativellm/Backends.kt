@@ -54,7 +54,7 @@ class GeminiNanoBackend(@Suppress("unused") private val context: Context) {
     /** `FeatureStatus` of a variant on this device, or null when the question itself fails. */
     suspend fun statusOf(v: Variant): Int? = try {
         client(v).checkStatus().also { Log.i(TAG, "${v.id}: checkStatus=$it") }
-    } catch (e: Exception) {
+    } catch (e: Throwable) { // also NoClassDefFoundError / UnsatisfiedLinkError: a device without AICore must not end the app
         Log.w(TAG, "${v.id}: checkStatus failed: $e")
         null
     }
@@ -65,7 +65,7 @@ class GeminiNanoBackend(@Suppress("unused") private val context: Context) {
     /** Context window (tokens) of a variant, when AICore says. */
     suspend fun tokenLimit(v: Variant): Int? = try {
         client(v).getTokenLimit().takeIf { it > 0 }
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         null
     }
 
@@ -140,7 +140,7 @@ class LiteRtLmBackend(private val context: Context) {
         val cache = context.cacheDir.absolutePath
         val e = try {
             Engine(EngineConfig(modelPath = file.absolutePath, backend = Backend.GPU(), cacheDir = cache)).also { it.initialize() }
-        } catch (gpuError: Exception) {
+        } catch (gpuError: Throwable) {
             Engine(EngineConfig(modelPath = file.absolutePath, backend = Backend.CPU(), cacheDir = cache)).also { it.initialize() }
         }
         engine = e
