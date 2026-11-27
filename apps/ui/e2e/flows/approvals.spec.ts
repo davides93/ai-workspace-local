@@ -33,7 +33,9 @@ test("approvals: one request approved, one denied", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Ferma" })).toBeHidden();
 
   // Both decisions are in the activity log.
-  await page.getByRole("button", { name: "Mostra tutte le sezioni" }).click();
+  await page.getByRole("navigation", { name: "Sezioni" }).getByRole("button", { name: "Altro" }).click();
+  await page.getByRole("dialog", { name: "Altro" }).getByRole("button", { name: "Sviluppatore" }).click();
+  await page.keyboard.press("Escape");
   await page.getByRole("link", { name: "Attività" }).click();
   const audit = page.getByRole("table", { name: "Audit trail" });
   await expect(audit.getByRole("row", { name: /Utente approval:shell Approvato/ })).toHaveCount(1);

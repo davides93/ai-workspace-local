@@ -24,8 +24,8 @@ test.describe("settings", () => {
     await expect(page.getByRole("heading", { name: "Impostazioni", level: 1 })).toBeHidden();
 
     // The menu has the mode selector.
-    await nav.getByRole("button", { name: "Menu" }).click();
-    const menu = page.getByRole("dialog", { name: "Menu" });
+    await nav.getByRole("button", { name: "Altro" }).click();
+    const menu = page.getByRole("dialog", { name: "Altro" });
     const mode = menu.getByRole("group", { name: "Modalità dell'interfaccia" });
     await expect(mode.getByRole("button", { name: "Semplice" })).toHaveAttribute("aria-pressed", "true");
     await mode.getByRole("button", { name: "Sviluppatore" }).click();

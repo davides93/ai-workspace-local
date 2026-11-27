@@ -153,9 +153,9 @@ test.describe("keyboard", () => {
       // From the skip link, the next stops are the rail: search, then the menu button, which opens the sheet, with its focus trap.
       await skip.focus();
       const rail = page.getByRole("navigation", { name: "Sezioni" });
-      const stops = await tabUntil(page, (f) => f.name === "Menu", 80);
+      const stops = await tabUntil(page, (f) => f.name === "Altro", 80);
       expect(stops.filter((s) => !s.visible).map((s) => `${s.tag}:${s.name}`), "stops without a visible focus indicator").toEqual([]);
-      await expectModal(page, rail.getByRole("button", { name: "Menu" }), page.getByRole("dialog", { name: "Menu" }));
+      await expectModal(page, rail.getByRole("button", { name: "Altro" }), page.getByRole("dialog", { name: "Altro" }));
 
       // The message box is one Tab stop of the page.
       await page.locator("#main").focus();
@@ -173,10 +173,10 @@ test.describe("keyboard", () => {
         const seen = new Set<string>();
 
         // Open the menu with the keyboard.
-        const menu = page.getByRole("button", { name: "Menu", exact: true });
+        const menu = page.getByRole("button", { name: "Altro", exact: true });
         await menu.focus();
         await page.keyboard.press("Enter");
-        const dialog = page.getByRole("dialog", { name: "Menu" });
+        const dialog = page.getByRole("dialog", { name: "Altro" });
         await expect(dialog).toBeVisible();
         const stops = await tabUntil(page, (f) => {
           for (const w of wanted) if (f.name === w || f.name.startsWith(`${w} `) || f.name.startsWith(w)) seen.add(w);
@@ -196,14 +196,14 @@ test.describe("keyboard", () => {
       });
     }
 
-    test("desktop: the kill switch and «Mostra tutte le sezioni» are in the rail, one Tab stop each", async ({ page }) => {
+    test("desktop: «Altro» is in the rail and holds the kill switch, one Tab stop each", async ({ page }) => {
       await openApp(page, "/chat");
       const seen = new Set<string>();
       await tabUntil(page, (f) => {
         seen.add(f.name);
-        return seen.has("Kill switch") || [...seen].some((n) => n.startsWith("Kill switch"));
+        return seen.has("Altro");
       }, 80);
-      expect([...seen].some((n) => n === "Mostra tutte le sezioni")).toBe(true);
+      expect(seen.has("Altro")).toBe(true);
     });
 
     test("the command palette offers the chat, a new session and the download of a model, and the last types the request in the message box", async ({ page }) => {

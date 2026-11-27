@@ -86,8 +86,8 @@ test.describe("nothing leads to a hidden section", () => {
     await expect(conversation(page).getByText("Errore del runtime", { exact: true })).toBeVisible();
     expect(linksOutsideChat(await appLinks(page))).toEqual([]);
 
-    await page.getByRole("navigation", { name: "Sezioni" }).getByRole("button", { name: "Menu" }).click();
-    await expect(page.getByRole("dialog", { name: "Menu" })).toBeVisible();
+    await page.getByRole("navigation", { name: "Sezioni" }).getByRole("button", { name: "Altro" }).click();
+    await expect(page.getByRole("dialog", { name: "Altro" })).toBeVisible();
     expect(linksOutsideChat(await appLinks(page)), "menu").toEqual([]);
     await page.keyboard.press("Escape");
 
@@ -100,11 +100,14 @@ test.describe("nothing leads to a hidden section", () => {
     await openApp(page, "/chat");
     const rail = page.getByRole("navigation", { name: "Sezioni" });
     await expect(rail.getByRole("link")).toHaveCount(0);
-    await expect(rail.locator(".device-chip")).toContainText("Studio-PC");
-    await expect(rail.getByRole("link", { name: /Dispositivo corrente/ })).toHaveCount(0);
-    // The way out is the rail's own button, and the menu.
-    await expect(rail.getByRole("button", { name: "Mostra tutte le sezioni" })).toBeVisible();
-    await expect(rail.getByRole("button", { name: "Menu" })).toBeVisible();
+    // The rail is calm: no device card, no kill switch; everything else is behind «Altro».
+    await expect(rail.locator(".device-chip")).toHaveCount(0);
+    await expect(rail.getByRole("button", { name: "Kill switch" })).toHaveCount(0);
+    await expect(rail.getByRole("button", { name: "Altro" })).toBeVisible();
+    await rail.getByRole("button", { name: "Altro" }).click();
+    const menu = page.getByRole("dialog", { name: "Altro" });
+    await expect(menu.locator(".device-chip")).toContainText("Studio-PC");
+    await expect(menu.getByRole("button", { name: /Kill switch/ })).toBeVisible();
   });
 
   test("the first-run panel is in the chat and leads nowhere else", async ({ page }) => {
@@ -222,14 +225,11 @@ test.describe("the assistant from the chat", () => {
   });
 
   for (const size of [{ name: "1440", width: 1440, height: 900 }, { name: "390", width: 390, height: 844 }]) {
-    test(`${size.name}: the run panel, open, leads to the chat only`, async ({ page }) => {
+    test(`${size.name}: the simple interface has no run panel and leads to the chat only`, async ({ page }) => {
       await page.setViewportSize({ width: size.width, height: size.height });
       await openApp(page, "/chat/ses_pdf");
-      const toggle = page.getByRole("button", { name: "Pannello del run" });
-      // Open on a wide screen to begin with, a sheet on a phone that has to be asked for.
-      if ((await toggle.getAttribute("aria-pressed")) !== "true") await toggle.click();
-      await expect(toggle).toHaveAttribute("aria-pressed", "true");
-      await expect(page.getByRole("complementary", { name: "Pannello del run" }).or(page.getByRole("dialog", { name: "Pannello del run" }))).toBeVisible();
+      await expect(page.getByRole("button", { name: "Pannello del run" })).toHaveCount(0);
+      await expect(page.getByRole("complementary", { name: "Pannello del run" })).toHaveCount(0);
       expect(linksOutsideChat(await appLinks(page))).toEqual([]);
     });
   }

@@ -21,8 +21,8 @@ describe("App shell: simple interface", () => {
   it("has no section links, only the menu, which opens the sheet with the mode choice", async () => {
     const { user } = await renderApp({ route: "/chat", mode: "simple" });
     expect(within(screen.getByRole("navigation", { name: "Sezioni" })).queryAllByRole("link")).toHaveLength(0);
-    await user.click(within(screen.getByRole("navigation", { name: "Sezioni" })).getByRole("button", { name: "Menu" }));
-    const sheet = await screen.findByRole("dialog", { name: "Menu" });
+    await user.click(within(screen.getByRole("navigation", { name: "Sezioni" })).getByRole("button", { name: "Altro" }));
+    const sheet = await screen.findByRole("dialog", { name: "Altro" });
     const mode = within(sheet).getByRole("group", { name: "Modalità dell'interfaccia" });
     expect(within(mode).getByRole("button", { name: "Semplice" })).toHaveAttribute("aria-pressed", "true");
     await user.keyboard("{Escape}");
@@ -31,8 +31,8 @@ describe("App shell: simple interface", () => {
 
   it("the menu switches to Developer: every section appears and the address stays", async () => {
     const { user } = await renderApp({ route: "/chat", mode: "simple" });
-    await user.click(within(screen.getByRole("navigation", { name: "Sezioni" })).getByRole("button", { name: "Menu" }));
-    const sheet = await screen.findByRole("dialog", { name: "Menu" });
+    await user.click(within(screen.getByRole("navigation", { name: "Sezioni" })).getByRole("button", { name: "Altro" }));
+    const sheet = await screen.findByRole("dialog", { name: "Altro" });
     await user.click(within(within(sheet).getByRole("group", { name: "Modalità dell'interfaccia" })).getByRole("button", { name: "Sviluppatore" }));
     await waitFor(() => expect(within(screen.getByRole("navigation", { name: "Sezioni" })).getAllByRole("link").length).toBeGreaterThan(10));
     expect(location.hash).toMatch(/^#\/chat/);

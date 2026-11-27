@@ -25,7 +25,7 @@ function Meta({ icon, label, tone = "neutral", title, children }: { icon: string
  * Header of the conversation: title and controls, then who works on it (agent, profile and model,
  * approval mode, sandbox, worktree) so the safety setup is never out of sight.
  * The simple interface keeps the title, the state, the model (as text: the profiles page is not there) and the
- * approval mode; the agent only when it is not the Assistente, and neither sandbox nor worktree. On a phone it
+ * approval mode; the agent only when it is not the Assistente, no run panel, neither sandbox nor worktree. On a phone it
  * has a «Menu» button, since there is no tab bar.
  */
 export function ChatHeader({ session, agent, profile, role, running, simple = false, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser, browserLive, onOpenMenu }: {
@@ -73,7 +73,7 @@ export function ChatHeader({ session, agent, profile, role, running, simple = fa
           </Button>
         )}
         {onOpenBrowser && <IconButton aria-label={t("chat.browser_dell_agente")} title={t("chat.apri_il_browser_dell_agente")} icon="globe" onClick={onOpenBrowser} />}
-        <IconButton aria-label={t("chat.pannello_del_run")} aria-pressed={inspectorOpen} icon="panel" onClick={onToggleInspector} className={inspectorOpen ? "is-on" : undefined} />
+        {!simple && <IconButton aria-label={t("chat.pannello_del_run")} aria-pressed={inspectorOpen} icon="panel" onClick={onToggleInspector} className={inspectorOpen ? "is-on" : undefined} />}
         {onOpenMenu && <IconButton aria-label={t("shell.menu")} icon="more" aria-haspopup="dialog" className="ws-menu-btn" onClick={onOpenMenu} />}
       </div>
       {session && agent && (
