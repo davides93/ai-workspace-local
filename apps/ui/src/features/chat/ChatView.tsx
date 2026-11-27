@@ -42,6 +42,7 @@ import { NoSessionState, SimpleEmpty } from "./components/SimpleEmpty";
 import { useAttachments } from "./useAttachments";
 import { ConversationLog, type ConversationLogHandle } from "./components/ConversationLog";
 import { InspectorBody } from "./components/Inspector";
+import { ConversationOptions } from "./components/ConversationOptions";
 import { SessionList, type NewSessionInput } from "./components/SessionList";
 import { onComposerSeed, takeComposerSeed, withSeed } from "./model/composerSeed";
 import { getDraft, setDraft } from "./model/drafts";
@@ -149,6 +150,7 @@ export function ChatView() {
   const [showLessons, setShowLessons] = useState(false);
   const [seedTick, setSeedTick] = useState(0);
   const [showSessions, setShowSessions] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
   const compactSessions = useMediaQuery(COMPACT_SESSIONS_QUERY);
   const mode = useInspectorMode();
   const panel = useInspectorOpen(mode);
@@ -310,7 +312,7 @@ export function ChatView() {
       <section className="ws-main" aria-label={tr("chat.workspace")}>
         <ChatHeader
           session={active} agent={agent} profile={profile} role={simple ? profileRoleLabel(profile, models.data ?? []) : undefined} running={conv.running} simple={simple}
-          onOpenMenu={simple ? openMenu : undefined} sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
+          onOpenMenu={simple ? openMenu : undefined} onOpenOptions={simple ? () => setShowOptions(true) : undefined} sessionsButton={compactSessions ? { onClick: () => setShowSessions(true), expanded: showSessions } : undefined}
           inspectorOpen={inspectorVisible} onToggleInspector={toggleInspector} onOpenWorktree={panel.show} onOpenBrowser={browserButton}
           browserLive={browser ? { open: browserShown, onToggle: toggleBrowser, status: shortStatus(browser), attention: browser.handover !== null && !browserShown, overlay: mode !== "inline" } : undefined}
         />
@@ -387,6 +389,9 @@ export function ChatView() {
         <ModalShell variant="drawer" title={tr("chat.sessioni")} className="ws-drawer-left" onClose={() => setShowSessions(false)}>
           {sessionList(() => setShowSessions(false))}
         </ModalShell>
+      )}
+      {simple && showOptions && (
+        <ConversationOptions profile={profile} role={profileRoleLabel(profile, models.data ?? [])} agent={agent} thinking={reasons ? { value: thinking, onChange: setThinking } : undefined} voice={voice} onClose={() => setShowOptions(false)} />
       )}
       {simple && showLessons && (
         <Drawer title={tr("learning.lezioni_da_rivedere")} onClose={() => setShowLessons(false)}>

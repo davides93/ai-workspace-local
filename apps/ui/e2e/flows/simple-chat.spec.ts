@@ -174,9 +174,14 @@ test.describe("notes of the conversation", () => {
     await openApp(page, "/chat");
     await page.getByRole("button", { name: "Nuova", exact: true }).click();
     const meta = page.getByRole("list", { name: "Come lavora questa sessione" });
-    await expect(meta.getByText("Approvazione")).toBeVisible();
+    // One control in the header, the model; the approval mode and the rest are in its options.
+    await expect(meta.getByText("Approvazione")).toHaveCount(0);
     await expect(meta.getByText("Assistente")).toHaveCount(0);
     await expect(meta.getByRole("link")).toHaveCount(0);
+    await meta.getByRole("button", { name: /^Opzioni della conversazione/ }).click();
+    const options = page.getByRole("dialog", { name: "Opzioni della conversazione" });
+    await expect(options.getByText("Approvazione")).toBeVisible();
+    await expect(options.getByText("Chiedi")).toBeVisible();
   });
 });
 

@@ -165,7 +165,7 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
               onClick={voice.toggleDictation}
             />
             )}
-            <IconButton
+            {!simple && <IconButton
               icon="wave"
               className={`ws-talk ${converse ? "on" : ""}`}
               aria-label={converse ? t("chat.termina_la_conversazione_a_voce") : t("chat.conversazione_a_voce")}
@@ -173,7 +173,7 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
               title={converse ? t("chat.termina_la_conversazione_a_voce_2") : t("chat.conversazione_a_voce_parli_l")}
               disabled={disabled || voice.dictation !== "off"}
               onClick={voice.toggleConvo}
-            />
+            />}
           </>
         )}
         {running ? (
@@ -183,7 +183,7 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
         )}
       </div>
       <div className="ws-composer-meta">
-        {thinking && (
+        {thinking && !simple && (
           <label className="ws-think" title={THINKING_HINT[thinking.value]}>
             <span>{tr("chat.ragionamento_2")}</span>
             <Select
@@ -195,7 +195,7 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
           </label>
         )}
         {modelLabel && <span className="mono ws-composer-model" title={t("chat.runtime_e_modello_della_sessione")}>{modelLabel}</span>}
-        <span id={hintId} className="ws-composer-hint">
+        <span id={hintId} className={simple ? "sr-only" : "ws-composer-hint"}>
           {running ? (
             <>{trNode("chat.risposta_in_corso_per_fermarla", { kbd: <kbd>{tr("chat.esc")}</kbd> })}</>
           ) : (

@@ -335,4 +335,12 @@ export const chatIt = {
   "chat.compito_pdf_titolo": "Riordina i PDF",
   "chat.compito_pdf_dettaglio": "Per anno, con un indice.",
   "chat.compito_memoria_dettaglio": "Cosa ricordo e come puoi insegnarmi.",
+  "chat.opzioni_conversazione": "Opzioni della conversazione",
+  "chat.opz_modello": "Modello",
+  "chat.opz_modello_hint": "Il modello che risponde in questa conversazione.",
+  "chat.opz_approvazione_hint": "Quando l'assistente chiede il tuo permesso prima di agire.",
+  "chat.opz_voce": "Conversazione a voce",
+  "chat.opz_voce_hint": "Parli, l'assistente risponde a voce.",
+  "chat.opz_voce_avvia": "Avvia",
+  "chat.opz_voce_ferma": "Termina",
 } as const;

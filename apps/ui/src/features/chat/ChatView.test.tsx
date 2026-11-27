@@ -39,9 +39,15 @@ describe("chat, simple interface", () => {
     await screen.findByRole("heading", { name: "Cosa vuoi fare?" });
     expect(within(screen.getByRole("navigation", { name: "Elenco delle sessioni" })).getByRole("button", { name: /^Nuova sessione.*Assistente/ })).toBeInTheDocument();
     const meta = screen.getByRole("list", { name: "Come lavora questa sessione" });
-    expect(meta).toHaveTextContent("Approvazione: Chiedi");
+    // The header carries one control, the model; the approval mode is in its options.
     expect(within(meta).queryByText("Sandbox")).toBeNull();
     expect(within(meta).queryAllByRole("link")).toHaveLength(0);
+    expect(within(meta).queryByText("Approvazione")).toBeNull();
+    await user.click(within(meta).getByRole("button", { name: /^Opzioni della conversazione/ }));
+    const options = await screen.findByRole("dialog", { name: "Opzioni della conversazione" });
+    expect(options).toHaveTextContent("Approvazione");
+    expect(options).toHaveTextContent("Chiedi");
+    await user.keyboard("{Escape}");
     // It starts from tasks of everyday life: a card puts its sentence in the message box without sending it.
     const ideas = screen.getByRole("list", { name: "Idee per iniziare" });
     expect(within(ideas).getAllByRole("button")).toHaveLength(6);
