@@ -14,14 +14,14 @@ import { UpdateDialog } from "./UpdateDialog";
 import { t } from "../../shared/i18n";
 /**
  * Left navigation on desktop; icon-only between 701 and 1100 px (labels stay as tooltips and accessible names).
- * The simple interface has a single destination, so it draws no section list: brand, device, search, «Menu»
- * (language, theme, mode), «Mostra tutte le sezioni» and the kill switch. The update notice opens the updater
+ * The simple interface has a single destination, so it draws no section list: brand, search and «Altro»
+ * (device, mode, language, theme and the kill switch live in that menu). The update notice opens the updater
  * in a dialog there (the Impostazioni page is not reachable); in developer mode it links to it.
  */
 export function Rail({ current, onOpenPalette, onOpenMenu }: { current?: RouteId; onOpenPalette: () => void; onOpenMenu: () => void }) {
   const { data: system } = useSystem();
   const update = useUpdateStatus().data?.available;
-  const [mode, setMode] = useUiMode();
+  const [mode] = useUiMode();
   const [updating, setUpdating] = useState(false);
   const simple = mode === "simple";
   const updateLabel = update ? t("shell.aggiornamento_disponibile_versione", { version: update.version }) : "";
@@ -45,14 +45,14 @@ export function Rail({ current, onOpenPalette, onOpenMenu }: { current?: RouteId
           <span className="nav-text">{t("shell.aggiornamento", { version: update.version })}</span>
         </Link>
       ))}
-      <DeviceChip />
+      {!simple && <DeviceChip />}
       <button type="button" className="rail-search" onClick={onOpenPalette} title={t("shell.cerca_e_comandi_ctrl_k")} aria-label={t("shell.cerca_nome_accessibile")}>
         <Icon name="search" size={16} />
         <span className="nav-text">{t("shell.cerca")}</span>
         <kbd className="nav-text">Ctrl K</kbd>
       </button>
       {simple && (
-        <button type="button" className="rail-search" aria-haspopup="dialog" onClick={onOpenMenu} title={t("shell.menu")} aria-label={t("shell.menu")}>
+        <button type="button" className="rail-search rail-menu" aria-haspopup="dialog" onClick={onOpenMenu} title={t("shell.menu")} aria-label={t("shell.menu")}>
           <Icon name="more" size={16} />
           <span className="nav-text">{t("shell.menu")}</span>
         </button>
@@ -69,12 +69,11 @@ export function Rail({ current, onOpenPalette, onOpenMenu }: { current?: RouteId
           ))}
         </div>
       ))}
-      <div className="rail-foot">
-        {simple && (
-          <button type="button" className="rail-more nav-text" onClick={() => setMode("developer")}>{t("shell.mostra_tutte_le_sezioni")}</button>
-        )}
-        <KillSwitch />
-      </div>
+      {!simple && (
+        <div className="rail-foot">
+          <KillSwitch />
+        </div>
+      )}
       {updating && <UpdateDialog onClose={() => setUpdating(false)} />}
     </nav>
   );

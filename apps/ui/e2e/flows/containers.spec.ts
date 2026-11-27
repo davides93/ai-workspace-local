@@ -4,7 +4,7 @@ import { expect, openApp, test } from "../support/app";
 
 test("the menu has «Un computer per i tuoi agenti» and it says what to do, and installs nothing", async ({ page }) => {
   await openApp(page, "/chat");
-  await page.getByRole("navigation", { name: "Sezioni" }).getByRole("button", { name: "Menu" }).click();
+  await page.getByRole("navigation", { name: "Sezioni" }).getByRole("button", { name: "Altro" }).click();
   await page.getByRole("button", { name: "Un computer per i tuoi agenti" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Un computer per i tuoi agenti" });

@@ -40,8 +40,8 @@ for (const size of SIZES) {
       });
       test("the menu", async ({ page }, info) => {
         await openApp(page, "/chat", { theme });
-        await page.getByRole("button", { name: "Menu", exact: true }).click();
-        await expect(page.getByRole("dialog", { name: "Menu" })).toBeVisible();
+        await page.getByRole("button", { name: "Altro", exact: true }).click();
+        await expect(page.getByRole("dialog", { name: "Altro" })).toBeVisible();
         await expectNoBlockingViolations(page, info);
         await expectNoPlaceholderLeaks(page);
       });

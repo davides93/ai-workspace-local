@@ -177,7 +177,7 @@ export function ChatView() {
   };
   const browserUi = useMemo(() => ({ panelOpen: browserShown, openPanel: () => setBrowserOpen(true) }), [browserShown]);
   // One side panel at a time: the browser takes the place of the run panel while it is open, and the run panel's button brings it back.
-  const inspectorVisible = panel.open && !(browserShown && mode === "inline");
+  const inspectorVisible = !simple && panel.open && !(browserShown && mode === "inline");
   const toggleInspector = () => {
     if (browserShown) {
       setBrowserOpen(false);
@@ -381,8 +381,8 @@ export function ChatView() {
           <BrowserPanel mode={mode} onClose={closeBrowser} />
         </Suspense>
       )}
-      {mode === "drawer" && panel.open && !browserShown && <Drawer title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Drawer>}
-      {mode === "sheet" && panel.open && !browserShown && <Sheet title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Sheet>}
+      {mode === "drawer" && !simple && panel.open && !browserShown && <Drawer title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Drawer>}
+      {mode === "sheet" && !simple && panel.open && !browserShown && <Sheet title={tr("chat.pannello_del_run")} onClose={panel.close}>{inspector}</Sheet>}
       {compactSessions && showSessions && (
         <ModalShell variant="drawer" title={tr("chat.sessioni")} className="ws-drawer-left" onClose={() => setShowSessions(false)}>
           {sessionList(() => setShowSessions(false))}
