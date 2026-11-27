@@ -13,11 +13,13 @@ test.describe("chat", () => {
     await expect(page.getByRole("heading", { name: "Cosa vuoi fare?" })).toBeVisible();
     const list = page.getByRole("navigation", { name: "Elenco delle sessioni" });
     await expect(list.getByRole("button", { name: /^Nuova sessione.*Assistente/ })).toBeVisible();
-    // The header says who and how without the technical details: the model as text (not a link), the approval mode; no sandbox.
+    // The header carries one control, the model (not a link); the approval mode is in its options; no sandbox.
     const meta = page.getByRole("list", { name: "Come lavora questa sessione" });
     await expect(meta.getByRole("link")).toHaveCount(0);
-    await expect(meta.getByText("Approvazione")).toBeVisible();
     await expect(meta.getByText("Sandbox")).toHaveCount(0);
+    await meta.getByRole("button", { name: /^Opzioni della conversazione/ }).click();
+    await expect(page.getByRole("dialog", { name: "Opzioni della conversazione" }).getByText("Approvazione")).toBeVisible();
+    await page.keyboard.press("Escape");
 
     // Attach a small text file with the message.
     const chooser = page.waitForEvent("filechooser");

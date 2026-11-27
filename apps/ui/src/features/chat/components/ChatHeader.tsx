@@ -28,7 +28,7 @@ function Meta({ icon, label, tone = "neutral", title, children }: { icon: string
  * approval mode; the agent only when it is not the Assistente, no run panel, neither sandbox nor worktree. On a phone it
  * has a «Menu» button, since there is no tab bar.
  */
-export function ChatHeader({ session, agent, profile, role, running, simple = false, sessionsButton, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser, browserLive, onOpenMenu }: {
+export function ChatHeader({ session, agent, profile, role, running, simple = false, sessionsButton, onOpenOptions, inspectorOpen, onToggleInspector, onOpenWorktree, onOpenBrowser, browserLive, onOpenMenu }: {
   session: Session | null;
   agent: AgentProfile | null;
   profile: InferenceProfile | null;
@@ -37,6 +37,8 @@ export function ChatHeader({ session, agent, profile, role, running, simple = fa
   running: boolean;
   /** The simple interface: fewer details, nothing that leads to a hidden section. */
   simple?: boolean;
+  /** Simple interface: opens the options of the conversation (model, approval, reasoning, voice); the model button of the header. */
+  onOpenOptions?: () => void;
   /** Present when the session list is off-canvas. */
   sessionsButton?: { onClick: () => void; expanded: boolean };
   inspectorOpen: boolean;
@@ -79,7 +81,20 @@ export function ChatHeader({ session, agent, profile, role, running, simple = fa
       {session && agent && (
         <ul className="ws-head-meta" aria-label={t("chat.come_lavora_questa_sessione")}>
           {(!simple || agent.id !== SIMPLE_AGENT_ID) && <Meta icon="agent" label={t("chat.agente")} title={agent.description || agent.name}>{agent.name}</Meta>}
-          {profile && (
+          {profile && simple && onOpenOptions && (
+            <li>
+              <button
+                type="button" className="pill neutral pill-btn ws-model-btn" aria-haspopup="dialog" onClick={onOpenOptions}
+                aria-label={t("chat.opzioni_aria", { p: role ?? profile.name })} title={t("chat.opzioni_conversazione")}
+              >
+                <Icon name="cube" size={13} />
+                <span className="ws-meta-text">{role ?? profile.name}</span>
+                {profile.model && <span className="mono ws-meta-model">{profile.model}</span>}
+                <Icon name="settings" size={13} />
+              </button>
+            </li>
+          )}
+          {profile && !(simple && onOpenOptions) && (
             <Meta icon="cube" label={t("chat.modello")} title={t("chat.profilo", { name: profile.name, runtime_id: profile.runtime_id, p: profile.model || "nessun modello" })}>
               {simple
                 ? <span className="ws-meta-text">{role ?? profile.name}</span>
@@ -87,7 +102,7 @@ export function ChatHeader({ session, agent, profile, role, running, simple = fa
               {profile.model && <span className="mono ws-meta-model">{profile.model}</span>}
             </Meta>
           )}
-          <Meta icon="shield" label={t("chat.approvazione")} tone={mode.tone} title={`${mode.label}: ${mode.hint}`}>{mode.label}</Meta>
+          {!(simple && onOpenOptions) && <Meta icon="shield" label={t("chat.approvazione")} tone={mode.tone} title={`${mode.label}: ${mode.hint}`}>{mode.label}</Meta>}
           {!simple && <Meta icon="lock" label={t("chat.sandbox")} tone={sandbox.tone} title={`${sandbox.label}: ${sandbox.hint}`}>{sandbox.label}</Meta>}
           {!simple && session.worktree && (
             <li>
