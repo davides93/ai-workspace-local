@@ -192,8 +192,8 @@ for (const size of SIZES) {
         await expect(page.locator("html")).toHaveAttribute("lang", "en");
         await expectNoBlockingViolations(page, info);
         await expectNoPlaceholderLeaks(page);
-        await page.getByRole("button", { name: "Altro", exact: true }).click();
-        await expect(page.getByRole("dialog", { name: "Altro" })).toBeVisible();
+        await page.getByRole("button", { name: "More", exact: true }).click();
+        await expect(page.getByRole("dialog", { name: "More" })).toBeVisible();
         await expectNoBlockingViolations(page, info);
         await expectNoPlaceholderLeaks(page);
       });
