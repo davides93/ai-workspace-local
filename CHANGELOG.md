@@ -2,7 +2,7 @@
 
 ## Non rilasciato
 
-- **Android: un errore nativo non ferma più l'app; chat Semplice più pulita.** Il plugin nativo risponde sempre all'avvio (AICore assente, libreria che non si carica, memoria), cattura anche gli `Error` e le coroutine non hanno più eccezioni senza gestore; le regole R8 non rinominano più il ponte JNI dei controlli in background. Nella chat Semplice spariscono il chip dell'agente e il pannello del run, e il compositore ha una riga di testo e una di pulsanti. **Non provato su un telefono; la causa del crash segnalato sulla build 5015 non è ancora confermata (servono i report degli store).**
+- **Android: un errore nativo non ferma più l'app.** Il plugin nativo risponde sempre all'avvio (AICore assente, libreria che non si carica, memoria), cattura anche gli `Error` e le coroutine non hanno più eccezioni senza gestore; le regole R8 non rinominano più il ponte JNI dei controlli in background. **Non provato su un telefono; la causa del crash segnalato sulla build 5015 non è ancora confermata (servono i report degli store).**
 
 ## 0.5.0-beta.13 - pre-release
 

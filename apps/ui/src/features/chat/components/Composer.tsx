@@ -93,7 +93,7 @@ export function Composer({ value, onChange, onSend, onStop, running, disabled, p
   };
   return (
     <div
-      className={`ws-composer${simple ? " is-simple" : ""}${dragging ? " is-dragging" : ""}`} ref={root}
+      className={`ws-composer${dragging ? " is-dragging" : ""}`} ref={root}
       onDragOver={onDragOver} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }} onDrop={onDrop}
     >
       {attachments && <PendingAttachments items={attachments.items} onRemove={attachments.onRemove} />}
